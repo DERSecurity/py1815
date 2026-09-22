@@ -112,7 +112,13 @@ implementation and not two.
 ## Roadmap
 
 - ~~The TCP and TLS listener, with D7 and D8.~~ Landed.
-- Events, classes 1 through 3, deadbands and unsolicited responses.
+- Events, classes 1 through 3, deadbands and unsolicited responses. The interoperability job
+  shows why this is not optional in practice: a real master's startup sends `DISABLE_UNSOLICITED`
+  and then `ENABLE_UNSOLICITED`, and this outstation refuses both. It proceeds to read normally,
+  so the refusal is survivable, but it is two warnings in an operator's log on every connection.
+  `DISABLE_UNSOLICITED` is worth a second look on its own: an outstation that sends none is
+  already in the state the master is asking for, so refusing the request answers a question it
+  did not ask.
 - The point-map loader and a published table for the predecessor DER profile.
 - Conformance testing.
 
