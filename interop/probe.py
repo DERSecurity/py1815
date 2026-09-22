@@ -85,6 +85,12 @@ def main() -> None:
             fail("the integrity poll returned no analog inputs")
 
         print(f"probe: read {values}")
+        # Quality is not checked here, and cannot be with this peer: its
+        # database stores bare scalars (``DbPointVal = Union[float, int, bool]``)
+        # and discards the flag octet before any caller sees it. Index 3 is
+        # served offline with COMM_LOST set, which this job therefore cannot
+        # observe -- the wire-level tests in the unit suite are what pin it.
+        # Closing that gap needs a peer that exposes quality, not a change here.
         for index, expected in enumerate(EXPECTED):
             if index not in values:
                 fail(f"index {index} missing from the response")

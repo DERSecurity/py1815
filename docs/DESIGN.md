@@ -109,6 +109,12 @@ wheels for.
 Additional masters are worth adding, with the caveat that two interfaces over one core is one
 implementation and not two.
 
+**What that job does not cover.** The master it uses stores point values as bare scalars and
+discards the quality octet, so the interoperability run checks values and not flags. The
+outstation it drives deliberately serves one point offline, and that point reads back as a
+number like any other. Quality is pinned by the wire-level tests instead, and closing the gap at
+this level needs a peer that exposes quality rather than a change to the harness.
+
 ## Roadmap
 
 - ~~The TCP and TLS listener, with D7 and D8.~~ Landed.
