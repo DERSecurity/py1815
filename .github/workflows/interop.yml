@@ -1,0 +1,64 @@
+name: interop
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# An independently developed master reads this library's outstation. Everything
+# in the unit suite is this library marking its own homework; this job is the
+# part that is not.
+#
+# The master runs under its own Python 3.10 virtual environment, because
+# dnp3-python ships wheels for cp38 through cp310 only. Two environments in one
+# job rather than a container: fewer moving parts, and nothing to cache or
+# rebuild.
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python for the outstation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the library
+        run: |
+          python -m venv .venv-outstation
+          .venv-outstation/bin/pip install --quiet -e .
+
+      - name: Set up Python for the master
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the independent master
+        run: |
+          python3.10 -m venv .venv-master
+          .venv-master/bin/pip install --quiet dnp3-python==0.3.0b2
+
+      - name: Start the outstation
+        run: |
+          .venv-outstation/bin/python interop/outstation.py --port 20000 \
+            > outstation.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if ss -ltn 2>/dev/null | grep -q ':20000'; then
+              echo "outstation listening"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "outstation did not bind within 30s"
+          cat outstation.log
+          exit 1
+
+      - name: Read it with the independent master
+        run: .venv-master/bin/python interop/probe.py --port 20000
+
+      - name: Outstation log
+        if: always()
+        run: cat outstation.log || true

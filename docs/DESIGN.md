@@ -99,13 +99,19 @@ The two protocol layers assign FIR and FIN to opposite bits, which is the kind o
 self-agreeing test will never catch, so both are pinned to literal octets.
 
 **Interoperability against other implementations.** A peer written from the same reading of the
-specification shares its misreadings. CI runs against an independently developed master;
-additional masters are worth adding, with the caveat that two interfaces over one core is one
-implementation, not two.
+specification shares its misreadings, so CI reads this library's outstation with a master built
+on a separately developed C++ stack (`interop/`, run by the `interop` workflow). Its upstream is
+end-of-life, which disqualifies it as a dependency and not as a witness: a frame it parses is a
+frame that was correct when it was maintained, and the wire format has not moved. The master
+runs in its own Python 3.10 environment, because that is the last interpreter it publishes
+wheels for.
+
+Additional masters are worth adding, with the caveat that two interfaces over one core is one
+implementation and not two.
 
 ## Roadmap
 
-- The TCP and TLS listener, with D7 and D8.
+- ~~The TCP and TLS listener, with D7 and D8.~~ Landed.
 - Events, classes 1 through 3, deadbands and unsolicited responses.
 - The point-map loader and a published table for the predecessor DER profile.
 - Conformance testing.
