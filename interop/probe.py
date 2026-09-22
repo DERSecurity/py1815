@@ -21,7 +21,8 @@ import argparse
 import sys
 import time
 
-from dnp3_python.dnp3station.master_new import MyMasterNew
+from dnp3_python.dnp3station.master import MyMaster
+from pydnp3.opendnp3 import GroupVariationID
 
 #: Must match ``interop/outstation.py``.
 EXPECTED = [10, -20, 30, 40, 50]
@@ -44,7 +45,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args()
 
-    master = MyMasterNew(
+    master = MyMaster(
         outstation_ip=args.host,
         port=args.port,
         master_id=args.master_address,
@@ -60,14 +61,23 @@ def main() -> None:
             fail(f"no connection to {args.host}:{args.port} within {args.timeout}s")
         print("probe: connected")
 
+        # Ask for the variation this outstation serves. The default scan list
+        # leads with group 30 variation 6 -- double-precision float -- and an
+        # outstation that answers a specific request with a different variation
+        # is not one a master should have to accommodate.
+        scan = [GroupVariationID(GROUP_ANALOG_INPUT, VARIATION_INT32_WITH_FLAG)]
+
         values: dict[int, float] = {}
         while time.time() < deadline:
-            master.send_scan_all_request()
+            master.send_scan_all_request(gv_ids=scan)
             time.sleep(1.0)
-            database = master.get_db_by_group_variation(
-                group=GROUP_ANALOG_INPUT, variation=VARIATION_INT32_WITH_FLAG
-            )
-            values = _flatten(database)
+            values = {}
+            for index in range(len(EXPECTED)):
+                value = master.get_val_by_group_variation_index(
+                    GROUP_ANALOG_INPUT, VARIATION_INT32_WITH_FLAG, index
+                )
+                if _numeric(value):
+                    values[index] = float(value)
             if len(values) >= len(EXPECTED):
                 break
 
@@ -84,25 +94,6 @@ def main() -> None:
         print(f"probe: OK, {len(EXPECTED)} analog inputs match")
     finally:
         master.shutdown()
-
-
-def _flatten(database: object) -> dict[int, float]:
-    """Pull ``{index: value}`` out of whatever shape the master hands back.
-
-    The upstream returns a nested mapping keyed by group-variation, and its
-    exact shape has changed across releases. Rather than pin a version's
-    internals, this walks what it is given and takes the innermost numeric
-    mapping. A shape it cannot read is a failure the caller reports, not a
-    silently empty result.
-    """
-    if isinstance(database, dict):
-        if database and all(isinstance(key, int) for key in database):
-            return {int(k): float(v) for k, v in database.items() if _numeric(v)}
-        for value in database.values():
-            found = _flatten(value)
-            if found:
-                return found
-    return {}
 
 
 def _numeric(value: object) -> bool:
