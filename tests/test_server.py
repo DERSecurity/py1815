@@ -60,6 +60,27 @@ def _session() -> Session:
     return Session(Provider(), outstation_address=OUTSTATION, master_address=MASTER)
 
 
+async def _read_frame(reader: asyncio.StreamReader, timeout: float = 5.0) -> link.LinkFrame:
+    """Read until a whole frame arrives.
+
+    ``StreamReader.read`` returns whatever has arrived, which is any prefix of a
+    frame and not necessarily a frame. Asserting on a single read passes on a
+    fast loopback and fails on a slow one, which is a flake rather than a test.
+    """
+    frames = link.FrameReader()
+
+    async def _pump() -> link.LinkFrame:
+        while True:
+            chunk = await reader.read(4096)
+            if not chunk:
+                raise AssertionError("stream ended before a frame arrived")
+            found = frames.feed(chunk)
+            if found:
+                return found[0]
+
+    return await asyncio.wait_for(_pump(), timeout=timeout)
+
+
 def _request() -> bytes:
     control = link.control_byte(
         from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
@@ -139,6 +160,102 @@ class TestTlsConfiguration:
         assert OutstationServer(_session(), bind="127.0.0.1:0") is not None
 
 
+class StubWriter:
+    """The parts of a ``StreamWriter`` the admission path touches."""
+
+    def __init__(self, ssl_object=None):
+        self._extra = {"peername": ("198.51.100.7", 40000), "ssl_object": ssl_object}
+        self.closed = False
+
+    def get_extra_info(self, name, default=None):
+        return self._extra.get(name, default)
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        return None
+
+
+class SpySession(Session):
+    """A session that records whether its framing state was discarded."""
+
+    def __init__(self):
+        super().__init__(Provider(), outstation_address=OUTSTATION, master_address=MASTER)
+        self.resets = 0
+
+    def connection_reset(self):
+        self.resets += 1
+        super().connection_reset()
+
+
+@pytest.mark.asyncio
+class TestRefusalLeavesTheAssociationAlone:
+    """The composition the allow-list exists for.
+
+    ``authorize`` being correct and displacement being correct do not together
+    prove that a refused peer cannot disturb the master already connected --
+    that depends on the order the two happen in, which is what these pin.
+    """
+
+    def _server(self, session):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.verify_mode = ssl.CERT_REQUIRED
+        server = OutstationServer(
+            session,
+            bind="127.0.0.1:0",
+            ssl_context=context,
+            authorized_peers=frozenset({"master.example"}),
+        )
+        # Stand in for a started listener. Admission refuses to install a
+        # connection once the listener has stopped, and without this the guard
+        # would be what these tests exercised rather than the allow-list.
+        server._server = object()  # type: ignore[assignment]
+        return server
+
+    async def test_a_refused_peer_does_not_displace_the_active_connection(self):
+        session = SpySession()
+        server = self._server(session)
+        incumbent = StubWriter()
+        server._active = incumbent
+
+        refused = StubWriter(ssl_object=StubTls(common_name="intruder.example"))
+        await server._handle(asyncio.StreamReader(), refused)
+
+        assert refused.closed
+        assert server._active is incumbent
+        assert not incumbent.closed
+
+    async def test_a_refused_peer_does_not_reset_framing_state(self):
+        """Half a frame from the real master must still be half a frame after
+        a stranger knocks."""
+        session = SpySession()
+        server = self._server(session)
+        server._active = StubWriter()
+
+        await server._handle(
+            asyncio.StreamReader(), StubWriter(ssl_object=StubTls(common_name="intruder.example"))
+        )
+
+        assert session.resets == 0
+
+    async def test_an_authorized_peer_does_displace_and_reset(self):
+        """The same path, with the allow-list satisfied, to show the refusal is
+        what stopped it rather than the stubs."""
+        session = SpySession()
+        server = self._server(session)
+        incumbent = StubWriter()
+        server._active = incumbent
+
+        admitted = StubWriter(ssl_object=StubTls(common_name="master.example"))
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        await server._handle(reader, admitted)
+
+        assert incumbent.closed
+        assert session.resets == 1
+
+
 @pytest.mark.asyncio
 class TestServing:
     async def _started(self, session=None, **kwargs):
@@ -152,13 +269,12 @@ class TestServing:
             reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
             writer.write(_request())
             await writer.drain()
-            reply = await asyncio.wait_for(reader.read(4096), timeout=5)
+            frame = await _read_frame(reader)
             writer.close()
         finally:
             await server.stop()
 
-        frames = link.FrameReader().feed(reply)
-        assert frames and frames[0].payload[1:][1] == FunctionCode.RESPONSE
+        assert frame.payload[1:][1] == FunctionCode.RESPONSE
 
     async def test_the_bound_port_is_reported(self):
         server = await self._started()
@@ -184,7 +300,7 @@ class TestServing:
 
             second.write(_request())
             await second.drain()
-            assert await asyncio.wait_for(second_reader.read(4096), timeout=5)
+            assert await _read_frame(second_reader)
             first.close()
             second.close()
         finally:
@@ -205,13 +321,12 @@ class TestServing:
             reader2, writer2 = await asyncio.open_connection("127.0.0.1", server.port)
             writer2.write(_request())
             await writer2.drain()
-            reply = await asyncio.wait_for(reader2.read(4096), timeout=5)
+            frame = await _read_frame(reader2)
             writer2.close()
         finally:
             await server.stop()
 
-        fragment = link.FrameReader().feed(reply)[0].payload[1:]
-        assert fragment[2] & 0x80
+        assert frame.payload[1:][2] & 0x80
 
     async def test_half_a_frame_from_a_dead_connection_is_not_completed(self):
         """Framing state is per socket. Completing it across connections would
@@ -270,7 +385,7 @@ class TestServing:
             reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
             writer.write(_request())
             await writer.drain()
-            assert await asyncio.wait_for(reader.read(4096), timeout=5)
+            assert await _read_frame(reader)
             writer.close()
         finally:
             await server.stop()

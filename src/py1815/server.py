@@ -165,6 +165,14 @@ class OutstationServer:
         self._idle_timeout = idle_timeout
         self._server: asyncio.Server | None = None
         self._active: asyncio.StreamWriter | None = None
+        self._active_task: asyncio.Task[None] | None = None
+        #: Admission and shutdown are serialized. Both await -- closing a
+        #: displaced connection waits on its transport -- and without this a
+        #: third connection arriving during that await sees no active
+        #: connection, installs itself, and then the displacing one installs
+        #: itself too. Two sockets would drive one session concurrently, which
+        #: is the state D7 exists to make impossible.
+        self._admission = asyncio.Lock()
 
     @property
     def running(self) -> bool:
@@ -197,23 +205,35 @@ class OutstationServer:
         """Stop accepting, then end the connection in progress.
 
         Both halves are needed: closing the listener stops new connections and
-        leaves an established one being served.
+        leaves an established one being served. Under the admission lock, so a
+        connection that was mid-handshake cannot install itself afterwards.
         """
-        server, self._server = self._server, None
-        if server is not None:
-            server.close()
-        await self._close_active()
+        async with self._admission:
+            server, self._server = self._server, None
+            if server is not None:
+                server.close()
+            await self._close_active()
         if server is not None:
             with contextlib.suppress(Exception):
                 await server.wait_closed()
 
     async def _close_active(self) -> None:
+        """End the active connection and stop its handler.
+
+        The writer is closed and the handler cancelled. Closing alone leaves the
+        handler blocked in ``read`` until the transport notices, and a handler
+        that wakes afterwards would go on feeding a session that belongs to
+        someone else. Its own ``finally`` does the cleanup either way.
+        """
         writer, self._active = self._active, None
-        if writer is None:
-            return
-        writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
+        task, self._active_task = self._active_task, None
+        if writer is not None:
+            writer.close()
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        if writer is not None:
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
@@ -235,14 +255,24 @@ class OutstationServer:
                 return
             logger.info("dnp3: admitted %s as %s", peer, identity)
 
-        if self._active is not None:
-            logger.info("dnp3: %s displaces the connection already established", peer)
-            await self._close_active()
+        async with self._admission:
+            if self._server is None:
+                # The listener stopped while this connection was being
+                # authorized. Admitting it now would outlive stop().
+                logger.info("dnp3: dropping %s: the listener has stopped", peer)
+                writer.close()
+                return
 
-        self._active = writer
-        # Framing state belongs to the socket that is gone; the association's
-        # own state survives, which is what a reconnecting master expects.
-        self._session.connection_reset()
+            if self._active is not None:
+                logger.info("dnp3: %s displaces the connection already established", peer)
+                await self._close_active()
+
+            self._active = writer
+            self._active_task = asyncio.current_task()
+            # Framing state belongs to the socket that is gone; the
+            # association's own state survives, which is what a reconnecting
+            # master expects.
+            self._session.connection_reset()
 
         try:
             await self._serve(reader, writer)
@@ -251,9 +281,12 @@ class OutstationServer:
         except Exception:
             # One connection's failure must not take the listener with it.
             logger.exception("dnp3: connection from %s failed", peer)
+        except asyncio.CancelledError:
+            logger.debug("dnp3: connection from %s cancelled", peer)
         finally:
             if self._active is writer:
                 self._active = None
+                self._active_task = None
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
