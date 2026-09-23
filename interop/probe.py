@@ -21,6 +21,7 @@ import argparse
 import contextlib
 import os
 import sys
+import threading
 import time
 
 from dnp3_python.dnp3station.master import MyMaster
@@ -28,6 +29,9 @@ from pydnp3.opendnp3 import GroupVariationID
 
 #: Must match ``interop/outstation.py``.
 EXPECTED = [10, -20, 30, 40, 50]
+
+#: How long a clean shutdown is given before the probe leaves without it.
+_SHUTDOWN_GRACE = 2.0
 
 GROUP_ANALOG_INPUT = 30
 VARIATION_INT32_WITH_FLAG = 1
@@ -53,6 +57,29 @@ def leave(code: int) -> None:
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(code)
+
+
+def _shutdown_without_waiting(master: object) -> None:
+    """Ask the master to shut down, and do not depend on it finishing.
+
+    ``shutdown()`` joins threads inside a C++ library. Suppressing exceptions
+    around it does nothing about a hang, which is the failure that matters here:
+    a probe that has already printed its verdict would sit in the join until the
+    step timeout and be reported as failed despite having succeeded.
+
+    So it runs on a daemon thread, joined briefly out of politeness. ``leave``
+    ends the process either way, and a daemon thread does not outlive it.
+    """
+    thread = threading.Thread(target=_quiet_shutdown, args=(master,), daemon=True)
+    thread.start()
+    thread.join(timeout=_SHUTDOWN_GRACE)
+    if thread.is_alive():
+        say("shutdown did not return; leaving anyway")
+
+
+def _quiet_shutdown(master: object) -> None:
+    with contextlib.suppress(Exception):
+        master.shutdown()  # type: ignore[attr-defined]
 
 
 def fail(message: str) -> None:
@@ -126,9 +153,7 @@ def main() -> None:
 
         say(f"OK, {len(EXPECTED)} analog inputs match")
     finally:
-        # Best effort, and not waited on: leave() is what actually ends this.
-        with contextlib.suppress(Exception):
-            master.shutdown()
+        _shutdown_without_waiting(master)
     leave(0)
 
 
