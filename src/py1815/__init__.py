@@ -13,7 +13,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
-from py1815 import crc, objects
+from py1815 import crc, events, objects
 from py1815.application import (
     IIN,
     AppControl,
@@ -64,6 +64,7 @@ __all__ = [
     "UnknownObject",
     "build_response",
     "crc",
+    "events",
     "null_response",
     "object_header",
     "objects",
