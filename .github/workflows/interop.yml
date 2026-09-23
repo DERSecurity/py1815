@@ -231,3 +231,29 @@ jobs:
             sweep.json
             suricata-out/eve.json
           if-no-files-found: ignore
+
+  interop:
+    name: interop
+    runs-on: ubuntu-latest
+    needs: [opendnp3-master, rust-master, parsers]
+    if: always()
+    # One gate the branch protection can name, in front of however many peer
+    # jobs there turn out to be.
+    #
+    # Required status checks are configured by job name, so naming each peer
+    # directly means every time a peer is added, removed or renamed the branch
+    # protection silently stops matching -- and a required check that no longer
+    # runs is not a check that fails, it is a pull request that can never merge.
+    # Adding a peer should not require an administrator.
+    steps:
+      - name: Every peer agreed
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "peer jobs: $results"
+          for result in $results; do
+            if [ "$result" != "success" ]; then
+              echo "a peer job did not succeed"
+              exit 1
+            fi
+          done
+          echo "every peer read this outstation without objection"
