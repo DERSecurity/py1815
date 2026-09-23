@@ -43,7 +43,9 @@ jobs:
 
       - name: Start the outstation
         run: |
-          .venv-outstation/bin/python interop/outstation.py --port 20000 \
+          # -u because a cancelled job loses whatever sits in Python's block
+          # buffer, which is exactly the output needed to explain the cancellation.
+          .venv-outstation/bin/python -u interop/outstation.py --port 20000 \
             > outstation.log 2>&1 &
           # Waits for this outstation's own log line rather than for something
           # to be bound to the port. The port test would pass on whatever else
@@ -61,7 +63,10 @@ jobs:
           exit 1
 
       - name: Read it with the independent master
-        run: .venv-master/bin/python interop/probe.py --port 20000
+        # Bounded well inside the job, so a hang fails here with a log rather
+        # than consuming the budget and taking the diagnostics down with it.
+        timeout-minutes: 3
+        run: .venv-master/bin/python -u interop/probe.py --port 20000
 
       - name: Outstation log
         if: always()

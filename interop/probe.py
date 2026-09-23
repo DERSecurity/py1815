@@ -18,6 +18,8 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import sys
 import time
 
@@ -31,9 +33,31 @@ GROUP_ANALOG_INPUT = 30
 VARIATION_INT32_WITH_FLAG = 1
 
 
+def say(message: str) -> None:
+    """Print and flush.
+
+    Flushed because this is a diagnostic first and a check second: when a run
+    hangs, the last line printed is the whole of the evidence, and
+    block-buffered output does not survive the cancellation that ends it.
+    """
+    print(f"probe: {message}", flush=True)
+
+
+def leave(code: int) -> None:
+    """Exit without waiting for the upstream to unwind.
+
+    ``master.shutdown()`` joins threads inside a C++ library, and a probe that
+    has already reached its verdict must not be able to hang on that. The
+    verdict is flushed; nothing after it is worth waiting for.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 def fail(message: str) -> None:
-    print(f"probe: FAIL {message}", file=sys.stderr)
-    sys.exit(1)
+    print(f"probe: FAIL {message}", file=sys.stderr, flush=True)
+    leave(1)
 
 
 def main() -> None:
@@ -59,7 +83,7 @@ def main() -> None:
             time.sleep(0.5)
         if not master.is_connected:
             fail(f"no connection to {args.host}:{args.port} within {args.timeout}s")
-        print("probe: connected")
+        say("connected")
 
         # Ask for the variation this outstation serves. The default scan list
         # leads with group 30 variation 6 -- double-precision float -- and an
@@ -68,7 +92,10 @@ def main() -> None:
         scan = [GroupVariationID(GROUP_ANALOG_INPUT, VARIATION_INT32_WITH_FLAG)]
 
         values: dict[int, float] = {}
+        attempt = 0
         while time.time() < deadline:
+            attempt += 1
+            say(f"scan {attempt}, {deadline - time.time():.0f}s left")
             master.send_scan_all_request(gv_ids=scan)
             time.sleep(1.0)
             values = {}
@@ -84,7 +111,7 @@ def main() -> None:
         if not values:
             fail("the integrity poll returned no analog inputs")
 
-        print(f"probe: read {values}")
+        say(f"read {values}")
         # Quality is not checked here, and cannot be with this peer: its
         # database stores bare scalars (``DbPointVal = Union[float, int, bool]``)
         # and discards the flag octet before any caller sees it. Index 3 is
@@ -97,9 +124,12 @@ def main() -> None:
             if float(values[index]) != float(expected):
                 fail(f"index {index} read {values[index]}, expected {expected}")
 
-        print(f"probe: OK, {len(EXPECTED)} analog inputs match")
+        say(f"OK, {len(EXPECTED)} analog inputs match")
     finally:
-        master.shutdown()
+        # Best effort, and not waited on: leave() is what actually ends this.
+        with contextlib.suppress(Exception):
+            master.shutdown()
+    leave(0)
 
 
 def _numeric(value: object) -> bool:
