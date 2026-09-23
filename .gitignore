@@ -10,3 +10,11 @@ build/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Build output of the interoperability Rust master.
+interop/rust-master/target/
+
+# Artifacts the interoperability sweep writes.
+sweep.pcap
+sweep.json
+suricata-out/
