@@ -117,6 +117,21 @@ def _refused(function: int, name: str, note: str = "") -> Case:
     )
 
 
+def _silent(function: int, name: str) -> Case:
+    """A function the standard says draws no reply at all.
+
+    IEEE 1815-2012 Table 4-2 describes each of these as "same as function code N
+    but outstation shall not send a response", so the expectation is silence
+    whether or not this outstation implements what was asked.
+    """
+    return Case(
+        name=name,
+        payload=_app(function),
+        expect=Expect(silent=True),
+        note="the standard says this one draws no reply",
+    )
+
+
 #: The functions that must be answered, the ones that must be refused out loud,
 #: and the ones that must be met with silence.
 #:
@@ -161,12 +176,7 @@ CASES: list[Case] = [
     _refused(FunctionCode.SELECT, "control: select"),
     _refused(FunctionCode.OPERATE, "control: operate"),
     _refused(FunctionCode.DIRECT_OPERATE, "control: direct operate"),
-    Case(
-        name="control: direct operate, no acknowledgment",
-        payload=_app(FunctionCode.DIRECT_OPERATE_NR),
-        expect=Expect(silent=True),
-        note="asks for no response, so it cannot be refused in band; dropped",
-    ),
+    _silent(FunctionCode.DIRECT_OPERATE_NR, "control: direct operate, no acknowledgment"),
     # -- everything else the outstation does not implement --------------------
     _refused(FunctionCode.IMMED_FREEZE, "freeze: immediate"),
     _refused(FunctionCode.FREEZE_CLEAR, "freeze: clear"),
@@ -191,28 +201,18 @@ CASES: list[Case] = [
     _refused(FunctionCode.ABORT_FILE, "file: abort"),
     _refused(FunctionCode.AUTH_REQUEST, "secure authentication: request"),
     _refused(0x7F, "a function code the standard does not define"),
-    # -- the no-response freeze variants --------------------------------------
+    # -- the rest of the no-response family -----------------------------------
     #
-    # DNP3 gives four function codes the "no acknowledgment" meaning, and this
-    # outstation meets one of them with silence. The other three are answered
-    # with a refusal, which a master that asked for no response is not
-    # expecting. Pinned as it behaves rather than as it should behave, so the
-    # divergence is visible and this job does not fail on a thing nobody has
-    # decided yet. If it is changed, these three move to Expect(silent=True).
-    _refused(
-        FunctionCode.IMMED_FREEZE_NR,
-        "freeze: immediate, no acknowledgment",
-        note="answered though the function asks for no response",
-    ),
-    _refused(
-        FunctionCode.FREEZE_CLEAR_NR,
-        "freeze: clear, no acknowledgment",
-        note="answered though the function asks for no response",
-    ),
-    _refused(
-        FunctionCode.FREEZE_AT_TIME_NR,
-        "freeze: at time, no acknowledgment",
-        note="answered though the function asks for no response",
+    # IEEE 1815-2012 Table 4-2 describes each of these as "same as function code
+    # N but outstation shall not send a response". The obligation is on the
+    # function code, not on whether the outstation implements what was asked, so
+    # a refusal here would be a fragment sent to a master that is not listening.
+    _silent(FunctionCode.IMMED_FREEZE_NR, "freeze: immediate, no acknowledgment"),
+    _silent(FunctionCode.FREEZE_CLEAR_NR, "freeze: clear, no acknowledgment"),
+    _silent(FunctionCode.FREEZE_AT_TIME_NR, "freeze: at time, no acknowledgment"),
+    _silent(
+        FunctionCode.AUTH_REQUEST_NO_ACK,
+        "secure authentication: request, no acknowledgment",
     ),
     # -- confirmations are not requests ---------------------------------------
     Case(

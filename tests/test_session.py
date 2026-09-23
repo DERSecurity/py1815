@@ -229,6 +229,32 @@ class TestRefusals:
         assert reply == b""
         assert recorder.headers == []
 
+    @pytest.mark.parametrize(
+        "function",
+        [
+            FunctionCode.DIRECT_OPERATE_NR,
+            FunctionCode.IMMED_FREEZE_NR,
+            FunctionCode.FREEZE_CLEAR_NR,
+            FunctionCode.FREEZE_AT_TIME_NR,
+            FunctionCode.AUTH_REQUEST_NO_ACK,
+        ],
+    )
+    def test_every_no_response_function_is_met_with_silence(self, function):
+        """IEEE 1815-2012 Table 4-2 describes each of these as "same as function
+        code N but outstation shall not send a response".
+
+        Refusing out loud is this outstation's rule everywhere else, and these
+        are the stated exception: a master that sent one is not listening, so a
+        refusal addressed to it arrives outside any conversation. Parametrized
+        rather than written once because the cost of missing a member is silent
+        non-conformance on a function nobody tests by hand."""
+        session, recorder = _session()
+
+        reply = session.receive(_user_data(bytes([0xC0, function])))
+
+        assert reply == b""
+        assert recorder.headers == []
+
     def test_an_unsupported_function_earns_the_function_bit(self):
         session, _ = _session()
 

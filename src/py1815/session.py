@@ -64,6 +64,27 @@ _CONTROL_FUNCTIONS = frozenset(
     }
 )
 
+#: The function codes IEEE 1815-2012 Table 4-2 defines as taking no reply, each
+#: described there as "same as function code N but outstation shall not send a
+#: response". The obligation is on the function code rather than on whether the
+#: outstation implements what was asked: a master that sent one of these is not
+#: listening for an answer, so a refusal addressed to it is a fragment arriving
+#: outside any conversation.
+#:
+#: Refusing out loud is this outstation's rule everywhere else, and this is the
+#: stated exception to it. That makes the set worth naming rather than leaving
+#: as one special case, because the cost of missing a member is silent
+#: non-conformance on a function nobody tests by hand.
+_NO_RESPONSE_FUNCTIONS = frozenset(
+    {
+        FunctionCode.DIRECT_OPERATE_NR,
+        FunctionCode.IMMED_FREEZE_NR,
+        FunctionCode.FREEZE_CLEAR_NR,
+        FunctionCode.FREEZE_AT_TIME_NR,
+        FunctionCode.AUTH_REQUEST_NO_ACK,
+    }
+)
+
 #: Functions this outstation answers. Everything else earns IIN2.1.
 _SUPPORTED_FUNCTIONS = frozenset({FunctionCode.CONFIRM, FunctionCode.READ, FunctionCode.WRITE})
 
@@ -234,11 +255,11 @@ class Session:
         known = request.known_function
         sequence = request.control.sequence
 
-        if known is FunctionCode.DIRECT_OPERATE_NR:
-            # The one control that asks for no response. It cannot be refused in
-            # band, so it is dropped rather than executed, and said out loud
-            # here because silence is also what executing it would look like.
-            logger.warning("dnp3: dropping DIRECT_OPERATE_NR; this outstation does not command")
+        if known in _NO_RESPONSE_FUNCTIONS:
+            # Asks for no response, so it cannot be refused in band. Dropped
+            # rather than executed, and said out loud in the log because silence
+            # is also what executing it would look like.
+            logger.warning("dnp3: dropping %s; it asks for no response", known.name)
             return b""
 
         if known in _CONTROL_FUNCTIONS:
