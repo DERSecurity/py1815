@@ -364,6 +364,22 @@ class TestRefusalLeavesTheAssociationAlone:
 
         assert not incumbent.transport.aborted
 
+    async def test_a_writer_without_a_transport_fails_loudly(self):
+        """The failure this fix exists to prevent. Suppressing the lookup as
+        well as the call would make an absent transport look like a connection
+        that was aborted, which is what the getattr default did."""
+        server = self._server(SpySession())
+        broken = StubWriter()
+        del broken.transport
+        server._active = broken
+
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        with pytest.raises(AttributeError):
+            await server._handle(
+                reader, StubWriter(ssl_object=StubTls(common_name="master.example"))
+            )
+
     async def test_shutdown_closes_gracefully_rather_than_aborting(self):
         """A master connected at stop() is usually healthy, and aborting would
         discard a response already queued."""

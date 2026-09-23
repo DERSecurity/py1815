@@ -293,12 +293,15 @@ class OutstationServer:
 
         if writer is not None:
             if abort:
-                # Called rather than probed for. An earlier revision reached
-                # this through getattr with a None default, which meant an
-                # absent attribute would silently stop aborting and the bounded
-                # wait below would hide it.
+                # The lookup sits outside the suppression and the call inside
+                # it. An earlier revision had both inside, which left an absent
+                # transport silently skipping the abort -- the same failure the
+                # getattr default before it had, wearing a different hat. Only
+                # abort() itself is allowed to fail, and only because a
+                # transport already closing raises from it.
+                transport = writer.transport
                 with contextlib.suppress(Exception):
-                    writer.transport.abort()
+                    transport.abort()
             writer.close()
         if task is not None and task is not asyncio.current_task():
             task.cancel()
