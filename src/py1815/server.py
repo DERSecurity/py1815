@@ -32,6 +32,7 @@ import contextlib
 import hashlib
 import logging
 import ssl
+from dataclasses import dataclass
 
 from py1815.session import Session
 
@@ -52,20 +53,40 @@ _READ_SIZE = 4096
 #: name.
 FINGERPRINT_PREFIX = "sha256:"
 
+#: How long a displaced connection is waited on before it is abandoned.
+_CLOSE_TIMEOUT = 2.0
+
 
 class PeerRefused(Exception):
     """A connection whose certificate is not on the allow-list."""
 
 
-def peer_identities(ssl_object: ssl.SSLObject) -> set[str]:
-    """Every name and fingerprint a peer certificate offers for matching.
+@dataclass(frozen=True)
+class PeerIdentity:
+    """What a peer certificate offers, kept apart by kind.
 
-    The common name and the DNS entries of the subject alternative name, plus
-    the certificate's own SHA-256 fingerprint. Names come from the certificate
-    the chain validated, so they are as trustworthy as the CA that signed it --
-    which is precisely why an allow-list is needed on top.
+    Names and the fingerprint are separate fields rather than one set, and that
+    separation is the security property rather than tidiness. A certificate's
+    subject is chosen by whoever requested it; its fingerprint is not. Holding
+    both in one collection let a common name of the literal text
+    ``sha256:<hex>`` satisfy an entry that pinned that fingerprint -- and since
+    a pinned fingerprint is readable off the certificate being protected, the
+    value needed to forge the match is published by the thing it protects.
     """
-    identities: set[str] = set()
+
+    names: frozenset[str]
+    fingerprint: str | None
+
+
+def peer_identities(ssl_object: ssl.SSLObject) -> PeerIdentity:
+    """What this peer offers for matching: its names, and its fingerprint.
+
+    Names are the common name and the DNS entries of the subject alternative
+    name. They come from the certificate the chain validated, so they are as
+    trustworthy as the CA that signed it -- which is precisely why an allow-list
+    is needed on top.
+    """
+    names: set[str] = set()
 
     certificate = ssl_object.getpeercert()
     if certificate:
@@ -77,38 +98,56 @@ def peer_identities(ssl_object: ssl.SSLObject) -> set[str]:
         for field in certificate.get("subject", ()):
             for pair in field:
                 if len(pair) == 2 and pair[0] == "commonName":
-                    identities.add(str(pair[1]))
+                    names.add(str(pair[1]))
         for entry in certificate.get("subjectAltName", ()):
             if len(entry) == 2 and entry[0] == "DNS":
-                identities.add(str(entry[1]))
+                names.add(str(entry[1]))
 
     der = ssl_object.getpeercert(binary_form=True)
-    if der:
-        identities.add(FINGERPRINT_PREFIX + hashlib.sha256(der).hexdigest())
+    fingerprint = FINGERPRINT_PREFIX + hashlib.sha256(der).hexdigest() if der else None
 
-    return identities
+    return PeerIdentity(names=frozenset(names), fingerprint=fingerprint)
 
 
 def authorize(ssl_object: ssl.SSLObject, allowed: frozenset[str]) -> str:
     """The identity this peer matched, or raise :class:`PeerRefused`.
 
+    Each entry is matched only against its own kind: a ``sha256:`` entry against
+    the certificate's fingerprint, anything else against its names. A name can
+    therefore never satisfy a pinned fingerprint however it is spelled.
+
     Matching is exact and case-sensitive for fingerprints; names are compared
     case-insensitively, since DNS is. No wildcards: an allow-list whose entries
     can match things nobody enumerated is not an allow-list.
     """
-    identities = peer_identities(ssl_object)
-    lowered = {name.lower() for name in identities if not name.startswith(FINGERPRINT_PREFIX)}
+    identity = peer_identities(ssl_object)
+    lowered = {name.lower() for name in identity.names}
 
     for entry in allowed:
         if entry.startswith(FINGERPRINT_PREFIX):
-            if entry in identities:
+            if identity.fingerprint is not None and entry == identity.fingerprint:
                 return entry
         elif entry.lower() in lowered:
             return entry
 
     raise PeerRefused(
-        f"peer offers {sorted(identities) or ['no identity']}, none of which is allowed"
+        f"peer offers names {sorted(identity.names) or ['none']} and fingerprint "
+        f"{identity.fingerprint or 'none'}, none of which is allowed"
     )
+
+
+def _split_bind(bind: str) -> tuple[str, int]:
+    """Split ``host:port``, including the bracketed form IPv6 needs.
+
+    ``[::1]:20000`` is how an IPv6 literal is written with a port, and splitting
+    on the last colon alone leaves the brackets on the host, which then does not
+    resolve.
+    """
+    if bind.startswith("["):
+        host, _, rest = bind.partition("]")
+        return host[1:], int(rest.lstrip(":"))
+    host, _, port = bind.rpartition(":")
+    return host or "0.0.0.0", int(port)
 
 
 class OutstationServer:
@@ -155,11 +194,19 @@ class OutstationServer:
                     "a TLS listener requires ssl.CERT_REQUIRED: without a client "
                     "certificate there is no identity to check against authorized_peers"
                 )
+        elif authorized_peers:
+            # The third configuration that looks secure and is not. A plaintext
+            # listener has no certificate to match, so the allow-list would be
+            # stored and never consulted -- and the caller who wrote it believes
+            # they have restricted who may connect. They have not: anyone may,
+            # and under D7 anyone may displace the master.
+            raise ValueError(
+                "authorized_peers requires a TLS listener: a plaintext connection "
+                "presents no certificate, so the allow-list could not be applied"
+            )
 
         self._session = session
-        host, _, port = bind.rpartition(":")
-        self._host = host or "0.0.0.0"
-        self._port = int(port)
+        self._host, self._port = _split_bind(bind)
         self._ssl = ssl_context
         self._allowed = frozenset(authorized_peers or ())
         self._idle_timeout = idle_timeout
@@ -218,22 +265,37 @@ class OutstationServer:
                 await server.wait_closed()
 
     async def _close_active(self) -> None:
-        """End the active connection and stop its handler.
+        """End the active connection and stop its handler, without waiting on it.
 
-        The writer is closed and the handler cancelled. Closing alone leaves the
-        handler blocked in ``read`` until the transport notices, and a handler
-        that wakes afterwards would go on feeding a session that belongs to
-        someone else. Its own ``finally`` does the cleanup either way.
+        The transport is aborted rather than closed gracefully. The connection
+        being displaced is typically one whose socket died without a FIN, which
+        is the case D7 names, and a graceful close there waits on TCP
+        retransmission or, under TLS, on a shutdown that can take tens of
+        seconds. Since this runs under the admission lock, waiting would block
+        the displacing connection and ``stop()`` behind it -- letting a dead
+        master hold the association through a second door, which is the door
+        displacement exists to shut.
+
+        The handler is cancelled too. Closing alone leaves it blocked in
+        ``read`` until the transport notices, and a handler that woke afterwards
+        would go on feeding a session that now belongs to someone else.
         """
         writer, self._active = self._active, None
         task, self._active_task = self._active_task, None
+
         if writer is not None:
+            transport = getattr(writer, "transport", None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    transport.abort()
             writer.close()
         if task is not None and task is not asyncio.current_task():
             task.cancel()
         if writer is not None:
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
+            # Bounded: an aborted transport closes promptly, and if it does not,
+            # nothing here should wait on it.
+            with contextlib.suppress(Exception, TimeoutError):
+                await asyncio.wait_for(writer.wait_closed(), timeout=_CLOSE_TIMEOUT)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
@@ -276,13 +338,17 @@ class OutstationServer:
 
         try:
             await self._serve(reader, writer)
+        except asyncio.CancelledError:
+            # Displacement cancels this handler. Re-raised so the task finishes
+            # cancelled rather than appearing to have returned normally, which
+            # is what anything awaiting it would otherwise be told.
+            logger.debug("dnp3: connection from %s cancelled", peer)
+            raise
         except (TimeoutError, ConnectionResetError, BrokenPipeError) as exc:
             logger.info("dnp3: connection from %s ended: %s", peer, exc)
         except Exception:
             # One connection's failure must not take the listener with it.
             logger.exception("dnp3: connection from %s failed", peer)
-        except asyncio.CancelledError:
-            logger.debug("dnp3: connection from %s cancelled", peer)
         finally:
             if self._active is writer:
                 self._active = None
@@ -299,4 +365,8 @@ class OutstationServer:
             reply = self._session.receive(data)
             if reply:
                 writer.write(reply)
-                await writer.drain()
+                # Bounded like the read: a peer that connects and stops reading
+                # would otherwise park this handler in drain() indefinitely,
+                # holding the association -- which is what the idle timeout is
+                # for, applied to only half the exchange.
+                await asyncio.wait_for(writer.drain(), timeout=self._idle_timeout)

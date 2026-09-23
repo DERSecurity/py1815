@@ -91,19 +91,27 @@ def _request() -> bytes:
 
 
 class TestPeerIdentities:
-    def test_a_common_name_is_offered(self):
-        assert "master.example" in peer_identities(StubTls(common_name="master.example"))
+    def test_a_common_name_is_offered_as_a_name(self):
+        assert "master.example" in peer_identities(StubTls(common_name="master.example")).names
 
-    def test_subject_alternative_names_are_offered(self):
-        identities = peer_identities(StubTls(dns=("a.example", "b.example")))
+    def test_subject_alternative_names_are_offered_as_names(self):
+        identity = peer_identities(StubTls(dns=("a.example", "b.example")))
 
-        assert {"a.example", "b.example"} <= identities
+        assert {"a.example", "b.example"} <= identity.names
 
-    def test_the_fingerprint_is_offered(self):
-        assert FINGERPRINT in peer_identities(StubTls(common_name="x"))
+    def test_the_fingerprint_is_offered_separately_from_the_names(self):
+        """Kept apart because a subject is chosen by whoever requested the
+        certificate and a fingerprint is not."""
+        identity = peer_identities(StubTls(common_name="x"))
 
-    def test_a_certificate_with_nothing_usable_offers_only_its_fingerprint(self):
-        assert peer_identities(StubTls()) == {FINGERPRINT}
+        assert identity.fingerprint == FINGERPRINT
+        assert FINGERPRINT not in identity.names
+
+    def test_a_certificate_with_no_usable_name_offers_only_a_fingerprint(self):
+        identity = peer_identities(StubTls())
+
+        assert identity.names == frozenset()
+        assert identity.fingerprint == FINGERPRINT
 
 
 class TestAuthorize:
@@ -138,6 +146,25 @@ class TestAuthorize:
         with pytest.raises(PeerRefused):
             authorize(StubTls(common_name="master.example"), frozenset())
 
+    def test_a_name_cannot_satisfy_a_pinned_fingerprint(self):
+        """The bypass this separation exists to prevent.
+
+        A pinned fingerprint is readable off the certificate being protected,
+        so an attacker who can have a CA issue a certificate with a chosen
+        subject could put that published string in the common name. Matching by
+        kind is what makes the spelling irrelevant.
+        """
+        impostor = StubTls(common_name=FINGERPRINT, der=b"a different certificate entirely")
+
+        with pytest.raises(PeerRefused):
+            authorize(impostor, frozenset({FINGERPRINT}))
+
+    def test_a_subject_alternative_name_cannot_either(self):
+        impostor = StubTls(dns=(FINGERPRINT,), der=b"a different certificate entirely")
+
+        with pytest.raises(PeerRefused):
+            authorize(impostor, frozenset({FINGERPRINT}))
+
 
 class TestTlsConfiguration:
     def test_tls_without_an_allow_list_is_refused_at_construction(self):
@@ -158,6 +185,33 @@ class TestTlsConfiguration:
 
     def test_plaintext_needs_no_allow_list(self):
         assert OutstationServer(_session(), bind="127.0.0.1:0") is not None
+
+    def test_an_allow_list_without_tls_is_refused(self):
+        """Storing it and never consulting it would leave the caller believing
+        they had restricted who may connect."""
+        with pytest.raises(ValueError, match="requires a TLS listener"):
+            OutstationServer(
+                _session(), bind="127.0.0.1:0", authorized_peers=frozenset({"master.example"})
+            )
+
+
+class TestBindParsing:
+    def test_a_host_and_port_split(self):
+        server = OutstationServer(_session(), bind="127.0.0.1:20001")
+
+        assert (server._host, server._port) == ("127.0.0.1", 20001)
+
+    def test_a_bracketed_ipv6_literal_keeps_its_address_and_loses_its_brackets(self):
+        """`[::1]:20000` is how an IPv6 literal is written with a port, and the
+        brackets are not part of the address."""
+        server = OutstationServer(_session(), bind="[::1]:20000")
+
+        assert (server._host, server._port) == ("::1", 20000)
+
+    def test_a_bare_port_binds_every_interface(self):
+        server = OutstationServer(_session(), bind=":20000")
+
+        assert (server._host, server._port) == ("0.0.0.0", 20000)
 
 
 class StubWriter:
