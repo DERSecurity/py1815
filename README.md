@@ -28,18 +28,6 @@ A DNP3 (IEEE 1815) outstation in pure Python.
 tested; the listener, the event path and the point-map loader are not. Nothing is released yet,
 and the API is not stable.
 
-## Why this exists
-
-There is no maintained, importable DNP3 stack for current Python. The widely used bindings wrap
-[opendnp3](https://github.com/dnp3/opendnp3), which was archived and declared end-of-life in
-September 2022, and they publish wheels only up to CPython 3.10. Everything else in the
-ecosystem is a compiled extension, which means a prebuilt wheel per interpreter version and a
-cross-compiler for anything unusual.
-
-This library is pure Python and depends on nothing outside the standard library. That is the
-point of it: it runs on embedded targets where no toolchain is available, and it upgrades with
-the interpreter rather than waiting for someone to publish a wheel.
-
 ## What it does
 
 An outstation -- the side a SCADA master connects *to*. Subset Level 2 is the target, over TCP
