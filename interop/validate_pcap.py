@@ -30,24 +30,31 @@ import shutil
 import subprocess
 import sys
 
-#: The fields this asks tshark for, one row per DNP3 frame.
+#: The two checksum status fields, which are the point of the exercise.
 #:
-#: The two CRC status fields are the point of the exercise. Wireshark reports
-#: them as "Good"/"Bad" strings by default; ``-o`` below forces the numeric
-#: form, which is stable across releases in a way the display string is not.
+#: Note the prefix. Every other field this dissector registers is ``dnp3.``,
+#: and these two are ``dnp.`` -- an inconsistency upstream, not a typo here.
+#: Getting it wrong does not produce an error: tshark returns an empty column
+#: for a field nobody defines, so every checksum assertion below would pass by
+#: having nothing to look at. CHECKSUM_FIELDS_SEEN guards against that.
+CHECKSUM_FIELDS = [
+    "dnp.hdr.CRC.status",
+    "dnp.data_chunk.CRC.status",
+]
+
+#: The fields this asks tshark for, one row per DNP3 frame.
 FIELDS = [
     "frame.number",
-    "dnp3.hdr.CRC.status",
-    "dnp3.data_chunk.CRC.status",
+    *CHECKSUM_FIELDS,
     "dnp3.ctl.prifunc",
     "dnp3.ctl.secfunc",
     "dnp3.al.func",
     "dnp3.al.iin",
 ]
 
-#: Wireshark's checksum-status convention: 1 is good, 0 is bad, 2 is
-#: unverified. Anything that is not good on a frame that has the field is a
-#: frame this library emitted with a checksum the dissector disagrees with.
+#: Wireshark's ``proto_checksum_vals``: 0 bad, 1 good, 2 unverified, 3 not
+#: present, 4 illegal. Anything that is not good on a frame that has the field
+#: is a frame this library emitted with a checksum the dissector disagrees with.
 CHECKSUM_GOOD = "1"
 
 #: Application function codes the capture must contain for the run to be
@@ -133,15 +140,21 @@ def main() -> None:
 
     bad_header = []
     bad_chunk = []
+    #: How many checksum verdicts this dissector actually reported. Zero means
+    #: the field names above no longer match what it registers, and every
+    #: checksum assertion below is being made against empty strings.
+    checksums_seen = 0
     app_functions: collections.Counter[str] = collections.Counter()
     link_functions: collections.Counter[str] = collections.Counter()
 
     for row in rows:
         number = row["frame.number"]
-        for status in _statuses(row["dnp3.hdr.CRC.status"]):
+        for status in _statuses(row["dnp.hdr.CRC.status"]):
+            checksums_seen += 1
             if status != CHECKSUM_GOOD:
                 bad_header.append(number)
-        for status in _statuses(row["dnp3.data_chunk.CRC.status"]):
+        for status in _statuses(row["dnp.data_chunk.CRC.status"]):
+            checksums_seen += 1
             if status != CHECKSUM_GOOD:
                 bad_chunk.append(number)
         for function in _statuses(row["dnp3.al.func"]):
@@ -153,6 +166,14 @@ def main() -> None:
     print(f"validate-pcap: {len(rows)} DNP3 frames, parsed by Wireshark's dissector")
     print(f"validate-pcap: link functions seen: {dict(sorted(link_functions.items()))}")
     print(f"validate-pcap: application functions seen: {dict(sorted(app_functions.items()))}")
+
+    if checksums_seen == 0:
+        fail(
+            "this dissector reported no checksum verdicts at all, so nothing below "
+            f"was checked. The fields {CHECKSUM_FIELDS} are no longer what it "
+            "registers; run `tshark -G fields | grep CRC.status` to find the new names"
+        )
+    print(f"validate-pcap: {checksums_seen} checksum verdicts reported")
 
     if bad_header:
         fail(f"link header checksum rejected on frames {sorted(set(bad_header))}")
