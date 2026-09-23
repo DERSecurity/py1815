@@ -26,6 +26,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from collections.abc import Iterable
@@ -115,6 +116,10 @@ class EventBuffers:
     """
 
     def __init__(self, *, capacity: int = DEFAULT_CAPACITY) -> None:
+        if capacity < 1:
+            # Otherwise the first event drops one from an empty buffer, and the
+            # IndexError names a deque rather than the configuration.
+            raise ValueError(f"capacity is {capacity}; a buffer holds at least one event")
         self._buffers = {cls: _ClassBuffer(capacity) for cls in EventClass}
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
@@ -204,6 +209,16 @@ class EventBuffers:
             # holding the same number has not moved and has changed in the way
             # that matters, and a deadband applied here would hide it.
             return True
+
+        # NaN before the deadband, because every comparison involving it is
+        # false -- so a reading that went NaN would look unchanged, the master
+        # would never hear about it, and the encoder's REFERENCE_ERR would never
+        # reach the wire. The recovery back to a real number would be lost the
+        # same way. NaN to NaN is genuinely unchanged.
+        was_nan, is_nan = math.isnan(previous.value), math.isnan(current.value)
+        if was_nan or is_nan:
+            return was_nan != is_nan
+
         return abs(current.value - previous.value) > deadband
 
     @staticmethod

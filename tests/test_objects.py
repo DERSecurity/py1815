@@ -352,6 +352,22 @@ class TestEventBlocks:
                 GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [(0x10000, self._event(1))]
             )
 
+    def test_a_negative_index_is_refused_as_a_negative_index(self):
+        """It passes an upper-bound check and then raises from to_bytes, which
+        names the encoding rather than the mistake."""
+        with pytest.raises(ValueError, match="negative"):
+            event_block(
+                GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [(-1, self._event(1))]
+            )
+
+    def test_too_many_events_is_refused_as_a_count(self):
+        """The count and the index are different limits, and saying the index is
+        wrong when the count is would send someone looking in the wrong place."""
+        events = [(0, self._event(1))] * (0xFFFF + 1)
+
+        with pytest.raises(ValueError, match="exceed the largest count"):
+            event_block(GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, events)
+
     def test_an_empty_block_is_refused(self):
         with pytest.raises(ValueError, match="at least one event"):
             event_block(GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [])

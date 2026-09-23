@@ -87,6 +87,53 @@ class TestAnalogDeadbands:
         assert _record(buffers, 1, 50, deadband=5.0) is not None
 
 
+class TestNonFiniteReadings:
+    """A NaN arrives when a register was not read or a division had no
+    denominator. Every comparison involving it is false, so it is handled before
+    the deadband or the transition disappears entirely."""
+
+    def test_a_reading_that_becomes_nan_is_reported(self):
+        """Otherwise the encoder's REFERENCE_ERR never reaches the wire: the
+        master is never told to go and look."""
+        buffers = _buffers()
+        _record(buffers, 0, 10, deadband=1000.0)
+
+        assert _record(buffers, 0, float("nan"), deadband=1000.0) is not None
+
+    def test_recovery_from_nan_to_a_real_number_is_reported(self):
+        buffers = _buffers()
+        _record(buffers, 0, float("nan"), deadband=1000.0)
+
+        assert _record(buffers, 0, 10, deadband=1000.0) is not None
+
+    def test_nan_holding_at_nan_reports_nothing(self):
+        """It has not changed, and repeating it every cycle would fill the
+        buffer with the same non-reading."""
+        buffers = _buffers()
+        _record(buffers, 0, float("nan"))
+
+        assert _record(buffers, 0, float("nan")) is None
+
+    def test_an_infinity_is_still_subject_to_the_deadband(self):
+        """It is a number, however implausible, and it saturates on the wire."""
+        buffers = _buffers()
+        _record(buffers, 0, float("inf"))
+
+        assert _record(buffers, 0, float("inf")) is None
+
+
+class TestConfiguration:
+    def test_a_capacity_below_one_is_refused(self):
+        """It would drop from an empty buffer on the first event, and the
+        IndexError would name a deque rather than the configuration."""
+        with pytest.raises(ValueError, match="at least one event"):
+            EventBuffers(capacity=0)
+
+    def test_a_negative_capacity_is_refused(self):
+        with pytest.raises(ValueError, match="at least one event"):
+            EventBuffers(capacity=-1)
+
+
 class TestQualityChanges:
     def test_a_quality_change_is_reported_whatever_the_deadband(self):
         """A point that goes comm-lost holding the same number has not moved and

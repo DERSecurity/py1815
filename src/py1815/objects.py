@@ -346,17 +346,23 @@ def event_block(group: int, variation: int, items: Sequence[tuple[int, bytes]]) 
         raise ValueError("an event block carries at least one event")
 
     count = len(items)
+    if count > 0xFFFF:
+        raise ValueError(f"{count} events exceed the largest count a header can carry")
+
     widest = max(index for index, _ in items)
+    if any(index < 0 for index, _ in items):
+        raise ValueError("an event index is negative")
+    if widest > 0xFFFF:
+        raise ValueError(f"index {widest} does not fit a 16-bit index")
+
     if count <= 0xFF and widest <= 0xFF:
         header = bytes([group, variation, QualifierCode.UINT8_COUNT_UINT8_INDEX, count])
         prefix = 1
-    elif count <= 0xFFFF and widest <= 0xFFFF:
+    else:
         header = struct.pack(
             "<BBBH", group, variation, QualifierCode.UINT16_COUNT_UINT16_INDEX, count
         )
         prefix = 2
-    else:
-        raise ValueError(f"index {widest} does not fit a 16-bit index")
 
     body = bytearray()
     for index, encoded in items:
