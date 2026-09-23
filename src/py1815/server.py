@@ -259,41 +259,53 @@ class OutstationServer:
             server, self._server = self._server, None
             if server is not None:
                 server.close()
-            await self._close_active()
+            await self._close_active(abort=False)
         if server is not None:
             with contextlib.suppress(Exception):
                 await server.wait_closed()
 
-    async def _close_active(self) -> None:
-        """End the active connection and stop its handler, without waiting on it.
+    async def _close_active(self, *, abort: bool) -> None:
+        """End the active connection and stop its handler.
 
-        The transport is aborted rather than closed gracefully. The connection
-        being displaced is typically one whose socket died without a FIN, which
-        is the case D7 names, and a graceful close there waits on TCP
-        retransmission or, under TLS, on a shutdown that can take tens of
-        seconds. Since this runs under the admission lock, waiting would block
-        the displacing connection and ``stop()`` behind it -- letting a dead
-        master hold the association through a second door, which is the door
-        displacement exists to shut.
+        ``abort`` is the difference between the two callers, and they want
+        opposite things.
 
-        The handler is cancelled too. Closing alone leaves it blocked in
-        ``read`` until the transport notices, and a handler that woke afterwards
-        would go on feeding a session that now belongs to someone else.
+        *Displacement aborts.* The connection being displaced is typically one
+        whose socket died without a FIN, which is the case D7 names, and a
+        graceful close there waits on TCP retransmission or, under TLS, on a
+        shutdown that can take tens of seconds. This runs under the admission
+        lock, so waiting would block the displacing connection and ``stop()``
+        behind it -- letting a dead master hold the association through a second
+        door, which is the door displacement exists to shut.
+
+        *Shutdown does not.* A master connected at ``stop()`` is usually
+        healthy, and aborting would discard a response already queued. The wait
+        is bounded either way, so a peer that has in fact gone away costs a
+        couple of seconds rather than the shutdown.
+
+        The handler is cancelled in both cases. Closing alone leaves it blocked
+        in ``read`` until the transport notices, and a handler that woke
+        afterwards would go on feeding a session that now belongs to someone
+        else.
         """
         writer, self._active = self._active, None
         task, self._active_task = self._active_task, None
 
         if writer is not None:
-            transport = getattr(writer, "transport", None)
-            if transport is not None:
+            if abort:
+                # Called rather than probed for. An earlier revision reached
+                # this through getattr with a None default, which meant an
+                # absent attribute would silently stop aborting and the bounded
+                # wait below would hide it.
                 with contextlib.suppress(Exception):
-                    transport.abort()
+                    writer.transport.abort()
             writer.close()
         if task is not None and task is not asyncio.current_task():
             task.cancel()
         if writer is not None:
-            # Bounded: an aborted transport closes promptly, and if it does not,
-            # nothing here should wait on it.
+            # Bounded either way: an aborted transport closes promptly, and a
+            # gracefully closed one belonging to a peer that has gone away must
+            # not hold up a shutdown.
             with contextlib.suppress(Exception, TimeoutError):
                 await asyncio.wait_for(writer.wait_closed(), timeout=_CLOSE_TIMEOUT)
 
@@ -327,7 +339,7 @@ class OutstationServer:
 
             if self._active is not None:
                 logger.info("dnp3: %s displaces the connection already established", peer)
-                await self._close_active()
+                await self._close_active(abort=True)
 
             self._active = writer
             self._active_task = asyncio.current_task()

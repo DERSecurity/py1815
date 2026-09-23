@@ -214,12 +214,41 @@ class TestBindParsing:
         assert (server._host, server._port) == ("0.0.0.0", 20000)
 
 
+class StubTransport:
+    """Records whether the connection was aborted rather than closed."""
+
+    def __init__(self):
+        self.aborted = False
+
+    def abort(self):
+        self.aborted = True
+
+
+class StubServer:
+    """Stands in for a started listener, which admission checks for."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        return None
+
+
 class StubWriter:
-    """The parts of a ``StreamWriter`` the admission path touches."""
+    """The parts of a ``StreamWriter`` the admission path touches.
+
+    It carries a transport because the real one does, and because the
+    difference between aborting and closing is behavior worth asserting rather
+    than an attribute worth defaulting away.
+    """
 
     def __init__(self, ssl_object=None):
         self._extra = {"peername": ("198.51.100.7", 40000), "ssl_object": ssl_object}
         self.closed = False
+        self.transport = StubTransport()
 
     def get_extra_info(self, name, default=None):
         return self._extra.get(name, default)
@@ -264,7 +293,7 @@ class TestRefusalLeavesTheAssociationAlone:
         # Stand in for a started listener. Admission refuses to install a
         # connection once the listener has stopped, and without this the guard
         # would be what these tests exercised rather than the allow-list.
-        server._server = object()  # type: ignore[assignment]
+        server._server = StubServer()  # type: ignore[assignment]
         return server
 
     async def test_a_refused_peer_does_not_displace_the_active_connection(self):
@@ -308,6 +337,44 @@ class TestRefusalLeavesTheAssociationAlone:
 
         assert incumbent.closed
         assert session.resets == 1
+
+    async def test_displacement_aborts_rather_than_closing_gracefully(self):
+        """A displaced master is usually one whose socket died, where a graceful
+        close waits on retransmission while holding the admission lock -- which
+        would let a dead master hold the association through the door
+        displacement exists to shut."""
+        server = self._server(SpySession())
+        incumbent = StubWriter()
+        server._active = incumbent
+
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        await server._handle(reader, StubWriter(ssl_object=StubTls(common_name="master.example")))
+
+        assert incumbent.transport.aborted
+
+    async def test_a_refused_peer_does_not_abort_the_incumbent(self):
+        server = self._server(SpySession())
+        incumbent = StubWriter()
+        server._active = incumbent
+
+        await server._handle(
+            asyncio.StreamReader(), StubWriter(ssl_object=StubTls(common_name="intruder.example"))
+        )
+
+        assert not incumbent.transport.aborted
+
+    async def test_shutdown_closes_gracefully_rather_than_aborting(self):
+        """A master connected at stop() is usually healthy, and aborting would
+        discard a response already queued."""
+        server = self._server(SpySession())
+        connected = StubWriter()
+        server._active = connected
+
+        await server.stop()
+
+        assert connected.closed
+        assert not connected.transport.aborted
 
 
 @pytest.mark.asyncio
