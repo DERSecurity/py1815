@@ -120,6 +120,19 @@ class Session:
     def restart_indication(self) -> bool:
         return self._restart
 
+    def connection_reset(self) -> None:
+        """Forget what a dead connection left behind, and nothing more.
+
+        Framing state is per connection: half a frame and half a fragment mean
+        nothing to the socket that replaces the one they arrived on, and
+        completing them with octets from the new connection would splice two
+        conversations. Everything else belongs to the association and survives
+        -- a reconnecting master expects the restart indication it has not
+        cleared, and the events it has not read.
+        """
+        self._frames = link.FrameReader()
+        self._reassembler.reset()
+
     def receive(self, data: bytes) -> bytes:
         """Handle received octets, returning the octets to send back."""
         out = bytearray()

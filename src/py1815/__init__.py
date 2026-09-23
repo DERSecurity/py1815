@@ -36,6 +36,7 @@ from py1815.link import (
     PrimaryFunction,
     SecondaryFunction,
 )
+from py1815.server import OutstationServer, PeerRefused
 from py1815.session import ReadProvider, Session, UnknownObject
 from py1815.transport import Reassembler, TransportError, segment
 
@@ -49,6 +50,8 @@ __all__ = [
     "IINBit",
     "LinkFrame",
     "LinkFrameError",
+    "OutstationServer",
+    "PeerRefused",
     "PrimaryFunction",
     "QualifierCode",
     "ReadProvider",
