@@ -21,17 +21,26 @@ from py1815.server import OutstationServer
 from py1815.session import Session
 
 #: What the master must read back. Distinct values so a mis-indexed read is
-#: visible rather than plausible, a negative one so sign handling is exercised,
-#: and one point offline so the quality octet is not uniformly 0x01.
-POINTS = [
-    AnalogPoint(10),
-    AnalogPoint(-20),
-    AnalogPoint(30),
-    AnalogPoint(40, analog_flags(online=False, comm_lost=True)),
-    AnalogPoint(50),
-]
-
+#: visible rather than plausible, and a negative one so sign handling is
+#: exercised. ``probe.py`` carries the same list, which the two virtual
+#: environments make unavoidable.
 EXPECTED = [10, -20, 30, 40, 50]
+
+#: The index served offline, so the quality octet is not uniformly 0x01. The
+#: probe cannot see this -- its master discards quality -- so the unit suite
+#: checks it instead.
+OFFLINE_INDEX = 3
+
+#: Derived from EXPECTED rather than written twice: two lists in one file where
+#: only one is read is the arrangement that drifts, because editing the
+#: decorative one changes nothing.
+POINTS = [
+    AnalogPoint(
+        value,
+        analog_flags(online=False, comm_lost=True) if index == OFFLINE_INDEX else analog_flags(),
+    )
+    for index, value in enumerate(EXPECTED)
+]
 
 
 class FixedProvider:

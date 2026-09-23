@@ -45,8 +45,12 @@ jobs:
         run: |
           .venv-outstation/bin/python interop/outstation.py --port 20000 \
             > outstation.log 2>&1 &
+          # Waits for this outstation's own log line rather than for something
+          # to be bound to the port. The port test would pass on whatever else
+          # happened to be listening, which is nothing in a CI runner and is
+          # worth not depending on.
           for _ in $(seq 1 30); do
-            if ss -ltn 2>/dev/null | grep -q ':20000'; then
+            if grep -q 'outstation listening on' outstation.log 2>/dev/null; then
               echo "outstation listening"
               exit 0
             fi
