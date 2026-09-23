@@ -1,4 +1,26 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/satori-dark.png">
+    <img src="docs/assets/satori.png" alt="Satori" height="88">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://dersec.io/"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dersec-white.png">
+    <img src="docs/assets/dersec-dark.png" alt="DER Security" height="32">
+  </picture></a>
+</p>
+
 # py1815
+
+**The DNP3 (IEEE 1815) outstation of [Project Satori](https://open-satori.org)** —
+an open-source project led by the SunSpec Alliance, DER Security,
+and industry consortium members.
+
+[![Tests](https://github.com/DERSecurity/py1815/actions/workflows/test.yml/badge.svg)](https://github.com/DERSecurity/py1815/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/DERSecurity/py1815)](LICENSE)
+[![Project Satori](https://img.shields.io/badge/Project-Satori-b7410e)](https://open-satori.org)
 
 A DNP3 (IEEE 1815) outstation in pure Python.
 
@@ -69,6 +91,29 @@ Two rules, both learned the hard way:
 - **Interoperability is tested against other implementations**, not against a peer written from
   the same understanding of the specification, which would share its misreadings. CI reads this
   outstation with a master built on a separately developed stack; see `interop/`.
+
+## Project Satori
+
+*Any certified DER. Any utility program.* Satori — “awakening” — is an
+open-source initiative to make any certified DER a compliant participant in
+utility DER programs: point it at a UL 1741 SB device — inverter, battery, or
+EV — and it joins a program without a firmware rewrite.
+
+A device joins a program by speaking whatever protocol the program is run on,
+and that is not one protocol. IEEE 2030.5 is what most North American and
+Australian utility programs specify. DNP3 is what a great deal of existing
+distribution SCADA already speaks, and IEEE 1815.2 is the DER profile built on
+it. A device that can only do one of them is a device that fits some programs
+and not others, so Satori covers both:
+
+| Project | Role |
+|---|---|
+| [PySunSpec2](https://github.com/sunspec/pysunspec2) | SunSpec Modbus reference library, used in more than 80% of inverter-based products shipped globally |
+| [py20305](https://github.com/DERSecurity/py20305) | IEEE 2030.5 client stack with CSIP and CSIP-AUS support, and a SunSpec Modbus bridge |
+| **py1815** (this repository) | DNP3 outstation stack, targeting the IEEE 1815.2 DER profile |
+| SunSpec DevKit CE | Discover, read and identify SunSpec devices on the wire |
+
+Project website: <https://open-satori.org>
 
 ## License
 

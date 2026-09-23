@@ -1,0 +1,17 @@
+Brand assets for Project Satori and DER Security.
+
+satori.png            Satori lockup, dark text -- for light backgrounds
+satori-dark.png       Satori lockup for dark backgrounds -- the official
+                      dark export, with its uniform background lifted to
+                      transparency so the mark floats on any dark theme
+dersec-dark.png       DER Security lockup, dark text
+dersec-white.png      DER Security lockup, white text
+
+The README pairs the light/dark variants with <picture>
+prefers-color-scheme sources, so the banner is legible in both GitHub
+themes.
+
+Referenced by relative path rather than by raw.githubusercontent URL,
+because this repository is private and those URLs do not resolve without
+a token. Switch to absolute URLs if the README is ever published
+somewhere that does not resolve relative paths, such as a PyPI page.
