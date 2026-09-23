@@ -94,8 +94,6 @@ def run_tshark(tshark: str, pcap: str, port: int) -> list[dict[str, str]]:
         "fields",
         "-E",
         "separator=\t",
-        "-o",
-        "dnp3.check_crc:TRUE",
     ]
     for field in FIELDS:
         command += ["-e", field]
