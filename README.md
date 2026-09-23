@@ -67,7 +67,8 @@ Two rules, both learned the hard way:
   carry published frames and hand-derived vectors, and the CRC is pinned to its catalogue check
   value.
 - **Interoperability is tested against other implementations**, not against a peer written from
-  the same understanding of the specification, which would share its misreadings.
+  the same understanding of the specification, which would share its misreadings. CI reads this
+  outstation with a master built on a separately developed stack; see `interop/`.
 
 ## License
 

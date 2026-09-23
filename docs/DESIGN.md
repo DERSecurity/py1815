@@ -99,14 +99,32 @@ The two protocol layers assign FIR and FIN to opposite bits, which is the kind o
 self-agreeing test will never catch, so both are pinned to literal octets.
 
 **Interoperability against other implementations.** A peer written from the same reading of the
-specification shares its misreadings. CI runs against an independently developed master;
-additional masters are worth adding, with the caveat that two interfaces over one core is one
-implementation, not two.
+specification shares its misreadings, so CI reads this library's outstation with a master built
+on a separately developed C++ stack (`interop/`, run by the `interop` workflow). Its upstream is
+end-of-life, which disqualifies it as a dependency and not as a witness: a frame it parses is a
+frame that was correct when it was maintained, and the wire format has not moved. The master
+runs in its own Python 3.10 environment, because that is the last interpreter it publishes
+wheels for.
+
+Additional masters are worth adding, with the caveat that two interfaces over one core is one
+implementation and not two.
+
+**What that job does not cover.** The master it uses stores point values as bare scalars and
+discards the quality octet, so the interoperability run checks values and not flags. The
+outstation it drives deliberately serves one point offline, and that point reads back as a
+number like any other. Quality is pinned by the wire-level tests instead, and closing the gap at
+this level needs a peer that exposes quality rather than a change to the harness.
 
 ## Roadmap
 
-- The TCP and TLS listener, with D7 and D8.
-- Events, classes 1 through 3, deadbands and unsolicited responses.
+- ~~The TCP and TLS listener, with D7 and D8.~~ Landed.
+- Events, classes 1 through 3, deadbands and unsolicited responses. The interoperability job
+  shows why this is not optional in practice: a real master's startup sends `DISABLE_UNSOLICITED`
+  and then `ENABLE_UNSOLICITED`, and this outstation refuses both. It proceeds to read normally,
+  so the refusal is survivable, but it is two warnings in an operator's log on every connection.
+  `DISABLE_UNSOLICITED` is worth a second look on its own: an outstation that sends none is
+  already in the state the master is asking for, so refusing the request answers a question it
+  did not ask.
 - The point-map loader and a published table for the predecessor DER profile.
 - Conformance testing.
 
