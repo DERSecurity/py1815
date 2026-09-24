@@ -310,6 +310,29 @@ class TestDirectOperateNoAck:
         assert session._handle_fragment(truncated) == b""
         assert not commands.operated
 
+    #: Two is where the application header ends; eighteen is the whole request.
+    @pytest.mark.parametrize("length", range(2, 19))
+    def test_no_body_length_draws_a_reply(self, length):
+        """The criterion the plan states separately from the fuzzing above,
+        because the two contradict each other: every other control function must
+        answer whatever arrives, and this one must answer none of it. A master
+        that asked for no response is not listening for a parse error either."""
+        session, _ = _session()
+        full = _request(FunctionCode.DIRECT_OPERATE_NR, (12, 1, 3, LATCH_ON))
+
+        assert session._handle_fragment(full[:length]) == b""
+
+    def test_only_the_complete_one_executes(self):
+        session, commands = _session()
+        full = _request(FunctionCode.DIRECT_OPERATE_NR, (12, 1, 3, LATCH_ON))
+
+        for length in range(2, len(full)):
+            session._handle_fragment(full[:length])
+        assert not commands.operated
+
+        session._handle_fragment(full)
+        assert len(commands.operated) == 1
+
     @pytest.mark.parametrize(
         "function",
         [

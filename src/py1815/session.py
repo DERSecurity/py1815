@@ -194,7 +194,17 @@ class ReadProvider(Protocol):
     timeout waiting to happen.
     """
 
-    def read(self, headers: Sequence[ObjectHeader]) -> bytes: ...
+    def read(self, headers: Sequence[ObjectHeader]) -> bytes:
+        """The encoded objects a response carries, headers included.
+
+        The bytes returned are forwarded to the master unchanged, so each run of
+        objects needs the object header that describes it -- see
+        ``application.object_header``. A provider that serves controls decides
+        for itself whether its group 10 and 40 status points answer a class 0
+        read; convention says they do, and under D6 this library holds no point
+        map with which to decide otherwise.
+        """
+        ...
 
 
 class Session:

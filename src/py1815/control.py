@@ -340,6 +340,15 @@ def encode_binary_output_status(*, state: bool, flags: int = BinaryQuality.ONLIN
     Variation 1 is packed and carries no quality, and is not offered here for
     the same reason the packed binary input is not: a point that has gone
     unreachable would read as a point reporting false.
+
+    **Whether these appear in a class 0 read is the caller's to decide.** Under
+    D6 this library holds no point map, so it cannot know which output points
+    exist, and a ``ReadProvider`` is what chooses and encodes what a class 0
+    header comes back with. Convention is that output status points do
+    participate -- a master that commanded a point expects to read it back
+    without asking for the group by name -- so a provider serving controls
+    should include them alongside its inputs. Nothing here does it on the
+    caller's behalf, and nothing here prevents it.
     """
     octet = flags | BinaryQuality.STATE if state else flags & ~BinaryQuality.STATE
     return bytes([octet & 0xFF])
