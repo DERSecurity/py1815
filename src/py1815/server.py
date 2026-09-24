@@ -332,24 +332,43 @@ class OutstationServer:
                 return
             logger.info("dnp3: admitted %s as %s", peer, identity)
 
-        async with self._admission:
-            if self._server is None:
-                # The listener stopped while this connection was being
-                # authorized. Admitting it now would outlive stop().
-                logger.info("dnp3: dropping %s: the listener has stopped", peer)
-                writer.close()
-                return
+        try:
+            async with self._admission:
+                if self._server is None:
+                    # The listener stopped while this connection was being
+                    # authorized. Admitting it now would outlive stop().
+                    logger.info("dnp3: dropping %s: the listener has stopped", peer)
+                    writer.close()
+                    return
 
-            if self._active is not None:
-                logger.info("dnp3: %s displaces the connection already established", peer)
-                await self._close_active(abort=True)
+                if self._active is not None:
+                    logger.info("dnp3: %s displaces the connection already established", peer)
+                    await self._close_active(abort=True)
 
-            self._active = writer
-            self._active_task = asyncio.current_task()
-            # Framing state belongs to the socket that is gone; the
-            # association's own state survives, which is what a reconnecting
-            # master expects.
-            self._session.connection_reset()
+                self._active = writer
+                self._active_task = asyncio.current_task()
+                # Framing state belongs to the socket that is gone; the
+                # association's own state survives, which is what a reconnecting
+                # master expects.
+                self._session.connection_reset()
+        except BaseException:
+            # Admission runs before the serve loop, and therefore before the
+            # cleanup below. A failure here -- displacing a writer whose
+            # transport is missing, say -- would otherwise escape with this
+            # connection's socket still open and ``_active`` already cleared by
+            # ``_close_active``: a live peer the listener no longer knows it
+            # has, reporting ``connected`` as False.
+            #
+            # Closed here, then re-raised. Failing loudly is the intent, and it
+            # should not also mean leaking. Catching ``BaseException`` so that
+            # cancellation during admission closes the socket too.
+            if self._active is writer:
+                self._active = None
+                self._active_task = None
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            raise
 
         try:
             await self._serve(reader, writer)

@@ -380,6 +380,28 @@ class TestRefusalLeavesTheAssociationAlone:
                 reader, StubWriter(ssl_object=StubTls(common_name="master.example"))
             )
 
+    async def test_a_failed_admission_closes_the_arriving_connection(self):
+        """Loudly must not also mean leaking.
+
+        The admission block runs before the serve loop's cleanup, so a failure
+        there used to escape with the arriving socket still open while
+        ``_close_active`` had already cleared ``_active`` -- a live peer the
+        listener reported as not connected.
+        """
+        server = self._server(SpySession())
+        broken = StubWriter()
+        del broken.transport
+        server._active = broken
+
+        arriving = StubWriter(ssl_object=StubTls(common_name="master.example"))
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        with pytest.raises(AttributeError):
+            await server._handle(reader, arriving)
+
+        assert arriving.closed, "the arriving connection was left open"
+        assert server._active is None
+
     async def test_shutdown_closes_gracefully_rather_than_aborting(self):
         """A master connected at stop() is usually healthy, and aborting would
         discard a response already queued."""
