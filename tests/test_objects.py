@@ -19,7 +19,10 @@ from py1815.application import (
 )
 from py1815.objects import (
     GROUP_ANALOG_INPUT,
+    GROUP_ANALOG_INPUT_EVENT,
     GROUP_BINARY_INPUT,
+    TIME_SIZE,
+    AnalogEventVariation,
     AnalogPoint,
     AnalogQuality,
     AnalogVariation,
@@ -31,7 +34,11 @@ from py1815.objects import (
     binary_flags,
     binary_range,
     encode_analog,
+    encode_analog_event,
     encode_binary,
+    encode_binary_event,
+    encode_time,
+    event_block,
 )
 
 
@@ -229,3 +236,158 @@ class TestRanges:
         master's parse of everything after it."""
         with pytest.raises(ValueError, match="at least one point"):
             analog_range(0, [])
+
+
+class TestTimeEncoding:
+    def test_a_timestamp_is_six_octets_little_endian(self):
+        """Six rather than eight, which is why it cannot be struct-packed."""
+        encoded = encode_time(0x0102030405)
+
+        assert encoded == bytes.fromhex("0504030201 00".replace(" ", ""))
+        assert len(encoded) == TIME_SIZE
+
+    def test_a_real_timestamp_round_trips(self):
+        stamp = 1_700_000_000_000
+        assert int.from_bytes(encode_time(stamp), "little") == stamp
+
+    def test_a_time_past_the_range_is_clamped_rather_than_truncated(self):
+        """The low 48 bits of a nonsense clock reading are a plausible-looking
+        time in the recent past, which is worse than an obviously pinned one."""
+        encoded = encode_time(2**48 + 1234)
+
+        assert int.from_bytes(encoded, "little") == 2**48 - 1
+
+    def test_a_negative_time_is_clamped_to_zero(self):
+        assert int.from_bytes(encode_time(-5), "little") == 0
+
+
+class TestEventEncoding:
+    def test_a_timed_analog_event_carries_flags_value_and_time(self):
+        encoded = encode_analog_event(AnalogPoint(42), timestamp_ms=1_700_000_000_000)
+
+        assert len(encoded) == 1 + 4 + TIME_SIZE
+        assert struct.unpack("<i", encoded[1:5])[0] == 42
+        assert int.from_bytes(encoded[5:], "little") == 1_700_000_000_000
+
+    def test_an_untimed_analog_event_omits_the_timestamp(self):
+        encoded = encode_analog_event(
+            AnalogPoint(42), variation=AnalogEventVariation.INT32, timestamp_ms=None
+        )
+
+        assert len(encoded) == 1 + 4
+
+    def test_a_timed_variation_without_a_timestamp_is_refused(self):
+        """Silently sending the epoch would be a timestamp a master believes."""
+        with pytest.raises(ValueError, match="carries a timestamp"):
+            encode_analog_event(AnalogPoint(42), timestamp_ms=None)
+
+    def test_an_event_saturates_exactly_as_the_static_point_does(self):
+        """An event reporting a different number from the static point it
+        describes is a contradiction a master cannot resolve."""
+        event = encode_analog_event(
+            AnalogPoint(5e9), variation=AnalogEventVariation.INT32, timestamp_ms=None
+        )
+        static = encode_analog(AnalogPoint(5e9), AnalogVariation.INT32_WITH_FLAG)
+
+        assert event == static
+
+    def test_a_timed_binary_event_carries_its_state_and_time(self):
+        encoded = encode_binary_event(BinaryPoint(state=True), timestamp_ms=1_700_000_000_000)
+
+        assert len(encoded) == 1 + TIME_SIZE
+        assert encoded[0] & BinaryQuality.STATE
+
+    def test_an_untimed_binary_event_is_one_octet(self):
+        assert len(encode_binary_event(BinaryPoint(state=False), with_time=False)) == 1
+
+    def test_an_untimed_analog_variation_refuses_a_timestamp(self):
+        """The loose direction, which used to discard it silently.
+
+        The caller believed it had sent a time; the master received an event
+        without one. Neither end can see the disagreement, so the encoder is
+        the only place it can be caught.
+        """
+        with pytest.raises(ValueError, match="carries no timestamp"):
+            encode_analog_event(
+                AnalogPoint(42),
+                variation=AnalogEventVariation.INT32,
+                timestamp_ms=1_700_000_000_000,
+            )
+
+    def test_an_untimed_binary_event_refuses_a_timestamp(self):
+        with pytest.raises(ValueError, match="carries no timestamp"):
+            encode_binary_event(
+                BinaryPoint(state=True), with_time=False, timestamp_ms=1_700_000_000_000
+            )
+
+
+class TestEventBlocks:
+    def _event(self, value):
+        return encode_analog_event(
+            AnalogPoint(value), variation=AnalogEventVariation.INT32, timestamp_ms=None
+        )
+
+    def test_a_block_prefixes_every_event_with_its_index(self):
+        block = event_block(
+            GROUP_ANALOG_INPUT_EVENT,
+            AnalogEventVariation.INT32,
+            [(4, self._event(10)), (9, self._event(20))],
+        )
+
+        assert block[:4] == bytes(
+            [
+                GROUP_ANALOG_INPUT_EVENT,
+                AnalogEventVariation.INT32,
+                QualifierCode.UINT8_COUNT_UINT8_INDEX,
+                2,
+            ]
+        )
+        assert block[4] == 4
+        assert block[4 + 1 + 5] == 9
+
+    def test_a_block_may_report_one_index_twice(self):
+        """Events are whichever points changed, in the order they changed, so a
+        point that moved twice appears twice."""
+        block = event_block(
+            GROUP_ANALOG_INPUT_EVENT,
+            AnalogEventVariation.INT32,
+            [(4, self._event(10)), (4, self._event(11))],
+        )
+
+        assert block[3] == 2
+        assert block[4] == 4 and block[4 + 1 + 5] == 4
+
+    def test_a_wide_index_takes_the_wide_qualifier(self):
+        block = event_block(
+            GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [(1009, self._event(10))]
+        )
+
+        assert block[2] == QualifierCode.UINT16_COUNT_UINT16_INDEX
+        assert struct.unpack("<H", block[3:5])[0] == 1
+        assert struct.unpack("<H", block[5:7])[0] == 1009
+
+    def test_an_index_past_the_16_bit_space_is_refused(self):
+        with pytest.raises(ValueError, match="16-bit index"):
+            event_block(
+                GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [(0x10000, self._event(1))]
+            )
+
+    def test_a_negative_index_is_refused_as_a_negative_index(self):
+        """It passes an upper-bound check and then raises from to_bytes, which
+        names the encoding rather than the mistake."""
+        with pytest.raises(ValueError, match="negative"):
+            event_block(
+                GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [(-1, self._event(1))]
+            )
+
+    def test_too_many_events_is_refused_as_a_count(self):
+        """The count and the index are different limits, and saying the index is
+        wrong when the count is would send someone looking in the wrong place."""
+        events = [(0, self._event(1))] * (0xFFFF + 1)
+
+        with pytest.raises(ValueError, match="exceed the largest count"):
+            event_block(GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, events)
+
+    def test_an_empty_block_is_refused(self):
+        with pytest.raises(ValueError, match="at least one event"):
+            event_block(GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [])

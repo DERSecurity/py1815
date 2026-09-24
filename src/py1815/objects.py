@@ -1,7 +1,8 @@
-"""Static data objects: binary and analog inputs, with their quality flags.
+"""Data objects: binary and analog inputs, static and event, with their flags.
 
-Encoding only, and only the variations a monitor outstation serves. Events live
-with the event buffer, which is a different cadence and a different qualifier.
+Encoding only. Static objects answer a class 0 read and travel in a contiguous
+range; event objects answer a class 1, 2 or 3 read and travel with an index in
+front of each one, because the indices they cover are whichever ones changed.
 
 **Values arrive scaled.** The IEEE 1815.2 tables carry a resolution for each
 point, and applying it belongs to the point map; this module writes the number it
@@ -20,13 +21,16 @@ from __future__ import annotations
 
 import math
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 
-from py1815.application import object_header
+from py1815.application import QualifierCode, object_header
 
 GROUP_BINARY_INPUT = 1
+GROUP_BINARY_INPUT_EVENT = 2
 GROUP_ANALOG_INPUT = 30
+GROUP_ANALOG_INPUT_EVENT = 32
 
 
 class BinaryQuality(IntEnum):
@@ -71,6 +75,43 @@ class AnalogVariation(IntEnum):
 class BinaryVariation(IntEnum):
     PACKED = 1
     WITH_FLAGS = 2
+
+
+class AnalogEventVariation(IntEnum):
+    """Analog input event variations.
+
+    The timed variations are the ones worth sending: an event without a
+    timestamp tells a master that a value changed and not when, which for a
+    sequence of events is most of what it wanted to know.
+    """
+
+    INT32 = 1
+    INT16 = 2
+    INT32_WITH_TIME = 3
+    INT16_WITH_TIME = 4
+
+
+class BinaryEventVariation(IntEnum):
+    WITHOUT_TIME = 1
+    WITH_TIME = 2
+
+
+#: DNP3 absolute time: milliseconds since the Unix epoch, UTC, in six octets.
+#: Six rather than eight is why this cannot be ``struct.pack``-ed directly, and
+#: it runs out in the year 10889, which is somebody else's problem.
+TIME_SIZE = 6
+_TIME_MAX = 2**48 - 1
+
+
+def encode_time(timestamp_ms: int) -> bytes:
+    """A DNP3 absolute timestamp, little-endian, six octets.
+
+    A time outside the representable range is clamped rather than truncated: the
+    low 48 bits of a nonsense clock reading are a plausible-looking time in the
+    recent past, which is worse than an obviously pinned one.
+    """
+    clamped = max(0, min(int(timestamp_ms), _TIME_MAX))
+    return clamped.to_bytes(TIME_SIZE, "little")
 
 
 #: The largest magnitude a single-precision float carries, which is where an
@@ -251,3 +292,105 @@ def binary_range(start: int, points: list[BinaryPoint]) -> bytes:
         GROUP_BINARY_INPUT, BinaryVariation.WITH_FLAGS, start=start, stop=start + len(points) - 1
     )
     return header + b"".join(encode_binary(point) for point in points)
+
+
+def encode_analog_event(
+    point: AnalogPoint,
+    *,
+    variation: AnalogEventVariation = AnalogEventVariation.INT32_WITH_TIME,
+    timestamp_ms: int | None = None,
+) -> bytes:
+    """One analog input event object.
+
+    Saturation and the non-finite rules are the static encoder's, reused rather
+    than restated: an event carrying a different number from the static point it
+    reports would be a contradiction a master has no way to resolve.
+
+    The variation decides whether a timestamp belongs, and both directions are
+    refused rather than only the strict one. Handing a timestamp to an untimed
+    variation used to drop it, so the caller believed it had sent a time and the
+    master received an event without one -- a disagreement neither end can see.
+    """
+    static = _EVENT_TO_STATIC[variation]
+    encoded = encode_analog(point, static)
+    if variation not in _TIMED_ANALOG_EVENTS:
+        if timestamp_ms is not None:
+            raise ValueError(f"{variation.name} carries no timestamp and one was given")
+        return encoded
+    if timestamp_ms is None:
+        raise ValueError(f"{variation.name} carries a timestamp and none was given")
+    return encoded + encode_time(timestamp_ms)
+
+
+def encode_binary_event(
+    point: BinaryPoint,
+    *,
+    with_time: bool = True,
+    timestamp_ms: int | None = None,
+) -> bytes:
+    """One binary input event object.
+
+    ``with_time`` and ``timestamp_ms`` must agree, in both directions -- see
+    ``encode_analog_event`` for why the loose one is refused too.
+    """
+    encoded = encode_binary(point)
+    if not with_time:
+        if timestamp_ms is not None:
+            raise ValueError("an untimed binary event carries no timestamp and one was given")
+        return encoded
+    if timestamp_ms is None:
+        raise ValueError("a timed binary event carries a timestamp and none was given")
+    return encoded + encode_time(timestamp_ms)
+
+
+def event_block(group: int, variation: int, items: Sequence[tuple[int, bytes]]) -> bytes:
+    """An object header and its events, each prefixed by its own index.
+
+    Events are not a range. They are whichever points changed, in the order they
+    changed, so the same index can appear twice and the indices between two
+    events need not have moved at all. That is why this uses a count with an
+    index in front of every object rather than a start and a stop.
+
+    The narrower qualifier is used when every index and the count fit an octet,
+    for the same reason the static encoder prefers a narrow range: it is two
+    octets cheaper per header and most fleets fit it.
+    """
+    if not items:
+        raise ValueError("an event block carries at least one event")
+
+    count = len(items)
+    if count > 0xFFFF:
+        raise ValueError(f"{count} events exceed the largest count a header can carry")
+
+    widest = max(index for index, _ in items)
+    if any(index < 0 for index, _ in items):
+        raise ValueError("an event index is negative")
+    if widest > 0xFFFF:
+        raise ValueError(f"index {widest} does not fit a 16-bit index")
+
+    if count <= 0xFF and widest <= 0xFF:
+        header = bytes([group, variation, QualifierCode.UINT8_COUNT_UINT8_INDEX, count])
+        prefix = 1
+    else:
+        header = struct.pack(
+            "<BBBH", group, variation, QualifierCode.UINT16_COUNT_UINT16_INDEX, count
+        )
+        prefix = 2
+
+    body = bytearray()
+    for index, encoded in items:
+        body += index.to_bytes(prefix, "little") + encoded
+    return header + bytes(body)
+
+
+#: Which static variation each event variation encodes its value as.
+_EVENT_TO_STATIC = {
+    AnalogEventVariation.INT32: AnalogVariation.INT32_WITH_FLAG,
+    AnalogEventVariation.INT32_WITH_TIME: AnalogVariation.INT32_WITH_FLAG,
+    AnalogEventVariation.INT16: AnalogVariation.INT16_WITH_FLAG,
+    AnalogEventVariation.INT16_WITH_TIME: AnalogVariation.INT16_WITH_FLAG,
+}
+
+_TIMED_ANALOG_EVENTS = frozenset(
+    {AnalogEventVariation.INT32_WITH_TIME, AnalogEventVariation.INT16_WITH_TIME}
+)
