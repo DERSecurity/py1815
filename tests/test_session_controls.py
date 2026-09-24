@@ -58,8 +58,16 @@ def _session(commands: Commands | None = None, **kwargs) -> tuple[Session, Comma
     return session, provider
 
 
-def _request(function: FunctionCode, *controls: tuple[int, int, int, str]) -> bytes:
-    """One control request: a header per group run, each object behind its index."""
+def _request(
+    function: FunctionCode, *controls: tuple[int, int, int, str], sequence: int = 0
+) -> bytes:
+    """One control request: a header per group run, each object behind its index.
+
+    ``sequence`` matters for select-before-operate. The operate that spends a
+    select has to be the request after it, so a pair sent under one sequence is
+    a pair no real master would send -- which is what these tests did until the
+    outstation started checking.
+    """
     body = b""
     run: list[tuple[int, str]] = []
     group = variation = -1
@@ -70,7 +78,7 @@ def _request(function: FunctionCode, *controls: tuple[int, int, int, str]) -> by
             group, variation, run = grp, var, []
         run.append((index, octets))
     body += _block(group, variation, run)
-    return bytes([0xC0, function]) + body
+    return bytes([0xC0 | (sequence & 0x0F), function]) + body
 
 
 def _block(group: int, variation: int, run: list[tuple[int, str]]) -> bytes:
@@ -172,7 +180,9 @@ class TestSelectBeforeOperate:
         request = _request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON))
 
         session._handle_fragment(request)
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert len(commands.operated) == 1
         assert _statuses(response) == [CommandStatus.SUCCESS]
@@ -187,7 +197,9 @@ class TestSelectBeforeOperate:
     def test_an_operate_with_no_select_is_refused(self):
         session, commands = _session()
 
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(response) == [CommandStatus.NO_SELECT]
         assert not commands.operated
@@ -196,7 +208,9 @@ class TestSelectBeforeOperate:
         session, commands = _session()
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
 
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_OFF)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_OFF), sequence=1)
+        )
 
         assert _statuses(response) == [CommandStatus.NO_SELECT]
         assert not commands.operated
@@ -206,9 +220,11 @@ class TestSelectBeforeOperate:
         sent the wrong one still holds the reservation it was granted."""
         session, commands = _session()
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
-        session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_OFF)))
+        session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_OFF), sequence=1))
 
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(response) == [CommandStatus.SUCCESS]
         assert len(commands.operated) == 1
@@ -216,9 +232,11 @@ class TestSelectBeforeOperate:
     def test_a_matching_operate_spends_the_select(self):
         session, _ = _session()
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
-        session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1))
 
-        again = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        again = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(again) == [CommandStatus.NO_SELECT]
 
@@ -230,7 +248,9 @@ class TestSelectBeforeOperate:
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
 
         now[0] = 10.5
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(response) == [CommandStatus.TIMEOUT]
         assert not commands.operated
@@ -241,7 +261,9 @@ class TestSelectBeforeOperate:
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
 
         now[0] = 9.9
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(response) == [CommandStatus.SUCCESS]
 
@@ -250,8 +272,12 @@ class TestSelectBeforeOperate:
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 5, LATCH_ON)))
 
-        stale = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
-        fresh = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 5, LATCH_ON)))
+        stale = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
+        fresh = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 5, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(stale) == [CommandStatus.NO_SELECT]
         assert _statuses(fresh) == [CommandStatus.SUCCESS]
@@ -263,7 +289,9 @@ class TestSelectBeforeOperate:
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
 
         session.connection_reset()
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON)))
+        response = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
 
         assert _statuses(response) == [CommandStatus.NO_SELECT]
         assert not commands.operated
@@ -276,7 +304,7 @@ class TestSelectBeforeOperate:
         both = ((12, 1, 0, LATCH_ON), (12, 1, 1, LATCH_ON))
 
         session._handle_fragment(_request(FunctionCode.SELECT, *both))
-        response = session._handle_fragment(_request(FunctionCode.OPERATE, *both))
+        response = session._handle_fragment(_request(FunctionCode.OPERATE, *both, sequence=1))
 
         assert _statuses(response) == [CommandStatus.SUCCESS, CommandStatus.NOT_SUPPORTED]
         assert len(commands.operated) == 1
@@ -389,7 +417,7 @@ class TestTheEchoMirrorsTheRequest:
         assert body[second] == 41 and body[second + 1] == 2
 
 
-def _two_headers(function: FunctionCode) -> bytes:
+def _two_headers(function: FunctionCode, sequence: int = 0) -> bytes:
     """One request, two headers, both naming group 12 variation 1."""
     header = bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1])
     crob = bytes.fromhex(LATCH_ON)
@@ -425,7 +453,9 @@ class TestTheEchoKeepsTheRequestsHeaderBoundaries:
         session, commands = _session()
         session._handle_fragment(_two_headers(FunctionCode.SELECT))
 
-        merged = _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), (12, 1, 5, LATCH_ON))
+        merged = _request(
+            FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), (12, 1, 5, LATCH_ON), sequence=1
+        )
         response = session._handle_fragment(merged)
 
         assert _statuses(response) == [CommandStatus.SUCCESS, CommandStatus.SUCCESS]
@@ -463,4 +493,74 @@ class TestTheProviderContractHoldsOnEveryPath:
         session._handle_fragment(_request(FunctionCode.SELECT, *both))
 
         with pytest.raises(ValueError, match="answered 1 of 2"):
-            session._handle_fragment(_request(FunctionCode.OPERATE, *both))
+            session._handle_fragment(_request(FunctionCode.OPERATE, *both, sequence=1))
+
+
+class TestASelectThatSelectedNothing:
+    """D16 arms the request received rather than the objects that succeeded, so
+    that the operate a master sends next still matches. That reasoning runs out
+    when nothing succeeded: there is no operate such a select could authorise,
+    and arming it would let a point the outstation refused to select be executed
+    by the operate that followed."""
+
+    def test_it_arms_nothing(self):
+        session, commands = _session(Commands([CommandStatus.NOT_SUPPORTED]))
+        one = (12, 1, 0, LATCH_ON)
+
+        session._handle_fragment(_request(FunctionCode.SELECT, one))
+        response = session._handle_fragment(_request(FunctionCode.OPERATE, one, sequence=1))
+
+        assert _statuses(response) == [CommandStatus.NO_SELECT]
+        assert not commands.operated
+
+    def test_a_partly_refused_one_still_arms(self):
+        """One success is enough. The refused object is answered on its merits
+        again at operate, so nothing it refused gets executed."""
+        commands = Commands([CommandStatus.SUCCESS, CommandStatus.NOT_SUPPORTED])
+        session, _ = _session(commands)
+        both = ((12, 1, 0, LATCH_ON), (12, 1, 1, LATCH_ON))
+
+        session._handle_fragment(_request(FunctionCode.SELECT, *both))
+        response = session._handle_fragment(_request(FunctionCode.OPERATE, *both, sequence=1))
+
+        assert _statuses(response) == [CommandStatus.SUCCESS, CommandStatus.NOT_SUPPORTED]
+        assert len(commands.operated) == 1
+
+
+class TestTheOperateMustBeTheRequestAfterTheSelect:
+    """Matching on the objects alone let a selection outlive whatever came
+    between it and the operate."""
+
+    def test_the_next_sequence_is_required(self):
+        session, commands = _session()
+        one = (12, 1, 0, LATCH_ON)
+        session._handle_fragment(_request(FunctionCode.SELECT, one, sequence=0))
+
+        response = session._handle_fragment(_request(FunctionCode.OPERATE, one, sequence=9))
+
+        assert _statuses(response) == [CommandStatus.NO_SELECT]
+        assert not commands.operated
+
+    def test_the_sequence_wraps(self):
+        """Fifteen is followed by zero, not by sixteen."""
+        session, commands = _session()
+        one = (12, 1, 0, LATCH_ON)
+        session._handle_fragment(_request(FunctionCode.SELECT, one, sequence=15))
+
+        response = session._handle_fragment(_request(FunctionCode.OPERATE, one, sequence=0))
+
+        assert _statuses(response) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
+
+    def test_an_intervening_request_discards_the_selection(self):
+        """A read between the two ends the exchange the select belonged to, even
+        where the sequence numbers would otherwise line up."""
+        session, commands = _session()
+        one = (12, 1, 0, LATCH_ON)
+        session._handle_fragment(_request(FunctionCode.SELECT, one, sequence=0))
+
+        session._handle_fragment(bytes([0xC1, FunctionCode.READ, 60, 1, QualifierCode.ALL_OBJECTS]))
+        response = session._handle_fragment(_request(FunctionCode.OPERATE, one, sequence=1))
+
+        assert _statuses(response) == [CommandStatus.NO_SELECT]
+        assert not commands.operated

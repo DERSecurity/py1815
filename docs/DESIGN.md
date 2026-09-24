@@ -136,6 +136,23 @@ select carrying one could otherwise never be operated at all. The header boundar
 excluded -- it is framing rather than instruction, and an operate carrying the same objects under
 a different boundary is still asking for the same points to move.
 
+Two limits on that, both found after the first implementation and both places where arming the
+request received was too generous rather than too strict.
+
+**A select that selected nothing arms nothing.** The reasoning above -- that the master will
+resend what it sent -- only holds while there is an operate the select could authorise. Where
+every object came back refused there is none, and arming it would let a point the outstation
+declined to select be executed by the operate that followed. One success is enough; the refused
+objects are answered on their own merits again at operate.
+
+**The operate has to be the request after the select.** Matching on the objects and the clock let
+a selection outlive whatever came between: a select, a read, then an operate carrying the same
+objects would execute on the strength of a selection the master had already moved on from. The
+application sequence the select arrived under is recorded, the operate must carry the next one,
+and any other request in between discards the selection outright. Both, because either alone
+leaves a gap -- a sequence can line up across an intervening request, and a master can skip
+sequences without sending one.
+
 
 ## Layering
 

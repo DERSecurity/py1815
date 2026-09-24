@@ -39,6 +39,7 @@ from py1815 import link
 from py1815.application import (
     IIN,
     REQUEST_HEADER_SIZE,
+    SEQUENCE_MODULUS,
     AppControl,
     FunctionCode,
     IIN2Bit,
@@ -182,6 +183,10 @@ class _ArmedSelect:
     #: ``(group, variation, index, octets)`` per control, in order received.
     key: tuple[tuple[int, int, int, bytes], ...]
     at: float
+    #: The application sequence the select arrived under. The operate that
+    #: spends it has to be the next one, which is how a stale selection is told
+    #: apart from the request it was granted for.
+    sequence: int
 
 
 class ReadProvider(Protocol):
@@ -426,6 +431,14 @@ class Session:
 
         if known in _CONTROL_FUNCTIONS:
             return self._handle_control(request, known)
+
+        # Anything else the master asks for ends the exchange a select belongs
+        # to. Keeping it would let a selection sit through arbitrary traffic and
+        # still authorise an operate afterwards, which is the stale-selection
+        # case the sequence check above also catches -- both, because either
+        # alone leaves a gap the other covers.
+        self._select = None
+
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
         return self._handle_read(request)
@@ -471,11 +484,21 @@ class Session:
 
         if known is FunctionCode.SELECT:
             statuses = _checked(self._controls.select(controls), controls)
-            # D16: the request received, not the objects that succeeded. The
-            # operate a master sends next is the request it already sent.
-            self._select = _ArmedSelect(key=_match_key(controls), at=self._clock())
+            if any(status is CommandStatus.SUCCESS for status in statuses):
+                # D16 arms the request received rather than the objects that
+                # succeeded, so that the operate a master sends next -- which is
+                # the request it already sent -- still matches. That reasoning
+                # runs out when nothing succeeded: there is no operate this
+                # select could authorise, and arming it would let a point the
+                # outstation refused to select be executed by the operate that
+                # followed.
+                self._select = _ArmedSelect(
+                    key=_match_key(controls), at=self._clock(), sequence=sequence
+                )
+            else:
+                self._select = None
         elif known is FunctionCode.OPERATE:
-            statuses = self._operate_after_select(controls)
+            statuses = self._operate_after_select(controls, sequence)
         else:
             statuses = _checked(self._controls.operate(controls), controls)
 
@@ -485,13 +508,23 @@ class Session:
             body=_echo(controls, statuses),
         )
 
-    def _operate_after_select(self, controls: Sequence[Control]) -> list[CommandStatus]:
+    def _operate_after_select(
+        self, controls: Sequence[Control], sequence: int
+    ) -> list[CommandStatus]:
         armed = self._select
         if armed is None:
             return [CommandStatus.NO_SELECT] * len(controls)
         if self._clock() - armed.at > self._select_timeout:
             self._select = None
             return [CommandStatus.TIMEOUT] * len(controls)
+        if sequence != (armed.sequence + 1) % SEQUENCE_MODULUS:
+            # The operate has to be the request after the select. Matching on
+            # the objects alone let a selection outlive whatever came between:
+            # select, then a read, then an operate carrying the same objects
+            # would execute on the strength of a selection the master had
+            # already moved on from.
+            self._select = None
+            return [CommandStatus.NO_SELECT] * len(controls)
         if armed.key != _match_key(controls):
             # Left armed rather than consumed. D12 spends a select on the
             # operate that matches it, and a master that sent the wrong one

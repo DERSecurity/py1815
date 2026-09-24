@@ -161,12 +161,18 @@ class FixedProvider:
             raise UnknownObject(f"this fixture serves no group {unknown}")
 
         asked = {h.group for h in headers}
-        if asked <= {GROUP_BINARY_OUTPUT_STATUS, GROUP_ANALOG_OUTPUT_STATUS}:
-            # A readback, answered on its own. A class-0 read is the other
-            # caller and still gets the analog inputs, which is what every
-            # existing peer checks.
-            return b"".join(self._controls.status_objects(group) for group in sorted(asked))
-        return analog_range(0, POINTS, variation=AnalogVariation.INT32_WITH_FLAG)
+        outputs = asked & {GROUP_BINARY_OUTPUT_STATUS, GROUP_ANALOG_OUTPUT_STATUS}
+        wants_inputs = bool(asked - outputs)
+
+        # One block per group asked for, rather than a branch that picks one
+        # kind. A request naming an output status group beside group 30, or a
+        # class 0 read alongside either, is a master combining a readback with
+        # an input read -- and answering only one of them drops data the master
+        # asked for without saying so.
+        body = b"".join(self._controls.status_objects(group) for group in sorted(outputs))
+        if wants_inputs:
+            body += analog_range(0, POINTS, variation=AnalogVariation.INT32_WITH_FLAG)
+        return body
 
 
 async def main() -> None:

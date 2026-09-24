@@ -224,3 +224,69 @@ class TestTheFixtureAcceptsControls:
 
         assert block[0] == GROUP_BINARY_OUTPUT_STATUS
         assert block[1] == 2, "variation 2 carries the flags the packed one does not"
+
+
+class TestAMixedRead:
+    """A master that commands a point and reads it back alongside its inputs is
+    the ordinary case, not an exotic one. Answering only one of the groups asked
+    for drops data without saying so."""
+
+    def test_output_status_and_analog_inputs_both_come_back(self, outstation):
+        from py1815.control import GROUP_BINARY_OUTPUT_STATUS
+        from py1815.session import Session
+
+        controls = outstation.FixedControls()
+        session = Session(
+            outstation.FixedProvider(controls),
+            control_provider=controls,
+            outstation_address=OUTSTATION,
+            master_address=MASTER,
+        )
+        mixed = bytes(
+            [
+                0xC0,
+                FunctionCode.READ,
+                GROUP_BINARY_OUTPUT_STATUS,
+                2,
+                QualifierCode.UINT8_START_STOP,
+                0,
+                1,
+                30,
+                1,
+                QualifierCode.UINT8_START_STOP,
+                0,
+                4,
+            ]
+        )
+
+        body = session._handle_fragment(mixed)[4:]
+
+        assert body[0] == GROUP_BINARY_OUTPUT_STATUS, "the readback leads"
+        assert bytes([30, 1]) in body, "and the inputs are still there"
+
+    def test_an_output_only_read_carries_no_inputs(self, outstation):
+        from py1815.control import GROUP_BINARY_OUTPUT_STATUS
+        from py1815.session import Session
+
+        controls = outstation.FixedControls()
+        session = Session(
+            outstation.FixedProvider(controls),
+            control_provider=controls,
+            outstation_address=OUTSTATION,
+            master_address=MASTER,
+        )
+        request = bytes(
+            [
+                0xC0,
+                FunctionCode.READ,
+                GROUP_BINARY_OUTPUT_STATUS,
+                2,
+                QualifierCode.UINT8_START_STOP,
+                0,
+                1,
+            ]
+        )
+
+        body = session._handle_fragment(request)[4:]
+
+        assert bytes([30, 1]) not in body
