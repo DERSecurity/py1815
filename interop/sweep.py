@@ -132,6 +132,29 @@ def _silent(function: int, name: str) -> Case:
     )
 
 
+def _control_without_objects(function: int, name: str) -> Case:
+    """A control function carrying no objects at all.
+
+    Malformed rather than unimplemented. The function is supported and the
+    request names nothing to do, so the refusal is PARAM_ERROR against the
+    fragment -- there is no object to attach a status to, which is the
+    distinction D15 draws.
+    """
+    return Case(
+        name=name,
+        payload=_app(function),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2=IIN2Bit.PARAM_ERROR),
+        note="supported, but nothing was asked for",
+    )
+
+
+def _crob_block(index: int) -> bytes:
+    """One LATCH_ON against *index*, as group 12 variation 1."""
+    crob = bytes.fromhex("030164000000c800000000")
+    header = bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1])
+    return header + bytes([index]) + crob
+
+
 #: The functions that must be answered, the ones that must be refused out loud,
 #: and the ones that must be met with silence.
 #:
@@ -172,10 +195,26 @@ CASES: list[Case] = [
         expect=Expect(function=FunctionCode.RESPONSE, iin2=IIN2Bit.OBJECT_UNKNOWN),
         note="refused as an unknown object, not an unsupported function",
     ),
-    # -- the controls this outstation does not hold the role to execute -------
-    _refused(FunctionCode.SELECT, "control: select"),
-    _refused(FunctionCode.OPERATE, "control: operate"),
-    _refused(FunctionCode.DIRECT_OPERATE, "control: direct operate"),
+    # -- controls ------------------------------------------------------------
+    #
+    # These answered FUNC_NOT_SUPPORTED until the fixture gained a control
+    # provider. They now reach the body parser, and a control function carrying
+    # no objects is a malformed request rather than an unimplemented one.
+    _control_without_objects(FunctionCode.SELECT, "control: select, no objects"),
+    _control_without_objects(FunctionCode.OPERATE, "control: operate, no objects"),
+    _control_without_objects(FunctionCode.DIRECT_OPERATE, "control: direct operate, no objects"),
+    Case(
+        name="control: direct operate, a point the fixture owns",
+        payload=_app(FunctionCode.DIRECT_OPERATE, _crob_block(0)),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+        note="answered per object, so the reply carries the control back",
+    ),
+    Case(
+        name="control: direct operate, a point it does not",
+        payload=_app(FunctionCode.DIRECT_OPERATE, _crob_block(9)),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+        note="refused per object rather than per fragment: the IIN stays clear",
+    ),
     _silent(FunctionCode.DIRECT_OPERATE_NR, "control: direct operate, no acknowledgment"),
     # -- everything else the outstation does not implement --------------------
     _refused(FunctionCode.IMMED_FREEZE, "freeze: immediate"),

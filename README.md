@@ -24,14 +24,16 @@ and industry consortium members.
 
 A DNP3 (IEEE 1815) outstation in pure Python.
 
-**Status: early development.** The protocol layers below the point map are implemented and
-tested; the listener, the event path and the point-map loader are not. Nothing is released yet,
-and the API is not stable.
+**Status: early development.** The protocol layers, the listener, controls and the event buffers
+are implemented and tested; the point-map loader and the event *path* -- classes 1 to 3 reaching a
+master -- are not. Nothing is released yet, and the API is not stable.
 
 ## What it does
 
-An outstation -- the side a SCADA master connects *to*. Subset Level 2 is the target, over TCP
-and TLS.
+An outstation -- the side a SCADA master connects *to*. It reports measurements and accepts
+commands. Subset Level 2 is the floor, over TCP and TLS; where the IEEE 1815.2 DER profile needs
+more -- a 50 kW setpoint does not fit the 16-bit analog output Level 2 offers -- the extra
+variations are served and named in the device profile.
 
 | Layer | Module | Contents |
 |---|---|---|
@@ -40,6 +42,8 @@ and TLS.
 | Transport | `transport` | Segmentation and reassembly |
 | Application | `application` | Control octet, function codes, internal indications, object headers |
 | Objects | `objects` | Static binary and analog inputs with quality flags |
+| Controls | `control` | Output commands and status, and the command status vocabulary |
+| Events | `events` | Class 1 to 3 buffers, deadbands and confirmation |
 | Session | `session` | One master association: octets in, octets out |
 
 Each layer is testable without the ones above it. The session does no I/O at all -- it takes

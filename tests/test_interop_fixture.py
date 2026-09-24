@@ -47,8 +47,12 @@ def outstation():
 @pytest.fixture
 def response(outstation) -> bytes:
     """The application fragment a class-0 read gets back from the fixture."""
+    controls = outstation.FixedControls()
     session = Session(
-        outstation.FixedProvider(), outstation_address=OUTSTATION, master_address=MASTER
+        outstation.FixedProvider(controls),
+        control_provider=controls,
+        outstation_address=OUTSTATION,
+        master_address=MASTER,
     )
     control = link.control_byte(
         from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
@@ -116,3 +120,102 @@ class TestTheServedFixture:
             if index == outstation.OFFLINE_INDEX:
                 continue
             assert objects[index * 5] & AnalogQuality.ONLINE
+
+
+class TestTheFixtureAcceptsControls:
+    """The half the C++ master cannot show and the Rust one now does.
+
+    Pinned here as well, because the interoperability job proves these against a
+    running outstation and this proves them without a socket -- the same
+    argument the module docstring makes about the quality octet.
+    """
+
+    def test_a_point_it_owns_is_operated_and_remembered(self, outstation):
+        from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType
+        from py1815.session import Control
+
+        controls = outstation.FixedControls()
+        latch_on = Control(
+            block=0,
+            group=12,
+            variation=1,
+            index=outstation.CONTROLLABLE_BINARY[0],
+            raw=b"",
+            command=ControlRelayOutputBlock.build(OperationType.LATCH_ON),
+        )
+
+        assert controls.operate([latch_on]) == [CommandStatus.SUCCESS]
+        assert controls.binary[outstation.CONTROLLABLE_BINARY[0]] is True
+
+    def test_a_point_it_does_not_own_is_refused_per_object(self, outstation):
+        """The two answers arrive in one request, which is the case a
+        fragment-level refusal cannot demonstrate."""
+        from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType
+        from py1815.session import Control
+
+        controls = outstation.FixedControls()
+
+        def latch(index):
+            return Control(
+                block=0,
+                group=12,
+                variation=1,
+                index=index,
+                raw=b"",
+                command=ControlRelayOutputBlock.build(OperationType.LATCH_ON),
+            )
+
+        statuses = controls.operate(
+            [latch(outstation.CONTROLLABLE_BINARY[0]), latch(outstation.UNCONTROLLABLE_BINARY)]
+        )
+
+        assert statuses == [CommandStatus.SUCCESS, CommandStatus.NOT_SUPPORTED]
+
+    def test_a_refused_point_is_not_applied(self, outstation):
+        from py1815.control import ControlRelayOutputBlock, OperationType
+        from py1815.session import Control
+
+        controls = outstation.FixedControls()
+        controls.operate(
+            [
+                Control(
+                    block=0,
+                    group=12,
+                    variation=1,
+                    index=outstation.UNCONTROLLABLE_BINARY,
+                    raw=b"",
+                    command=ControlRelayOutputBlock.build(OperationType.LATCH_ON),
+                )
+            ]
+        )
+
+        assert outstation.UNCONTROLLABLE_BINARY not in controls.binary
+
+    def test_the_readback_reflects_what_was_commanded(self, outstation):
+        """A constant would look identical if the control had been dropped."""
+        from py1815.control import (
+            GROUP_BINARY_OUTPUT_STATUS,
+            BinaryQuality,
+            ControlRelayOutputBlock,
+            OperationType,
+        )
+        from py1815.session import Control
+
+        controls = outstation.FixedControls()
+        before = controls.status_objects(GROUP_BINARY_OUTPUT_STATUS)
+        controls.operate(
+            [
+                Control(
+                    block=0,
+                    group=12,
+                    variation=1,
+                    index=outstation.CONTROLLABLE_BINARY[0],
+                    raw=b"",
+                    command=ControlRelayOutputBlock.build(OperationType.LATCH_ON),
+                )
+            ]
+        )
+        after = controls.status_objects(GROUP_BINARY_OUTPUT_STATUS)
+
+        assert not before[0] & BinaryQuality.STATE
+        assert after[0] & BinaryQuality.STATE

@@ -80,6 +80,63 @@ execute by omission. And a contract that names one of them leaves the other four
 ordinary refusals -- which is exactly what they were until the interoperability sweep walked the
 function code space and found them answering.
 
+**D10 -- Controls reach the device through a synchronous `ControlProvider`,** mirroring
+`ReadProvider`. The session stays synchronous, so it keeps doing no I/O and stays pinned against
+literal frames.
+
+This is conformant rather than a compromise, which is worth saying because it reads like one. The
+standard defines `SUCCESS` as "accepted, initiated, or queued" -- queuing is one of the things
+success means. A provider that hands the control to a device thread and returns is answering
+correctly. What it must not do is block: a device round-trip inside the window a master is timing
+is a protocol timeout waiting to happen, which is why `ReadProvider` is synchronous too.
+
+**D11 -- Select state lives in the session, not in the provider.** Selecting is protocol
+bookkeeping: the provider is asked whether it *could* operate, and the session remembers that it
+said yes. A provider written by a caller should not have to reimplement matching and expiry to be
+conformant, and under D7 there is one association, so there is exactly one select to track.
+
+**D12 -- A select is invalidated by anything that makes it ambiguous.** It expires after a
+configurable timeout, ten seconds by default; it is consumed by the operate that matches it and
+left alone by one that does not, since a master that sent the wrong operate still holds the
+reservation it was granted; a second select replaces the first; and `connection_reset` discards
+it, because a reservation held for an operate on a socket that died must not be honoured over the
+connection that replaced it.
+
+**D13 -- The control point map belongs to the caller, as with reads.** Under D6 this library does
+not know that index 7 is a power setpoint, and it does not scale. A control arrives at the
+provider as an index, a decoded object and the function that carried it.
+
+**D14 -- A complete control is answered per object, echoed in request order.** A request naming
+four points where one is unsupported returns four objects with three successes and one
+`NOT_SUPPORTED`, not a single refusal for the fragment. The echo is of the request rather than a
+tidier version of it: the objects come back as they arrived, and two headers naming the same group
+are answered with two headers.
+
+That last part is why the decoders keep raw octets rather than rebuilding from parsed fields.
+`struct` does not round-trip every bit pattern a float variation can carry -- unpacking the
+signaling NaN `0x7f800001` and packing the result yields `0x7fc00001` -- so an echo built from
+parsed values would return octets the master did not send.
+
+**D15 -- A request that does not parse is refused at the fragment, not per object.** A truncated
+body, a count that disagrees with the octets present, or an index width that contradicts the
+qualifier may leave no complete object to echo, and a status has to be attached to something.
+Those produce a null response carrying `PARAM_ERROR`. An object that parses completely and is then
+invalid is echoed with `FORMAT_ERROR` under D14.
+
+**D16 -- A select arms the request it received, not the objects that succeeded.** A four-point
+select can return three successes and one refusal, which a master meets on any map with a
+read-only index. The operate it sends next is the request it already sent, so matching against the
+subset it was never told about would reject its own unchanged request. Each object is answered on
+its merits again at operate, so an index that failed at select fails again, and no subset
+bookkeeping exists to get wrong.
+
+Matching compares the object octets rather than the decoded objects. That is exact, which the
+standard requires, and it sidesteps float equality: two NaN setpoints never compare equal, so a
+select carrying one could otherwise never be operated at all. The header boundary is deliberately
+excluded -- it is framing rather than instruction, and an operate carrying the same objects under
+a different boundary is still asking for the same points to move.
+
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -129,6 +186,9 @@ this level needs a peer that exposes quality rather than a change to the harness
 ## Roadmap
 
 - ~~The TCP and TLS listener, with D7 and D8.~~ Landed.
+- ~~Controls: SELECT, OPERATE, DIRECT OPERATE and DIRECT OPERATE NO ACK, with D10 through D16.~~
+  Landed. The outstation commands as well as reports; output status readback is served by the
+  caller's provider, per D6.
 - Events, classes 1 through 3, deadbands and unsolicited responses. The interoperability job
   shows why this is not optional in practice: a real master's startup sends `DISABLE_UNSOLICITED`
   and then `ENABLE_UNSOLICITED`, and this outstation refuses both. It proceeds to read normally,

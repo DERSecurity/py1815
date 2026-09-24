@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dnp3::app::control::{ControlCode, Group12Var1, OpType};
+use dnp3::app::control::{CommandStatus, ControlCode, Group12Var1, OpType};
 use dnp3::app::measurement::{AnalogInput, BinaryInput, Counter, DoubleBitBinaryInput};
 use dnp3::app::{ConnectStrategy, MaybeAsync, NullListener, ResponseHeader, Variation};
 use dnp3::decode::{AppDecodeLevel, DecodeLevel};
@@ -27,13 +27,20 @@ use dnp3::link::{EndpointAddress, LinkErrorMode};
 use dnp3::master::TaskError;
 use dnp3::master::{
     AssociationConfig, AssociationHandler, AssociationInformation, Classes, CommandBuilder,
-    CommandError, CommandMode, CommandSupport, EventClasses, HeaderInfo, MasterChannelConfig,
-    ReadHandler, ReadRequest, ReadType,
+    CommandError, CommandMode, CommandResponseError, CommandSupport, EventClasses, HeaderInfo,
+    MasterChannelConfig, ReadHandler, ReadRequest, ReadType,
 };
 use dnp3::tcp::{spawn_master_tcp_client, EndpointList};
 
 /// What the fixture serves. Must match `interop/outstation.py`.
 const EXPECTED: [i32; 5] = [10, -20, 30, 40, 50];
+
+/// A binary output the fixture operates.
+const CONTROLLABLE_INDEX: u8 = 0;
+
+/// One it deliberately does not, so a refusal can be seen arriving as a status
+/// against that point while the rest of the request succeeds.
+const UNCONTROLLABLE_INDEX: u8 = 9;
 
 /// The index the fixture serves offline, with COMM_LOST set.
 const OFFLINE_INDEX: u16 = 3;
@@ -184,41 +191,91 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(Ok(())) => println!("rust-master: read completed"),
     }
 
-    // A control this outstation must refuse. Proving the refusal reaches a
-    // master as a refusal, rather than as a timeout, is the half of D9 that a
-    // sweep checking indication bits on our own socket cannot show.
-    let control = tokio::time::timeout(
+    // Two assertions where there was one, because they sit at different layers
+    // and neither stands in for the other. An unsupported *point* comes back as
+    // a status against that object; an unsupported *function* comes back as an
+    // indication against the fragment. Checking only the first would retire the
+    // D9 coverage while appearing to keep it.
+
+    // A point the outstation owns.
+    let accepted = tokio::time::timeout(
         Duration::from_secs(30),
         association.operate(
             CommandMode::DirectOperate,
             CommandBuilder::single_header_u8(
                 Group12Var1::from_code(ControlCode::from_op_type(OpType::LatchOn)),
-                0u8,
+                CONTROLLABLE_INDEX,
             ),
         ),
     )
     .await;
 
-    match control {
-        Err(_) => fail("the outstation did not answer a control request within 30s"),
-        Ok(Ok(())) => fail("the outstation accepted a control; it is supposed to refuse every one"),
-        // The refusal has to be the specific one D9 promises. Accepting any
-        // CommandError would let a timeout, a dropped connection or a malformed
-        // response stand in for "refused", which is the same shape of mistake
-        // as a test that passes because nothing happened.
-        Ok(Err(CommandError::Task(TaskError::RejectedByIin2(iin)))) => {
+    match accepted {
+        Err(_) => fail("the outstation did not answer a control within 30s"),
+        Ok(Err(error)) => fail(&format!(
+            "a control the outstation owns was refused: {error}"
+        )),
+        Ok(Ok(())) => println!("rust-master: the control was accepted"),
+    }
+
+    // A point it does not. The refusal has to arrive as a per-object status
+    // rather than as an indication against the fragment, which is what D14
+    // promises and what a master driving one point at a time can prove.
+    //
+    // This library checks the echo on the way past: a response whose objects
+    // differ from the request is ObjectValueMismatch, and one whose header
+    // count differs is HeaderCountMismatch. Either would surface here as a
+    // failure that is not BadStatus.
+    let refused = tokio::time::timeout(
+        Duration::from_secs(30),
+        association.operate(
+            CommandMode::DirectOperate,
+            CommandBuilder::single_header_u8(
+                Group12Var1::from_code(ControlCode::from_op_type(OpType::LatchOn)),
+                UNCONTROLLABLE_INDEX,
+            ),
+        ),
+    )
+    .await;
+
+    match refused {
+        Err(_) => fail("the outstation did not answer a control within 30s"),
+        Ok(Ok(())) => fail("a point the outstation does not control was accepted"),
+        Ok(Err(CommandError::Response(CommandResponseError::BadStatus(status)))) => {
+            if status != CommandStatus::NotSupported {
+                fail(&format!(
+                    "the point was refused, but with {status:?} rather than NotSupported"
+                ));
+            }
+            println!("rust-master: the uncontrolled point was refused per object, as it should be");
+        }
+        Ok(Err(other)) => fail(&format!(
+            "the refusal did not arrive as a per-object status: {other}"
+        )),
+    }
+
+    // A function this outstation still does not implement. The half of D9 that
+    // a sweep checking indication bits on our own socket cannot show: that a
+    // refusal reaches an independent master as a refusal rather than as a
+    // timeout.
+    let restart = tokio::time::timeout(Duration::from_secs(30), association.cold_restart()).await;
+
+    match restart {
+        Err(_) => fail("the outstation did not answer a cold restart within 30s"),
+        Ok(Ok(_)) => fail("the outstation accepted a cold restart; it implements none"),
+        Ok(Err(TaskError::RejectedByIin2(iin))) => {
             if !iin.iin2.get_no_func_code_support() {
                 fail(&format!(
-                    "the control was rejected, but not with FUNC_NOT_SUPPORTED; iin2 was {:?}",
+                    "the function was rejected, but not with FUNC_NOT_SUPPORTED; iin2 was {:?}",
                     iin.iin2
                 ));
             }
             println!(
-                "rust-master: the control was refused with FUNC_NOT_SUPPORTED, as it should be"
+                "rust-master: the unsupported function was refused with FUNC_NOT_SUPPORTED, as it should be"
             );
         }
         Ok(Err(other)) => fail(&format!(
-            "the control failed without being refused in band: {other}"
+            "the function failed without being refused in band: {other}"
         )),
     }
 
