@@ -40,9 +40,33 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
   32, the six-octet timestamp, and index-prefixed event blocks. Events are not a
   range -- they are whichever points changed, in the order they changed -- so
   each carries its own index.
+- **Controls: this outstation commands as well as reports.** `SELECT`,
+  `OPERATE`, `DIRECT_OPERATE` and `DIRECT_OPERATE NO ACK`, over control relay
+  output blocks and analog output setpoints, with the output status points a
+  master reads back afterwards. Given no control provider it still refuses every
+  one, which is the truthful answer for an outstation that monitors rather than
+  a degraded version of one that commands.
+
+  Each control is answered on its own: a request naming four points where one is
+  unsupported returns four objects with three successes and one refusal, rather
+  than one verdict for the fragment. A request that cannot be parsed is refused
+  whole instead, because a status has to be attached to an object and a
+  truncated body may leave none.
+
+  Select-before-operate holds the request it was given rather than the points
+  that accepted it, since the operate a master sends next is the request it
+  already sent. Matching compares the octets, which is exact and sidesteps the
+  fact that two NaN setpoints never compare equal.
 
 ### Changed
 
+- **`DIRECT_OPERATE NO ACK` executes rather than being dropped.** The standard
+  defines it as function code 5 without a response, and it was previously
+  discarded unexecuted -- correct for an outstation that could not command, and
+  the worst available behavior for one that can, since a master would believe it
+  had issued commands that were silently thrown away. It stays silent, including
+  when its body does not parse: a master that asked for no response is not
+  listening for a parse error either.
 - **A displaced connection is now aborted; a connection closed at shutdown still
   closes gracefully.** The two callers want opposite things. A displaced peer is
   typically one whose socket died without a FIN, where a graceful close waits on
