@@ -19,6 +19,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -371,6 +372,91 @@ def parse_request(fragment: bytes) -> Request:
         body=fragment[offset:],
         known_function=known,
     )
+
+
+@dataclass(frozen=True)
+class ObjectBlock:
+    """One object header and the indexed objects that followed it."""
+
+    header: ObjectHeader
+    #: ``(index, octets)`` in the order they arrived. An index may repeat: a
+    #: request naming the same point twice is a request naming it twice, and
+    #: collapsing that here would answer fewer objects than were asked about.
+    items: tuple[tuple[int, bytes], ...]
+
+
+def parse_object_blocks(
+    request: Request, size_of: Callable[[int, int], int | None]
+) -> tuple[ObjectBlock, ...]:
+    """Walk a request whose objects interleave with their indices.
+
+    ``parse_request`` stops at the first header for such a request and leaves
+    the remainder in ``body``, because the indices do not form a list that can
+    be read ahead of the objects. This walks that remainder: for each header,
+    ``count`` objects each prefixed by its own index, then the next header.
+
+    ``size_of`` answers how wide one object of a group and variation is, and
+    ``None`` where it knows of none. The layer is kept ignorant of object
+    formats deliberately -- it parses headers and qualifiers and nothing below
+    them -- so the caller supplies the only thing it cannot know.
+
+    Every failure here is a failure of the fragment rather than of one object,
+    and that is not a stylistic choice. A truncated body, a count that disagrees
+    with the octets present, or a width nothing recognizes may leave no complete
+    object at all, and a status has to be attached to something. Raising
+    :class:`RequestError` is what tells the caller to refuse the fragment rather
+    than to answer per index.
+
+    No object count is imposed. A fragment is already bounded, and eleven octets
+    plus an index is the smallest control a request can carry, so the ceiling is
+    the one the transport already sets.
+    """
+    if not request.headers:
+        raise RequestError("a request carrying objects has no object header")
+
+    blocks: list[ObjectBlock] = []
+    header = request.headers[0]
+    body = request.body
+    offset = 0
+
+    while True:
+        width = _INDEX_WIDTHS.get(header.qualifier)
+        if width is None:
+            raise RequestError(
+                f"qualifier 0x{int(header.qualifier):02X} prefixes no index, so the "
+                "objects after it cannot be told apart"
+            )
+        if header.count is None:
+            raise RequestError("an index-prefixed qualifier carries no count")
+
+        size = size_of(header.group, header.variation)
+        if size is None:
+            raise RequestError(
+                f"no object of group {header.group} variation {header.variation} is known, "
+                "so its width cannot be read"
+            )
+
+        items: list[tuple[int, bytes]] = []
+        for _ in range(header.count):
+            end = offset + width + size
+            if end > len(body):
+                raise RequestError(
+                    f"group {header.group} variation {header.variation} declares "
+                    f"{header.count} objects and the body holds fewer"
+                )
+            items.append(
+                (
+                    int.from_bytes(body[offset : offset + width], "little"),
+                    bytes(body[offset + width : end]),
+                )
+            )
+            offset = end
+
+        blocks.append(ObjectBlock(header=header, items=tuple(items)))
+
+        if offset == len(body):
+            return tuple(blocks)
+        header, offset = _parse_header(body, offset, indices_follow=False)
 
 
 def object_header(group: int, variation: int, *, start: int, stop: int) -> bytes:

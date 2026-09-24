@@ -417,3 +417,41 @@ def _as_status(raw: int) -> CommandStatus:
         # standard reserves for exactly this, and the field is overwritten in
         # the echo regardless.
         return CommandStatus.UNDEFINED
+
+
+def object_size(group: int, variation: int) -> int | None:
+    """How wide one control object is, or ``None`` where none is known.
+
+    The resolver ``application.parse_object_blocks`` needs. That layer parses
+    headers and qualifiers and deliberately knows nothing below them, so the
+    widths live here beside the objects they describe.
+    """
+    if group == GROUP_BINARY_OUTPUT_COMMAND and variation == 1:
+        return CROB_SIZE
+    if group == GROUP_ANALOG_OUTPUT_COMMAND:
+        width = _ANALOG_WIDTH.get(variation)
+        return None if width is None else width + 1
+    return None
+
+
+def decode_control(
+    group: int, variation: int, data: bytes
+) -> ControlRelayOutputBlock | AnalogOutput:
+    """One control object, chosen by the group and variation carrying it.
+
+    Raises :class:`ControlError` for a group and variation that name no control,
+    which the caller has already had the chance to refuse through
+    :func:`object_size` -- reaching here with one means the two disagree.
+    """
+    if group == GROUP_BINARY_OUTPUT_COMMAND and variation == 1:
+        return decode_crob(data)
+    if group == GROUP_ANALOG_OUTPUT_COMMAND and variation in _ANALOG_WIDTH:
+        return decode_analog_output(data, variation)
+    raise ControlError(f"group {group} variation {variation} is not a control")
+
+
+def encode_control(control: ControlRelayOutputBlock | AnalogOutput) -> bytes:
+    """One control object, echoed back with whatever status it now carries."""
+    if isinstance(control, ControlRelayOutputBlock):
+        return encode_crob(control)
+    return encode_analog_output(control)
