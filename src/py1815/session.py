@@ -550,9 +550,7 @@ class Session:
         )
 
 
-def _checked(
-    statuses: Sequence[CommandStatus], controls: Sequence[Control]
-) -> list[CommandStatus]:
+def _checked(statuses: Sequence[CommandStatus], controls: Sequence[Control]) -> list[CommandStatus]:
     """One status per control, or the programming error that says otherwise.
 
     The provider contract in one place rather than at each call site, so a path
