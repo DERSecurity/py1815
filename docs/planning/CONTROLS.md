@@ -88,6 +88,19 @@ there is nothing to attach a status to. Those produce a null response carrying
 control code, impossible timing values -- is echoed with `FORMAT_ERROR` under
 **D14**.
 
+**D16 -- A select arms the request it received, not the objects that
+succeeded.** **D14** answers per object, so a four-point `SELECT` can return
+three `SUCCESS` and one `NOT_SUPPORTED` -- which a master will meet on any map
+with a read-only index. What that arms has to be defined, and the answer is the
+whole request.
+
+The following `OPERATE` must match what the master sent, because that is what
+the master will send again; matching against a subset the master was never told
+about would reject its own unchanged request. Each object is then answered on
+its merits a second time, so an index that failed at select fails again at
+operate. Nothing partially-selected is executed, and no subset bookkeeping is
+invented to be got wrong.
+
 ## Work
 
 ### 1. Control objects -- `objects.py`
@@ -152,8 +165,19 @@ qualifier to size the index and the group and variation to size the object.
 Multiple headers per request, which the current single-header stop does not
 handle.
 
-Bound the count. opendnp3 caps controls at **16 per request**; exceeding the
-cap is the condition `TOO_MANY_OPS` exists for. Configurable, with that default.
+Bound the count, as a policy choice this library is making rather than one it
+inherits. opendnp3 does not cap controls per request at all --
+`maxControlsPerRequest` defaults to `4'294'967'295` in `OutstationParams.h` --
+so a cap cannot be attributed to it, and an earlier draft of this plan claimed
+a default of 16 that does not exist. Adopting that number on a false citation
+would refuse a legitimate seventeen-point request with `TOO_MANY_OPS`.
+
+The argument for a bound is availability, not precedent. Note that one already
+exists implicitly: a fragment is 2048 octets and a CROB with a one-octet index
+prefix is 12, so roughly 170 controls fit a fragment whatever this library
+says. A lower cap is worth having only if some provider needs protecting from a
+request that size, and it should be configurable with a default chosen and
+justified here rather than borrowed.
 
 **Acceptance:**
 
@@ -169,7 +193,19 @@ cap is the condition `TOO_MANY_OPS` exists for. Configurable, with that default.
 ### 4. Session dispatch and select state -- `session.py`
 
 - Add `SELECT`, `OPERATE` and `DIRECT_OPERATE` to `_SUPPORTED_FUNCTIONS`.
-  `DIRECT_OPERATE_NR` stays out, and stays silent (**D9**).
+- **`DIRECT_OPERATE_NR` must begin executing**, while staying silent. Table 4-2
+  defines it as "same as function code 5 but outstation shall not send a
+  response" -- *same as function code 5*, so it operates and says nothing.
+  Dropping it unexecuted is right for an outstation that cannot command and
+  becomes the worst available behavior for one that can: silently ignoring
+  commands a master believes it issued.
+
+  There is a concrete interaction to handle rather than rediscover.
+  `session.py:251` resolves `_NO_RESPONSE_FUNCTIONS` from the function code
+  octet *before* `parse_request`, deliberately, so that a malformed member
+  draws no reply. This function has to be carved out of that early branch while
+  the other four stay in it -- and its silence must survive a body that does not
+  parse, which is the very case that branch was written for.
 - `ControlProvider` Protocol alongside `ReadProvider`, with `select` and
   `operate` taking the decoded controls and returning one status each.
 - Select state per **D11** and **D12**: what was selected, when, and the
@@ -235,12 +271,27 @@ will now see different answers for 3, 4 and 5.
 ## Sequencing
 
 Objects and status codes first, then body parsing, then session dispatch, then
-interop. Each is independently testable, and the first three land without
-changing any answer the outstation currently gives -- so they can merge ahead
-of the behavior change rather than in one reviewable-only-as-a-whole diff.
+interop. Each is independently testable, and they can merge ahead of the
+behavior change rather than arriving as one diff reviewable only as a whole.
+
+One answer does change before 4 lands, and the claim that none does was wrong.
+A control request with a malformed body is today parsed as far as its first
+header and then refused at the function with `FUNC_NOT_SUPPORTED`. Once 3 walks
+the body, that same request becomes a `PARAM_ERROR` under **D15** while the
+function is still unsupported. Nothing currently sends one -- `interop/sweep.py`
+sends bare control headers with no body, which parse -- so no test breaks, but
+the change is real and 3 should carry it in its own notes.
 
 ## Open
 
+- **Secure Authentication, group 120.** This is the change that lets the
+  outstation alter physical state, and the only thing in front of it is **D8**'s
+  TLS allow-list. IEEE 1815-2012 Table 7-7 lists `SELECT`, `OPERATE`,
+  `DIRECT_OPERATE` and `DIRECT_OPERATE_NR` as MANDATORY critical requests, which
+  is the standard naming these as the functions Secure Authentication exists
+  for. Out of scope here is a defensible answer; leaving it unmentioned is not,
+  and the `SECURITY.md` item under 7 documents the surface rather than deciding
+  this.
 - **Counter groups 20 and 21, and freeze.** Out of scope here, but
   `IMMED_FREEZE` sits in the same refused-function neighborhood, and "complete
   outstation" may be taken to include it. Deciding this needs the Level 2
