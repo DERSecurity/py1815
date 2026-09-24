@@ -64,10 +64,21 @@ the active one.
 
 **D9 -- What is refused is refused out loud.** A control function receives a response carrying
 `FUNC_NOT_SUPPORTED` rather than silence, because a master that times out learns nothing and
-retries. The single exception is `DIRECT OPERATE NO ACK`, which asks for no response and
-therefore cannot be refused in band; it is dropped without execution and reported. Stating that
-separately matters: a refusal contract written only in terms of returned statuses leaves the one
-control function that returns nothing as the one an implementation could execute by omission.
+retries.
+
+The exceptions are the function codes the standard defines as taking no reply. IEEE 1815-2012
+Table 4-2 describes each as "same as function code N but outstation shall not send a response":
+`DIRECT OPERATE NO ACK` (0x06), `IMMEDIATE FREEZE NO ACK` (0x08), `FREEZE AND CLEAR NO ACK`
+(0x0A), `FREEZE AT TIME NO ACK` (0x0C) and `AUTHENTICATION REQUEST NO ACK` (0x21). Each is
+dropped without execution and reported in the log. The obligation is on the function code rather
+than on whether this outstation implements what was asked, so refusing one out loud would send a
+fragment to a master that is not listening for it.
+
+Stating the exception separately matters twice over. A refusal contract written only in terms of
+returned statuses leaves the functions that return nothing as the ones an implementation could
+execute by omission. And a contract that names one of them leaves the other four looking like
+ordinary refusals -- which is exactly what they were until the interoperability sweep walked the
+function code space and found them answering.
 
 ## Layering
 

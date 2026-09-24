@@ -1,0 +1,35 @@
+[package]
+name = "interop-rust-master"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Reads the py1815 outstation with an independently developed Rust master"
+
+# NOTE ON THE DEPENDENCY BELOW, WHICH IS NOT OPEN SOURCE.
+#
+# `dnp3` is published by Step Function I/O under a licence that is source
+# available rather than open source. It forbids use that "directly or
+# indirectly, generates revenue", forbids use in a production environment, and
+# forbids publishing benchmark results. It permits non-production use for
+# "testing, teaching, training and research/development".
+#
+# It is here because it is the only mature Rust DNP3 implementation, and a
+# second implementation in a second language is worth more to this library than
+# a third interface onto the C++ one. It is used only to read this outstation in
+# continuous integration; nothing it provides is linked into, distributed with,
+# or depended on by the library itself, and removing this directory removes it
+# entirely.
+#
+# That reading of the licence is a judgement rather than advice, and it was made
+# deliberately rather than by default. If it is reconsidered, the job that runs
+# this is self-contained: delete this directory and its workflow job, and the
+# remaining peers -- the C++ stack and the two independent parsers -- carry on
+# unchanged.
+[dependencies]
+dnp3 = "1.7"
+tokio = { version = "1", features = ["rt", "macros", "time", "net", "sync"] }
+
+[[bin]]
+name = "interop-rust-master"
+path = "src/main.rs"

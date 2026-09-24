@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from py1815.application import ObjectHeader
 from py1815.objects import AnalogPoint, AnalogVariation, analog_flags, analog_range
 from py1815.server import OutstationServer
-from py1815.session import Session
+from py1815.session import Session, UnknownObject
 
 #: What the master must read back. Distinct values so a mis-indexed read is
 #: visible rather than plausible, and a negative one so sign handling is
@@ -43,10 +43,19 @@ POINTS = [
 ]
 
 
+#: What this fixture serves: its analog inputs, and the class objects a class-0
+#: read asks for. Anything else is refused, so the unknown-object path is a
+#: thing the sweep can reach rather than a branch nothing exercises.
+SERVED_GROUPS = frozenset({30, 60})
+
+
 class FixedProvider:
-    """Answers every read with the same analog range."""
+    """Answers reads for the groups it serves, and refuses the rest."""
 
     def read(self, headers: Sequence[ObjectHeader]) -> bytes:
+        unknown = sorted({h.group for h in headers} - SERVED_GROUPS)
+        if unknown:
+            raise UnknownObject(f"this fixture serves no group {unknown}")
         return analog_range(0, POINTS, variation=AnalogVariation.INT32_WITH_FLAG)
 
 

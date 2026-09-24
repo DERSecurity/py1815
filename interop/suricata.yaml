@@ -1,0 +1,90 @@
+%YAML 1.1
+---
+# Suricata, reading a capture of this outstation with its own DNP3 parser.
+#
+# Suricata's DNP3 support is roughly 80KB of C written by the Open Information
+# Security Foundation from the specification, with no connection to this
+# library. It reassembles the TCP stream itself, verifies the link-layer and
+# data-chunk checksums, and raises an application-layer event for each thing it
+# finds wrong -- which is what this job reads.
+#
+# This is a deliberately small configuration rather than the distribution's.
+# The packaged suricata.yaml turns on dozens of parsers, a rule path and an
+# outputs stack that have nothing to do with reading one DNP3 capture, and it
+# differs between distributions in ways that would make this job's behavior
+# depend on which runner image it landed on.
+
+vars:
+  address-groups:
+    HOME_NET: "any"
+    EXTERNAL_NET: "any"
+  port-groups:
+    DNP3_PORTS: "20000"
+
+default-log-dir: /var/log/suricata
+
+# Only the parser under test. Everything else off, so an event in the output is
+# a DNP3 event and the run says nothing about protocols this library does not
+# speak.
+app-layer:
+  protocols:
+    dnp3:
+      enabled: yes
+      detection-ports:
+        dp: 20000
+    http:
+      enabled: no
+    tls:
+      enabled: no
+    ftp:
+      enabled: no
+    smtp:
+      enabled: no
+    ssh:
+      enabled: no
+    dns:
+      enabled: no
+    smb:
+      enabled: no
+    modbus:
+      enabled: no
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      types:
+        # The transactions the parser understood, which is what the validator
+        # counts function codes from.
+        - dnp3
+        # Anything it could not: a checksum it rejected, a length that did not
+        # agree with the frame, a segment it could not reassemble. These arrive
+        # as anomaly records and are what fail the job.
+        - anomaly:
+            enabled: yes
+            types:
+              applayer: yes
+              decode: yes
+              stream: yes
+        - alert:
+            payload: no
+
+# No rules. This job asks whether an independent parser can read the traffic,
+# not whether the traffic matches a signature, and a missing rule file is a
+# startup failure rather than a quiet no-op.
+default-rule-path: /dev/null
+rule-files: []
+
+stream:
+  # A capture of a complete conversation, so a midstream pickup would mean the
+  # capture is wrong rather than the traffic.
+  midstream: false
+  reassembly:
+    depth: 0
+
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
