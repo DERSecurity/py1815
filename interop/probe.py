@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import faulthandler
 import os
 import sys
 import threading
@@ -96,6 +97,13 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args()
 
+    # Whatever hangs next should say where. faulthandler prints every thread's
+    # stack, including the ones with no Python frame, which is what identified
+    # the deadlock this file used to have. Set well beyond the work below so it
+    # fires only on a hang, and before the workflow's own step bound so the dump
+    # survives.
+    faulthandler.dump_traceback_later(args.timeout + 30.0, exit=True)
+
     master = MyMaster(
         outstation_ip=args.host,
         port=args.port,
@@ -106,11 +114,25 @@ def main() -> None:
 
     try:
         deadline = time.time() + args.timeout
-        while time.time() < deadline and not master.is_connected:
-            time.sleep(0.5)
-        if not master.is_connected:
-            fail(f"no connection to {args.host}:{args.port} within {args.timeout}s")
-        say("connected")
+        # Deliberately not master.is_connected.
+        #
+        # That property reads channel_statistic twice, and channel_statistic
+        # calls GetStatistics() once per dictionary key, so each read is six
+        # calls into the C++ channel. Polling it every half second deadlocks
+        # against the stack's own worker thread, which needs the GIL to deliver
+        # its logging callbacks into Python while this thread holds the GIL
+        # inside a call that does not release it. The process then hangs with no
+        # output, and the loop above never re-evaluates its own deadline because
+        # the block is inside the condition.
+        #
+        # Reproduced locally at 8 hangs in 15 runs with two CPUs, and 0 in 15
+        # with this poll removed. Nothing else here calls into the channel
+        # outside a bounded retry, and the scan loop below establishes
+        # connectivity by succeeding: a genuine failure to connect arrives as
+        # "the integrity poll returned no analog inputs" once the deadline
+        # expires, which is a less specific message than the one this replaced
+        # and an actual verdict rather than a hang.
+        say(f"started, polling {args.host}:{args.port} for up to {args.timeout:.0f}s")
 
         # Ask for the variation this outstation serves. The default scan list
         # leads with group 30 variation 6 -- double-precision float -- and an
