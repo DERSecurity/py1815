@@ -16,8 +16,15 @@ working days.
 ## What is in scope
 
 This is an outstation -- the side a SCADA master connects *to* -- so everything
-it accepts from the network is untrusted input, arriving before any peer has
-proven anything about itself:
+it accepts from the network is untrusted input.
+
+How much of it is reachable before authentication depends on the listener. Given
+a TLS context, the standard library validates the client certificate and
+`server.authorize` matches it against the allow-list before the connection is
+admitted and before a single DNP3 octet reaches the session, so the parsers below
+run only for a peer already accepted. Given none, there is no authentication at
+all and every parser is exposed to anyone able to open a socket. Both are
+supported deployments and both are in scope; please say which one you tested.
 
 - Data link parsing in `link`: FT3 framing, the control byte, addresses, and
   the CRC over each block.
@@ -33,8 +40,12 @@ proven anything about itself:
 - Association handling in `server`: in particular that an unauthorized peer
   cannot displace an established master, and that a connection which fails
   authorization changes nothing about the association already in progress.
-- Resource exhaustion reachable from a single connection: event buffers,
-  reassembly state, and the idle timeouts that bound both.
+- Resource exhaustion reachable from a single connection, against the limit each
+  resource actually carries: event buffers bounded by their configured capacity,
+  which survive a reconnect by design because a returning master expects the
+  events it has not read; fragment reassembly bounded by its own `max_fragment`
+  ceiling; and the idle timeout, which closes a connection that has stopped
+  making progress rather than bounding either of the above.
 
 A crash, a hang, an unbounded allocation, or a response built from one
 association leaking into another are all in scope, whether or not the input is
@@ -44,11 +55,11 @@ valid DNP3.
 
 Two properties are deliberate and documented rather than defects:
 
-- **Plaintext operation.** `ssl_context` is optional, and DNP3 over plain TCP
-  is the norm on isolated serial and OT networks. A report that traffic is
-  unencrypted when TLS was not configured is not a finding. A report that TLS
-  is *not* applied when it was configured, or that the peer allow-list admits
-  an identity it should refuse, very much is.
+- **Plaintext operation.** `ssl_context` is optional, and DNP3 over plain TCP is
+  ordinary on the isolated OT networks this is built for. A report that traffic
+  is unencrypted when TLS was not configured is not a finding. A report that TLS
+  is *not* applied when it was configured, or that the peer allow-list admits an
+  identity it should refuse, very much is.
 - **No DNP3 Secure Authentication.** SAv5 is not implemented. Its absence is a
   missing feature rather than a vulnerability, and requests for it belong in an
   issue.
