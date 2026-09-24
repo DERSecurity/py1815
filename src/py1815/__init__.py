@@ -13,7 +13,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
-from py1815 import crc, events, objects
+from py1815 import control, crc, events, objects
 from py1815.application import (
     IIN,
     AppControl,
@@ -63,6 +63,7 @@ __all__ = [
     "TransportError",
     "UnknownObject",
     "build_response",
+    "control",
     "crc",
     "events",
     "null_response",
