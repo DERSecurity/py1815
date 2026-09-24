@@ -146,6 +146,21 @@ _CLASS_BITS = {
 _ANALOG_EVENT_VARIATION = AnalogEventVariation.INT32_WITH_TIME
 _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 
+#: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
+#: the class holds; the count qualifiers ask for at most that many, which is how
+#: a master paces a buffer it does not want in one fragment.
+#:
+#: A range is not among them. Class objects have no indices to range over -- a
+#: class is a reporting priority, not a set of points -- so a start and a stop
+#: name nothing, and honouring one would mean inventing a meaning for it.
+_CLASS_QUALIFIERS = frozenset(
+    {
+        QualifierCode.ALL_OBJECTS,
+        QualifierCode.UINT8_COUNT,
+        QualifierCode.UINT16_COUNT,
+    }
+)
+
 
 class UnknownObject(Exception):
     """Raised by a read provider for a group or range it does not serve."""
@@ -613,6 +628,21 @@ class Session:
         sequence = request.control.sequence
         event_headers, static_headers = self._split_read(request.headers)
 
+        unusable = [h for h in event_headers if h.qualifier not in _CLASS_QUALIFIERS]
+        if unusable:
+            # Refused rather than answered with everything the class holds. A
+            # master that asked for a selection and received the whole buffer
+            # has been told its request was honoured when it was ignored, which
+            # is the shape of failure D9 exists to rule out.
+            logger.info(
+                "dnp3: class read refused: qualifier 0x%02X selects nothing on a class",
+                int(unusable[0].qualifier),
+            )
+            return null_response(
+                sequence=sequence,
+                iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR)),
+            )
+
         body = b""
         if event_headers:
             body += self._event_body(event_headers)
@@ -664,14 +694,27 @@ class Session:
         handling lands a master reading twice sees the same events twice.
         """
         assert self._events is not None
-        # Narrowed here rather than trusted from the caller: `event_class` is
-        # None for a header naming no class at all, and the filter that got us
-        # here is a different statement from the type.
-        classes = sorted({h.event_class for h in headers if h.event_class is not None})
-
         body = b""
-        for event_class in classes:
-            for group, variation, items in _encoded(self._events.peek(EventClass(event_class))):
+        #: Identities already in this response. A master naming a class twice
+        #: asked about it twice, and sending an event once per header would tell
+        #: it the same change happened more than once.
+        emitted: set[int] = set()
+
+        # Header order rather than class order: a master that asked for class 3
+        # before class 1 gets them back that way, and the count on each header
+        # belongs to that header rather than to the class.
+        for header in headers:
+            if header.event_class is None:
+                continue
+            held = self._events.peek(EventClass(header.event_class))
+            selected = [event for event in held if id(event) not in emitted]
+            if header.count is not None:
+                # A count qualifier is "at most this many", which is how a
+                # master paces a buffer it does not want in one fragment.
+                selected = selected[: header.count]
+            emitted.update(id(event) for event in selected)
+
+            for group, variation, items in _encoded(selected):
                 body += indexed_block(group, variation, items)
         return body
 

@@ -231,3 +231,94 @@ class TestBinaryEventsTravelInTheirOwnBlock:
         assert body[0] == 32, "analog event group"
         analog_block = 4 + (1 + 11)
         assert body[analog_block] == 2, "binary event group"
+
+
+def _read_qualified(cls: int, qualifier: int, extra: bytes = b"") -> bytes:
+    return bytes([0xC0, FunctionCode.READ, 60, CLASS_VARIATION[cls], qualifier]) + extra
+
+
+class TestWhatQualifierAClassReadMayCarry:
+    """A class is a reporting priority, not a set of points, so a start and a
+    stop name nothing on one. Answering such a request with the whole buffer
+    would tell a master its selection was honoured when it was ignored."""
+
+    @pytest.mark.parametrize(
+        "qualifier",
+        [
+            QualifierCode.UINT8_START_STOP,
+            QualifierCode.UINT16_START_STOP,
+            QualifierCode.UINT8_COUNT_UINT8_INDEX,
+        ],
+    )
+    def test_a_qualifier_that_selects_nothing_is_refused(self, qualifier):
+        session, _ = _session(_filled(class_1=3))
+        extra = b"\x00\x00" if qualifier == QualifierCode.UINT8_START_STOP else b"\x00\x00\x00\x00"
+        if qualifier == QualifierCode.UINT8_COUNT_UINT8_INDEX:
+            extra = b"\x00"
+
+        response = session._handle_fragment(_read_qualified(1, qualifier, extra))
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert response[4:] == b"", "refused rather than answered with everything"
+
+    def test_all_objects_returns_the_whole_class(self):
+        session, _ = _session(_filled(class_1=3))
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        assert body[3] == 3
+
+
+class TestACountLimitsWhatComesBack:
+    """ "At most this many", which is how a master paces a buffer it does not
+    want in one fragment."""
+
+    def test_fewer_than_the_buffer_holds(self):
+        session, _ = _session(_filled(class_1=5))
+
+        body = session._handle_fragment(_read_qualified(1, QualifierCode.UINT8_COUNT, bytes([2])))[
+            4:
+        ]
+
+        assert body[3] == 2
+
+    def test_a_count_larger_than_the_buffer_is_not_an_error(self):
+        session, _ = _session(_filled(class_1=2))
+
+        body = session._handle_fragment(_read_qualified(1, QualifierCode.UINT8_COUNT, bytes([50])))[
+            4:
+        ]
+
+        assert body[3] == 2
+
+    def test_a_count_of_zero_returns_nothing(self):
+        session, _ = _session(_filled(class_1=3))
+
+        response = session._handle_fragment(
+            _read_qualified(1, QualifierCode.UINT8_COUNT, bytes([0]))
+        )
+
+        assert response[4:] == b""
+        assert not response[3] & IIN2Bit.PARAM_ERROR, "asking for none is not an error"
+
+
+class TestAClassNamedTwice:
+    def test_its_events_are_not_sent_twice(self):
+        """A master naming a class twice asked about it twice. Sending each
+        event once per header would tell it the same change happened more than
+        once."""
+        session, _ = _session(_filled(class_1=2))
+
+        body = session._handle_fragment(_read(1, 1))[4:]
+
+        assert body[3] == 2
+        assert len(body) == 4 + 2 * (1 + 11), "one block, not two"
+
+    def test_header_order_is_the_masters(self):
+        session, _ = _session(_filled(class_1=1, class_3=1))
+
+        body = session._handle_fragment(_read(3, 1))[4:]
+
+        # The class 3 event was recorded second, so index 1 leads if the order
+        # is the master's and index 0 leads if it is the class number's.
+        assert body[4] == 1

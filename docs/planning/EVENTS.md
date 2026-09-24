@@ -224,7 +224,8 @@ plan. Then 6.
 - **Events per fragment.** A bound belongs somewhere, and as with the control
   cap it should be chosen here rather than borrowed. The fragment size already
   bounds it; a lower limit is only worth having if a reason for one appears.
-- **Whether `peek` needs its limit.** It takes one, and only `test_events`
-  passes it -- no caller in `src/` does. Section 3 will decide whether that is
-  the fragment-splitting mechanism or a parameter to remove, and it should not
-  be removed before then on the strength of having no production caller yet.
+- ~~**Whether `peek` needs its limit.**~~ Settled in section 1 rather than 3. A
+  class read may carry a count qualifier, which asks for at most that many
+  events, and the limit is what answers it. Section 3 still has to decide how a
+  response too large for one fragment is split, but the parameter has a caller
+  now and is not a candidate for removal.
