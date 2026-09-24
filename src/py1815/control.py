@@ -393,6 +393,13 @@ def _pack_value(value: float, variation: int, group: int) -> bytes:
         if not low <= raw <= high:
             raise ControlError(f"{value} does not fit group {group} variation {variation}")
         return struct.pack(fmt, raw)
+    if not math.isfinite(value):
+        # struct packs NaN and infinity onto the float variations without
+        # complaint, so the refusal the integer path gets from round() has to be
+        # made explicit here. A command is an instruction rather than a reading:
+        # there is nothing to normalize it to, and a setpoint of "not a number"
+        # is not one a device can be asked to hold.
+        raise ControlError(f"{value} is not a value group {group} can carry")
     try:
         return struct.pack(fmt, float(value))
     except (struct.error, OverflowError) as exc:

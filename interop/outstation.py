@@ -19,7 +19,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 
-from py1815.application import ObjectHeader
+from py1815.application import ObjectHeader, object_header
 from py1815.control import (
     GROUP_ANALOG_OUTPUT_STATUS,
     GROUP_BINARY_OUTPUT_STATUS,
@@ -99,6 +99,11 @@ class FixedControls:
         if isinstance(command, ControlRelayOutputBlock):
             if item.index not in self.binary:
                 return CommandStatus.NOT_SUPPORTED
+            if command.queued:
+                # Bit 4 is obsolete in IEEE 1815-2012 and required to be zero. A
+                # master that sets it is asking for behavior the standard
+                # withdrew, which is malformed rather than unimplemented.
+                return CommandStatus.FORMAT_ERROR
             if command.operation not in (OperationType.LATCH_ON, OperationType.LATCH_OFF):
                 # Pulses need a timer this fixture has no reason to own.
                 return CommandStatus.NOT_SUPPORTED
@@ -115,14 +120,26 @@ class FixedControls:
             self.analog[item.index] = command.value
 
     def status_objects(self, group: int) -> bytes:
+        """A readback block: an object header, then the points it covers.
+
+        The header is not optional. A provider hands the session a response body
+        and the session forwards it unchanged, so objects returned bare would
+        have a master reading the first status octet as an object group.
+        """
         if group == GROUP_BINARY_OUTPUT_STATUS:
-            return b"".join(
-                encode_binary_output_status(state=self.binary[index])
-                for index in sorted(self.binary)
+            indices = sorted(self.binary)
+            variation = 2
+            body = b"".join(
+                encode_binary_output_status(state=self.binary[index]) for index in indices
             )
-        return b"".join(
-            encode_analog_output_status(self.analog[index], 1) for index in sorted(self.analog)
-        )
+        else:
+            indices = sorted(self.analog)
+            variation = 1
+            body = b"".join(
+                encode_analog_output_status(self.analog[index], variation) for index in indices
+            )
+        header = object_header(group, variation, start=indices[0], stop=indices[-1])
+        return header + body
 
 
 #: What this fixture serves: its analog inputs, the output status points a

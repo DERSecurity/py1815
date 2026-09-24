@@ -135,6 +135,12 @@ class Control:
     #: Which object header this arrived under. Two headers naming the same
     #: group and variation are two blocks, and the echo reproduces them as two
     #: -- a request is echoed, not tidied.
+    #: The function code that carried it. D13 promises a provider the
+    #: function alongside the object, and the three that reach
+    #: ``operate`` are not interchangeable: a provider may want to audit
+    #: a select differently from the operate that spends it, and
+    #: ``DIRECT_OPERATE_NR`` is one no master is waiting on.
+    function: FunctionCode
     block: int
     group: int
     variation: int
@@ -420,7 +426,9 @@ class Session:
             logger.info("dnp3: dropping DIRECT_OPERATE_NR: monitor role")
             return
         try:
-            controls = self._decode_controls(parse_request(fragment))
+            controls = self._decode_controls(
+                parse_request(fragment), FunctionCode.DIRECT_OPERATE_NR
+            )
         except (RequestError, ControlError) as exc:
             # Nowhere to send a refusal. Logged so an operator can see a master
             # is sending something this outstation cannot read, which is the
@@ -442,7 +450,7 @@ class Session:
         assert self._controls is not None  # refused above when absent
 
         try:
-            controls = self._decode_controls(request)
+            controls = self._decode_controls(request, known)
         except (RequestError, ControlError) as exc:
             # D15. A fragment that does not parse may leave no complete object,
             # and a per-object status has to be attached to something.
@@ -483,12 +491,13 @@ class Session:
         assert self._controls is not None
         return _checked(self._controls.operate(controls), controls)
 
-    def _decode_controls(self, request: Request) -> list[Control]:
+    def _decode_controls(self, request: Request, function: FunctionCode) -> list[Control]:
         controls: list[Control] = []
         for ordinal, block in enumerate(parse_object_blocks(request, control_objects.object_size)):
             for index, data in block.items:
                 controls.append(
                     Control(
+                        function=function,
                         block=ordinal,
                         group=block.header.group,
                         variation=block.header.variation,

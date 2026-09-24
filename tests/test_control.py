@@ -278,3 +278,17 @@ class TestStatusObjectsAreMeasurements:
 
         assert encoded[0] & AnalogQuality.OVER_RANGE
         assert encoded[1:].hex() == "ff7f"
+
+
+class TestNonFiniteCommandsOnEveryVariation:
+    """The integer variations refuse these through ``round``; the float ones
+    reach ``struct.pack``, which accepts NaN and infinity without complaint. A
+    command is an instruction rather than a reading, so there is nothing to
+    normalize it to -- a setpoint of "not a number" is not one a device can be
+    asked to hold."""
+
+    @pytest.mark.parametrize("variation", [1, 2, 3, 4])
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_refused(self, variation, value):
+        with pytest.raises(ControlError):
+            encode_analog_output(AnalogOutput(value=value, variation=variation))
