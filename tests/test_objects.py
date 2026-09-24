@@ -300,6 +300,26 @@ class TestEventEncoding:
     def test_an_untimed_binary_event_is_one_octet(self):
         assert len(encode_binary_event(BinaryPoint(state=False), with_time=False)) == 1
 
+    def test_an_untimed_analog_variation_refuses_a_timestamp(self):
+        """The loose direction, which used to discard it silently.
+
+        The caller believed it had sent a time; the master received an event
+        without one. Neither end can see the disagreement, so the encoder is
+        the only place it can be caught.
+        """
+        with pytest.raises(ValueError, match="carries no timestamp"):
+            encode_analog_event(
+                AnalogPoint(42),
+                variation=AnalogEventVariation.INT32,
+                timestamp_ms=1_700_000_000_000,
+            )
+
+    def test_an_untimed_binary_event_refuses_a_timestamp(self):
+        with pytest.raises(ValueError, match="carries no timestamp"):
+            encode_binary_event(
+                BinaryPoint(state=True), with_time=False, timestamp_ms=1_700_000_000_000
+            )
+
 
 class TestEventBlocks:
     def _event(self, value):

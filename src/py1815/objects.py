@@ -305,14 +305,21 @@ def encode_analog_event(
     Saturation and the non-finite rules are the static encoder's, reused rather
     than restated: an event carrying a different number from the static point it
     reports would be a contradiction a master has no way to resolve.
+
+    The variation decides whether a timestamp belongs, and both directions are
+    refused rather than only the strict one. Handing a timestamp to an untimed
+    variation used to drop it, so the caller believed it had sent a time and the
+    master received an event without one -- a disagreement neither end can see.
     """
     static = _EVENT_TO_STATIC[variation]
     encoded = encode_analog(point, static)
-    if variation in _TIMED_ANALOG_EVENTS:
-        if timestamp_ms is None:
-            raise ValueError(f"{variation.name} carries a timestamp and none was given")
-        return encoded + encode_time(timestamp_ms)
-    return encoded
+    if variation not in _TIMED_ANALOG_EVENTS:
+        if timestamp_ms is not None:
+            raise ValueError(f"{variation.name} carries no timestamp and one was given")
+        return encoded
+    if timestamp_ms is None:
+        raise ValueError(f"{variation.name} carries a timestamp and none was given")
+    return encoded + encode_time(timestamp_ms)
 
 
 def encode_binary_event(
@@ -321,9 +328,15 @@ def encode_binary_event(
     with_time: bool = True,
     timestamp_ms: int | None = None,
 ) -> bytes:
-    """One binary input event object."""
+    """One binary input event object.
+
+    ``with_time`` and ``timestamp_ms`` must agree, in both directions -- see
+    ``encode_analog_event`` for why the loose one is refused too.
+    """
     encoded = encode_binary(point)
     if not with_time:
+        if timestamp_ms is not None:
+            raise ValueError("an untimed binary event carries no timestamp and one was given")
         return encoded
     if timestamp_ms is None:
         raise ValueError("a timed binary event carries a timestamp and none was given")

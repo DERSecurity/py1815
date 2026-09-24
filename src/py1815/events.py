@@ -152,7 +152,19 @@ class EventBuffers:
         return events[:limit] if limit is not None else events
 
     def drop(self, events: Iterable[Event]) -> None:
-        """Remove events a master has confirmed."""
+        """Remove events a master has confirmed.
+
+        Matched on identity, not equality, and the difference matters. Events
+        are frozen dataclasses, so two genuinely distinct events carrying the
+        same index, value and timestamp compare equal -- a master confirming
+        one of them would silently drop both. ``id()`` is what tells them
+        apart, and tidying this into ``==`` would reintroduce that.
+
+        It is load-bearing that the events passed in are still held by a
+        buffer, since that is what keeps them alive and their ids stable for
+        the length of this call. True of the ``peek`` then ``drop`` lifecycle
+        above; not true of ids kept across a confirm cycle.
+        """
         confirmed = set(map(id, events))
         for buffer in self._buffers.values():
             remaining = deque(e for e in buffer.events if id(e) not in confirmed)
