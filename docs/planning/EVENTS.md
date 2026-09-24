@@ -224,8 +224,13 @@ plan. Then 6.
 - **Events per fragment.** A bound belongs somewhere, and as with the control
   cap it should be chosen here rather than borrowed. The fragment size already
   bounds it; a lower limit is only worth having if a reason for one appears.
-- ~~**Whether `peek` needs its limit.**~~ Settled in section 1 rather than 3. A
-  class read may carry a count qualifier, which asks for at most that many
-  events, and the limit is what answers it. Section 3 still has to decide how a
-  response too large for one fragment is split, but the parameter has a caller
-  now and is not a candidate for removal.
+- **Whether `peek` needs its limit.** Still open, and an earlier edit of this
+  entry claimed otherwise. Section 1 taught something about it rather than
+  settling it: a class read may carry a count qualifier asking for at most that
+  many events, but `peek`'s limit is *not* what answers one. The count is
+  applied after deduplication, because a limit taken inside `peek` would count
+  events that the deduplication then removes -- so a second header naming the
+  same class would come back short of what the master asked for.
+
+  The parameter therefore still has no caller in `src/`. Section 3 may find one
+  in fragment splitting, and it should not be removed before then.

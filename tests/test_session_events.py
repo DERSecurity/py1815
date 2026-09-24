@@ -242,21 +242,23 @@ class TestWhatQualifierAClassReadMayCarry:
     stop name nothing on one. Answering such a request with the whole buffer
     would tell a master its selection was honoured when it was ignored."""
 
+    #: Each refused qualifier with the payload its own parse path expects.
+    #: The two index-prefixed forms are read through different code -- one
+    #: octet of count and index versus two -- so covering only the narrow one
+    #: would let a regression accepting the wide one pass.
     @pytest.mark.parametrize(
-        "qualifier",
+        ("qualifier", "payload"),
         [
-            QualifierCode.UINT8_START_STOP,
-            QualifierCode.UINT16_START_STOP,
-            QualifierCode.UINT8_COUNT_UINT8_INDEX,
+            (QualifierCode.UINT8_START_STOP, bytes(2)),
+            (QualifierCode.UINT16_START_STOP, bytes(4)),
+            (QualifierCode.UINT8_COUNT_UINT8_INDEX, bytes(1)),
+            (QualifierCode.UINT16_COUNT_UINT16_INDEX, bytes(2)),
         ],
     )
-    def test_a_qualifier_that_selects_nothing_is_refused(self, qualifier):
+    def test_a_qualifier_that_selects_nothing_is_refused(self, qualifier, payload):
         session, _ = _session(_filled(class_1=3))
-        extra = b"\x00\x00" if qualifier == QualifierCode.UINT8_START_STOP else b"\x00\x00\x00\x00"
-        if qualifier == QualifierCode.UINT8_COUNT_UINT8_INDEX:
-            extra = b"\x00"
 
-        response = session._handle_fragment(_read_qualified(1, qualifier, extra))
+        response = session._handle_fragment(_read_qualified(1, qualifier, payload))
 
         assert response[3] & IIN2Bit.PARAM_ERROR
         assert response[4:] == b"", "refused rather than answered with everything"
