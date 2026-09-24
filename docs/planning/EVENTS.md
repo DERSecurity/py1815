@@ -55,20 +55,29 @@ which index is which point or when it moved. An `EventProvider` asked for events
 when a read arrives would have to own a buffer anyway, so the indirection would
 buy nothing and hide where the state lives.
 
-**D18 -- A confirmation is what retires an event, and nothing else is.** A
-response carrying events sets `CON`, and the events stay in the buffer until the
-matching `CONFIRM` arrives. `peek` selects, `drop` retires, and the gap between
-them is the window a master might fail to answer in.
+**D18 -- A confirmation is what the outstation retires an event *for*. The
+buffer bound is the other way one leaves.** A response carrying events sets
+`CON`, and the events stay until the matching `CONFIRM` arrives. `peek` selects,
+`drop` retires, and the gap between them is the window a master might fail to
+answer in.
 
-This is why `EventBuffers.drop` matches on identity rather than equality, and why
-it is load-bearing that the events are still buffered while the confirm is
+This is why `EventBuffers.drop` matches on identity rather than equality, and
+why it is load-bearing that the events are still buffered while the confirm is
 outstanding.
 
-A master that never confirms gets the same events again on its next read. That
-is the correct outcome: the alternative is an outstation that discards data
-because a master went quiet, which is the failure event buffers exist to
-prevent. The buffer bound and the overflow flag are what stop it growing without
-limit.
+A master that never confirms gets the same events again on its next read, until
+the buffer fills. `_ClassBuffer.add` evicts the oldest at capacity and raises
+the overflow flag, so continued recording can remove an unconfirmed event before
+the master ever sees it a second time. That is not a hole in this decision, it
+is the decision the buffer already made: unbounded retention for a master that
+has gone quiet is how an outstation runs out of memory, and the overflow bit
+exists to say that data was lost rather than to pretend it was not.
+
+The two interact where a pending selection is evicted. `drop` skips events it
+cannot find, so a confirmation retires whatever survived and silently ignores
+what did not, which is the right outcome -- there is nothing to retire and
+nothing to report beyond the overflow bit already set. The acceptance criteria
+below have to cover that case rather than assume a selection outlives the wait.
 
 **D19 -- One outstanding response at a time, and a new request replaces it.**
 Under **D7** there is one association, so there is one unconfirmed response to
@@ -141,6 +150,10 @@ sequence number covers; a confirmation with the wrong sequence retires nothing;
 `connection_reset` leaves the buffers alone but forgets what was outstanding,
 since the socket carrying that response is gone.
 
+And the eviction case from **D18**: recording past capacity while a confirm is
+outstanding evicts the oldest selected event, after which the confirmation
+retires the survivors, raises no error, and leaves the overflow flag set.
+
 ### 3. Multi-fragment responses
 
 The first in this library. Events that do not fit one fragment split across
@@ -169,9 +182,14 @@ until the response reporting it is confirmed.
 Per **D21**. Small, and worth doing here rather than with unsolicited, because
 it is the half that needs no sending.
 
-**Acceptance:** `DISABLE_UNSOLICITED` is answered with a null response and clear
-indications; `ENABLE_UNSOLICITED` still carries `FUNC_NOT_SUPPORTED`. The sweep
-case for the first changes meaning and has to change with it.
+**Acceptance:** `DISABLE_UNSOLICITED` is answered with a null response that
+does *not* carry `FUNC_NOT_SUPPORTED`; `ENABLE_UNSOLICITED` still does.
+
+Success is the absence of that bit rather than an empty indication field, which
+an earlier draft of this said and which nothing could satisfy. `DEVICE_RESTART`
+is set until a master clears it, and **D22** and **D23** put the class and
+overflow bits there on their own terms -- a response reporting them is still a
+successful one.
 
 ### 6. Interoperability
 
