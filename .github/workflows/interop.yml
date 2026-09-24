@@ -16,7 +16,9 @@ on:
 # same codebase wearing different clothes:
 #
 #   opendnp3-master  a C++ stack, driven through its Python bindings. Reads
-#                    points and checks them.
+#                    points and checks them. Advisory only -- it runs on every
+#                    pull request but does not gate one, because the binding
+#                    deadlocks intermittently. See the gate job and issue #10.
 #   rust-master      a Rust stack by different authors. Reads points, checks
 #                    the quality octet the C++ one discards, and confirms a
 #                    refused control arrives as a refusal.
@@ -87,8 +89,16 @@ jobs:
       - name: Read it with the independent master
         # Bounded well inside the job, so a hang fails here with a log rather
         # than consuming the budget and taking the diagnostics down with it.
-        timeout-minutes: 3
-        run: .venv-master/bin/python -u interop/probe.py --port 20000
+        #
+        # 90s against a passing run of about 25s. The bound cannot be tightened
+        # from inside the probe, because the hang is in master.start() before
+        # any of the probe's own waits are armed, so this is the only place it
+        # can be cut. Two layers on purpose: ``timeout`` ends it on schedule and
+        # exits 124, which is greppable and leaves the outstation log step to
+        # run; timeout-minutes is the backstop for a process that ignores the
+        # signal.
+        timeout-minutes: 2
+        run: timeout 90 .venv-master/bin/python -u interop/probe.py --port 20000
 
       - name: Outstation log
         if: always()
@@ -257,7 +267,7 @@ jobs:
   interop:
     name: interop
     runs-on: ubuntu-latest
-    needs: [opendnp3-master, rust-master, parsers]
+    needs: [rust-master, parsers]
     if: always()
     # One gate the branch protection can name, in front of however many peer
     # jobs there turn out to be.
@@ -267,6 +277,23 @@ jobs:
     # protection silently stops matching -- and a required check that no longer
     # runs is not a check that fails, it is a pull request that can never merge.
     # Adding a peer should not require an administrator.
+    #
+    # ``opendnp3-master`` is deliberately absent, and it is the one exception
+    # to the rule above: a peer that runs without gating. It hangs inside
+    # dnp3-python before the probe executes a line of its own, roughly two
+    # times in seven, and the binding wraps a stack that has been end-of-life
+    # since 2022 -- so the hang is not ours to fix and the rate is not
+    # improving. See issue #10.
+    #
+    # Demoting it costs no assertion. ``rust-master`` checks strictly more:
+    # the point values, the whole quality octet, the object variation, and
+    # that a refused control comes back as FUNC_NOT_SUPPORTED rather than as
+    # a timeout. The C++ job still runs on every pull request and still
+    # reports its own verdict in the checks list, so the second-codebase
+    # evidence survives; it just cannot block a merge on an upstream deadlock.
+    #
+    # Put it back in this list the day the hang stops, or the day it is the
+    # only peer left reading something.
     steps:
       - name: Every peer agreed
         run: |
