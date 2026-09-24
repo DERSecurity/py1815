@@ -11,6 +11,24 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
 
 ### Added
 
+- **The protocol stack**: CRC-16/DNP, FT3 data link framing with a stream
+  reader, transport segmentation and reassembly, the application layer's
+  control octet, function codes, internal indications and object headers, and
+  static binary and analog inputs with their quality flags. Each layer is
+  testable without the ones above it, and the session does no I/O at all -- it
+  takes the octets that arrived and returns the octets to send -- so behavior
+  is pinned against literal frames rather than against a socket.
+- **The listener**: TCP and TLS, with an explicit peer allow-list by subject
+  name or certificate fingerprint. One master association at a time; admission
+  is serialized, and a peer that fails authorization changes nothing about the
+  association already established.
+- **An interoperability suite of implementations that are not this one.** Four
+  across three jobs, chosen so that no two are the same codebase in different
+  clothes: a C++ master through its Python bindings, a Rust master by different
+  authors that checks the quality octet and the object variation the C++
+  bindings discard, and Wireshark and Suricata reading a capture of the whole
+  function code sweep and verifying every checksum in it. The unit suite is
+  this library marking its own homework; these jobs are the part that is not.
 - **Event buffers for classes 1, 2 and 3**, with deadbands, overflow reporting
   and confirmation handling. A deadband is measured against the last value
   *reported*, not the previous reading, so a point drifting in steps smaller
@@ -22,10 +40,6 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
   32, the six-octet timestamp, and index-prefixed event blocks. Events are not a
   range -- they are whichever points changed, in the order they changed -- so
   each carries its own index.
-- **Three more independent implementations in the interop suite**: a Rust master
-  that checks the quality octet and the object variation the C++ bindings
-  discard, and Wireshark and Suricata reading a capture of the whole function
-  code sweep and verifying every checksum in it.
 
 ### Changed
 

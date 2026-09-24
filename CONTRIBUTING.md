@@ -15,11 +15,18 @@ implementation, so the useful question is rarely "should we do this" but "what
 does the standard require" -- and that is cheaper to settle before the code than
 after.
 
-**For a point map**, note that none ships in-tree and none will. The IEEE 1815.2
-DER profile assigns specific indices to specific measurements, and those tables
-are distributed to DNP Users Group members rather than published. The library
-defines the map format and reads a table supplied by the caller; a map for your
-own device belongs in your project.
+**For a point map**, the IEEE 1815.2 DER profile's tables cannot ship here: they
+assign specific indices to specific measurements and are distributed to DNP
+Users Group members rather than published, so a library carrying them could not
+be shared. A map for your own device belongs in your project.
+
+That prohibition is narrower than "no maps ever". The roadmap plans a map-format
+loader and a published table for the predecessor DER profile, and whether the
+AN2018-001-derived map ships with the first release is an open question in
+[DESIGN.md](docs/DESIGN.md) -- it carries an attribution obligation that needs
+confirming before publication. Neither the loader nor the format exists yet; the
+only interface today is the caller-supplied `ReadProvider`. Open an issue before
+building against either.
 
 ## Development setup
 
