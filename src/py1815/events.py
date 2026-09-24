@@ -32,6 +32,8 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
+from functools import reduce
+from operator import or_
 
 from py1815.objects import AnalogPoint, AnalogQuality, BinaryPoint, BinaryQuality
 
@@ -204,7 +206,7 @@ class EventBuffers:
 
     @staticmethod
     def _analog_changed(previous: AnalogPoint, current: AnalogPoint, deadband: float) -> bool:
-        if _quality_of(previous.flags) != _quality_of(current.flags):
+        if _analog_quality_of(previous.flags) != _analog_quality_of(current.flags):
             # Quality first and unconditionally. A point that goes comm-lost
             # holding the same number has not moved and has changed in the way
             # that matters, and a deadband applied here would hide it.
@@ -225,22 +227,30 @@ class EventBuffers:
     def _binary_changed(previous: BinaryPoint, current: BinaryPoint) -> bool:
         if previous.state != current.state:
             return True
-        return _quality_of(previous.flags) != _quality_of(current.flags)
+        return _binary_quality_of(previous.flags) != _binary_quality_of(current.flags)
 
 
-#: The quality bits a change is judged on. The binary state bit is excluded
-#: because it is the value rather than the quality, and it is compared
-#: separately; ignoring that would make every state change look like two.
-_QUALITY_MASK = (
-    AnalogQuality.ONLINE
-    | AnalogQuality.RESTART
-    | AnalogQuality.COMM_LOST
-    | AnalogQuality.REMOTE_FORCED
-    | AnalogQuality.LOCAL_FORCED
-    | AnalogQuality.OVER_RANGE
-    | AnalogQuality.REFERENCE_ERR
-) & ~BinaryQuality.STATE
+#: The quality bits a change is judged on, one mask per point type, each
+#: derived from its own enum so that adding a bit to either cannot leave the
+#: masks behind.
+#:
+#: The two enums agree on their lower five bits and diverge at 0x20, where
+#: analog has ``OVER_RANGE`` and binary has ``CHATTER_FILTER``; 0x40 is
+#: analog-only. A single mask spelled out from ``AnalogQuality`` covered
+#: chatter only because those two 0x20 bits happen to collide -- true today,
+#: but by coincidence rather than by construction, and silently untrue the
+#: moment either enum gains a bit the other lacks.
+_ANALOG_QUALITY_MASK: int = reduce(or_, AnalogQuality, 0)
+
+#: Binary, less the state bit: that bit is the value rather than the quality,
+#: and ``_binary_changed`` compares it separately. Including it would make
+#: every state change register as a quality change as well, and count twice.
+_BINARY_QUALITY_MASK: int = reduce(or_, BinaryQuality, 0) & ~BinaryQuality.STATE
 
 
-def _quality_of(flags: int) -> int:
-    return flags & _QUALITY_MASK
+def _analog_quality_of(flags: int) -> int:
+    return flags & _ANALOG_QUALITY_MASK
+
+
+def _binary_quality_of(flags: int) -> int:
+    return flags & _BINARY_QUALITY_MASK

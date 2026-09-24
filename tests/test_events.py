@@ -7,16 +7,28 @@ about something at all.
 
 from __future__ import annotations
 
+from functools import reduce
+from operator import or_
+
 import pytest
 
 from py1815.events import (
+    _ANALOG_QUALITY_MASK,
+    _BINARY_QUALITY_MASK,
     AnalogEvent,
     BinaryEvent,
     EventBuffers,
     EventClass,
     now_ms,
 )
-from py1815.objects import AnalogPoint, BinaryPoint, analog_flags, binary_flags
+from py1815.objects import (
+    AnalogPoint,
+    AnalogQuality,
+    BinaryPoint,
+    BinaryQuality,
+    analog_flags,
+    binary_flags,
+)
 
 ONLINE = analog_flags()
 COMM_LOST = analog_flags(online=False, comm_lost=True)
@@ -192,6 +204,54 @@ class TestBinaryEvents:
         buffers.record_binary(0, BinaryPoint(state=True), event_class=EventClass.CLASS_1)
 
         assert buffers.count(EventClass.CLASS_1) == 2
+
+    def test_a_chatter_filter_change_at_the_same_state_is_reported(self):
+        """Chatter is a binary-only quality bit, and it was never covered.
+
+        It worked regardless, because the mask was built from ``AnalogQuality``
+        and ``OVER_RANGE`` happens to occupy the same 0x20 bit. That is a
+        coincidence of the bit layout rather than a decision, so nothing here
+        was holding it up.
+        """
+        buffers = _buffers()
+        buffers.record_binary(0, BinaryPoint(state=True), event_class=EventClass.CLASS_1)
+        chattering = BinaryPoint(state=True, flags=binary_flags(state=True, chatter=True))
+
+        assert buffers.record_binary(0, chattering, event_class=EventClass.CLASS_1) is not None
+
+
+class TestQualityMasks:
+    """Each mask is derived from its own enum, not from the other's bit layout.
+
+    The behavioral tests above cannot catch a mask that drifts from its enum,
+    because the two enums currently agree everywhere a test looks. These
+    assertions are what fails when a bit is added to one of them.
+    """
+
+    def test_the_analog_mask_covers_every_analog_quality_bit(self):
+        for bit in AnalogQuality:
+            assert _ANALOG_QUALITY_MASK & bit, f"{bit.name} is not judged a quality change"
+
+    def test_the_binary_mask_covers_every_binary_quality_bit(self):
+        for bit in BinaryQuality:
+            if bit is BinaryQuality.STATE:
+                continue
+            assert _BINARY_QUALITY_MASK & bit, f"{bit.name} is not judged a quality change"
+
+    def test_the_binary_mask_excludes_the_state_bit(self):
+        """Excluded on purpose, so that a state change counts once.
+
+        Previously this exclusion was written as ``& ~BinaryQuality.STATE``
+        against a mask built from ``AnalogQuality``, where no bit is 0x80 --
+        so the term removed nothing and the guard it described was not running.
+        """
+        assert not _BINARY_QUALITY_MASK & BinaryQuality.STATE
+
+    def test_the_binary_mask_claims_no_bit_binary_does_not_define(self):
+        """0x40 is ``AnalogQuality.REFERENCE_ERR`` and means nothing on a
+        binary point. The shared mask included it on binary flags."""
+        defined = reduce(or_, BinaryQuality, 0)
+        assert _BINARY_QUALITY_MASK & ~defined == 0
 
 
 class TestClasses:
