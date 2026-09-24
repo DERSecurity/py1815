@@ -29,13 +29,17 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
+from py1815 import control as control_objects
 from py1815 import link
 from py1815.application import (
     IIN,
     REQUEST_HEADER_SIZE,
+    SEQUENCE_MODULUS,
     AppControl,
     FunctionCode,
     IIN2Bit,
@@ -46,8 +50,20 @@ from py1815.application import (
     RequestError,
     build_response,
     null_response,
+    parse_object_blocks,
     parse_request,
 )
+from py1815.control import (
+    AnalogOutput,
+    CommandStatus,
+    ControlError,
+    ControlRelayOutputBlock,
+)
+
+# Controls echo in the same shape events do -- a count with an index in front of
+# every object -- so the encoder is the same one, named for the first caller
+# rather than for the format.
+from py1815.objects import event_block as indexed_block
 from py1815.transport import Reassembler, TransportError, segment
 
 logger = logging.getLogger(__name__)
@@ -60,13 +76,16 @@ RESTART_GROUP = 80
 RESTART_VARIATION = 1
 RESTART_INDEX = 7
 
-#: Controls, which this outstation does not hold the role to execute.
+#: Controls that carry objects and are answered.
+#:
+#: ``DIRECT_OPERATE_NR`` is absent on purpose. It executes like the rest and
+#: says nothing, which is a different path rather than a different entry in this
+#: set -- see ``_handle_fragment``.
 _CONTROL_FUNCTIONS = frozenset(
     {
         FunctionCode.SELECT,
         FunctionCode.OPERATE,
         FunctionCode.DIRECT_OPERATE,
-        FunctionCode.DIRECT_OPERATE_NR,
     }
 )
 
@@ -92,11 +111,82 @@ _NO_RESPONSE_FUNCTIONS = frozenset(
 )
 
 #: Functions this outstation answers. Everything else earns IIN2.1.
-_SUPPORTED_FUNCTIONS = frozenset({FunctionCode.CONFIRM, FunctionCode.READ, FunctionCode.WRITE})
+_SUPPORTED_FUNCTIONS = frozenset(
+    {FunctionCode.CONFIRM, FunctionCode.READ, FunctionCode.WRITE} | _CONTROL_FUNCTIONS
+)
+
+#: How long a select stays armed. Ten seconds is opendnp3's default and the
+#: middle of what implementations use; the standard leaves it to the outstation.
+DEFAULT_SELECT_TIMEOUT = 10.0
 
 
 class UnknownObject(Exception):
     """Raised by a read provider for a group or range it does not serve."""
+
+
+@dataclass(frozen=True)
+class Control:
+    """One control, as it reached the provider.
+
+    ``index`` is the point and nothing more. Under D6 this library holds no
+    point map: what index 7 means is the caller's to know, and the object is
+    handed over decoded but uninterpreted.
+    """
+
+    #: Which object header this arrived under. Two headers naming the same
+    #: group and variation are two blocks, and the echo reproduces them as two
+    #: -- a request is echoed, not tidied.
+    #: The function code that carried it. D13 promises a provider the
+    #: function alongside the object, and the three that reach
+    #: ``operate`` are not interchangeable: a provider may want to audit
+    #: a select differently from the operate that spends it, and
+    #: ``DIRECT_OPERATE_NR`` is one no master is waiting on.
+    function: FunctionCode
+    block: int
+    group: int
+    variation: int
+    index: int
+    #: The object's octets exactly as they arrived. Select matching compares
+    #: these rather than the decoded objects, because the comparison has to be
+    #: exact and float equality is not -- two NaN setpoints are never equal, so
+    #: a select carrying one could never be operated.
+    raw: bytes
+    command: ControlRelayOutputBlock | AnalogOutput
+
+
+class ControlProvider(Protocol):
+    """What can be commanded, and what it says about being commanded.
+
+    Synchronous by contract, like :class:`ReadProvider` and for the same reason:
+    a master is timing this, and a device round-trip inside the window is a
+    protocol timeout waiting to happen. That is not a compromise the answers
+    have to hide. ``SUCCESS`` is defined by the standard as "accepted,
+    initiated, or queued", so a provider that hands the work to a device thread
+    and returns has answered correctly.
+
+    Both methods return one status per control, in the order received.
+    Returning a different number of statuses is a programming error and is
+    treated as one.
+    """
+
+    def select(self, controls: Sequence[Control]) -> Sequence[CommandStatus]:
+        """Whether each control *could* be operated. Nothing is executed."""
+        ...
+
+    def operate(self, controls: Sequence[Control]) -> Sequence[CommandStatus]: ...
+
+
+@dataclass
+class _ArmedSelect:
+    """What a select left behind for the operate that may follow."""
+
+    #: ``(group, variation, index, octets)`` per control, in order received.
+    key: tuple[tuple[int, int, int, bytes], ...]
+    at: float
+    #: The application sequence the select arrived under. The operate that
+    #: spends it has to be the next one, which is how a stale selection is told
+    #: apart from the request it was granted for.
+    sequence: int
 
 
 class ReadProvider(Protocol):
@@ -109,7 +199,17 @@ class ReadProvider(Protocol):
     timeout waiting to happen.
     """
 
-    def read(self, headers: Sequence[ObjectHeader]) -> bytes: ...
+    def read(self, headers: Sequence[ObjectHeader]) -> bytes:
+        """The encoded objects a response carries, headers included.
+
+        The bytes returned are forwarded to the master unchanged, so each run of
+        objects needs the object header that describes it -- see
+        ``application.object_header``. A provider that serves controls decides
+        for itself whether its group 10 and 40 status points answer a class 0
+        read; convention says they do, and under D6 this library holds no point
+        map with which to decide otherwise.
+        """
+        ...
 
 
 class Session:
@@ -119,9 +219,12 @@ class Session:
         self,
         provider: ReadProvider,
         *,
+        control_provider: ControlProvider | None = None,
         outstation_address: int = 1024,
         master_address: int = 1,
         max_fragment: int = 2048,
+        select_timeout: float = DEFAULT_SELECT_TIMEOUT,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """
         Args:
@@ -133,8 +236,20 @@ class Session:
                 answering an unexpected one would interleave two conversations
                 over one set of sequence numbers.
             max_fragment: Reassembly ceiling for a received fragment.
+            control_provider: Executes controls. Without one this outstation
+                monitors and does not command, and every control function is
+                refused as unsupported -- which is a truthful answer rather than
+                a degraded one.
+            select_timeout: How long a select stays armed for the operate that
+                follows it.
+            clock: Monotonic source for that timeout. Injectable so expiry can
+                be tested without waiting for it.
         """
         self._provider = provider
+        self._controls = control_provider
+        self._select_timeout = select_timeout
+        self._clock = clock
+        self._select: _ArmedSelect | None = None
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._frames = link.FrameReader()
@@ -156,9 +271,16 @@ class Session:
         conversations. Everything else belongs to the association and survives
         -- a reconnecting master expects the restart indication it has not
         cleared, and the events it has not read.
+
+        An armed select is the exception among the things that could survive,
+        and is discarded here per D12. It is a reservation held for the operate
+        that was about to follow on the socket that just died; honouring it
+        across a reconnect would let an operate arrive over a connection the
+        select never crossed.
         """
         self._frames = link.FrameReader()
         self._reassembler.reset()
+        self._select = None
 
     def receive(self, data: bytes) -> bytes:
         """Handle received octets, returning the octets to send back."""
@@ -248,6 +370,18 @@ class Session:
         return iin | extra if extra else iin
 
     def _handle_fragment(self, fragment: bytes) -> bytes:
+        if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
+            # Table 4-2: "same as function code 5 but outstation shall not send
+            # a response". Same as function code 5 -- so it operates, and says
+            # nothing. Carved out of the set below rather than added to it,
+            # because the other four are dropped unexecuted and this one is not.
+            #
+            # Silence survives a body that does not parse, which is the case
+            # that early branch exists for: a master that asked for no response
+            # is not listening for a parse error either.
+            self._operate_unacknowledged(fragment)
+            return b""
+
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] in _NO_RESPONSE_FUNCTIONS:
             # Resolved from the function code octet, before the parse. The
             # obligation these codes carry is on the function code and not on
@@ -275,7 +409,7 @@ class Session:
         known = request.known_function
         sequence = request.control.sequence
 
-        if known in _CONTROL_FUNCTIONS:
+        if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             return null_response(
                 sequence=sequence,
@@ -295,9 +429,131 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
             )
 
+        if known in _CONTROL_FUNCTIONS:
+            return self._handle_control(request, known)
+
+        # Anything else the master asks for ends the exchange a select belongs
+        # to. Keeping it would let a selection sit through arbitrary traffic and
+        # still authorise an operate afterwards, which is the stale-selection
+        # case the sequence check above also catches -- both, because either
+        # alone leaves a gap the other covers.
+        self._select = None
+
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
         return self._handle_read(request)
+
+    def _operate_unacknowledged(self, fragment: bytes) -> None:
+        """Execute a DIRECT_OPERATE_NR and tell nobody, including on failure."""
+        if self._controls is None:
+            logger.info("dnp3: dropping DIRECT_OPERATE_NR: monitor role")
+            return
+        try:
+            controls = self._decode_controls(
+                parse_request(fragment), FunctionCode.DIRECT_OPERATE_NR
+            )
+        except (RequestError, ControlError) as exc:
+            # Nowhere to send a refusal. Logged so an operator can see a master
+            # is sending something this outstation cannot read, which is the
+            # only signal available on a function that answers nothing.
+            logger.warning("dnp3: unreadable DIRECT_OPERATE_NR dropped: %s", exc)
+            return
+        # Checked here too. A provider that miscounts is a programming error
+        # wherever it happens, and answering nothing is not a reason to hold
+        # this path to a weaker contract than the one beside it.
+        statuses = _checked(self._controls.operate(controls), controls)
+        logger.info(
+            "dnp3: DIRECT_OPERATE_NR executed %d control(s): %s",
+            len(controls),
+            ", ".join(status.name for status in statuses),
+        )
+
+    def _handle_control(self, request: Request, known: FunctionCode) -> bytes:
+        sequence = request.control.sequence
+        assert self._controls is not None  # refused above when absent
+
+        try:
+            controls = self._decode_controls(request, known)
+        except (RequestError, ControlError) as exc:
+            # D15. A fragment that does not parse may leave no complete object,
+            # and a per-object status has to be attached to something.
+            logger.warning("dnp3: control request refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+
+        if known is FunctionCode.SELECT:
+            statuses = _checked(self._controls.select(controls), controls)
+            if any(status is CommandStatus.SUCCESS for status in statuses):
+                # D16 arms the request received rather than the objects that
+                # succeeded, so that the operate a master sends next -- which is
+                # the request it already sent -- still matches. That reasoning
+                # runs out when nothing succeeded: there is no operate this
+                # select could authorise, and arming it would let a point the
+                # outstation refused to select be executed by the operate that
+                # followed.
+                self._select = _ArmedSelect(
+                    key=_match_key(controls), at=self._clock(), sequence=sequence
+                )
+            else:
+                self._select = None
+        elif known is FunctionCode.OPERATE:
+            statuses = self._operate_after_select(controls, sequence)
+        else:
+            statuses = _checked(self._controls.operate(controls), controls)
+
+        return build_response(
+            control=AppControl(fir=True, fin=True, sequence=sequence),
+            iin=self._indications(),
+            body=_echo(controls, statuses),
+        )
+
+    def _operate_after_select(
+        self, controls: Sequence[Control], sequence: int
+    ) -> list[CommandStatus]:
+        armed = self._select
+        if armed is None:
+            return [CommandStatus.NO_SELECT] * len(controls)
+        if self._clock() - armed.at > self._select_timeout:
+            self._select = None
+            return [CommandStatus.TIMEOUT] * len(controls)
+        if sequence != (armed.sequence + 1) % SEQUENCE_MODULUS:
+            # The operate has to be the request after the select. Matching on
+            # the objects alone let a selection outlive whatever came between:
+            # select, then a read, then an operate carrying the same objects
+            # would execute on the strength of a selection the master had
+            # already moved on from.
+            self._select = None
+            return [CommandStatus.NO_SELECT] * len(controls)
+        if armed.key != _match_key(controls):
+            # Left armed rather than consumed. D12 spends a select on the
+            # operate that matches it, and a master that sent the wrong one
+            # still has the one it was granted.
+            return [CommandStatus.NO_SELECT] * len(controls)
+        self._select = None
+        assert self._controls is not None
+        return _checked(self._controls.operate(controls), controls)
+
+    def _decode_controls(self, request: Request, function: FunctionCode) -> list[Control]:
+        controls: list[Control] = []
+        for ordinal, block in enumerate(parse_object_blocks(request, control_objects.object_size)):
+            for index, data in block.items:
+                controls.append(
+                    Control(
+                        function=function,
+                        block=ordinal,
+                        group=block.header.group,
+                        variation=block.header.variation,
+                        index=index,
+                        raw=data,
+                        command=control_objects.decode_control(
+                            block.header.group, block.header.variation, data
+                        ),
+                    )
+                )
+        if not controls:
+            raise RequestError("a control request carries no controls")
+        return controls
 
     def _handle_read(self, request: Request) -> bytes:
         try:
@@ -344,3 +600,57 @@ class Session:
             and header.start == RESTART_INDEX
             and header.stop == RESTART_INDEX
         )
+
+
+def _checked(statuses: Sequence[CommandStatus], controls: Sequence[Control]) -> list[CommandStatus]:
+    """One status per control, or the programming error that says otherwise.
+
+    The provider contract in one place rather than at each call site, so a path
+    that answers nothing is held to it as firmly as one that answers a master.
+    """
+    answered = list(statuses)
+    if len(answered) != len(controls):
+        raise ValueError(
+            f"the control provider answered {len(answered)} of {len(controls)} controls"
+        )
+    return answered
+
+
+def _match_key(controls: Sequence[Control]) -> tuple[tuple[int, int, int, bytes], ...]:
+    """What an operate has to reproduce to spend the select it follows.
+
+    The octets rather than the decoded objects. The comparison has to be exact,
+    and float equality is not: two NaN setpoints never compare equal, so a
+    select carrying one could never be operated at all.
+
+    The block a control arrived under is deliberately absent. That is framing
+    rather than instruction: an operate that carried the same objects under a
+    different header boundary is still asking for the same points to move, and
+    refusing it would fail a master over a detail the standard does not make
+    part of the command.
+    """
+    return tuple((c.group, c.variation, c.index, c.raw) for c in controls)
+
+
+def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> bytes:
+    """The request back, one status per object, in the order it arrived (D14).
+
+    The request's own header boundaries are kept. Splitting on the group and
+    variation instead would merge two headers that named the same group into
+    one block carrying twice the count -- a tidier response than the request,
+    and not the request. A master that sent two headers is answered with two.
+    """
+    body = b""
+    run: list[tuple[int, bytes]] = []
+    block = group = variation = -1
+
+    for item, status in zip(controls, statuses, strict=True):
+        if item.block != block:
+            if run:
+                body += indexed_block(group, variation, run)
+            block, group, variation, run = item.block, item.group, item.variation, []
+        run.append((item.index, control_objects.encode_control(item.command.with_status(status))))
+
+    if run:
+        body += indexed_block(group, variation, run)
+    return body

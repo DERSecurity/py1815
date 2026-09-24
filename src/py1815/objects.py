@@ -207,6 +207,28 @@ def binary_flags(
     return flags
 
 
+def normalize_for_wire(value: float, flags: int) -> tuple[float, int]:
+    """A finite value and the quality that says what was done to get one.
+
+    NaN goes out as zero with ``ONLINE`` cleared and ``REFERENCE_ERR`` set,
+    which is DNP3's way of saying the value should not be trusted: a connector
+    can hand up an unread register or a division that had no denominator, and
+    there is no wire representation of "no number". An infinity is a magnitude
+    nothing can represent, which is what ``OVER_RANGE`` already means, so it
+    saturates like any other value too large for its variation.
+
+    Shared rather than repeated. Every analog quantity this library puts on the
+    wire reaches it through here, so a reading that would otherwise raise out of
+    ``round`` -- failing a whole response over one point -- cannot reach the
+    packer from any of them.
+    """
+    if math.isnan(value):
+        return 0.0, (flags & ~AnalogQuality.ONLINE) | AnalogQuality.REFERENCE_ERR
+    if math.isinf(value):
+        return math.copysign(_FLOAT32_MAX, value), flags | AnalogQuality.OVER_RANGE
+    return value, flags
+
+
 def encode_analog(point: AnalogPoint, variation: AnalogVariation) -> bytes:
     """One analog input object, saturating rather than overflowing.
 
@@ -219,24 +241,7 @@ def encode_analog(point: AnalogPoint, variation: AnalogVariation) -> bytes:
     with-flag variations are the ones to prefer.
     """
     fmt = _FORMATS[variation]
-    flags = point.flags
-    value = point.value
-
-    if math.isnan(value):
-        # A connector can hand up a NaN -- an unread register, a division that
-        # had no denominator. There is no wire representation of "no number", so
-        # it goes out as zero with ONLINE cleared and REFERENCE_ERR set, which
-        # is DNP3's way of saying the value should not be trusted. Letting
-        # ``round`` raise would fail the whole response over one point, which is
-        # the failure this function exists to avoid.
-        value = 0.0
-        flags = (flags & ~AnalogQuality.ONLINE) | AnalogQuality.REFERENCE_ERR
-    elif math.isinf(value):
-        # An infinite reading is a magnitude nothing can represent, which is
-        # what OVER_RANGE already means. It saturates like any other value too
-        # large for the variation.
-        value = math.copysign(_FLOAT32_MAX, value)
-        flags |= AnalogQuality.OVER_RANGE
+    value, flags = normalize_for_wire(point.value, point.flags)
 
     if variation in _LIMITS:
         low, high = _LIMITS[variation]

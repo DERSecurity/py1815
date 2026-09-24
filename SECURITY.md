@@ -18,6 +18,13 @@ working days.
 This is an outstation -- the side a SCADA master connects *to* -- so everything
 it accepts from the network is untrusted input.
 
+**Some of that input now changes state.** Until controls existed the worst a
+request could do was crash the process, hang it, or make it answer wrongly.
+A control moves equipment. A defect that lets an unauthorized peer operate a
+point, or lets one point's command reach another, is a different category of
+finding from the parsing bugs below, and reports of that kind are the ones most
+worth sending.
+
 How much of it is reachable before authentication depends on the listener. Given
 a TLS context, the standard library validates the client certificate and
 `server.authorize` matches it against the allow-list before the connection is
@@ -35,6 +42,17 @@ supported deployments and both are in scope; please say which one you tested.
   single request asks the outstation to allocate or emit.
 - Object decoding in `objects`, including index ranges that do not correspond
   to points the caller configured.
+- Control decoding in `control`, and the interleaved index-and-object walk in
+  `application.parse_object_blocks` that feeds it. A control request carries its
+  objects, so this is the one parser whose input a master chooses the length and
+  count of.
+- The select state machine in `session`: that an operate cannot spend a select
+  it does not match, that an expired one cannot be spent at all, and that a
+  select granted over one connection cannot be operated over the next.
+- The boundary a control crosses into the caller's `ControlProvider`: the index,
+  the decoded object and the function are what it receives, and a defect that
+  hands it a different point from the one the master named is a control applied
+  to the wrong equipment.
 - TLS: certificate verification, and the peer allow-list in
   `server.authorize` that decides which certificate identities may connect.
 - Association handling in `server`: in particular that an unauthorized peer
@@ -60,6 +78,16 @@ Two properties are deliberate and documented rather than defects:
   is unencrypted when TLS was not configured is not a finding. A report that TLS
   is *not* applied when it was configured, or that the peer allow-list admits an
   identity it should refuse, very much is.
+
+  Worth stating plainly now that controls exist: on a plaintext listener there is
+  no authentication, so anyone who can open the socket can command the equipment.
+  That is a deployment decision rather than a defect in this library, and it is
+  the reason an outstation reachable from anywhere it should not be belongs
+  behind TLS with an allow-list.
+- **Accepting a control from an authorized master.** Operating a point a
+  provider says it owns is what this is for. A finding is a control that reaches
+  a provider it should not have, or reaches it naming something other than what
+  the master sent.
 - **No DNP3 Secure Authentication.** SAv5 is not implemented. Its absence is a
   missing feature rather than a vulnerability, and requests for it belong in an
   issue.

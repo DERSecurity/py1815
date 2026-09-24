@@ -47,8 +47,12 @@ def outstation():
 @pytest.fixture
 def response(outstation) -> bytes:
     """The application fragment a class-0 read gets back from the fixture."""
+    controls = outstation.FixedControls()
     session = Session(
-        outstation.FixedProvider(), outstation_address=OUTSTATION, master_address=MASTER
+        outstation.FixedProvider(controls),
+        control_provider=controls,
+        outstation_address=OUTSTATION,
+        master_address=MASTER,
     )
     control = link.control_byte(
         from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
@@ -116,3 +120,173 @@ class TestTheServedFixture:
             if index == outstation.OFFLINE_INDEX:
                 continue
             assert objects[index * 5] & AnalogQuality.ONLINE
+
+
+def _latch(outstation, index, on=True):
+    """One CROB against *index*, as it would reach a provider."""
+    from py1815.control import ControlRelayOutputBlock, OperationType
+    from py1815.session import Control
+
+    return Control(
+        function=FunctionCode.DIRECT_OPERATE,
+        block=0,
+        group=12,
+        variation=1,
+        index=index,
+        raw=b"",
+        command=ControlRelayOutputBlock.build(
+            OperationType.LATCH_ON if on else OperationType.LATCH_OFF
+        ),
+    )
+
+
+class TestTheFixtureAcceptsControls:
+    """The half the C++ master cannot show and the Rust one now does.
+
+    Pinned here as well, because the interoperability job proves these against a
+    running outstation and this proves them without a socket -- the same
+    argument the module docstring makes about the quality octet.
+    """
+
+    def test_a_point_it_owns_is_operated_and_remembered(self, outstation):
+        from py1815.control import CommandStatus
+
+        controls = outstation.FixedControls()
+        owned = outstation.CONTROLLABLE_BINARY[0]
+
+        assert controls.operate([_latch(outstation, owned)]) == [CommandStatus.SUCCESS]
+        assert controls.binary[owned] is True
+
+    def test_a_point_it_does_not_own_is_refused_per_object(self, outstation):
+        """Both answers arrive in one request, which is the case a
+        fragment-level refusal cannot demonstrate."""
+        from py1815.control import CommandStatus
+
+        controls = outstation.FixedControls()
+
+        statuses = controls.operate(
+            [
+                _latch(outstation, outstation.CONTROLLABLE_BINARY[0]),
+                _latch(outstation, outstation.UNCONTROLLABLE_BINARY),
+            ]
+        )
+
+        assert statuses == [CommandStatus.SUCCESS, CommandStatus.NOT_SUPPORTED]
+
+    def test_a_refused_point_is_not_applied(self, outstation):
+        controls = outstation.FixedControls()
+
+        controls.operate([_latch(outstation, outstation.UNCONTROLLABLE_BINARY)])
+
+        assert outstation.UNCONTROLLABLE_BINARY not in controls.binary
+
+    def test_the_obsolete_queue_bit_is_a_format_error(self, outstation):
+        """Bit 4 was withdrawn by IEEE 1815-2012 and required to be zero. A
+        control that sets it is malformed rather than unimplemented, and the
+        low nibble still naming LATCH_ON does not make it acceptable."""
+        from py1815.control import CommandStatus, ControlRelayOutputBlock
+        from py1815.session import Control
+
+        controls = outstation.FixedControls()
+        queued = Control(
+            function=FunctionCode.DIRECT_OPERATE,
+            block=0,
+            group=12,
+            variation=1,
+            index=outstation.CONTROLLABLE_BINARY[0],
+            raw=b"",
+            command=ControlRelayOutputBlock(control_code=0x13),
+        )
+
+        assert controls.operate([queued]) == [CommandStatus.FORMAT_ERROR]
+        assert controls.binary[outstation.CONTROLLABLE_BINARY[0]] is False
+
+    def test_the_readback_reflects_what_was_commanded(self, outstation):
+        """A constant would look identical if the control had been dropped."""
+        from py1815.control import GROUP_BINARY_OUTPUT_STATUS, BinaryQuality
+
+        controls = outstation.FixedControls()
+        before = controls.status_objects(GROUP_BINARY_OUTPUT_STATUS)
+        controls.operate([_latch(outstation, outstation.CONTROLLABLE_BINARY[0])])
+        after = controls.status_objects(GROUP_BINARY_OUTPUT_STATUS)
+
+        # Past the object header, which both carry.
+        assert not before[-2] & BinaryQuality.STATE
+        assert after[-2] & BinaryQuality.STATE
+
+    def test_a_readback_block_carries_its_object_header(self, outstation):
+        """A provider hands the session a response body and the session forwards
+        it unchanged, so objects returned bare would have a master reading the
+        first status octet as an object group."""
+        from py1815.control import GROUP_BINARY_OUTPUT_STATUS
+
+        block = outstation.FixedControls().status_objects(GROUP_BINARY_OUTPUT_STATUS)
+
+        assert block[0] == GROUP_BINARY_OUTPUT_STATUS
+        assert block[1] == 2, "variation 2 carries the flags the packed one does not"
+
+
+class TestAMixedRead:
+    """A master that commands a point and reads it back alongside its inputs is
+    the ordinary case, not an exotic one. Answering only one of the groups asked
+    for drops data without saying so."""
+
+    def test_output_status_and_analog_inputs_both_come_back(self, outstation):
+        from py1815.control import GROUP_BINARY_OUTPUT_STATUS
+        from py1815.session import Session
+
+        controls = outstation.FixedControls()
+        session = Session(
+            outstation.FixedProvider(controls),
+            control_provider=controls,
+            outstation_address=OUTSTATION,
+            master_address=MASTER,
+        )
+        mixed = bytes(
+            [
+                0xC0,
+                FunctionCode.READ,
+                GROUP_BINARY_OUTPUT_STATUS,
+                2,
+                QualifierCode.UINT8_START_STOP,
+                0,
+                1,
+                30,
+                1,
+                QualifierCode.UINT8_START_STOP,
+                0,
+                4,
+            ]
+        )
+
+        body = session._handle_fragment(mixed)[4:]
+
+        assert body[0] == GROUP_BINARY_OUTPUT_STATUS, "the readback leads"
+        assert bytes([30, 1]) in body, "and the inputs are still there"
+
+    def test_an_output_only_read_carries_no_inputs(self, outstation):
+        from py1815.control import GROUP_BINARY_OUTPUT_STATUS
+        from py1815.session import Session
+
+        controls = outstation.FixedControls()
+        session = Session(
+            outstation.FixedProvider(controls),
+            control_provider=controls,
+            outstation_address=OUTSTATION,
+            master_address=MASTER,
+        )
+        request = bytes(
+            [
+                0xC0,
+                FunctionCode.READ,
+                GROUP_BINARY_OUTPUT_STATUS,
+                2,
+                QualifierCode.UINT8_START_STOP,
+                0,
+                1,
+            ]
+        )
+
+        body = session._handle_fragment(request)[4:]
+
+        assert bytes([30, 1]) not in body
