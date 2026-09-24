@@ -211,3 +211,70 @@ class TestStatusObjects:
     )
     def test_every_variation(self, value, variation, expected):
         assert encode_analog_output_status(value, variation).hex() == expected
+
+
+class TestRawFidelityOnAnalogCommands:
+    """``struct`` does not round-trip every bit pattern a float variation holds.
+
+    Unpacking the signaling NaN ``0x7f800001`` and packing the result yields
+    ``0x7fc00001``: the platform quiets it. Re-packing ``value`` to build an
+    echo would therefore return octets the master did not send, which is the
+    same failure the raw control code exists to prevent.
+    """
+
+    def test_a_signaling_nan_echoes_exactly_as_it_arrived(self):
+        raw = bytes.fromhex("0100807f")
+
+        command = decode_analog_output(raw + bytes([0]), variation=3)
+        echoed = encode_analog_output(command.with_status(CommandStatus.NOT_SUPPORTED))
+
+        assert echoed[:4] == raw
+        assert echoed[4] == CommandStatus.NOT_SUPPORTED
+
+    def test_a_command_built_by_a_caller_still_packs_its_value(self):
+        assert encode_analog_output(AnalogOutput(value=50000, variation=1)).hex() == "50c3000000"
+
+    def test_raw_octets_of_the_wrong_width_are_refused(self):
+        with pytest.raises(ControlError, match="raw value is"):
+            encode_analog_output(AnalogOutput(value=1.0, variation=1, raw_value=b"\x00\x00"))
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")])
+    def test_a_non_finite_command_is_refused_as_a_control_error(self, value):
+        """A command is an instruction, not a reading, so there is nothing to
+        normalize it to -- but it leaves as ControlError like every other
+        refusal here rather than as whatever ``round`` chose to raise."""
+        with pytest.raises(ControlError):
+            encode_analog_output(AnalogOutput(value=value, variation=1))
+
+
+class TestStatusObjectsAreMeasurements:
+    """A read-back point is fed by the same devices an input is, and can go NaN
+    the same way. Group 40 therefore normalizes exactly as group 30 does, rather
+    than emitting a non-finite value with ONLINE still set -- or letting
+    ``round`` raise and fail a response carrying every other point."""
+
+    def test_a_nan_reading_goes_out_as_zero_and_says_so(self):
+        encoded = encode_analog_output_status(float("nan"), 1)
+
+        assert not encoded[0] & AnalogQuality.ONLINE
+        assert encoded[0] & AnalogQuality.REFERENCE_ERR
+        assert encoded[1:] == bytes(4)
+
+    def test_an_infinite_reading_saturates_and_says_so(self):
+        encoded = encode_analog_output_status(float("inf"), 1)
+
+        assert encoded[0] & AnalogQuality.OVER_RANGE
+        assert encoded[1:].hex() == "ffffff7f"
+
+    @pytest.mark.parametrize("variation", [1, 2, 3, 4])
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_no_variation_raises_on_a_non_finite_reading(self, variation, value):
+        assert encode_analog_output_status(value, variation)
+
+    def test_a_value_too_large_for_the_variation_saturates(self):
+        """The 50 kW setpoint against a 16-bit point again -- as a measurement
+        it clamps and flags rather than refusing."""
+        encoded = encode_analog_output_status(50000, 2)
+
+        assert encoded[0] & AnalogQuality.OVER_RANGE
+        assert encoded[1:].hex() == "ff7f"

@@ -30,11 +30,12 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
-from py1815.objects import AnalogQuality, BinaryQuality
+from py1815.objects import AnalogQuality, BinaryQuality, normalize_for_wire
 
 #: Binary output status, read back rather than commanded.
 GROUP_BINARY_OUTPUT_STATUS = 10
@@ -138,6 +139,8 @@ CROB_SIZE = 11
 _ANALOG_FORMAT = {1: "<i", 2: "<h", 3: "<f", 4: "<d"}
 _ANALOG_WIDTH = {1: 4, 2: 2, 3: 4, 4: 8}
 _ANALOG_LIMITS = {1: (-(2**31), 2**31 - 1), 2: (-(2**15), 2**15 - 1)}
+#: Where an infinite reading saturates on the single-precision variation.
+_FLOAT32_MAX = 3.4028234663852886e38
 
 
 @dataclass(frozen=True)
@@ -229,10 +232,24 @@ class AnalogOutput:
     value: float
     variation: int = 1
     status: CommandStatus = CommandStatus.SUCCESS
+    #: The value octets exactly as they arrived, when this came from the wire.
+    #:
+    #: For the same reason ``ControlRelayOutputBlock`` keeps its control code.
+    #: ``struct`` does not round-trip every bit pattern a float variation can
+    #: carry: unpacking the signaling NaN ``0x7f800001`` and packing the result
+    #: yields ``0x7fc00001``, because the platform quiets it. Re-packing
+    #: ``value`` to build an echo would therefore return octets the master did
+    #: not send, which is the thing D14 forbids.
+    raw_value: bytes | None = None
 
     def with_status(self, status: CommandStatus) -> AnalogOutput:
         """This command as it should be echoed, carrying *status*."""
-        return AnalogOutput(value=self.value, variation=self.variation, status=status)
+        return AnalogOutput(
+            value=self.value,
+            variation=self.variation,
+            status=status,
+            raw_value=self.raw_value,
+        )
 
 
 def encode_crob(control: ControlRelayOutputBlock) -> bytes:
@@ -276,10 +293,22 @@ def decode_crob(data: bytes) -> ControlRelayOutputBlock:
 
 
 def encode_analog_output(command: AnalogOutput) -> bytes:
-    """One analog output command: the value, then a status octet."""
-    return _pack_value(command.value, command.variation, GROUP_ANALOG_OUTPUT_COMMAND) + bytes(
-        [int(command.status) & 0xFF]
-    )
+    """One analog output command: the value, then a status octet.
+
+    Octets that arrived from the wire are written back unchanged rather than
+    re-packed from ``value``, so an echo is the object the master sent.
+    """
+    if command.raw_value is not None:
+        width = _width_for(command.variation)
+        if len(command.raw_value) != width:
+            raise ControlError(
+                f"raw value is {len(command.raw_value)} octets and variation "
+                f"{command.variation} is {width}"
+            )
+        value = command.raw_value
+    else:
+        value = _pack_value(command.value, command.variation, GROUP_ANALOG_OUTPUT_COMMAND)
+    return value + bytes([int(command.status) & 0xFF])
 
 
 def decode_analog_output(data: bytes, variation: int) -> AnalogOutput:
@@ -297,7 +326,12 @@ def decode_analog_output(data: bytes, variation: int) -> AnalogOutput:
             f"{width + 1} octets and {len(data)} were given"
         )
     (value,) = struct.unpack(_ANALOG_FORMAT[variation], data[:width])
-    return AnalogOutput(value=value, variation=variation, status=_as_status(data[width]))
+    return AnalogOutput(
+        value=value,
+        variation=variation,
+        status=_as_status(data[width]),
+        raw_value=bytes(data[:width]),
+    )
 
 
 def encode_binary_output_status(*, state: bool, flags: int = BinaryQuality.ONLINE) -> bytes:
@@ -319,15 +353,43 @@ def encode_analog_output_status(
     The flags lead here and trail in the command, which is not a mistake in
     either direction: a status object is a measurement and carries its quality
     first, while a command carries its outcome last.
+
+    Being a measurement, it saturates and normalizes exactly as an analog input
+    does -- a read-back point is fed by the same devices and can go NaN the same
+    way. A value that does not fit the variation is clamped and marked
+    ``OVER_RANGE`` rather than raising, because failing a whole response over
+    one point is the outcome that handling exists to avoid.
     """
-    return bytes([flags & 0xFF]) + _pack_value(value, variation, GROUP_ANALOG_OUTPUT_STATUS)
+    _checked_variation(variation)
+    value, flags = normalize_for_wire(value, flags)
+
+    if variation in _ANALOG_LIMITS:
+        low, high = _ANALOG_LIMITS[variation]
+        raw: float | int = round(value)
+        if not low <= raw <= high:
+            raw = low if raw < low else high
+            flags |= AnalogQuality.OVER_RANGE
+    elif variation == 3 and abs(value) > _FLOAT32_MAX:
+        raw = math.copysign(_FLOAT32_MAX, value)
+        flags |= AnalogQuality.OVER_RANGE
+    else:
+        raw = value
+
+    return bytes([flags & 0xFF]) + struct.pack(_ANALOG_FORMAT[variation], raw)
 
 
 def _pack_value(value: float, variation: int, group: int) -> bytes:
     fmt = _ANALOG_FORMAT[_checked_variation(variation)]
     if variation in _ANALOG_LIMITS:
         low, high = _ANALOG_LIMITS[variation]
-        raw = round(value)
+        try:
+            raw = round(value)
+        except (ValueError, OverflowError) as exc:
+            # round() raises on NaN and infinity. A command is a caller's
+            # instruction rather than a reading, so there is nothing to
+            # normalize it to -- but it leaves as ControlError like every other
+            # refusal here, not as whatever round chose.
+            raise ControlError(f"{value} is not a value group {group} can carry") from exc
         if not low <= raw <= high:
             raise ControlError(f"{value} does not fit group {group} variation {variation}")
         return struct.pack(fmt, raw)
