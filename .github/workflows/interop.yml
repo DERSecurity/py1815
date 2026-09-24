@@ -134,7 +134,10 @@ jobs:
 
       - name: Start the outstation
         run: |
-          python interop/outstation.py --port 20000 > outstation.log 2>&1 &
+          # -u for the same reason the other jobs use it: a cancelled job
+          # loses whatever sits in Python's block buffer, which is exactly
+          # the output needed to explain the cancellation.
+          python -u interop/outstation.py --port 20000 > outstation.log 2>&1 &
           for _ in $(seq 1 30); do
             if grep -q 'outstation listening on' outstation.log 2>/dev/null; then
               echo "outstation listening"
@@ -147,6 +150,9 @@ jobs:
           exit 1
 
       - name: Read it with the independent master
+        # Bounded well inside the job, so a hang fails here with a log rather
+        # than consuming the budget and taking the diagnostics down with it.
+        timeout-minutes: 3
         run: interop/rust-master/target/debug/interop-rust-master 127.0.0.1:20000
 
       - name: Outstation log
@@ -188,7 +194,10 @@ jobs:
 
       - name: Start the outstation
         run: |
-          python interop/outstation.py --port 20000 > outstation.log 2>&1 &
+          # -u for the same reason the other jobs use it: a cancelled job
+          # loses whatever sits in Python's block buffer, which is exactly
+          # the output needed to explain the cancellation.
+          python -u interop/outstation.py --port 20000 > outstation.log 2>&1 &
           for _ in $(seq 1 30); do
             if grep -q 'outstation listening on' outstation.log 2>/dev/null; then
               echo "outstation listening"
@@ -201,19 +210,22 @@ jobs:
           exit 1
 
       - name: Walk the function codes, recording the exchange
+        # Bounded well inside the job, so a hang fails here with a log rather
+        # than consuming the budget and taking the diagnostics down with it.
+        timeout-minutes: 3
         run: |
-          python interop/sweep.py --port 20000 \
+          python -u interop/sweep.py --port 20000 \
             --pcap sweep.pcap --summary sweep.json
 
       - name: Read the capture with Wireshark's dissector
-        run: python interop/validate_pcap.py sweep.pcap --port 20000 --expect sweep.json
+        run: python -u interop/validate_pcap.py sweep.pcap --port 20000 --expect sweep.json
 
       - name: Read the capture with Suricata's parser
         run: |
           mkdir -p suricata-out
           suricata -r sweep.pcap -c interop/suricata.yaml -l suricata-out \
             --set app-layer.protocols.dnp3.detection-ports.dp=20000
-          python interop/validate_suricata.py suricata-out/eve.json --expect sweep.json
+          python -u interop/validate_suricata.py suricata-out/eve.json --expect sweep.json
 
       - name: Logs
         if: always()
