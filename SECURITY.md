@@ -1,0 +1,66 @@
+# Security Policy
+
+## Reporting a vulnerability
+
+Please report vulnerabilities privately rather than in a public issue.
+
+Use GitHub's [private vulnerability
+reporting](https://github.com/DERSecurity/py1815/security/advisories/new)
+on this repository. It goes to the maintainers and stays private until an
+advisory is published.
+
+Please include what you have: affected version, what an attacker can do, and a
+reproduction if you have one. You will get an acknowledgment within a few
+working days.
+
+## What is in scope
+
+This is an outstation -- the side a SCADA master connects *to* -- so everything
+it accepts from the network is untrusted input, arriving before any peer has
+proven anything about itself:
+
+- Data link parsing in `link`: FT3 framing, the control byte, addresses, and
+  the CRC over each block.
+- Transport reassembly in `transport`: segment ordering, duplicate and missing
+  segments, and the memory a partial fragment holds while it waits for the rest.
+- Application parsing in `application`: function codes, the control octet,
+  object headers, and the qualifier and range fields that decide how much a
+  single request asks the outstation to allocate or emit.
+- Object decoding in `objects`, including index ranges that do not correspond
+  to points the caller configured.
+- TLS: certificate verification, and the peer allow-list in
+  `server.authorize` that decides which certificate identities may connect.
+- Association handling in `server`: in particular that an unauthorized peer
+  cannot displace an established master, and that a connection which fails
+  authorization changes nothing about the association already in progress.
+- Resource exhaustion reachable from a single connection: event buffers,
+  reassembly state, and the idle timeouts that bound both.
+
+A crash, a hang, an unbounded allocation, or a response built from one
+association leaking into another are all in scope, whether or not the input is
+valid DNP3.
+
+## What is not a finding
+
+Two properties are deliberate and documented rather than defects:
+
+- **Plaintext operation.** `ssl_context` is optional, and DNP3 over plain TCP
+  is the norm on isolated serial and OT networks. A report that traffic is
+  unencrypted when TLS was not configured is not a finding. A report that TLS
+  is *not* applied when it was configured, or that the peer allow-list admits
+  an identity it should refuse, very much is.
+- **No DNP3 Secure Authentication.** SAv5 is not implemented. Its absence is a
+  missing feature rather than a vulnerability, and requests for it belong in an
+  issue.
+
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| `main` | yes |
+| anything else | no -- this library has not had a release yet |
+
+There is no published release: the version is `0.1.0.dev0` and nothing has been
+uploaded to PyPI. Fixes land on `main`, and until the first release there is
+nothing to backport to. Reports against a commit rather than a version are
+expected and welcome; please name the commit.
