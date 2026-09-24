@@ -59,6 +59,15 @@ from py1815.control import (
     ControlError,
     ControlRelayOutputBlock,
 )
+from py1815.events import AnalogEvent, Event, EventBuffers, EventClass
+from py1815.objects import (
+    GROUP_ANALOG_INPUT_EVENT,
+    GROUP_BINARY_INPUT_EVENT,
+    AnalogEventVariation,
+    BinaryEventVariation,
+    encode_analog_event,
+    encode_binary_event,
+)
 
 # Controls echo in the same shape events do -- a count with an index in front of
 # every object -- so the encoder is the same one, named for the first caller
@@ -118,6 +127,24 @@ _SUPPORTED_FUNCTIONS = frozenset(
 #: How long a select stays armed. Ten seconds is opendnp3's default and the
 #: middle of what implementations use; the standard leaves it to the outstation.
 DEFAULT_SELECT_TIMEOUT = 10.0
+
+#: The classes a read can ask for that come from the buffers. Class 0 is static
+#: data and is the provider's, which is why ``event_class`` returning 0 is not
+#: the same as it returning None.
+_EVENT_CLASSES = frozenset({EventClass.CLASS_1, EventClass.CLASS_2, EventClass.CLASS_3})
+
+#: Which indication bit says a class has something waiting.
+_CLASS_BITS = {
+    EventClass.CLASS_1: IINBit.CLASS_1_EVENTS,
+    EventClass.CLASS_2: IINBit.CLASS_2_EVENTS,
+    EventClass.CLASS_3: IINBit.CLASS_3_EVENTS,
+}
+
+#: The variations events are reported in. Timed, because an event without a
+#: timestamp tells a master that a value changed and not when -- which, for the
+#: sequence a master reads events to obtain, is most of what it wanted.
+_ANALOG_EVENT_VARIATION = AnalogEventVariation.INT32_WITH_TIME
+_BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 
 
 class UnknownObject(Exception):
@@ -220,6 +247,7 @@ class Session:
         provider: ReadProvider,
         *,
         control_provider: ControlProvider | None = None,
+        events: EventBuffers | None = None,
         outstation_address: int = 1024,
         master_address: int = 1,
         max_fragment: int = 2048,
@@ -240,6 +268,13 @@ class Session:
                 monitors and does not command, and every control function is
                 refused as unsupported -- which is a truthful answer rather than
                 a degraded one.
+            events: Where class 1, 2 and 3 events are read from. The caller
+                records into it as its device polls and the session only ever
+                reads: a deadband is measured against the last value reported
+                rather than the previous reading, so it needs history between
+                requests, and under D6 this library does not know which index is
+                which point. Without one, a class 1 to 3 read reaches the
+                provider like any other.
             select_timeout: How long a select stays armed for the operate that
                 follows it.
             clock: Monotonic source for that timeout. Injectable so expiry can
@@ -247,6 +282,7 @@ class Session:
         """
         self._provider = provider
         self._controls = control_provider
+        self._events = events
         self._select_timeout = select_timeout
         self._clock = clock
         self._select: _ArmedSelect | None = None
@@ -367,7 +403,25 @@ class Session:
 
     def _indications(self, extra: IIN | None = None) -> IIN:
         iin = IIN(first=IINBit.DEVICE_RESTART) if self._restart else IIN()
+        iin = iin | self._event_indications()
         return iin | extra if extra else iin
+
+    def _event_indications(self) -> IIN:
+        """Which classes have events waiting, and whether any were lost.
+
+        Derived on every response rather than tracked alongside the buffers
+        (D22). A master polling on indications never asks for events it is not
+        told about, so a bit that drifts from the buffer is an outstation whose
+        data is invisible -- and deriving it makes drift impossible rather than
+        unlikely.
+        """
+        if self._events is None:
+            return IIN()
+        first = 0
+        for event_class in self._events.classes_with_events():
+            first |= _CLASS_BITS[event_class]
+        second = IIN2Bit.EVENT_BUFFER_OVERFLOW if self._events.overflowed() else 0
+        return IIN(first=first, second=second)
 
     def _handle_fragment(self, fragment: bytes) -> bytes:
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
@@ -556,19 +610,70 @@ class Session:
         return controls
 
     def _handle_read(self, request: Request) -> bytes:
-        try:
-            body = self._provider.read(request.headers)
-        except UnknownObject as exc:
-            logger.info("dnp3: read refused: %s", exc)
-            return null_response(
-                sequence=request.control.sequence,
-                iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
-            )
+        sequence = request.control.sequence
+        event_headers, static_headers = self._split_read(request.headers)
+
+        body = b""
+        if event_headers:
+            body += self._event_body(event_headers)
+
+        if static_headers or not event_headers:
+            try:
+                body += self._provider.read(static_headers)
+            except UnknownObject as exc:
+                logger.info("dnp3: read refused: %s", exc)
+                return null_response(
+                    sequence=sequence,
+                    iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
+                )
+
         return build_response(
-            control=AppControl(fir=True, fin=True, sequence=request.control.sequence),
+            control=AppControl(fir=True, fin=True, sequence=sequence),
             iin=self._indications(),
             body=body,
         )
+
+    def _split_read(
+        self, headers: Sequence[ObjectHeader]
+    ) -> tuple[list[ObjectHeader], list[ObjectHeader]]:
+        """The headers this session answers from the buffers, and the rest.
+
+        Without buffers nothing is split: a class 1 to 3 read goes to the
+        provider exactly as it did before, so an outstation with no events
+        configured behaves as it always has.
+        """
+        if self._events is None:
+            return [], list(headers)
+        events = [h for h in headers if h.event_class in _EVENT_CLASSES]
+        static = [h for h in headers if h.event_class not in _EVENT_CLASSES]
+        return events, static
+
+    def _event_body(self, headers: Sequence[ObjectHeader]) -> bytes:
+        """The event objects the named classes are holding.
+
+        Events lead the response, before any static data beside them (D20): a
+        master applies a fragment in order, and a static value written after the
+        events that led to it leaves the point at the value it should end up
+        holding.
+
+        A class with nothing in it is not an error. An empty answer is a normal
+        outcome for a master polling to find out whether anything happened.
+
+        Nothing is dropped here. An event leaves the buffer when the master
+        confirms the response carrying it (D18), and until the confirmation
+        handling lands a master reading twice sees the same events twice.
+        """
+        assert self._events is not None
+        # Narrowed here rather than trusted from the caller: `event_class` is
+        # None for a header naming no class at all, and the filter that got us
+        # here is a different statement from the type.
+        classes = sorted({h.event_class for h in headers if h.event_class is not None})
+
+        body = b""
+        for event_class in classes:
+            for group, variation, items in _encoded(self._events.peek(EventClass(event_class))):
+                body += indexed_block(group, variation, items)
+        return body
 
     def _handle_write(self, request: Request) -> bytes:
         """The only write a monitor outstation honors: clearing the restart bit.
@@ -654,3 +759,33 @@ def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> byt
     if run:
         body += indexed_block(group, variation, run)
     return body
+
+
+def _encoded(events: Sequence[Event]) -> list[tuple[int, int, list[tuple[int, bytes]]]]:
+    """Events grouped into the blocks they travel in, in the order they happened.
+
+    Consecutive events of one kind share a block. The order is the buffer's --
+    which is the order the points changed -- so a run of analog events
+    interrupted by a binary one becomes three blocks rather than two, because
+    reordering them into two would tell the master a different story about when
+    things happened.
+    """
+    blocks: list[tuple[int, int, list[tuple[int, bytes]]]] = []
+    for event in events:
+        if isinstance(event, AnalogEvent):
+            group, variation = GROUP_ANALOG_INPUT_EVENT, int(_ANALOG_EVENT_VARIATION)
+            encoded = encode_analog_event(
+                event.point,
+                variation=_ANALOG_EVENT_VARIATION,
+                timestamp_ms=event.timestamp_ms,
+            )
+        else:
+            group, variation = GROUP_BINARY_INPUT_EVENT, int(_BINARY_EVENT_VARIATION)
+            encoded = encode_binary_event(
+                event.point, with_time=True, timestamp_ms=event.timestamp_ms
+            )
+        if blocks and blocks[-1][0] == group and blocks[-1][1] == variation:
+            blocks[-1][2].append((event.index, encoded))
+        else:
+            blocks.append((group, variation, [(event.index, encoded)]))
+    return blocks
