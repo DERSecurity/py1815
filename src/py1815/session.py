@@ -132,6 +132,10 @@ class Control:
     handed over decoded but uninterpreted.
     """
 
+    #: Which object header this arrived under. Two headers naming the same
+    #: group and variation are two blocks, and the echo reproduces them as two
+    #: -- a request is echoed, not tidied.
+    block: int
     group: int
     variation: int
     index: int
@@ -423,11 +427,14 @@ class Session:
             # only signal available on a function that answers nothing.
             logger.warning("dnp3: unreadable DIRECT_OPERATE_NR dropped: %s", exc)
             return
-        statuses = self._controls.operate(controls)
+        # Checked here too. A provider that miscounts is a programming error
+        # wherever it happens, and answering nothing is not a reason to hold
+        # this path to a weaker contract than the one beside it.
+        statuses = _checked(self._controls.operate(controls), controls)
         logger.info(
             "dnp3: DIRECT_OPERATE_NR executed %d control(s): %s",
             len(controls),
-            ", ".join(CommandStatus(s).name for s in statuses),
+            ", ".join(status.name for status in statuses),
         )
 
     def _handle_control(self, request: Request, known: FunctionCode) -> bytes:
@@ -445,19 +452,14 @@ class Session:
             )
 
         if known is FunctionCode.SELECT:
-            statuses = list(self._controls.select(controls))
+            statuses = _checked(self._controls.select(controls), controls)
             # D16: the request received, not the objects that succeeded. The
             # operate a master sends next is the request it already sent.
             self._select = _ArmedSelect(key=_match_key(controls), at=self._clock())
         elif known is FunctionCode.OPERATE:
             statuses = self._operate_after_select(controls)
         else:
-            statuses = list(self._controls.operate(controls))
-
-        if len(statuses) != len(controls):
-            raise ValueError(
-                f"the control provider answered {len(statuses)} of {len(controls)} controls"
-            )
+            statuses = _checked(self._controls.operate(controls), controls)
 
         return build_response(
             control=AppControl(fir=True, fin=True, sequence=sequence),
@@ -479,14 +481,15 @@ class Session:
             return [CommandStatus.NO_SELECT] * len(controls)
         self._select = None
         assert self._controls is not None
-        return list(self._controls.operate(controls))
+        return _checked(self._controls.operate(controls), controls)
 
     def _decode_controls(self, request: Request) -> list[Control]:
         controls: list[Control] = []
-        for block in parse_object_blocks(request, control_objects.object_size):
+        for ordinal, block in enumerate(parse_object_blocks(request, control_objects.object_size)):
             for index, data in block.items:
                 controls.append(
                     Control(
+                        block=ordinal,
                         group=block.header.group,
                         variation=block.header.variation,
                         index=index,
@@ -547,12 +550,34 @@ class Session:
         )
 
 
+def _checked(
+    statuses: Sequence[CommandStatus], controls: Sequence[Control]
+) -> list[CommandStatus]:
+    """One status per control, or the programming error that says otherwise.
+
+    The provider contract in one place rather than at each call site, so a path
+    that answers nothing is held to it as firmly as one that answers a master.
+    """
+    answered = list(statuses)
+    if len(answered) != len(controls):
+        raise ValueError(
+            f"the control provider answered {len(answered)} of {len(controls)} controls"
+        )
+    return answered
+
+
 def _match_key(controls: Sequence[Control]) -> tuple[tuple[int, int, int, bytes], ...]:
     """What an operate has to reproduce to spend the select it follows.
 
     The octets rather than the decoded objects. The comparison has to be exact,
     and float equality is not: two NaN setpoints never compare equal, so a
     select carrying one could never be operated at all.
+
+    The block a control arrived under is deliberately absent. That is framing
+    rather than instruction: an operate that carried the same objects under a
+    different header boundary is still asking for the same points to move, and
+    refusing it would fail a master over a detail the standard does not make
+    part of the command.
     """
     return tuple((c.group, c.variation, c.index, c.raw) for c in controls)
 
@@ -560,20 +585,20 @@ def _match_key(controls: Sequence[Control]) -> tuple[tuple[int, int, int, bytes]
 def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> bytes:
     """The request back, one status per object, in the order it arrived (D14).
 
-    Consecutive controls sharing a group and variation travel in one block, the
-    way they arrived. A request that named the same group twice in two headers
-    gets two blocks back rather than one merged block, because the echo is of
-    the request and not a tidier version of it.
+    The request's own header boundaries are kept. Splitting on the group and
+    variation instead would merge two headers that named the same group into
+    one block carrying twice the count -- a tidier response than the request,
+    and not the request. A master that sent two headers is answered with two.
     """
     body = b""
     run: list[tuple[int, bytes]] = []
-    group = variation = -1
+    block = group = variation = -1
 
     for item, status in zip(controls, statuses, strict=True):
-        if (item.group, item.variation) != (group, variation):
+        if item.block != block:
             if run:
                 body += indexed_block(group, variation, run)
-            group, variation, run = item.group, item.variation, []
+            block, group, variation, run = item.block, item.group, item.variation, []
         run.append((item.index, control_objects.encode_control(item.command.with_status(status))))
 
     if run:

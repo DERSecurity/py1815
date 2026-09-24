@@ -364,3 +364,80 @@ class TestTheEchoMirrorsTheRequest:
         assert body[0] == 12 and body[1] == 1
         second = 4 + 1 + 11
         assert body[second] == 41 and body[second + 1] == 2
+
+
+def _two_headers(function: FunctionCode) -> bytes:
+    """One request, two headers, both naming group 12 variation 1."""
+    header = bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1])
+    crob = bytes.fromhex(LATCH_ON)
+    return bytes([0xC0, function]) + header + bytes([0]) + crob + header + bytes([5]) + crob
+
+
+class TestTheEchoKeepsTheRequestsHeaderBoundaries:
+    """Splitting on the group would merge two headers into one block carrying
+    twice the count -- a tidier response than the request, and not the request.
+    """
+
+    def test_two_headers_naming_one_group_come_back_as_two_blocks(self):
+        session, _ = _session()
+
+        body = session._handle_fragment(_two_headers(FunctionCode.DIRECT_OPERATE))[4:]
+
+        assert body[:3] == bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX])
+        assert body[3] == 1, "the first block answers one object, not two"
+        second = 4 + 1 + 11
+        assert body[second : second + 3] == bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX])
+        assert body[second + 3] == 1
+
+    def test_both_controls_are_still_answered(self):
+        session, commands = _session()
+
+        session._handle_fragment(_two_headers(FunctionCode.DIRECT_OPERATE))
+
+        assert [c.index for c in commands.operated[0]] == [0, 5]
+
+    def test_re_blocking_does_not_invalidate_a_select(self):
+        """The block is framing, not instruction. An operate carrying the same
+        objects under a different header boundary asks for the same points."""
+        session, commands = _session()
+        session._handle_fragment(_two_headers(FunctionCode.SELECT))
+
+        merged = _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), (12, 1, 5, LATCH_ON))
+        response = session._handle_fragment(merged)
+
+        assert _statuses(response) == [CommandStatus.SUCCESS, CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
+
+
+class TestTheProviderContractHoldsOnEveryPath:
+    @pytest.mark.parametrize(
+        "function",
+        [
+            FunctionCode.SELECT,
+            FunctionCode.DIRECT_OPERATE,
+            FunctionCode.DIRECT_OPERATE_NR,
+        ],
+    )
+    def test_a_miscounted_answer_is_a_programming_error(self, function):
+        """Answering nothing is not a reason to hold a path to a weaker
+        contract than the one beside it."""
+        session, _ = _session(Commands([CommandStatus.SUCCESS]))
+
+        with pytest.raises(ValueError, match="answered 1 of 2"):
+            session._handle_fragment(_request(function, (12, 1, 0, LATCH_ON), (12, 1, 1, LATCH_ON)))
+
+    def test_the_operate_after_select_path_is_checked_too(self):
+        """Needs a provider that selects correctly and miscounts the operate,
+        or the select raises first and the path under test is never reached."""
+
+        class SelectsWellOperatesBadly(Commands):
+            def operate(self, controls):
+                self.operated.append(list(controls))
+                return [CommandStatus.SUCCESS]
+
+        session, _ = _session(SelectsWellOperatesBadly())
+        both = ((12, 1, 0, LATCH_ON), (12, 1, 1, LATCH_ON))
+        session._handle_fragment(_request(FunctionCode.SELECT, *both))
+
+        with pytest.raises(ValueError, match="answered 1 of 2"):
+            session._handle_fragment(_request(FunctionCode.OPERATE, *both))
