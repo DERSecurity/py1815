@@ -3,10 +3,20 @@
 Making this a complete outstation rather than a monitoring one. Today a master
 can read; it cannot command. `session.py` supports `CONFIRM`, `READ` and
 `WRITE`, and `WRITE` honors exactly one object -- clearing the restart bit.
-`SELECT`, `OPERATE` and `DIRECT_OPERATE` are refused with `FUNC_NOT_SUPPORTED`.
+`SELECT`, `OPERATE` and `DIRECT_OPERATE` are refused with
+`FUNC_NOT_SUPPORTED`.
 
-Scope agreed: the full Subset Level 2 control set, so conformance testing has
-nothing left to add.
+## Scope
+
+Subset Level 2 as the floor, plus the variations the IEEE 1815.2 DER profile
+requires, each named in the device profile document as an agreed extension.
+
+Not "the Level 2 control set", which is not a servable target here.
+[DESIGN.md](../DESIGN.md) already says why: 32-bit analog outputs exceed Level
+2, and a 50 kW real power value overflows a 16-bit point, so the profile cannot
+be served inside Level 2 once controls are in scope. An implementation that
+stopped at Level 2 would be conformant and useless for the thing this library
+was built for.
 
 ## What already exists
 
@@ -36,12 +46,17 @@ Continuing the numbering in [DESIGN.md](../DESIGN.md).
 mirroring `ReadProvider`. The session stays synchronous, so it continues to do
 no I/O and to be pinned against literal frames.
 
-The consequence is honest and must be documented for callers: a status of
-`SUCCESS` means the outstation accepted and dispatched the control, not that
-hardware has moved. A provider that needs a device round-trip queues the work
-and returns. Making the control path awaitable was considered and rejected --
-it would turn `session.receive()` async, rewrite every existing test and the
-server, and put a slow device inside a window a master is timing.
+This is conformant rather than a compromise, which is worth stating because it
+reads like one. The standard defines status `SUCCESS` as *"command was
+accepted, initiated, or queued"* -- queuing is explicitly one of the things
+success means. A provider that hands the control to a device thread and returns
+is answering correctly, not optimistically. What it must not do is block: a
+device round-trip inside the window a master is timing is a protocol timeout
+waiting to happen, which is the same reason `ReadProvider` is synchronous.
+
+An awaitable control path was considered and rejected. It would turn
+`session.receive()` async and rewrite every existing test and the server, to
+buy a distinction the status vocabulary does not draw.
 
 **D11 -- Select state lives in the session, not in the provider.** Selecting is
 protocol bookkeeping: the provider is asked whether it *could* operate, and the
@@ -60,10 +75,18 @@ the first rather than accumulating.
 not scale. A control arrives at the provider as an index, a decoded object and
 the function that carried it.
 
-**D14 -- Every control is answered per object, echoed in request order.** The
-response repeats the objects it was sent with each status field filled in. A
+**D14 -- A complete control is answered per object, echoed in request order.** A
 request naming four points where one is unsupported returns four objects with
 three successes and one `NOT_SUPPORTED`, not a single refusal for the fragment.
+
+**D15 -- A request that does not parse is refused at the fragment, not per
+object.** These are different failures and they cannot share an answer. A
+truncated body, a count that disagrees with the octets present, or an index
+width that contradicts the qualifier may leave no complete object to echo --
+there is nothing to attach a status to. Those produce a null response carrying
+`PARAM_ERROR`. An object that parses completely and is then invalid -- a bad
+control code, impossible timing values -- is echoed with `FORMAT_ERROR` under
+**D14**.
 
 ## Work
 
@@ -78,30 +101,49 @@ Currently inputs only: groups 1, 2, 30 and 32. Add:
 | 10 | 2 | Binary output status | read back |
 | 40 | 1-4 | Analog output status | read back |
 
+Group 41 variation 1 and the floating-point variations are the above-Level-2
+extensions the scope section names; the device profile document must list them.
+
 CROB is 11 octets: control code, count, on-time, off-time, status. Analog
 output is the value plus a status octet. The status objects carry a quality
 flag octet like their input counterparts, so `analog_flags` and `binary_flags`
 extend rather than being duplicated.
 
 Both directions are needed: controls are **decoded** from a request and
-**encoded** back into the response. Reads to this point have been encode-only,
-so this is the first decoder in the module.
+**encoded** back into the response. Everything to this point has been
+encode-only, so this is the module's first decoder.
 
 **Acceptance:** each object round-trips against literal octets from IEEE 1815,
 in both directions, with the tests comparing hex rather than round-tripping.
 
 ### 2. Control status codes -- `objects.py` or a new `control.py`
 
-The status enum the standard defines, at minimum `SUCCESS`, `TIMEOUT`,
-`NO_SELECT`, `FORMAT_ERROR`, `NOT_SUPPORTED`, `ALREADY_ACTIVE`,
-`HARDWARE_ERROR`, `LOCAL`, `TOO_MANY_OBJS`, `NOT_AUTHORIZED`,
-`AUTOMATION_INHIBIT`, `PROCESSING_LIMITED` and `OUT_OF_RANGE`.
+Define the full enumeration, not a useful subset. A decoder meets whatever a
+master sends, and an unknown status arriving as an integer is worse than one
+arriving with a name. The set runs to 18 plus two reserved values:
+
+`SUCCESS` (0), `TIMEOUT`, `NO_SELECT`, `FORMAT_ERROR`, `NOT_SUPPORTED`,
+`ALREADY_ACTIVE`, `HARDWARE_ERROR`, `LOCAL`, `TOO_MANY_OPS`, `NOT_AUTHORIZED`,
+`AUTOMATION_INHIBIT`, `PROCESSING_LIMITED`, `OUT_OF_RANGE`, `DOWNSTREAM_LOCAL`,
+`ALREADY_COMPLETE`, `BLOCKED`, `CANCELLED`, `BLOCKED_OTHER_MASTER`,
+`DOWNSTREAM_FAIL` (18), `NON_PARTICIPATING` (126, deprecated), `UNDEFINED`
+(127).
+
+The name is `TOO_MANY_OPS` -- too many *operations*, throttling -- and not
+`TOO_MANY_OBJS`. The ecosystem is inconsistent here and an earlier draft of
+this plan had it wrong; the name that interoperates is the one opendnp3
+publishes.
 
 These are the vocabulary a provider answers in, so they are public API and
-their docstrings should say when each is the right answer -- `NOT_SUPPORTED`
-for a point that cannot be controlled at all, `OUT_OF_RANGE` for a value the
-point cannot take, `PROCESSING_LIMITED` for a provider that accepted but cannot
-confirm.
+their docstrings should say when each is the right answer. Two are easy to get
+backwards:
+
+- **`PROCESSING_LIMITED`** means the outstation *could not* accept the
+  operation, having no capacity for more activity than is already in progress.
+  It is not "accepted but unconfirmed" -- that is `SUCCESS`, per **D10**.
+- **`ALREADY_ACTIVE`** means the point is already in the requested state or the
+  operation is already running. It is a provider answer, since only the
+  provider knows the point's state.
 
 ### 3. Interleaved body parsing -- `application.py`
 
@@ -110,13 +152,19 @@ qualifier to size the index and the group and variation to size the object.
 Multiple headers per request, which the current single-header stop does not
 handle.
 
-The failure modes matter more than the happy path: a truncated body, an object
-count that disagrees with the octets present, an index width that does not
-match the qualifier. Each should produce `FORMAT_ERROR` against the objects
-rather than an exception that escapes the session.
+Bound the count. opendnp3 caps controls at **16 per request**; exceeding the
+cap is the condition `TOO_MANY_OPS` exists for. Configurable, with that default.
 
-**Acceptance:** a malformed control request is answered, not raised. Fuzzing
-the body length against a valid header produces a response every time.
+**Acceptance:**
+
+- A malformed body produces a fragment-level refusal per **D15**, never an
+  exception escaping the session.
+- Fuzzing the body length against a valid header produces a response every
+  time -- for `SELECT`, `OPERATE` and `DIRECT_OPERATE` only.
+- **Separately:** every body length under `DIRECT_OPERATE_NR`, malformed or
+  not, produces silence. **D9** is not suspended by a parse failure, and an
+  acceptance criterion demanding a response for all four functions would
+  contradict it.
 
 ### 4. Session dispatch and select state -- `session.py`
 
@@ -126,35 +174,48 @@ the body length against a valid header produces a response every time.
   `operate` taking the decoded controls and returning one status each.
 - Select state per **D11** and **D12**: what was selected, when, and the
   comparison an operate must satisfy.
-- `_handle_control` building the echo per **D14**.
+- `_handle_control` building the echo per **D14** and the fragment refusal per
+  **D15**.
 
 **Acceptance:** an operate with no prior select returns `NO_SELECT`; one after
-the timeout returns `TIMEOUT`; one whose objects differ from the select
-returns `NO_SELECT`; a matching pair returns the provider's statuses and
-consumes the select. A `connection_reset` discards it.
+the timeout returns `TIMEOUT`; one whose objects differ from the select returns
+`NO_SELECT`; a matching pair returns the provider's statuses and consumes the
+select. A `connection_reset` discards it.
 
 ### 5. Output status readback
 
-A master that commands expects to read back. `ReadProvider` implementations
-must be able to serve groups 10 and 40, which is a caller concern, but the
-encoders and the class-0 participation are this library's.
+A master that commands expects to read back, so groups 10 and 40 need
+encoders here.
 
-Decide whether output status points participate in class 0 by default. They
-conventionally do.
+**Class-0 participation is the provider's, not this library's.** `Session`
+forwards a class-0 header to `ReadProvider`, which chooses and encodes what
+comes back; under **D6** the library holds no point map and so cannot know
+which output points exist, let alone add them to a response. An earlier draft
+of this plan assigned that ownership to the library, which the current API
+cannot support. What belongs here is the encoders and the documentation telling
+a caller that output status points conventionally participate in class 0.
 
-### 6. Interop -- and a test that must change
+### 6. Interop -- and a test that changes meaning
 
 **The Rust master currently asserts controls are refused.**
 `interop/rust-master/src/main.rs:187-198` sends a `LatchOn` CROB via
 `DirectOperate` and requires `FUNC_NOT_SUPPORTED`, with a comment naming it as
-the half of **D9** a sweep on our own socket cannot show. That assertion
-encodes the present limitation and inverts the day controls land.
+the half of **D9** a sweep on our own socket cannot show.
 
-It should not simply be deleted. The property it protects -- that a refusal
-reaches a master as a refusal rather than as a timeout -- is still worth
-holding. Suggest retargeting it at an index the fixture deliberately does not
-control, so the refusal path stays covered while a controllable index proves
-the success path.
+Retargeting it at an uncontrollable index is *not* sufficient, and an earlier
+draft of this plan said it was. The two assertions are about different layers:
+an unsupported index yields an echoed object carrying `NOT_SUPPORTED` under
+**D14**, while the existing test checks a fragment-level
+`IIN2.FUNC_NOT_SUPPORTED`. Replacing one with the other silently drops the
+coverage **D9** was given.
+
+Both are needed:
+
+- A per-object case: a controllable index succeeds, an uncontrollable one comes
+  back `NOT_SUPPORTED`, in the same response.
+- A function-level case that keeps **D9** covered, using a function that stays
+  unsupported after this work -- `COLD_RESTART` or `IMMED_FREEZE` are
+  candidates, subject to the master library being able to send one.
 
 Also: `interop/outstation.py` serves groups 30 and 60 only, so it needs
 controllable points; and `interop/sweep.py` walks the function code space and
@@ -162,11 +223,12 @@ will now see different answers for 3, 4 and 5.
 
 ### 7. Documentation
 
-- **D10** through **D14** into `DESIGN.md`, and the roadmap updated -- controls
+- **D10** through **D15** into `DESIGN.md`, and the roadmap updated -- controls
   are not currently on it.
-- `SECURITY.md` scope gains a real attack surface: a control is the first
-  request that changes state, so decoded control objects, the select state
-  machine, and the provider boundary all belong in the list.
+- `SECURITY.md` -- create or extend depending on whether the policy branch has
+  landed by then. A control is the first request that changes state, so decoded
+  control objects, the select state machine and the provider boundary all
+  belong in the scope list.
 - `README.md` says the library reads; it will command.
 - `CHANGELOG.md` under Unreleased.
 
@@ -179,11 +241,20 @@ of the behavior change rather than in one reviewable-only-as-a-whole diff.
 
 ## Open
 
-- **Select timeout default.** Needs a number. Common practice is 5 to 10
-  seconds; the standard leaves it to the outstation.
-- **`ALREADY_ACTIVE` semantics** under **D7**. With one association there is no
-  competing master, so the case may not arise; worth confirming before
-  implementing a status nothing can return.
-- **Counter groups 20 and 21, and freeze.** Out of scope here, but `IMMED_FREEZE`
-  sits in the same refused-function neighborhood, and "complete outstation" may
-  be taken to include it.
+- **Counter groups 20 and 21, and freeze.** Out of scope here, but
+  `IMMED_FREEZE` sits in the same refused-function neighborhood, and "complete
+  outstation" may be taken to include it. Deciding this needs the Level 2
+  object requirement from the standard itself rather than from secondary
+  sources.
+
+## Settled by survey
+
+- **Select timeout: 10 seconds, configurable.** opendnp3's `selectTimeout`
+  default, and it is Apache 2.0 like this library and already one of the two
+  masters in the interop suite. go-dnp3 uses 5 seconds when unset, so the
+  range in the field is 5 to 10. The Rust `dnp3` crate is source-available
+  rather than open source and is not the implementation to treat as reference.
+- **`ALREADY_ACTIVE` does arise under D7.** It concerns the point's state, not
+  competing masters. The status that genuinely cannot arise with one
+  association is `BLOCKED_OTHER_MASTER` (17), which is defined as another
+  master holding exclusive rights.
