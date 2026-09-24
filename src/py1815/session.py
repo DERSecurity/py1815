@@ -12,11 +12,16 @@ literal frames with no listener, no TLS and no event loop.
 
 **What it refuses, it refuses out loud.** A control function gets a response
 carrying IIN2.1 rather than silence, because a master that times out learns
-nothing and retries. The single exception is DIRECT OPERATE NO ACK, which asks
-for no response and therefore cannot be refused in band; it is dropped and
-reported. A refusal contract written only in terms of returned statuses would
-leave the one control function that returns nothing as the one an implementation
-executes by omission.
+nothing and retries.
+
+The exceptions are the function codes IEEE 1815-2012 Table 4-2 defines as taking
+no reply, each described there as "same as function code N but outstation shall
+not send a response". They are dropped and reported in the log rather than
+answered, and they are recognized from the function code octet before the
+fragment is parsed, because a master that asked for no response is not listening
+for a parse error either. A refusal contract written only in terms of returned
+statuses would leave the functions that return nothing as the ones an
+implementation executes by omission.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -30,6 +35,7 @@ from typing import Protocol
 from py1815 import link
 from py1815.application import (
     IIN,
+    REQUEST_HEADER_SIZE,
     AppControl,
     FunctionCode,
     IIN2Bit,
@@ -242,6 +248,20 @@ class Session:
         return iin | extra if extra else iin
 
     def _handle_fragment(self, fragment: bytes) -> bytes:
+        if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] in _NO_RESPONSE_FUNCTIONS:
+            # Resolved from the function code octet, before the parse. The
+            # obligation these codes carry is on the function code and not on
+            # what the outstation implements, and by the same reasoning not on
+            # whether the fragment parsed either: a master that asked for no
+            # response is not listening for a parse error any more than for a
+            # refusal. Deciding after the parse meant a malformed
+            # DIRECT_OPERATE_NR -- the one member of the set whose body this
+            # module walks -- was answered with PARAM_ERROR.
+            logger.warning(
+                "dnp3: dropping %s; it asks for no response", FunctionCode(fragment[1]).name
+            )
+            return b""
+
         try:
             request = parse_request(fragment)
         except RequestError as exc:
@@ -254,13 +274,6 @@ class Session:
 
         known = request.known_function
         sequence = request.control.sequence
-
-        if known in _NO_RESPONSE_FUNCTIONS:
-            # Asks for no response, so it cannot be refused in band. Dropped
-            # rather than executed, and said out loud in the log because silence
-            # is also what executing it would look like.
-            logger.warning("dnp3: dropping %s; it asks for no response", known.name)
-            return b""
 
         if known in _CONTROL_FUNCTIONS:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)

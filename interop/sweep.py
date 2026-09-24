@@ -2,8 +2,8 @@
 
 The unit suite pins each layer in isolation and the master probes read points.
 Neither walks the function code space, which is where an outstation's contract
-mostly lives: what it answers, what it refuses out loud, and the two things it
-is supposed to meet with silence.
+mostly lives: what it answers, what it refuses out loud, and the ones it is
+supposed to meet with silence.
 
 This drives all of it over a real connection and checks the reply against a
 declared expectation. It is also what the capture-based jobs record: the
@@ -392,8 +392,10 @@ def run(host: str, port: int, pcap: str | None = None, summary: str | None = Non
                 continue
             note = f"  ({case.note})" if case.note else ""
             print(f"sweep: ok   {case.name}: {observed}{note}")
-            if case.name.startswith("write: clear"):
-                restart_expected = False
+            if case.restart is not None:
+                # A case that declares the bit also sets the running state, so
+                # the clearing write does not need to be recognized by name.
+                restart_expected = case.restart
 
         final = _frame(AFTER_RESTART_CLEARED)
         sock.sendall(final)

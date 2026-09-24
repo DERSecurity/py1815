@@ -239,6 +239,39 @@ class TestRefusals:
             FunctionCode.AUTH_REQUEST_NO_ACK,
         ],
     )
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(b"", id="no body"),
+            pytest.param(bytes([12, 1, 0x5B, 1, 0]), id="qualifier this module rejects"),
+            pytest.param(bytes([12, 1]), id="object header truncated"),
+        ],
+    )
+    def test_a_no_response_function_is_silent_even_when_it_does_not_parse(self, function, body):
+        """The obligation is on the function code, so it cannot depend on the
+        body parsing.
+
+        DIRECT_OPERATE_NR is the one member of the set whose body this module
+        walks, so a malformed one reached the parse-error branch and was
+        answered with PARAM_ERROR -- a response to a master that asked for
+        none."""
+        session, recorder = _session()
+
+        reply = session.receive(_user_data(bytes([0xC0, function]) + body))
+
+        assert reply == b""
+        assert recorder.headers == []
+
+    @pytest.mark.parametrize(
+        "function",
+        [
+            FunctionCode.DIRECT_OPERATE_NR,
+            FunctionCode.IMMED_FREEZE_NR,
+            FunctionCode.FREEZE_CLEAR_NR,
+            FunctionCode.FREEZE_AT_TIME_NR,
+            FunctionCode.AUTH_REQUEST_NO_ACK,
+        ],
+    )
     def test_every_no_response_function_is_met_with_silence(self, function):
         """IEEE 1815-2012 Table 4-2 describes each of these as "same as function
         code N but outstation shall not send a response".

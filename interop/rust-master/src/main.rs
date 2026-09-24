@@ -24,10 +24,11 @@ use dnp3::app::measurement::{AnalogInput, BinaryInput, Counter, DoubleBitBinaryI
 use dnp3::app::{ConnectStrategy, MaybeAsync, NullListener, ResponseHeader, Variation};
 use dnp3::decode::{AppDecodeLevel, DecodeLevel};
 use dnp3::link::{EndpointAddress, LinkErrorMode};
+use dnp3::master::TaskError;
 use dnp3::master::{
     AssociationConfig, AssociationHandler, AssociationInformation, Classes, CommandBuilder,
-    CommandMode, CommandSupport, EventClasses, HeaderInfo, MasterChannelConfig, ReadHandler,
-    ReadRequest, ReadType,
+    CommandError, CommandMode, CommandSupport, EventClasses, HeaderInfo, MasterChannelConfig,
+    ReadHandler, ReadRequest, ReadType,
 };
 use dnp3::tcp::{spawn_master_tcp_client, EndpointList};
 
@@ -37,14 +38,16 @@ const EXPECTED: [i32; 5] = [10, -20, 30, 40, 50];
 /// The index the fixture serves offline, with COMM_LOST set.
 const OFFLINE_INDEX: u16 = 3;
 
-/// DNP3 quality bits, which this stack exposes as the raw octet.
-const FLAG_ONLINE: u8 = 0x01;
-const FLAG_COMM_LOST: u8 = 0x04;
+/// The whole quality octet each point is expected to carry, which is what the
+/// fixture sets: ONLINE alone, or COMM_LOST alone with ONLINE cleared.
+const FLAGS_ONLINE: u8 = 0x01;
+const FLAGS_OFFLINE: u8 = 0x04;
 
 /// Everything the read handler collected, shared with the main task.
 #[derive(Default)]
 struct Readings {
     analog: HashMap<u16, (f64, u8)>,
+    variations: Vec<Variation>,
     fragments: usize,
     restart_seen: bool,
 }
@@ -68,12 +71,18 @@ impl ReadHandler for Collector {
 
     fn handle_analog_input(
         &mut self,
-        _info: HeaderInfo,
+        info: HeaderInfo,
         iter: &mut dyn Iterator<Item = (AnalogInput, u16)>,
     ) {
         let mut readings = self.0.lock().unwrap();
+        // The read names a variation, so the variation that comes back is part
+        // of what is being checked. Without this a g30v2 answer to a g30v1
+        // request would land in this same handler and pass.
+        readings.variations.push(info.variation);
         for (value, index) in iter {
-            readings.analog.insert(index, (value.value, value.flags.value));
+            readings
+                .analog
+                .insert(index, (value.value, value.flags.value));
         }
     }
 
@@ -193,7 +202,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match control {
         Err(_) => fail("the outstation did not answer a control request within 30s"),
         Ok(Ok(())) => fail("the outstation accepted a control; it is supposed to refuse every one"),
-        Ok(Err(error)) => println!("rust-master: the control was refused, as it should be: {error}"),
+        // The refusal has to be the specific one D9 promises. Accepting any
+        // CommandError would let a timeout, a dropped connection or a malformed
+        // response stand in for "refused", which is the same shape of mistake
+        // as a test that passes because nothing happened.
+        Ok(Err(CommandError::Task(TaskError::RejectedByIin2(iin)))) => {
+            if !iin.iin2.get_no_func_code_support() {
+                fail(&format!(
+                    "the control was rejected, but not with FUNC_NOT_SUPPORTED; iin2 was {:?}",
+                    iin.iin2
+                ));
+            }
+            println!(
+                "rust-master: the control was refused with FUNC_NOT_SUPPORTED, as it should be"
+            );
+        }
+        Ok(Err(other)) => fail(&format!(
+            "the control failed without being refused in band: {other}"
+        )),
     }
 
     // -- verdict ------------------------------------------------------------
@@ -202,10 +228,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fail("the outstation returned no response fragments");
     }
     println!(
-        "rust-master: {} fragments, {} analog inputs",
+        "rust-master: {} fragments, {} analog inputs, variations {:?}",
         readings.fragments,
-        readings.analog.len()
+        readings.analog.len(),
+        readings.variations
     );
+
+    if readings.variations.is_empty() {
+        fail("no analog header arrived, so the variation was never checked");
+    }
+    if let Some(other) = readings
+        .variations
+        .iter()
+        .find(|variation| **variation != Variation::Group30Var1)
+    {
+        fail(&format!("asked for g30v1 and a header carried {other:?}"));
+    }
 
     for (index, expected) in EXPECTED.iter().enumerate() {
         let index = index as u16;
@@ -216,19 +254,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fail(&format!("index {index} read {value}, expected {expected}"));
         }
 
-        // The assertion the opendnp3-driven job cannot make.
-        let online = flags & FLAG_ONLINE != 0;
-        let comm_lost = flags & FLAG_COMM_LOST != 0;
-        if index == OFFLINE_INDEX {
-            if online || !comm_lost {
-                fail(&format!(
-                    "index {index} is served offline and should read COMM_LOST with ONLINE \
-                     clear; flags were {flags:#04x}"
-                ));
-            }
-        } else if !online || comm_lost {
+        // The assertion the opendnp3-driven job cannot make. The whole octet is
+        // compared rather than the two bits of interest: the fixture sets
+        // exactly one value per point, so a subset check would pass a point
+        // that was also, say, over-range, and this peer exists precisely to
+        // see what the other one cannot.
+        let wanted = if index == OFFLINE_INDEX {
+            FLAGS_OFFLINE
+        } else {
+            FLAGS_ONLINE
+        };
+        if *flags != wanted {
             fail(&format!(
-                "index {index} should read ONLINE; flags were {flags:#04x}"
+                "index {index} quality octet was {flags:#04x}, expected {wanted:#04x}"
             ));
         }
     }

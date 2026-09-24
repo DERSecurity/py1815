@@ -12,8 +12,8 @@ on:
 # that encodes with this library and decodes with it agrees with itself through
 # any mistake both halves share. These jobs are the part that does not.
 #
-# Four peers, chosen so that no two of them are the same codebase wearing
-# different clothes:
+# Four implementations across three jobs, chosen so that no two of them are the
+# same codebase wearing different clothes:
 #
 #   opendnp3-master  a C++ stack, driven through its Python bindings. Reads
 #                    points and checks them.
@@ -118,6 +118,8 @@ jobs:
         run: pip install --quiet -e .
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache the master's dependencies
         uses: actions/cache@v4
@@ -127,6 +129,14 @@ jobs:
             ~/.cargo/git
             interop/rust-master/target
           key: rust-master-${{ hashFiles('interop/rust-master/Cargo.lock') }}
+
+      - name: Check the independent master the way the rest of this repository is checked
+        working-directory: interop/rust-master
+        # ruff and mypy gate every other language here; nothing was gating this
+        # one.
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
 
       - name: Build the independent master
         working-directory: interop/rust-master

@@ -29,6 +29,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+from typing import NoReturn
 
 #: The two checksum status fields, which are the point of the exercise.
 #:
@@ -72,7 +73,7 @@ REQUIRED_APP_FUNCTIONS = {
 }
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(f"validate-pcap: FAIL {message}", file=sys.stderr)
     sys.exit(1)
 

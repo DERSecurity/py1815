@@ -24,6 +24,7 @@ import collections
 import json
 import pathlib
 import sys
+from typing import NoReturn
 
 #: Application-layer events that mean the traffic was malformed. Suricata names
 #: each one, and a checksum it rejected is the assertion this job exists for: a
@@ -47,6 +48,14 @@ FRAMING_EVENTS = {
 #: and failing on it would mean the sweep could never test a refusal.
 DECODE_ONLY_EVENTS = {"UNKNOWN_OBJECT"}
 
+#: How many of those the sweep is expected to provoke. Naming the event without
+#: bounding it would let a genuinely undecodable object appearing somewhere new
+#: pass unnoticed, which is the failure the checksum-verdict count guards
+#: against at the other end of this file. The sweep asks for three objects this
+#: parser does not decode: a file-transfer read, an analog-output write, and the
+#: internal-indication write that clears the restart bit.
+MAX_DECODE_ONLY_EVENTS = 3
+
 #: Function codes that must appear for the capture to be the one this job
 #: expects. Not the full set the sweep sends: Suricata logs a record per
 #: application fragment it parses, and a bare confirmation is not one, so
@@ -69,7 +78,7 @@ REQUIRED_FUNCTIONS = {
 MINIMUM_DISTINCT_FUNCTIONS = 30
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(f"validate-suricata: FAIL {message}", file=sys.stderr)
     sys.exit(1)
 
@@ -133,6 +142,14 @@ def main() -> None:
     }
     if unexpected:
         fail(f"Suricata raised application-layer events nobody has accounted for: {unexpected}")
+
+    decode_only = sum(count for name, count in anomalies.items() if name in DECODE_ONLY_EVENTS)
+    if decode_only > MAX_DECODE_ONLY_EVENTS:
+        fail(
+            f"{decode_only} objects this parser could not decode, expected at most "
+            f"{MAX_DECODE_ONLY_EVENTS}; the allowlist is meant to cover the objects the "
+            "sweep asks for on purpose, not any new one"
+        )
 
     responses = kinds.get("response", 0)
     if responses == 0:
