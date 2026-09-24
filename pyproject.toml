@@ -25,7 +25,21 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
+# Building the documentation site. mkdocstrings reads the package's own
+# docstrings, so the docs build also proves the public API imports.
+docs = [
+    # Capped below 2.0 deliberately. MkDocs 2.0 removes the plugin system and
+    # the theming system with no migration path, which would take mkdocstrings
+    # and Material with it. Revisit once that ecosystem has settled.
+    "mkdocs>=1.6,<2.0",
+    "mkdocs-material>=9.5,<10",
+    "mkdocstrings[python]>=0.26",
+    # mkdocstrings formats rendered signatures with Black or Ruff if one is
+    # present and leaves them on one line if neither is. Most of this API is
+    # keyword-only, so the wrapped form is the readable one.
+    "ruff>=0.6",
+]
+dev = ["py1815[docs]", "pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/py1815"]
