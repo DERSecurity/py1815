@@ -79,6 +79,10 @@ class BinaryEvent:
 #: everything assigned to class 1.
 Event = AnalogEvent | BinaryEvent
 
+#: The largest index an event block can prefix an object with, the wider of the
+#: two qualifiers this outstation accepts being sixteen bits.
+MAX_INDEX = 0xFFFF
+
 
 def now_ms() -> int:
     """Wall-clock milliseconds, which is what a DNP3 timestamp carries.
@@ -175,6 +179,23 @@ class EventBuffers:
         for buffer in self._buffers.values():
             buffer.overflowed = False
 
+    @staticmethod
+    def _checked_index(index: int) -> int:
+        """An index an event block can actually carry.
+
+        Checked when the event is recorded rather than when it is read. The
+        encoder refuses a negative or oversized index, and that refusal arriving
+        at read time would take out every read of the class -- a caller's
+        mistake surfacing as a protocol failure, far from the line that made it
+        and with the connection as collateral. Refusing here puts the error
+        where the mistake is and leaves the buffer incapable of holding one.
+        """
+        if not 0 <= index <= MAX_INDEX:
+            raise ValueError(
+                f"index {index} is outside 0..{MAX_INDEX}, which is what an event block can carry"
+            )
+        return index
+
     def record_analog(
         self,
         index: int,
@@ -185,6 +206,7 @@ class EventBuffers:
         timestamp_ms: int | None = None,
     ) -> AnalogEvent | None:
         """Record an analog reading, returning the event it generated, if any."""
+        self._checked_index(index)
         previous = self._last_analog.get(index)
         if previous is not None and not self._analog_changed(previous, point, deadband):
             return None
@@ -207,6 +229,7 @@ class EventBuffers:
         No deadband: a binary point has two values, so any change is the whole
         of its range.
         """
+        self._checked_index(index)
         previous = self._last_binary.get(index)
         if previous is not None and not self._binary_changed(previous, point):
             return None

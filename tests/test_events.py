@@ -15,6 +15,7 @@ import pytest
 from py1815.events import (
     _ANALOG_QUALITY_MASK,
     _BINARY_QUALITY_MASK,
+    MAX_INDEX,
     AnalogEvent,
     BinaryEvent,
     EventBuffers,
@@ -376,3 +377,40 @@ class TestTimestamps:
 
         assert event is not None
         assert event.index == 7
+
+
+class TestAnIndexAnEventBlockCanCarry:
+    """Checked when recorded, not when read.
+
+    ``event_block`` refuses a negative or oversized index, and that refusal
+    arriving at read time would take out every read of the class -- a caller's
+    mistake surfacing as a protocol failure, far from the line that made it and
+    with the connection as collateral.
+    """
+
+    @pytest.mark.parametrize("index", [-1, -100, MAX_INDEX + 1, 1 << 20])
+    def test_an_analog_event_outside_the_range_is_refused(self, index):
+        with pytest.raises(ValueError, match="is outside"):
+            _buffers().record_analog(index, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
+
+    @pytest.mark.parametrize("index", [-1, -100, MAX_INDEX + 1, 1 << 20])
+    def test_a_binary_event_outside_the_range_is_refused(self, index):
+        with pytest.raises(ValueError, match="is outside"):
+            _buffers().record_binary(index, BinaryPoint(state=True), event_class=EventClass.CLASS_1)
+
+    @pytest.mark.parametrize("index", [0, 1, MAX_INDEX])
+    def test_the_ends_of_the_range_are_accepted(self, index):
+        buffers = _buffers()
+
+        assert buffers.record_analog(index, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
+        assert buffers.record_binary(index, BinaryPoint(state=True), event_class=EventClass.CLASS_2)
+
+    def test_a_refused_index_leaves_nothing_behind(self):
+        """Not recorded and not half-recorded: a later reading at that index
+        must not compare against a value the buffer rejected."""
+        buffers = _buffers()
+
+        with pytest.raises(ValueError):
+            buffers.record_analog(-1, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
+
+        assert buffers.total == 0
