@@ -33,6 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from functools import reduce
+from itertools import islice
 from operator import or_
 
 from py1815.objects import AnalogPoint, AnalogQuality, BinaryPoint, BinaryQuality
@@ -79,6 +80,10 @@ class BinaryEvent:
 #: everything assigned to class 1.
 Event = AnalogEvent | BinaryEvent
 
+#: The largest index an event block can prefix an object with, the wider of the
+#: two qualifiers this outstation accepts being sixteen bits.
+MAX_INDEX = 0xFFFF
+
 
 def now_ms() -> int:
     """Wall-clock milliseconds, which is what a DNP3 timestamp carries.
@@ -100,11 +105,14 @@ class _ClassBuffer:
     events: deque[Event] = field(default_factory=deque)
     overflowed: bool = False
 
-    def add(self, event: Event) -> None:
-        if len(self.events) >= self.capacity:
+    def add(self, event: Event) -> bool:
+        """Buffer an event, reporting whether one had to be dropped for it."""
+        evicted = len(self.events) >= self.capacity
+        if evicted:
             self.events.popleft()
             self.overflowed = True
         self.events.append(event)
+        return evicted
 
 
 class EventBuffers:
@@ -125,6 +133,7 @@ class EventBuffers:
         self._buffers = {cls: _ClassBuffer(capacity) for cls in EventClass}
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
+        self._overflow_generation = 0
 
     def count(self, event_class: EventClass) -> int:
         return len(self._buffers[event_class].events)
@@ -137,6 +146,19 @@ class EventBuffers:
         """Whether any class has dropped an event since it was last reported."""
         return any(buffer.overflowed for buffer in self._buffers.values())
 
+    @property
+    def overflow_generation(self) -> int:
+        """How many events have been lost, counted from the first.
+
+        Monotonic, and deliberately not reset by ``clear_overflow``. A
+        confirmation acknowledges the loss a particular response reported, and
+        the flag alone cannot say whether more has been lost since that response
+        was built -- it reads the same after one eviction and after a hundred.
+        Clearing on the flag would retire a report of data loss the master has
+        never been sent.
+        """
+        return self._overflow_generation
+
     def classes_with_events(self) -> set[EventClass]:
         """Which classes have something to report, for the indication bits."""
         return {cls for cls, buffer in self._buffers.items() if buffer.events}
@@ -147,9 +169,21 @@ class EventBuffers:
         Reads do not consume. An event leaves the buffer when the master
         confirms the response carrying it, because a response that never arrives
         must not have taken the only copy with it.
+
+        ``limit`` is taken from the front, and taken while the deque is walked
+        rather than after. The difference is the whole point of the parameter:
+        materialising the class and slicing it afterwards costs the buffer on
+        every call, and ``capacity`` has no upper bound, so a caller asking for
+        the few events that fit a response would still pay for all of them.
         """
-        events: list[Event] = list(self._buffers[event_class].events)
-        return events[:limit] if limit is not None else events
+        events = self._buffers[event_class].events
+        if limit is None:
+            return list(events)
+        # Clamped to the length as well as to zero. ``islice`` refuses a stop
+        # above ``sys.maxsize``, where a plain slice simply returns everything,
+        # and a limit is an upper bound rather than a promise -- a caller that
+        # names a number larger than the buffer is asking for the buffer.
+        return list(islice(events, min(max(0, limit), len(events))))
 
     def drop(self, events: Iterable[Event]) -> None:
         """Remove events a master has confirmed.
@@ -175,6 +209,28 @@ class EventBuffers:
         for buffer in self._buffers.values():
             buffer.overflowed = False
 
+    def _buffer(self, event_class: EventClass, event: Event) -> None:
+        """Hold an event, counting it against the generation if one was lost."""
+        if self._buffers[event_class].add(event):
+            self._overflow_generation += 1
+
+    @staticmethod
+    def _checked_index(index: int) -> int:
+        """An index an event block can actually carry.
+
+        Checked when the event is recorded rather than when it is read. The
+        encoder refuses a negative or oversized index, and that refusal arriving
+        at read time would take out every read of the class -- a caller's
+        mistake surfacing as a protocol failure, far from the line that made it
+        and with the connection as collateral. Refusing here puts the error
+        where the mistake is and leaves the buffer incapable of holding one.
+        """
+        if not 0 <= index <= MAX_INDEX:
+            raise ValueError(
+                f"index {index} is outside 0..{MAX_INDEX}, which is what an event block can carry"
+            )
+        return index
+
     def record_analog(
         self,
         index: int,
@@ -185,13 +241,14 @@ class EventBuffers:
         timestamp_ms: int | None = None,
     ) -> AnalogEvent | None:
         """Record an analog reading, returning the event it generated, if any."""
+        self._checked_index(index)
         previous = self._last_analog.get(index)
         if previous is not None and not self._analog_changed(previous, point, deadband):
             return None
 
         event = AnalogEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
         self._last_analog[index] = point
-        self._buffers[event_class].add(event)
+        self._buffer(event_class, event)
         return event
 
     def record_binary(
@@ -207,13 +264,14 @@ class EventBuffers:
         No deadband: a binary point has two values, so any change is the whole
         of its range.
         """
+        self._checked_index(index)
         previous = self._last_binary.get(index)
         if previous is not None and not self._binary_changed(previous, point):
             return None
 
         event = BinaryEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
         self._last_binary[index] = point
-        self._buffers[event_class].add(event)
+        self._buffer(event_class, event)
         return event
 
     @staticmethod

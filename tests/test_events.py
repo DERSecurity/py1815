@@ -7,6 +7,7 @@ about something at all.
 
 from __future__ import annotations
 
+from collections import deque
 from functools import reduce
 from operator import or_
 
@@ -15,6 +16,7 @@ import pytest
 from py1815.events import (
     _ANALOG_QUALITY_MASK,
     _BINARY_QUALITY_MASK,
+    MAX_INDEX,
     AnalogEvent,
     BinaryEvent,
     EventBuffers,
@@ -376,3 +378,136 @@ class TestTimestamps:
 
         assert event is not None
         assert event.index == 7
+
+
+class TestAnIndexAnEventBlockCanCarry:
+    """Checked when recorded, not when read.
+
+    ``event_block`` refuses a negative or oversized index, and that refusal
+    arriving at read time would take out every read of the class -- a caller's
+    mistake surfacing as a protocol failure, far from the line that made it and
+    with the connection as collateral.
+    """
+
+    @pytest.mark.parametrize("index", [-1, -100, MAX_INDEX + 1, 1 << 20])
+    def test_an_analog_event_outside_the_range_is_refused(self, index):
+        with pytest.raises(ValueError, match="is outside"):
+            _buffers().record_analog(index, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
+
+    @pytest.mark.parametrize("index", [-1, -100, MAX_INDEX + 1, 1 << 20])
+    def test_a_binary_event_outside_the_range_is_refused(self, index):
+        with pytest.raises(ValueError, match="is outside"):
+            _buffers().record_binary(index, BinaryPoint(state=True), event_class=EventClass.CLASS_1)
+
+    @pytest.mark.parametrize("index", [0, 1, MAX_INDEX])
+    def test_the_ends_of_the_range_are_accepted(self, index):
+        buffers = _buffers()
+
+        assert buffers.record_analog(index, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
+        assert buffers.record_binary(index, BinaryPoint(state=True), event_class=EventClass.CLASS_2)
+
+    def test_a_refused_index_leaves_nothing_behind(self):
+        """Not recorded and not half-recorded: a later reading at that index
+        must not compare against a value the buffer rejected."""
+        buffers = _buffers()
+
+        with pytest.raises(ValueError):
+            buffers.record_analog(-1, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
+
+        assert buffers.total == 0
+
+
+class _CountingDeque(deque):
+    """A deque that records how many of its items have been handed out.
+
+    Which is the only way to see the difference the limit is there for.
+    Slicing a materialised copy returns exactly the same events as walking a
+    prefix, so the returned value cannot tell the two apart -- and the cost is
+    the whole of the point.
+    """
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)  # type: ignore[arg-type]
+        self.visited = 0
+
+    def __iter__(self):
+        for item in super().__iter__():
+            self.visited += 1
+            yield item
+
+
+class TestPeekTakesItsLimitFromTheFront:
+    """The limit is what a caller asking for the few events that fit a response
+    uses to avoid paying for a buffer it has no room for."""
+
+    @staticmethod
+    def _filled(count: int = 6) -> EventBuffers:
+        buffers = EventBuffers(capacity=count)
+        for index in range(count):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+            )
+        return buffers
+
+    def test_the_oldest_events_come_back(self):
+        held = self._filled().peek(EventClass.CLASS_1, limit=2)
+
+        assert [event.index for event in held] == [0, 1]
+
+    def test_a_limit_of_zero_returns_none_of_them(self):
+        assert self._filled().peek(EventClass.CLASS_1, limit=0) == []
+
+    def test_a_limit_past_the_end_is_not_an_error(self):
+        assert len(self._filled().peek(EventClass.CLASS_1, limit=99)) == 6
+
+    def test_nor_is_one_past_every_end(self):
+        """A limit is an upper bound rather than a promise, so a number larger
+        than the buffer asks for the buffer. Python integers have no ceiling
+        and the iterator underneath this does, which is a difference a caller
+        should never have to know about."""
+        assert len(self._filled().peek(EventClass.CLASS_1, limit=10**100)) == 6
+
+    def test_a_negative_limit_returns_none_of_them(self):
+        assert self._filled().peek(EventClass.CLASS_1, limit=-5) == []
+
+    def test_no_limit_returns_the_class(self):
+        assert len(self._filled().peek(EventClass.CLASS_1)) == 6
+
+    def _counting(self, count: int = 6) -> tuple[EventBuffers, _CountingDeque]:
+        buffers = self._filled(count)
+        held = _CountingDeque(buffers.peek(EventClass.CLASS_1))
+        buffers._buffers[EventClass.CLASS_1].events = held
+        held.visited = 0
+        return buffers, held
+
+    def test_it_stops_walking_once_it_has_the_prefix(self):
+        """What the limit is for. Materialising the class and slicing after
+        returns these same two events and costs the buffer to do it, so this
+        is the assertion that tells the two implementations apart."""
+        buffers, held = self._counting()
+
+        assert len(buffers.peek(EventClass.CLASS_1, limit=2)) == 2
+        assert held.visited == 2, "the other four were never touched"
+
+    def test_no_limit_walks_the_whole_class(self):
+        buffers, held = self._counting()
+
+        buffers.peek(EventClass.CLASS_1)
+
+        assert held.visited == 6
+
+    def test_a_limit_past_the_end_walks_it_once_and_no_further(self):
+        """The clamp keeps the walk bounded by the buffer rather than by the
+        number, which is what stops an enormous limit reaching the iterator."""
+        buffers, held = self._counting()
+
+        buffers.peek(EventClass.CLASS_1, limit=10**100)
+
+        assert held.visited == 6
+
+    def test_the_buffer_is_untouched_by_a_limited_read(self):
+        buffers = self._filled()
+
+        buffers.peek(EventClass.CLASS_1, limit=1)
+
+        assert buffers.count(EventClass.CLASS_1) == 6

@@ -1,0 +1,438 @@
+"""Reading events, and saying there are some.
+
+Sections 1 and 4 of the event plan: which events a read selects, how they are
+blocked, and the indication bits that tell a master they are waiting.
+
+Nothing here confirms anything, which is a division of labour rather than a
+gap. An event leaves the buffer when the master confirms the response carrying
+it (D18), so a read on its own returns the same events again -- several tests
+below depend on that, and reading twice is how they check it. What a
+confirmation then does with them is in `test_session_confirmation.py`, and the
+budget that decides how many of them a response may carry is in
+`test_session_fragment_budget.py`.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
+from py1815.events import EventBuffers, EventClass
+from py1815.objects import AnalogPoint, BinaryPoint
+from py1815.session import Session
+
+#: Group 60 variation 2 is class 1, 3 is class 2, 4 is class 3. Variation 1 is
+#: class 0, which is static data and stays the provider's.
+CLASS_VARIATION = {0: 1, 1: 2, 2: 3, 3: 4}
+
+
+class Reader:
+    """A read provider that records what it was asked for."""
+
+    def __init__(self, body: bytes = b"\x1e\x01\x00\x00\x00\x01\x2a\x00\x00\x00") -> None:
+        self.body = body
+        self.headers: list = []
+
+    def read(self, headers):
+        self.headers = list(headers)
+        return self.body
+
+
+def _session(buffers: EventBuffers | None = None, reader: Reader | None = None):
+    r = reader or Reader()
+    return Session(r, events=buffers), r
+
+
+def _read(*classes: int, sequence: int = 0) -> bytes:
+    """A read naming one or more classes, all objects."""
+    body = b""
+    for cls in classes:
+        body += bytes([60, CLASS_VARIATION[cls], QualifierCode.ALL_OBJECTS])
+    return bytes([0xC0 | sequence, FunctionCode.READ]) + body
+
+
+def _filled(**per_class: int) -> EventBuffers:
+    """Buffers holding *n* analog events in each named class."""
+    buffers = EventBuffers()
+    index = 0
+    for name, count in per_class.items():
+        event_class = EventClass[name.upper()]
+        for _ in range(count):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=event_class, timestamp_ms=1
+            )
+            index += 1
+    return buffers
+
+
+class TestAClassReadAnswersFromTheBuffers:
+    #: Group 32 variation 3 is flags, an int32 and a six-octet time, and each
+    #: event sits behind a one-octet index.
+    EVENT_OCTETS = 1 + (1 + 4 + 6)
+    HEADER_OCTETS = 4
+
+    def test_class_one_returns_its_events_and_not_another_class(self):
+        buffers = _filled(class_1=2, class_2=3)
+        session, _ = _session(buffers)
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        assert body[0] == 32
+        assert body[3] == 2, "two events, not the five in the buffers"
+        # The whole body, not just the first block. Checking the count alone
+        # passes an outstation that answers class 1 correctly and then appends
+        # every other class after it.
+        assert len(body) == self.HEADER_OCTETS + 2 * self.EVENT_OCTETS
+
+    def test_the_other_classes_are_not_appended_after_it(self):
+        buffers = _filled(class_1=1, class_2=1, class_3=1)
+        session, _ = _session(buffers)
+
+        body = session._handle_fragment(_read(2))[4:]
+
+        assert len(body) == self.HEADER_OCTETS + self.EVENT_OCTETS
+
+    def test_two_classes_are_both_answered(self):
+        session, _ = _session(_filled(class_1=1, class_2=1))
+
+        body = session._handle_fragment(_read(1, 2))[4:]
+
+        assert body[3] == 1
+        second = 4 + (1 + 11)
+        assert body[second] == 32
+        assert body[second + 3] == 1
+
+    def test_a_class_with_nothing_in_it_is_an_empty_answer(self):
+        """Not an error. A master polls a class to find out whether anything
+        happened, and nothing happening is one of the answers."""
+        session, _ = _session(EventBuffers())
+
+        response = session._handle_fragment(_read(1))
+
+        assert response[1] == FunctionCode.RESPONSE
+        assert response[4:] == b""
+
+    def test_the_provider_is_not_asked_for_an_event_class(self):
+        session, reader = _session(_filled(class_1=1))
+
+        session._handle_fragment(_read(1))
+
+        assert reader.headers == []
+
+
+class TestClassZeroIsStillTheProviders:
+    def test_it_reaches_the_provider(self):
+        session, reader = _session(_filled(class_1=1))
+
+        body = session._handle_fragment(_read(0))[4:]
+
+        assert [h.variation for h in reader.headers] == [1]
+        assert body == reader.body
+
+    def test_an_integrity_poll_carries_events_before_static_data(self):
+        """D20. A master applies a fragment in order, so a static value written
+        after the events that led to it leaves the point where it should end
+        up."""
+        session, reader = _session(_filled(class_1=1))
+
+        body = session._handle_fragment(_read(1, 0))[4:]
+
+        assert body[0] == 32, "the event block leads"
+        assert body.endswith(reader.body), "and the static data follows it"
+
+
+class TestWithoutBuffers:
+    """An outstation with no events configured behaves as it always has."""
+
+    def test_a_class_one_read_goes_to_the_provider(self):
+        session, reader = _session(None)
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        assert [h.variation for h in reader.headers] == [2]
+        assert body == reader.body
+
+    def test_no_class_indications_are_set(self):
+        session, _ = _session(None)
+
+        response = session._handle_fragment(_read(0))
+
+        assert not response[2] & IINBit.CLASS_1_EVENTS
+
+
+class TestTheIndicationBits:
+    """D22: derived from the buffers on every response, so they cannot drift."""
+
+    @pytest.mark.parametrize(
+        ("name", "bit", "neighbours"),
+        [
+            ("class_1", IINBit.CLASS_1_EVENTS, (IINBit.CLASS_2_EVENTS, IINBit.CLASS_3_EVENTS)),
+            ("class_2", IINBit.CLASS_2_EVENTS, (IINBit.CLASS_1_EVENTS, IINBit.CLASS_3_EVENTS)),
+            ("class_3", IINBit.CLASS_3_EVENTS, (IINBit.CLASS_1_EVENTS, IINBit.CLASS_2_EVENTS)),
+        ],
+    )
+    def test_one_class_sets_its_own_bit_and_neither_neighbour(self, name, bit, neighbours):
+        session, _ = _session(_filled(**{name: 1}))
+
+        first = session._handle_fragment(_read(0))[2]
+
+        assert first & bit
+        assert not any(first & other for other in neighbours)
+
+    def test_an_empty_buffer_sets_none_of_them(self):
+        session, _ = _session(EventBuffers())
+
+        first = session._handle_fragment(_read(0))[2]
+
+        assert not first & (IINBit.CLASS_1_EVENTS | IINBit.CLASS_2_EVENTS | IINBit.CLASS_3_EVENTS)
+
+    def test_the_bit_follows_the_buffer_rather_than_a_counter(self):
+        """The point of deriving them. Dropping the events clears the bit with
+        no bookkeeping in between to get wrong."""
+        buffers = _filled(class_1=1)
+        session, _ = _session(buffers)
+        assert session._handle_fragment(_read(0))[2] & IINBit.CLASS_1_EVENTS
+
+        buffers.drop(buffers.peek(EventClass.CLASS_1))
+
+        assert not session._handle_fragment(_read(0))[2] & IINBit.CLASS_1_EVENTS
+
+
+class TestOverflow:
+    def test_a_full_buffer_reports_it(self):
+        buffers = EventBuffers(capacity=1)
+        for index in range(3):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+            )
+        session, _ = _session(buffers)
+
+        second = session._handle_fragment(_read(0))[3]
+
+        assert second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+
+    def test_a_buffer_within_capacity_does_not(self):
+        session, _ = _session(_filled(class_1=1))
+
+        second = session._handle_fragment(_read(0))[3]
+
+        assert not second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+
+
+class TestBinaryEventsTravelInTheirOwnBlock:
+    def test_a_run_of_each_kind_becomes_two_blocks(self):
+        """Ordered as the points changed rather than gathered by type:
+        reordering them would tell the master a different story about when
+        things happened."""
+        buffers = EventBuffers()
+        buffers.record_analog(0, AnalogPoint(1.0), event_class=EventClass.CLASS_1, timestamp_ms=1)
+        buffers.record_binary(
+            1, BinaryPoint(state=True), event_class=EventClass.CLASS_1, timestamp_ms=2
+        )
+        session, _ = _session(buffers)
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        assert body[0] == 32, "analog event group"
+        analog_block = 4 + (1 + 11)
+        assert body[analog_block] == 2, "binary event group"
+
+
+def _read_qualified(cls: int, qualifier: int, extra: bytes = b"") -> bytes:
+    return bytes([0xC0, FunctionCode.READ, 60, CLASS_VARIATION[cls], qualifier]) + extra
+
+
+class TestWhatQualifierAClassReadMayCarry:
+    """A class is a reporting priority, not a set of points, so a start and a
+    stop name nothing on one. Answering such a request with the whole buffer
+    would tell a master its selection was honoured when it was ignored."""
+
+    #: Each refused qualifier with the payload its own parse path expects.
+    #: The two index-prefixed forms are read through different code -- one
+    #: octet of count and index versus two -- so covering only the narrow one
+    #: would let a regression accepting the wide one pass.
+    @pytest.mark.parametrize(
+        ("qualifier", "payload"),
+        [
+            (QualifierCode.UINT8_START_STOP, bytes(2)),
+            (QualifierCode.UINT16_START_STOP, bytes(4)),
+            (QualifierCode.UINT8_COUNT_UINT8_INDEX, bytes(1)),
+            (QualifierCode.UINT16_COUNT_UINT16_INDEX, bytes(2)),
+        ],
+    )
+    def test_a_qualifier_that_selects_nothing_is_refused(self, qualifier, payload):
+        session, _ = _session(_filled(class_1=3))
+
+        response = session._handle_fragment(_read_qualified(1, qualifier, payload))
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert response[4:] == b"", "refused rather than answered with everything"
+
+    def test_all_objects_returns_the_whole_class(self):
+        session, _ = _session(_filled(class_1=3))
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        assert body[3] == 3
+
+
+class TestACountLimitsWhatComesBack:
+    """ "At most this many", which is how a master paces a buffer it does not
+    want in one fragment."""
+
+    def test_fewer_than_the_buffer_holds(self):
+        session, _ = _session(_filled(class_1=5))
+
+        body = session._handle_fragment(_read_qualified(1, QualifierCode.UINT8_COUNT, bytes([2])))[
+            4:
+        ]
+
+        assert body[3] == 2
+
+    def test_a_count_larger_than_the_buffer_is_not_an_error(self):
+        session, _ = _session(_filled(class_1=2))
+
+        body = session._handle_fragment(_read_qualified(1, QualifierCode.UINT8_COUNT, bytes([50])))[
+            4:
+        ]
+
+        assert body[3] == 2
+
+    def test_a_count_of_zero_returns_nothing(self):
+        session, _ = _session(_filled(class_1=3))
+
+        response = session._handle_fragment(
+            _read_qualified(1, QualifierCode.UINT8_COUNT, bytes([0]))
+        )
+
+        assert response[4:] == b""
+        assert not response[3] & IIN2Bit.PARAM_ERROR, "asking for none is not an error"
+
+
+class TestAClassNamedTwice:
+    def test_its_events_are_not_sent_twice(self):
+        """A master naming a class twice asked about it twice. Sending each
+        event once per header would tell it the same change happened more than
+        once."""
+        session, _ = _session(_filled(class_1=2))
+
+        body = session._handle_fragment(_read(1, 1))[4:]
+
+        assert body[3] == 2
+        assert len(body) == 4 + 2 * (1 + 11), "one block, not two"
+
+    def test_header_order_is_the_masters(self):
+        session, _ = _session(_filled(class_1=1, class_3=1))
+
+        body = session._handle_fragment(_read(3, 1))[4:]
+
+        # The class 3 event was recorded second, so index 1 leads if the order
+        # is the master's and index 0 leads if it is the class number's.
+        assert body[4] == 1
+
+
+class TestARunTooLongForOneBlock:
+    """``capacity`` has no upper bound, so a legal buffer can hold more events
+    of one type in a row than an object header can count. Encoding that as a
+    single block raises out of request handling instead of answering."""
+
+    #: The largest count a header carries, and the largest index one can
+    #: prefix. 65,536 events at indices 0 to 65,535 sit one past the first and
+    #: exactly on the second, so the split is forced without the index limit
+    #: being what forces it.
+    LIMIT = 0xFFFF
+    #: A five-octet header -- group, variation, qualifier, 16-bit count -- and
+    #: then a 16-bit index in front of each eleven-octet event.
+    WIDE_HEADER = 5
+    WIDE_ITEM = 2 + 11
+
+    #: Large enough that the response budget is not what cuts this short. The
+    #: two ceilings are independent -- one is what a master can receive, the
+    #: other what an object header can count -- and this test is about the
+    #: second, so the first is lifted out of its way.
+    ROOM = 2_000_000
+
+    def _session(self) -> Session:
+        return Session(Reader(), events=self._buffers(), max_response=self.ROOM)
+
+    @classmethod
+    def _buffers(cls) -> EventBuffers:
+        buffers = EventBuffers(capacity=cls.LIMIT + 2)
+        for index in range(cls.LIMIT + 1):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+            )
+        return buffers
+
+    def test_it_is_split_rather_than_refused(self):
+        body = self._session()._handle_fragment(_read(1))[4:]
+
+        assert body[0] == 32, "an analog event block, not an exception"
+        first = int.from_bytes(body[3:5], "little")
+        assert first == self.LIMIT, "the first block is filled to the count a header can carry"
+
+    def test_the_remainder_follows_in_a_block_of_its_own(self):
+        body = self._session()._handle_fragment(_read(1))[4:]
+
+        second = self.WIDE_HEADER + self.LIMIT * self.WIDE_ITEM
+        assert body[second] == 32
+        assert int.from_bytes(body[second + 3 : second + 5], "little") == 1
+        assert len(body) == second + self.WIDE_HEADER + self.WIDE_ITEM, "two blocks, no more"
+
+
+class TestTheWideCountQualifier:
+    """`UINT16_COUNT` is accepted alongside the narrow one, and reaches the
+    buffers through a different parse -- a two-octet count rather than one.
+    Exercised end to end here because the narrow form answering correctly says
+    nothing about the wide form, and every earlier test used the narrow one.
+    """
+
+    #: Room for several hundred events, so that what comes back is decided by
+    #: the count the master asked for rather than by the response ceiling.
+    ROOM = 8192
+    HELD = 400
+
+    @classmethod
+    def _session(cls) -> Session:
+        return Session(Reader(), events=_filled(class_1=cls.HELD), max_response=cls.ROOM)
+
+    @staticmethod
+    def _read(count: int) -> bytes:
+        return bytes([0xC0, FunctionCode.READ, 60, 2, QualifierCode.UINT16_COUNT]) + count.to_bytes(
+            2, "little"
+        )
+
+    def test_a_count_above_an_octet_is_honoured(self):
+        """Three hundred, which a one-octet read of the same field would take
+        for forty-four."""
+        body = self._session()._handle_fragment(self._read(300))[4:]
+
+        assert body[2] == QualifierCode.UINT16_COUNT_UINT16_INDEX
+        assert int.from_bytes(body[3:5], "little") == 300
+
+    def test_a_count_whose_low_octet_is_zero(self):
+        """Two hundred and fifty-six. The sharper case: a one-octet read finds
+        zero here and answers with nothing at all."""
+        body = self._session()._handle_fragment(self._read(256))[4:]
+
+        assert int.from_bytes(body[3:5], "little") == 256
+
+    def test_a_count_of_zero_returns_nothing_and_is_not_an_error(self):
+        response = self._session()._handle_fragment(self._read(0))
+
+        assert response[4:] == b""
+        assert not response[3] & IIN2Bit.PARAM_ERROR
+
+    def test_a_count_larger_than_the_class_is_not_an_error(self):
+        body = self._session()._handle_fragment(self._read(self.HELD + 100))[4:]
+
+        assert int.from_bytes(body[3:5], "little") == self.HELD
+
+    def test_what_it_left_behind_stays_buffered(self):
+        buffers = _filled(class_1=self.HELD)
+        session = Session(Reader(), events=buffers, max_response=self.ROOM)
+
+        session._handle_fragment(self._read(300))
+        session._handle_fragment(bytes([0xC0, FunctionCode.CONFIRM]))
+
+        assert buffers.count(EventClass.CLASS_1) == self.HELD - 300

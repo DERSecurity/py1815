@@ -82,8 +82,24 @@ below have to cover that case rather than assume a selection outlives the wait.
 **D19 -- One outstanding response at a time, and a new request replaces it.**
 Under **D7** there is one association, so there is one unconfirmed response to
 track. A read arriving while one is outstanding supersedes it: the master has
-evidently moved on, and holding a stale selection would answer the new request
-with the old events.
+evidently moved on, and a confirmation arriving afterwards would name a response
+that is no longer the current one.
+
+A refusal counts. An unsupported function or a control sent to a monitor-role
+outstation is a response like any other, and leaving the selection standing
+across one would let a confirmation for the response *before* it still retire
+those events. The first draft of this decision was written as though only the
+requests that do work superseded, and the implementation followed it -- which
+put two refusal branches on the wrong side of the line.
+
+Two things are outside it, and stay outside it:
+
+- The functions that ask for no response. They send nothing, so there is no
+  response for a later confirmation to be late against.
+- A fragment that did not parse. That is not evidence the master moved on; it
+  is evidence something arrived damaged, which is exactly when a retransmission
+  of the held response is the likely next thing to arrive. Discarding the cache
+  on noise would throw it away at the one moment it is most wanted.
 
 **D20 -- Class 0 is static and classes 1 to 3 are events, answered in one
 response.** The integrity poll a real master sends names all four. Static
@@ -116,10 +132,121 @@ response carrying the bit is confirmed -- not when it is sent. An overflow
 reported in a response the master never received is an overflow the master never
 learned about.
 
+A response reporting one therefore sets `CON` whether or not any event travels
+with it. The bit is the thing being acknowledged, so a response carrying it has
+something to confirm on its own account. Without that, a ceiling under which no
+event fits -- which **D27** explicitly allows -- is a configuration where no
+response ever asks for a confirmation, and the flag latches: the master is told
+for ever about a loss it was told about once. The same holds for a master that
+polls only class 0.
+
 **D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller
 records the event, and under **D6** this library holds no point map for a master
 to reassign. Accepting the request would mean either ignoring it or inventing
 the map the design exists to keep out.
+
+**D25 -- A repeated request is replayed, not rebuilt, and a repeat is one that
+matches octet for octet.** A master that did not receive a response repeats the
+request. The outstation holds the request beside the response it produced and
+the events it selected, and when the same octets arrive again it sends that
+response back unchanged.
+
+The comparison is against the request and not against the sequence number alone.
+A master that reuses a sequence for a *different* question has retransmitted
+nothing, and answering it from the cache would reply to the question before it --
+then have those events retired by the confirmation that followed, acknowledged
+against a response the master never asked for.
+
+The two shapes differ only when an event arrives in between, and that is the
+case that decides it. The confirmation which follows retires the events the
+response was built from, so a rebuilt response carrying an event the first did
+not would have that event retired under a sequence it was never sent under --
+reported once, acknowledged once, and gone, except that the master's copy of
+the exchange and the outstation's disagree about which events the sequence
+covered. Replaying keeps the two in step at the cost of the newer event waiting
+for the next read, which is the delay a retransmission implies anyway.
+
+The cache this needs is not extra machinery. Confirmation has to record which
+events went out under which sequence regardless, and the fragment is one more
+field beside them.
+
+This was decided without the text of the standard, which was not available.
+**IEEE 1815** may specify the behavior outright, and if it turns out to say
+rebuild, switching is deleting the `fragment` field and re-dispatching the
+request -- the sequence and the event selection stay either way. The decision is
+recorded as a soft one for that reason.
+
+**D26 -- A confirmation carrying `UNS` is ignored.** The bit distinguishes a
+confirmation for an unsolicited response from one for a solicited response, and
+the two count sequence numbers separately. This outstation sends no unsolicited
+responses, so a confirmation carrying the bit names an exchange that never
+happened, and retiring the solicited selection on the strength of a number from
+a different counter would delete events the master has not acknowledged.
+
+Ignored rather than consumed: the master's real confirmation may still be
+coming, and swallowing the selection here would lose the events instead of
+merely mistiming them. This is the same asymmetry as **D21** -- an outstation
+that does not send unsolicited responses answers questions about them by
+declining to act, not by pretending the exchange exists.
+
+**D27 -- A response is capped to what the master can receive, and the rest
+stays buffered.** ``max_response`` is its own number rather than the reassembly
+ceiling ``max_fragment``: one is the largest request this outstation will piece
+back together, the other the largest fragment the master on the far end can
+accept, and a master advertises its own. Sending past it is not a long response
+but a discarded one -- the events were readable and then none of them arrived.
+
+Events are fitted to what is left after the application header and whatever the
+provider returned. Static data is paid for first and trimmed never: it is the
+provider's answer, and this session cannot tell where one object inside it ends.
+Events still travel in front of it on the wire, per **D20**.
+
+A provider body that overruns the ceiling on its own is the one case the events
+cannot be fitted around, and the read is refused with `PARAM_ERROR` rather than
+sent. Sending it past the ceiling loses the whole response -- the master
+discards the fragment -- and says nothing about why; four octets that arrive and
+name the problem let a master narrow its request. Nothing is recorded as
+outstanding on that path, so the events stay buffered for the read that fits.
+
+What does not fit is left in the buffer and left out of the selection, so the
+confirmation retires only what was actually sent and the class indication bits
+go on asking for the rest. A master that reads again gets it.
+
+The fit is found by bisecting the encoder rather than by arithmetic on the
+header layout, because a block's size is not a fixed cost per event -- the
+qualifier widens when the count passes an octet or an index does. Bisection is
+sound because the size never falls as events are added.
+
+The ceiling bounds the work and not only the octets. `capacity` has no upper
+bound, so anything proportional to the buffer is proportional to a number the
+operator chose, paid on every read a peer sends. The selection is therefore cut
+to what could possibly fit *before* anything is encoded -- the remaining budget
+divided by the narrowest an event encodes, which is a strict upper bound rather
+than an estimate -- and the buffer is asked for no more than that plus what the
+deduplication is about to remove. A four-octet response over fifty thousand
+events used to cost fifty thousand encodings; it now costs none.
+
+That is what `peek`'s `limit` is for, and it settles the open question about it.
+The limit is not how a count qualifier is answered -- a limit taken before
+deduplication would come back short -- it is how a caller avoids paying for a
+buffer it has no room for. It has to slice while walking the deque rather than
+after materialising it, or the call still costs the buffer.
+
+This is the cap section 3 replaces with a split. Until then an outstation that
+answers with fewer events than it holds is correct, just chatty.
+
+The ceiling is not only the read path's. A control response is the request
+echoed with a status per object, and one that will not fit is refused *before
+anything is dispatched* -- a control that executes and cannot report its outcome
+is worse than one that never ran, because a master that learns nothing about an
+operate is a master that may send it again. The echo is measured with a probe
+status, since an object's encoding is a fixed size for its type and the status
+sits inside it.
+
+A ceiling below a response header is refused at construction. Every answer such
+an outstation could give would break it, including the refusal it would give
+instead, so the number is rejected where it is set rather than logged on each
+response that overruns it.
 
 ## Work
 
@@ -217,14 +344,17 @@ plan. Then 6.
 
 ## Open
 
-- **Retransmission.** A master that does not receive a response repeats the
-  request with the same sequence number. Whether to replay the previous response
-  or build a fresh one from the buffer needs settling before section 2 is
-  written; the two differ when an event arrives in between.
+- **Settled: what `peek`'s limit is for.** Recorded here because the answer took
+  three passes to find. It is not how a count qualifier is answered -- the count
+  is applied after deduplication, and a limit taken before it would leave a
+  second header naming the same class short. It is how the response budget
+  avoids paying for a buffer it has no room for. See **D27**.
+
 - **Events per fragment.** A bound belongs somewhere, and as with the control
   cap it should be chosen here rather than borrowed. The fragment size already
   bounds it; a lower limit is only worth having if a reason for one appears.
-- **Whether `peek` needs its limit.** It takes one, and only `test_events`
-  passes it -- no caller in `src/` does. Section 3 will decide whether that is
-  the fragment-splitting mechanism or a parameter to remove, and it should not
-  be removed before then on the strength of having no production caller yet.
+
+- **Whether the standard agrees with D25.** Not an open design question -- the
+  behavior is decided and implemented -- but the one place in this plan where
+  the text would change an answer rather than confirm it. Worth re-reading the
+  application layer's duplicate-request handling if a copy becomes available.

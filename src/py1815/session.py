@@ -39,6 +39,7 @@ from py1815 import link
 from py1815.application import (
     IIN,
     REQUEST_HEADER_SIZE,
+    RESPONSE_HEADER_SIZE,
     SEQUENCE_MODULUS,
     AppControl,
     FunctionCode,
@@ -58,6 +59,15 @@ from py1815.control import (
     CommandStatus,
     ControlError,
     ControlRelayOutputBlock,
+)
+from py1815.events import AnalogEvent, Event, EventBuffers, EventClass
+from py1815.objects import (
+    GROUP_ANALOG_INPUT_EVENT,
+    GROUP_BINARY_INPUT_EVENT,
+    AnalogEventVariation,
+    BinaryEventVariation,
+    encode_analog_event,
+    encode_binary_event,
 )
 
 # Controls echo in the same shape events do -- a count with an index in front of
@@ -110,6 +120,14 @@ _NO_RESPONSE_FUNCTIONS = frozenset(
     }
 )
 
+#: The two fragments that do not end an armed select's exchange. An OPERATE
+#: because spending a select is what it is for. A CONFIRM because it is not a
+#: request at all -- it is the second half of an exchange this outstation
+#: started, and it carries the sequence of the response it acknowledges rather
+#: than a new one, so a master may legitimately send SELECT, then a confirmation
+#: for an earlier response, then the OPERATE.
+_KEEPS_A_SELECT = frozenset({FunctionCode.OPERATE, FunctionCode.CONFIRM})
+
 #: Functions this outstation answers. Everything else earns IIN2.1.
 _SUPPORTED_FUNCTIONS = frozenset(
     {FunctionCode.CONFIRM, FunctionCode.READ, FunctionCode.WRITE} | _CONTROL_FUNCTIONS
@@ -118,6 +136,51 @@ _SUPPORTED_FUNCTIONS = frozenset(
 #: How long a select stays armed. Ten seconds is opendnp3's default and the
 #: middle of what implementations use; the standard leaves it to the outstation.
 DEFAULT_SELECT_TIMEOUT = 10.0
+
+#: The classes a read can ask for that come from the buffers. Class 0 is static
+#: data and is the provider's, which is why ``event_class`` returning 0 is not
+#: the same as it returning None.
+_EVENT_CLASSES = frozenset({EventClass.CLASS_1, EventClass.CLASS_2, EventClass.CLASS_3})
+
+#: Which indication bit says a class has something waiting.
+_CLASS_BITS = {
+    EventClass.CLASS_1: IINBit.CLASS_1_EVENTS,
+    EventClass.CLASS_2: IINBit.CLASS_2_EVENTS,
+    EventClass.CLASS_3: IINBit.CLASS_3_EVENTS,
+}
+
+#: The variations events are reported in. Timed, because an event without a
+#: timestamp tells a master that a value changed and not when -- which, for the
+#: sequence a master reads events to obtain, is most of what it wanted.
+_ANALOG_EVENT_VARIATION = AnalogEventVariation.INT32_WITH_TIME
+_BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
+
+#: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
+#: the class holds; the count qualifiers ask for at most that many, which is how
+#: a master paces a buffer it does not want in one fragment.
+#:
+#: A range is not among them. Class objects have no indices to range over -- a
+#: class is a reporting priority, not a set of points -- so a start and a stop
+#: name nothing, and honouring one would mean inventing a meaning for it.
+#: The fewest octets an event can occupy on the wire: a one-octet index prefix
+#: in front of a binary event with time, which is a flag octet and a six-octet
+#: timestamp. Nothing encodes smaller, so the remaining budget divided by this
+#: is an upper bound on how many events could still fit -- and a bound that can
+#: be taken before anything is encoded.
+_MIN_EVENT_OCTETS = 8
+
+#: The most events one object header can count, and so the most one block can
+#: carry. Beyond it the encoder refuses, which is a bug report rather than a
+#: response, so a run longer than this is split into several blocks.
+_MAX_BLOCK_EVENTS = 0xFFFF
+
+_CLASS_QUALIFIERS = frozenset(
+    {
+        QualifierCode.ALL_OBJECTS,
+        QualifierCode.UINT8_COUNT,
+        QualifierCode.UINT16_COUNT,
+    }
+)
 
 
 class UnknownObject(Exception):
@@ -189,6 +252,38 @@ class _ArmedSelect:
     sequence: int
 
 
+@dataclass(frozen=True)
+class _Outstanding:
+    """A response carrying events, waiting for the master to confirm it."""
+
+    #: The application sequence it went out under. The confirmation that
+    #: retires these events has to name it (D18).
+    sequence: int
+    #: The events themselves, not their ids. ``EventBuffers.drop`` matches on
+    #: identity, and an id kept while its event is freed can be reused by an
+    #: unrelated one -- which is the failure its docstring warns about. Holding
+    #: the objects keeps them alive, so the ids stay theirs for as long as this
+    #: selection is outstanding, whether or not the buffer still has them.
+    events: tuple[Event, ...]
+    #: The request this answered, octet for octet. A repeat is recognised by
+    #: what was asked and not by the sequence alone: a master that reuses a
+    #: sequence for a different request has not retransmitted anything, and
+    #: replaying an event response to, say, an operate would answer a question
+    #: nobody asked -- and leave its events acknowledged by the confirmation
+    #: that followed.
+    request: bytes
+    #: The response as it was sent, for a master that did not receive it.
+    fragment: bytes
+    #: The overflow generation this response reported, or ``None`` if it
+    #: carried no overflow bit. D23 clears the flag when such a response is
+    #: confirmed rather than when it is sent, because an overflow reported into
+    #: a void is one the master never learned about -- and the generation is
+    #: what keeps that from clearing a later loss too. A boolean here would
+    #: acknowledge every eviction up to the moment of the confirmation, not the
+    #: ones the confirmed response actually reported.
+    reported_overflow: int | None
+
+
 class ReadProvider(Protocol):
     """Where the objects in a response come from.
 
@@ -220,9 +315,11 @@ class Session:
         provider: ReadProvider,
         *,
         control_provider: ControlProvider | None = None,
+        events: EventBuffers | None = None,
         outstation_address: int = 1024,
         master_address: int = 1,
         max_fragment: int = 2048,
+        max_response: int = 2048,
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -236,10 +333,40 @@ class Session:
                 answering an unexpected one would interleave two conversations
                 over one set of sequence numbers.
             max_fragment: Reassembly ceiling for a received fragment.
+            max_response: Ceiling for a response this outstation builds. A
+                separate number from ``max_fragment`` because they are separate
+                things: one is the largest request this outstation will piece
+                back together, the other the largest fragment the master on the
+                far end can receive. A master advertises its own, and sending
+                past it is a fragment discarded rather than a response. It must
+                leave room for a response header.
+
+                Until application-layer fragmentation lands, a read caps rather
+                than splits: events that do not fit stay buffered and come back
+                on the next read, which the class indication bits go on asking
+                for. Static data is not trimmed -- it is the provider's answer
+                and this session cannot tell where one object ends.
+
+                A control request whose echo would not fit is refused before
+                anything is dispatched, because a control that executes and
+                cannot report is worse than one that never ran.
             control_provider: Executes controls. Without one this outstation
                 monitors and does not command, and every control function is
                 refused as unsupported -- which is a truthful answer rather than
                 a degraded one.
+            events: Where class 1, 2 and 3 events are read from. The caller
+                records into it as its device polls and the session never
+                records: a deadband is measured against the last value reported
+                rather than the previous reading, so it needs history between
+                requests, and under D6 this library does not know which index is
+                which point.
+
+                The session does write, on one occasion. A confirmation retires
+                the events the response it acknowledges carried, and clears the
+                overflow the same response reported, so a caller reading the
+                buffer after handling a fragment may find both changed. Nothing
+                else here mutates it. Without a buffer, a class 1 to 3 read
+                reaches the provider like any other.
             select_timeout: How long a select stays armed for the operate that
                 follows it.
             clock: Monotonic source for that timeout. Injectable so expiry can
@@ -247,13 +374,26 @@ class Session:
         """
         self._provider = provider
         self._controls = control_provider
+        self._events = events
         self._select_timeout = select_timeout
         self._clock = clock
         self._select: _ArmedSelect | None = None
+        self._outstanding: _Outstanding | None = None
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._frames = link.FrameReader()
         self._reassembler = Reassembler(max_fragment=max_fragment)
+        if max_response < RESPONSE_HEADER_SIZE:
+            # A response is four octets before it carries anything, so a smaller
+            # ceiling is one nothing can honour -- every answer this outstation
+            # gives would break it, including the refusal it would give instead.
+            # Refused at construction, where the number is, rather than logged
+            # on each response that overruns it.
+            raise ValueError(
+                f"max_response is {max_response}; a response header alone is "
+                f"{RESPONSE_HEADER_SIZE} octets"
+            )
+        self._max_response = max_response
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
@@ -281,6 +421,7 @@ class Session:
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._select = None
+        self._outstanding = None
 
     def receive(self, data: bytes) -> bytes:
         """Handle received octets, returning the octets to send back."""
@@ -367,9 +508,44 @@ class Session:
 
     def _indications(self, extra: IIN | None = None) -> IIN:
         iin = IIN(first=IINBit.DEVICE_RESTART) if self._restart else IIN()
+        iin = iin | self._event_indications()
         return iin | extra if extra else iin
 
+    def _event_indications(self) -> IIN:
+        """Which classes have events waiting, and whether any were lost.
+
+        Derived on every response rather than tracked alongside the buffers
+        (D22). A master polling on indications never asks for events it is not
+        told about, so a bit that drifts from the buffer is an outstation whose
+        data is invisible -- and deriving it makes drift impossible rather than
+        unlikely.
+        """
+        if self._events is None:
+            return IIN()
+        first = 0
+        for event_class in self._events.classes_with_events():
+            first |= _CLASS_BITS[event_class]
+        second = IIN2Bit.EVENT_BUFFER_OVERFLOW if self._events.overflowed() else 0
+        return IIN(first=first, second=second)
+
     def _handle_fragment(self, fragment: bytes) -> bytes:
+        if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
+            # Anything the master sends other than the operate that spends a
+            # select ends the exchange that select belongs to (D12). Sited here,
+            # above every early return, because siting it lower is what left the
+            # refusals and the no-response functions holding a reservation open
+            # across traffic the master had plainly moved on from.
+            #
+            # Decided on the function code octet rather than after the parse, so
+            # that a fragment too damaged to read clears it too. That is the
+            # opposite of what a damaged fragment does to the outstanding event
+            # response, and deliberately: replaying a response costs nothing if
+            # the guess is wrong, while holding a control reservation open
+            # through noise can authorise an operate the master never selected.
+            # An unreadable fragment claiming to be an OPERATE keeps it, which
+            # is the corrupted-retransmission case worth keeping it for.
+            self._select = None
+
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
             # Table 4-2: "same as function code 5 but outstation shall not send
             # a response". Same as function code 5 -- so it operates, and says
@@ -409,19 +585,63 @@ class Session:
         known = request.known_function
         sequence = request.control.sequence
 
+        if known is FunctionCode.CONFIRM:
+            # Answered with silence rather than a fragment: a confirmation is
+            # not a request, and replying to one would be traffic the master
+            # never asked for. Still checked ahead of the retransmission branch
+            # below, which the octet comparison there would now settle on its
+            # own -- the order is what keeps it settled if that comparison is
+            # ever loosened back to the sequence number.
+            if request.control.uns:
+                # The UNS bit is what tells a confirmation for an unsolicited
+                # response apart from one for a solicited response, and the two
+                # count sequence numbers separately. This outstation sends no
+                # unsolicited responses at all, so a confirmation carrying the
+                # bit names an exchange that never happened -- and answering it
+                # from the solicited selection would retire events on the
+                # strength of a number from a different counter.
+                logger.info(
+                    "dnp3: ignoring an unsolicited confirmation; none was sent (sequence %d)",
+                    sequence,
+                )
+                return b""
+            self._confirm(sequence)
+            return b""
+
+        if self._outstanding is not None and self._outstanding.request == fragment:
+            # A master that did not receive a response repeats the request,
+            # octet for octet. It is replayed rather than rebuilt, so that the
+            # master ends up holding the fragment whose events its confirmation
+            # will retire -- rebuilding would answer with whatever the buffer
+            # holds now, and the confirmation that followed would name a set of
+            # events that was never sent under it (D25).
+            logger.info("dnp3: replaying the response for sequence %d", sequence)
+            return self._outstanding.fragment
+
+        # Every other request supersedes what was outstanding (D19): the master
+        # has moved on, and the events go back to being unreported rather than
+        # waiting for a confirmation that would now be two requests late.
+        #
+        # Sited above every remaining return so that it covers the refusals as
+        # well as the work. A refusal is a response like any other, and one that
+        # left the selection standing would let a confirmation for the response
+        # before it still retire those events.
+        #
+        # Two paths are deliberately outside it. The functions returning above
+        # send nothing at all, so there is no response for a confirmation to be
+        # late against. And a fragment that did not parse is not evidence the
+        # master moved on -- it is evidence something arrived garbled, which is
+        # when a retransmission of the held response is most likely to be what
+        # comes next, and discarding the cache on noise would throw it away
+        # exactly then.
+        self._outstanding = None
+
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             return null_response(
                 sequence=sequence,
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
             )
-
-        if known is FunctionCode.CONFIRM:
-            # Nothing is outstanding to confirm until unsolicited responses
-            # exist. Accepted silently rather than refused: a confirmation is
-            # not a request, and answering one would be a fragment the master
-            # never asked for.
-            return b""
 
         if known not in _SUPPORTED_FUNCTIONS:
             return null_response(
@@ -432,16 +652,9 @@ class Session:
         if known in _CONTROL_FUNCTIONS:
             return self._handle_control(request, known)
 
-        # Anything else the master asks for ends the exchange a select belongs
-        # to. Keeping it would let a selection sit through arbitrary traffic and
-        # still authorise an operate afterwards, which is the stale-selection
-        # case the sequence check above also catches -- both, because either
-        # alone leaves a gap the other covers.
-        self._select = None
-
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
-        return self._handle_read(request)
+        return self._handle_read(request, fragment)
 
     def _operate_unacknowledged(self, fragment: bytes) -> None:
         """Execute a DIRECT_OPERATE_NR and tell nobody, including on failure."""
@@ -478,6 +691,28 @@ class Session:
             # D15. A fragment that does not parse may leave no complete object,
             # and a per-object status has to be attached to something.
             logger.warning("dnp3: control request refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+
+        # Measured before anything is dispatched, and refused rather than
+        # attempted. A control response is the request echoed with a status per
+        # object, so a master that cannot receive it executes the controls and
+        # then learns nothing about them -- and a master that learns nothing
+        # about an operate is a master that may send it again. Refusing costs a
+        # rejected request; proceeding risks a breaker cycled twice.
+        #
+        # The statuses here are a probe, not an answer. An object's encoding is
+        # a fixed size for its type and the status sits inside it, so the echo
+        # measures the same whichever status is used.
+        echo = _echo(controls, [CommandStatus.SUCCESS] * len(controls))
+        if RESPONSE_HEADER_SIZE + len(echo) > self._max_response:
+            logger.warning(
+                "dnp3: refusing %s: its echo of %d octets exceeds the %d the master can receive",
+                known.name,
+                RESPONSE_HEADER_SIZE + len(echo),
+                self._max_response,
+            )
             return null_response(
                 sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
             )
@@ -555,20 +790,239 @@ class Session:
             raise RequestError("a control request carries no controls")
         return controls
 
-    def _handle_read(self, request: Request) -> bytes:
-        try:
-            body = self._provider.read(request.headers)
-        except UnknownObject as exc:
-            logger.info("dnp3: read refused: %s", exc)
-            return null_response(
-                sequence=request.control.sequence,
-                iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
+    def _handle_read(self, request: Request, fragment: bytes) -> bytes:
+        sequence = request.control.sequence
+        event_headers, static_headers = self._split_read(request.headers)
+
+        unusable = [h for h in event_headers if h.qualifier not in _CLASS_QUALIFIERS]
+        if unusable:
+            # Refused rather than answered with everything the class holds. A
+            # master that asked for a selection and received the whole buffer
+            # has been told its request was honoured when it was ignored, which
+            # is the shape of failure D9 exists to rule out.
+            logger.info(
+                "dnp3: class read refused: qualifier 0x%02X selects nothing on a class",
+                int(unusable[0].qualifier),
             )
-        return build_response(
-            control=AppControl(fir=True, fin=True, sequence=request.control.sequence),
-            iin=self._indications(),
+            return null_response(
+                sequence=sequence,
+                iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR)),
+            )
+
+        static = b""
+        if static_headers or not event_headers:
+            try:
+                static = self._provider.read(static_headers)
+            except UnknownObject as exc:
+                logger.info("dnp3: read refused: %s", exc)
+                return null_response(
+                    sequence=sequence,
+                    iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
+                )
+
+        selected: list[Event] = []
+        body = b""
+        if event_headers:
+            # What is left for events once the application header and whatever
+            # the provider returned are paid for. Static data goes first in the
+            # accounting and second on the wire: D20 puts events in front, and
+            # this session cannot trim an opaque body without knowing where its
+            # objects end.
+            budget = self._max_response - RESPONSE_HEADER_SIZE - len(static)
+            body, selected = self._event_body(event_headers, budget)
+        body += static
+
+        if len(body) + RESPONSE_HEADER_SIZE > self._max_response:
+            # Only reachable through the provider, since the events were fitted
+            # to what was left after it. Refused rather than truncated: the
+            # provider's body is opaque here and cutting it at an arbitrary
+            # octet would hand the master half an object.
+            #
+            # And refused rather than sent. A fragment past the ceiling is one
+            # the master discards, so sending it loses the whole response and
+            # says nothing about why; four octets carrying PARAM_ERROR arrive,
+            # and a master that knows its request was too large can narrow it.
+            # This is the same answer the control path gives for the same
+            # reason.
+            logger.warning(
+                "dnp3: refusing read: a response of %d octets exceeds the %d the master "
+                "can receive",
+                len(body) + RESPONSE_HEADER_SIZE,
+                self._max_response,
+            )
+            # Returned before anything is recorded as outstanding: no events
+            # were sent, so none are awaiting a confirmation and all of them
+            # stay buffered for the read that follows.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+
+        iin = self._indications()
+        overflowed = (
+            self._events.overflow_generation
+            if self._events is not None and iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+            else None
+        )
+        # ``CON`` where there is something to confirm, which is the events and
+        # also the overflow. A report of lost data is retired by the master
+        # acknowledging it (D23), so a response that carries the bit and no
+        # events still has to ask -- otherwise the one configuration where no
+        # event ever fits is the one where the flag can never clear, and the
+        # master is told for ever about a loss it was told about once.
+        confirmable = bool(selected) or overflowed is not None
+        response = build_response(
+            control=AppControl(fir=True, fin=True, con=confirmable, sequence=sequence),
+            iin=iin,
             body=body,
         )
+        if confirmable:
+            self._outstanding = _Outstanding(
+                sequence=sequence,
+                request=fragment,
+                events=tuple(selected),
+                fragment=response,
+                reported_overflow=overflowed,
+            )
+        return response
+
+    def _confirm(self, sequence: int) -> None:
+        """Retire the events the confirmed response carried.
+
+        A confirmation naming anything other than the outstanding sequence
+        retires nothing. It is late, duplicated, or for a response this
+        outstation has already superseded, and in each case the events it names
+        are not the ones the master has just acknowledged.
+
+        Events evicted while the confirmation was in flight are simply gone:
+        ``drop`` skips what it cannot find, so the survivors retire and the
+        overflow bit already set is the whole of the report (D18).
+
+        Those evictions are also why the overflow is acknowledged by generation
+        rather than by flag. The master has confirmed the loss this response
+        reported; anything lost since is a loss it has not been told about, and
+        clearing the flag on its behalf would bury it.
+        """
+        if self._events is None:
+            return
+        pending = self._outstanding
+        if pending is None or pending.sequence != sequence:
+            logger.info("dnp3: ignoring a confirmation for sequence %d", sequence)
+            return
+
+        self._events.drop(pending.events)
+        if pending.reported_overflow == self._events.overflow_generation:
+            # ``None`` never matches a generation, which is how a response that
+            # carried no overflow bit declines to clear one.
+            self._events.clear_overflow()
+        self._outstanding = None
+
+    def _split_read(
+        self, headers: Sequence[ObjectHeader]
+    ) -> tuple[list[ObjectHeader], list[ObjectHeader]]:
+        """The headers this session answers from the buffers, and the rest.
+
+        Without buffers nothing is split: a class 1 to 3 read goes to the
+        provider exactly as it did before, so an outstation with no events
+        configured behaves as it always has.
+        """
+        if self._events is None:
+            return [], list(headers)
+        events = [h for h in headers if h.event_class in _EVENT_CLASSES]
+        static = [h for h in headers if h.event_class not in _EVENT_CLASSES]
+        return events, static
+
+    def _event_body(
+        self, headers: Sequence[ObjectHeader], budget: int
+    ) -> tuple[bytes, list[Event]]:
+        """The event objects the named classes are holding.
+
+        Events lead the response, before any static data beside them (D20): a
+        master applies a fragment in order, and a static value written after the
+        events that led to it leaves the point at the value it should end up
+        holding.
+
+        A class with nothing in it is not an error. An empty answer is a normal
+        outcome for a master polling to find out whether anything happened.
+
+        Nothing is dropped here, which is why the selection comes back beside
+        the octets. An event leaves the buffer when the master confirms the
+        response carrying it (D18), so a master that reads and never confirms
+        sees the same events on its next read.
+
+        ``budget`` is the octets left for events. What does not fit is left in
+        the buffer and left out of the returned selection, so the confirmation
+        that follows retires only what was actually sent and the class
+        indication bits go on asking for the rest (D27).
+
+        It also bounds the work, not just the octets: the selection is cut to
+        what could possibly fit before anything is encoded, so a small response
+        over a large buffer costs the response rather than the buffer.
+        """
+        assert self._events is not None
+        body = b""
+        #: Identities already in this response. A master naming a class twice
+        #: asked about it twice, and sending an event once per header would tell
+        #: it the same change happened more than once.
+        emitted: set[int] = set()
+        #: How many of each class have gone into this response already. Only
+        #: needed because it is what the deduplication below will discard, so
+        #: the buffer has to be asked for that many more than could fit.
+        taken: dict[int, int] = {}
+        sent: list[Event] = []
+
+        # Header order rather than class order: a master that asked for class 3
+        # before class 1 gets them back that way, and the count on each header
+        # belongs to that header rather than to the class.
+        for header in headers:
+            if header.event_class is None:
+                continue
+            # Asked for only what could possibly still fit, so that a small
+            # response over a large buffer costs the response rather than the
+            # buffer. Without this the whole class was copied, scanned for
+            # duplicates and encoded, and `_fitting` then discarded nearly all
+            # of it -- a four-octet response over fifty thousand events cost
+            # fifty thousand encodings. `capacity` has no upper bound, so that
+            # is work proportional to a number the operator chose, repeated on
+            # every read a peer sends.
+            #
+            # A strict upper bound rather than an estimate: nothing encodes
+            # smaller than `_MIN_EVENT_OCTETS` and a block costs a header on
+            # top, so nothing that would have fitted is left behind here.
+            #
+            # Plus what deduplication is about to remove. A class named twice
+            # has its earlier events at the front of the buffer -- every
+            # selection takes from the front -- so asking for that many more is
+            # what keeps the second header from coming back short.
+            room = max(0, (budget - len(body)) // _MIN_EVENT_OCTETS)
+            already = taken.get(header.event_class, 0)
+            held = self._events.peek(EventClass(header.event_class), limit=already + room)
+
+            selected = [event for event in held if id(event) not in emitted]
+            if header.count is not None:
+                # A count qualifier is "at most this many", which is how a
+                # master paces a buffer it does not want in one fragment.
+                selected = selected[: header.count]
+            emitted.update(id(event) for event in selected)
+            taken[header.event_class] = already + len(selected)
+
+            # The cursor walks `selected` alongside the blocks, because
+            # `_encoded` partitions it into consecutive runs and a run cut short
+            # by the budget has to record the events it actually carried.
+            cursor = 0
+            for group, variation, items in _encoded(selected):
+                # Split at the largest count a header can carry. A buffer wide
+                # enough to hold more than this of one type in a row is legal --
+                # capacity has no upper bound -- and encoding it as one block
+                # would raise out of request handling rather than answer.
+                for start in range(0, len(items), _MAX_BLOCK_EVENTS):
+                    chunk = items[start : start + _MAX_BLOCK_EVENTS]
+                    fitted, block = _fitting(group, variation, chunk, budget - len(body))
+                    body += block
+                    sent += selected[cursor : cursor + fitted]
+                    cursor += fitted
+                    if fitted < len(chunk):
+                        return body, sent
+        return body, sent
 
     def _handle_write(self, request: Request) -> bytes:
         """The only write a monitor outstation honors: clearing the restart bit.
@@ -654,3 +1108,61 @@ def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> byt
     if run:
         body += indexed_block(group, variation, run)
     return body
+
+
+def _fitting(
+    group: int, variation: int, items: Sequence[tuple[int, bytes]], budget: int
+) -> tuple[int, bytes]:
+    """The longest prefix of a block that fits a budget, and its octets.
+
+    Found by bisection over the encoder rather than by arithmetic on the header
+    layout. A block's size is not a fixed cost per event: the qualifier widens
+    when the count passes an octet or an index does, and duplicating that rule
+    here would be a second copy to keep in step with the first. Bisection is
+    sound because the size never falls as events are added -- the count only
+    grows and the widest index is a maximum over a growing set.
+    """
+    whole = indexed_block(group, variation, list(items))
+    if len(whole) <= budget:
+        return len(items), whole
+
+    low, high, best, encoded = 1, len(items), 0, b""
+    while low <= high:
+        middle = (low + high) // 2
+        block = indexed_block(group, variation, list(items[:middle]))
+        if len(block) <= budget:
+            best, encoded = middle, block
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best, encoded
+
+
+def _encoded(events: Sequence[Event]) -> list[tuple[int, int, list[tuple[int, bytes]]]]:
+    """Events grouped into the blocks they travel in, in the order they happened.
+
+    Consecutive events of one kind share a block. The order is the buffer's --
+    which is the order the points changed -- so a run of analog events
+    interrupted by a binary one becomes three blocks rather than two, because
+    reordering them into two would tell the master a different story about when
+    things happened.
+    """
+    blocks: list[tuple[int, int, list[tuple[int, bytes]]]] = []
+    for event in events:
+        if isinstance(event, AnalogEvent):
+            group, variation = GROUP_ANALOG_INPUT_EVENT, int(_ANALOG_EVENT_VARIATION)
+            encoded = encode_analog_event(
+                event.point,
+                variation=_ANALOG_EVENT_VARIATION,
+                timestamp_ms=event.timestamp_ms,
+            )
+        else:
+            group, variation = GROUP_BINARY_INPUT_EVENT, int(_BINARY_EVENT_VARIATION)
+            encoded = encode_binary_event(
+                event.point, with_time=True, timestamp_ms=event.timestamp_ms
+            )
+        if blocks and blocks[-1][0] == group and blocks[-1][1] == variation:
+            blocks[-1][2].append((event.index, encoded))
+        else:
+            blocks.append((group, variation, [(event.index, encoded)]))
+    return blocks
