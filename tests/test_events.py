@@ -440,6 +440,16 @@ class TestPeekTakesItsLimitFromTheFront:
     def test_a_limit_past_the_end_is_not_an_error(self):
         assert len(self._filled().peek(EventClass.CLASS_1, limit=99)) == 6
 
+    def test_nor_is_one_past_every_end(self):
+        """A limit is an upper bound rather than a promise, so a number larger
+        than the buffer asks for the buffer. Python integers have no ceiling
+        and the iterator underneath this does, which is a difference a caller
+        should never have to know about."""
+        assert len(self._filled().peek(EventClass.CLASS_1, limit=10**100)) == 6
+
+    def test_a_negative_limit_returns_none_of_them(self):
+        assert self._filled().peek(EventClass.CLASS_1, limit=-5) == []
+
     def test_no_limit_returns_the_class(self):
         assert len(self._filled().peek(EventClass.CLASS_1)) == 6
 

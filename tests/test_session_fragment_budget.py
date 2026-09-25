@@ -399,3 +399,16 @@ class TestTheBudgetBoundsTheWorkAndNotJustTheOctets:
         # hundred deduplication was about to take out of it.
         assert body[second + 3] == 69
         assert body[second + 4] == 100, "carrying on where the first left off"
+
+
+class TestACeilingLargerThanAnyFragment:
+    """No upper bound is enforced on `max_response`, so the read path has to
+    survive one. The budget it derives reaches the buffer as a limit, and the
+    iterator underneath that has a ceiling Python integers do not."""
+
+    def test_a_read_is_still_answered(self):
+        session = _session(_filled(20), max_response=10**100)
+
+        response = session._handle_fragment(_read())
+
+        assert response[7] == 20, "the whole class, since everything fits"

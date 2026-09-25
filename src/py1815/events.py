@@ -179,7 +179,11 @@ class EventBuffers:
         events = self._buffers[event_class].events
         if limit is None:
             return list(events)
-        return list(islice(events, max(0, limit)))
+        # Clamped to the length as well as to zero. ``islice`` refuses a stop
+        # above ``sys.maxsize``, where a plain slice simply returns everything,
+        # and a limit is an upper bound rather than a promise -- a caller that
+        # names a number larger than the buffer is asking for the buffer.
+        return list(islice(events, min(max(0, limit), len(events))))
 
     def drop(self, events: Iterable[Event]) -> None:
         """Remove events a master has confirmed.
