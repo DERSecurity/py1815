@@ -130,7 +130,13 @@ _KEEPS_A_SELECT = frozenset({FunctionCode.OPERATE, FunctionCode.CONFIRM})
 
 #: Functions this outstation answers. Everything else earns IIN2.1.
 _SUPPORTED_FUNCTIONS = frozenset(
-    {FunctionCode.CONFIRM, FunctionCode.READ, FunctionCode.WRITE} | _CONTROL_FUNCTIONS
+    {
+        FunctionCode.CONFIRM,
+        FunctionCode.READ,
+        FunctionCode.WRITE,
+        FunctionCode.DISABLE_UNSOLICITED,
+    }
+    | _CONTROL_FUNCTIONS
 )
 
 #: How long a select stays armed. Ten seconds is opendnp3's default and the
@@ -652,9 +658,40 @@ class Session:
         if known in _CONTROL_FUNCTIONS:
             return self._handle_control(request, known)
 
+        if known is FunctionCode.DISABLE_UNSOLICITED:
+            return self._disable_unsolicited(request)
+
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
         return self._handle_read(request, fragment)
+
+    def _disable_unsolicited(self, request: Request) -> bytes:
+        """Agree, having nothing to stop (D21).
+
+        The asymmetry with ``ENABLE_UNSOLICITED`` is the point. This outstation
+        sends no unsolicited responses, so it is already in the state this
+        request asks for, and refusing it answers a question the master did not
+        ask. ``ENABLE`` asks for something this outstation does not do, and
+        saying so is the honest answer rather than the matching one.
+
+        Nothing is recorded. There is no state to enter that is not already the
+        state, and a flag tracking it would be one a sending path does not yet
+        exist to read. When unsolicited responses land, this becomes the place
+        that flag is written, and the answer given here does not change.
+
+        The classes named in the request are accepted without being examined,
+        because the answer is the same for any of them: none is being sent for.
+
+        Success is the absence of ``FUNC_NOT_SUPPORTED`` rather than an empty
+        indication field. ``DEVICE_RESTART`` stands until a master clears it,
+        and D22 and D23 put the class and overflow bits there on their own
+        terms -- a response reporting those is still a successful one.
+        """
+        logger.info(
+            "dnp3: DISABLE_UNSOLICITED accepted; none are sent (%d header(s))",
+            len(request.headers),
+        )
+        return null_response(sequence=request.control.sequence, iin=self._indications())
 
     def _operate_unacknowledged(self, fragment: bytes) -> None:
         """Execute a DIRECT_OPERATE_NR and tell nobody, including on failure."""

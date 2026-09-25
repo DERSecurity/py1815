@@ -304,10 +304,21 @@ Class bits from the buffers per **D22**, overflow per **D23**.
 neighbour; the bits clear when the events are confirmed away; overflow survives
 until the response reporting it is confirmed.
 
-### 5. `DISABLE_UNSOLICITED`
+### 5. `DISABLE_UNSOLICITED` -- landed
 
 Per **D21**. Small, and worth doing here rather than with unsolicited, because
 it is the half that needs no sending.
+
+Nothing is recorded when it is accepted. There is no state to enter that is not
+already the state, and a flag tracking it would be one no sending path exists to
+read. When unsolicited responses land, this becomes where that flag is written,
+and the answer given here does not change.
+
+The classes the request names are accepted without being examined, since the
+answer is the same for any of them. They are emphatically not a selection to
+answer: the function reaches its own branch rather than falling through to the
+read path, which would hand a master events it never polled for and then wait to
+have them confirmed.
 
 **Acceptance:** `DISABLE_UNSOLICITED` is answered with a null response that
 does *not* carry `FUNC_NOT_SUPPORTED`; `ENABLE_UNSOLICITED` still does.
@@ -341,6 +352,10 @@ halves of one useful change, and either alone is a master that cannot find the
 data. Then 2, which is the state machine. Then 5, which is independent and
 small. Then 3, which is the largest and the one most likely to want its own
 plan. Then 6.
+
+Sections 1, 2, 4 and 5 have landed, along with D25, D26 and D27, none of which
+were in this plan when it was written -- they came out of review. Sections 3, 6
+and 7 remain.
 
 ## Open
 

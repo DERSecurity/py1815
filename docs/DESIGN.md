@@ -227,13 +227,13 @@ this level needs a peer that exposes quality rather than a change to the harness
 - ~~Controls: SELECT, OPERATE, DIRECT OPERATE and DIRECT OPERATE NO ACK, with D10 through D16.~~
   Landed. The outstation commands as well as reports; output status readback is served by the
   caller's provider, per D6.
-- Events, classes 1 through 3, deadbands and unsolicited responses. The interoperability job
-  shows why this is not optional in practice: a real master's startup sends `DISABLE_UNSOLICITED`
-  and then `ENABLE_UNSOLICITED`, and this outstation refuses both. It proceeds to read normally,
-  so the refusal is survivable, but it is two warnings in an operator's log on every connection.
-  `DISABLE_UNSOLICITED` is worth a second look on its own: an outstation that sends none is
-  already in the state the master is asking for, so refusing the request answers a question it
-  did not ask.
+- ~~Events, classes 1 through 3, read from the buffers, confirmed, and reported through the
+  indication bits, with D17 through D27.~~ Landed. `DISABLE_UNSOLICITED` is answered rather than
+  refused: an outstation that sends none is already in the state the master is asking for, so
+  refusing it answered a question the master did not ask.
+- Unsolicited responses: outstation-initiated traffic with its own retry timer, and
+  `ENABLE_UNSOLICITED` becoming something this outstation can agree to. Still refused today,
+  which is the honest answer while nothing is sent.
 - The point-map loader and a published table for the predecessor DER profile.
 - Conformance testing.
 

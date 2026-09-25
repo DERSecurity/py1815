@@ -147,9 +147,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // No unsolicited handling and no startup class scan beyond class 0. This
-    // outstation serves static data and refuses the unsolicited functions, and
-    // a startup sequence that argued with it about that would be testing the
-    // refusal rather than the read. The refusal itself is covered by the
+    // outstation sends no unsolicited responses: it agrees to DISABLE, having
+    // nothing to stop, and refuses ENABLE, which asks for something it does not
+    // do. A startup sequence that argued with it about either would be testing
+    // that exchange rather than the read, and both answers are covered by the
     // function code sweep.
     let mut association_config = AssociationConfig::new(
         EventClasses::none(),
