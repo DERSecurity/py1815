@@ -809,13 +809,27 @@ class Session:
 
         if len(body) + RESPONSE_HEADER_SIZE > self._max_response:
             # Only reachable through the provider, since the events were fitted
-            # to what was left after it. Logged rather than truncated: cutting
-            # an encoded body at an arbitrary octet would hand the master half
-            # an object, which is worse than a fragment it has to reject.
+            # to what was left after it. Refused rather than truncated: the
+            # provider's body is opaque here and cutting it at an arbitrary
+            # octet would hand the master half an object.
+            #
+            # And refused rather than sent. A fragment past the ceiling is one
+            # the master discards, so sending it loses the whole response and
+            # says nothing about why; four octets carrying PARAM_ERROR arrive,
+            # and a master that knows its request was too large can narrow it.
+            # This is the same answer the control path gives for the same
+            # reason.
             logger.warning(
-                "dnp3: response of %d octets exceeds the %d the master can receive",
+                "dnp3: refusing read: a response of %d octets exceeds the %d the master "
+                "can receive",
                 len(body) + RESPONSE_HEADER_SIZE,
                 self._max_response,
+            )
+            # Returned before anything is recorded as outstanding: no events
+            # were sent, so none are awaiting a confirmation and all of them
+            # stay buffered for the read that follows.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
             )
 
         iin = self._indications()

@@ -193,6 +193,13 @@ provider returned. Static data is paid for first and trimmed never: it is the
 provider's answer, and this session cannot tell where one object inside it ends.
 Events still travel in front of it on the wire, per **D20**.
 
+A provider body that overruns the ceiling on its own is the one case the events
+cannot be fitted around, and the read is refused with `PARAM_ERROR` rather than
+sent. Sending it past the ceiling loses the whole response -- the master
+discards the fragment -- and says nothing about why; four octets that arrive and
+name the problem let a master narrow its request. Nothing is recorded as
+outstanding on that path, so the events stay buffered for the read that fits.
+
 What does not fit is left in the buffer and left out of the selection, so the
 confirmation retires only what was actually sent and the class indication bits
 go on asking for the rest. A master that reads again gets it.

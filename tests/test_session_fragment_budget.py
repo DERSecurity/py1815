@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from py1815.application import CON_MASK, FunctionCode, IINBit, QualifierCode
+from py1815.application import CON_MASK, FunctionCode, IIN2Bit, IINBit, QualifierCode
 from py1815.events import EventBuffers, EventClass
 from py1815.objects import AnalogPoint, BinaryPoint
 from py1815.session import Session
@@ -251,3 +251,68 @@ class TestACeilingBelowTheHeader:
         assert len(response) == 4
         assert response[2] & IINBit.CLASS_1_EVENTS, "still asking for what it cannot send"
         assert not response[0] & CON_MASK
+
+
+class TestStaticDataThatWillNotFitOnItsOwn:
+    """The one overrun the events cannot be fitted around, since they are
+    fitted to what is left after the provider. The body is opaque here, so
+    trimming it would cut an object in half -- and sending it past the ceiling
+    loses the whole response and says nothing about why."""
+
+    #: 106 octets of static data against a ceiling of sixteen.
+    TOO_MUCH = 100
+    CEILING = 16
+    STATIC_READ = bytes([0xC0, FunctionCode.READ, 60, 1, QualifierCode.ALL_OBJECTS])
+    INTEGRITY = bytes([0xC0, FunctionCode.READ, 60, 2, 0x06, 60, 1, 0x06])
+
+    def test_the_read_is_refused_within_the_ceiling(self):
+        session = _session(EventBuffers(), max_response=self.CEILING, static=self.TOO_MUCH)
+
+        response = session._handle_fragment(self.STATIC_READ)
+
+        assert len(response) <= self.CEILING
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert response[4:] == b"", "not the body that did not fit, nor part of it"
+
+    def test_an_integrity_poll_is_refused_the_same_way(self):
+        session = _session(_filled(), max_response=self.CEILING, static=self.TOO_MUCH)
+
+        response = session._handle_fragment(self.INTEGRITY)
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert not response[0] & CON_MASK, "nothing was sent, so nothing is awaited"
+
+    def test_and_leaves_its_events_buffered(self):
+        """Nothing was recorded as outstanding, so the confirmation a confused
+        master might send retires nothing and the events wait for a request
+        that fits."""
+        buffers = _filled()
+        session = _session(buffers, max_response=self.CEILING, static=self.TOO_MUCH)
+        session._handle_fragment(self.INTEGRITY)
+
+        session._handle_fragment(_confirm())
+
+        assert buffers.count(EventClass.CLASS_1) == FULL
+
+    #: Six octets of object header and then the hundred, answered under a
+    #: four-octet response header.
+    EXACT = 4 + 6 + TOO_MUCH
+
+    def test_static_data_that_fits_exactly_is_answered(self):
+        """The boundary, so the refusal cannot be a blanket one."""
+        session = _session(EventBuffers(), max_response=self.EXACT, static=self.TOO_MUCH)
+
+        response = session._handle_fragment(self.STATIC_READ)
+
+        assert len(response) == self.EXACT
+        assert not response[3] & IIN2Bit.PARAM_ERROR
+
+    def test_one_octet_over_is_refused(self):
+        """The other side of the same boundary. A ceiling the response misses
+        by one is a ceiling the response misses."""
+        session = _session(EventBuffers(), max_response=self.EXACT - 1, static=self.TOO_MUCH)
+
+        response = session._handle_fragment(self.STATIC_READ)
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert response[4:] == b""
