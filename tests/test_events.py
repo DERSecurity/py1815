@@ -7,6 +7,7 @@ about something at all.
 
 from __future__ import annotations
 
+from collections import deque
 from functools import reduce
 from operator import or_
 
@@ -416,6 +417,25 @@ class TestAnIndexAnEventBlockCanCarry:
         assert buffers.total == 0
 
 
+class _CountingDeque(deque):
+    """A deque that records how many of its items have been handed out.
+
+    Which is the only way to see the difference the limit is there for.
+    Slicing a materialised copy returns exactly the same events as walking a
+    prefix, so the returned value cannot tell the two apart -- and the cost is
+    the whole of the point.
+    """
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)  # type: ignore[arg-type]
+        self.visited = 0
+
+    def __iter__(self):
+        for item in super().__iter__():
+            self.visited += 1
+            yield item
+
+
 class TestPeekTakesItsLimitFromTheFront:
     """The limit is what a caller asking for the few events that fit a response
     uses to avoid paying for a buffer it has no room for."""
@@ -452,6 +472,38 @@ class TestPeekTakesItsLimitFromTheFront:
 
     def test_no_limit_returns_the_class(self):
         assert len(self._filled().peek(EventClass.CLASS_1)) == 6
+
+    def _counting(self, count: int = 6) -> tuple[EventBuffers, _CountingDeque]:
+        buffers = self._filled(count)
+        held = _CountingDeque(buffers.peek(EventClass.CLASS_1))
+        buffers._buffers[EventClass.CLASS_1].events = held
+        held.visited = 0
+        return buffers, held
+
+    def test_it_stops_walking_once_it_has_the_prefix(self):
+        """What the limit is for. Materialising the class and slicing after
+        returns these same two events and costs the buffer to do it, so this
+        is the assertion that tells the two implementations apart."""
+        buffers, held = self._counting()
+
+        assert len(buffers.peek(EventClass.CLASS_1, limit=2)) == 2
+        assert held.visited == 2, "the other four were never touched"
+
+    def test_no_limit_walks_the_whole_class(self):
+        buffers, held = self._counting()
+
+        buffers.peek(EventClass.CLASS_1)
+
+        assert held.visited == 6
+
+    def test_a_limit_past_the_end_walks_it_once_and_no_further(self):
+        """The clamp keeps the walk bounded by the buffer rather than by the
+        number, which is what stops an enormous limit reaching the iterator."""
+        buffers, held = self._counting()
+
+        buffers.peek(EventClass.CLASS_1, limit=10**100)
+
+        assert held.visited == 6
 
     def test_the_buffer_is_untouched_by_a_limited_read(self):
         buffers = self._filled()
