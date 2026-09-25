@@ -168,6 +168,19 @@ rebuild, switching is deleting the `fragment` field and re-dispatching the
 request -- the sequence and the event selection stay either way. The decision is
 recorded as a soft one for that reason.
 
+**D26 -- A confirmation carrying `UNS` is ignored.** The bit distinguishes a
+confirmation for an unsolicited response from one for a solicited response, and
+the two count sequence numbers separately. This outstation sends no unsolicited
+responses, so a confirmation carrying the bit names an exchange that never
+happened, and retiring the solicited selection on the strength of a number from
+a different counter would delete events the master has not acknowledged.
+
+Ignored rather than consumed: the master's real confirmation may still be
+coming, and swallowing the selection here would lose the events instead of
+merely mistiming them. This is the same asymmetry as **D21** -- an outstation
+that does not send unsolicited responses answers questions about them by
+declining to act, not by pretending the exchange exists.
+
 ## Work
 
 ### 1. Session wiring

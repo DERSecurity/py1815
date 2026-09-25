@@ -9,7 +9,7 @@ response reporting it has been acknowledged (D23).
 
 from __future__ import annotations
 
-from py1815.application import CON_MASK, FunctionCode, IIN2Bit, IINBit, QualifierCode
+from py1815.application import CON_MASK, UNS_MASK, FunctionCode, IIN2Bit, IINBit, QualifierCode
 from py1815.events import EventBuffers, EventClass
 from py1815.objects import AnalogPoint
 from py1815.session import Session
@@ -53,8 +53,9 @@ def _filled(**per_class: int) -> EventBuffers:
     return buffers
 
 
-def _confirm(sequence: int = 0) -> bytes:
-    return bytes([0xC0 | sequence, FunctionCode.CONFIRM])
+def _confirm(sequence: int = 0, unsolicited: bool = False) -> bytes:
+    control = 0xC0 | sequence | (UNS_MASK if unsolicited else 0)
+    return bytes([control, FunctionCode.CONFIRM])
 
 
 def _record(buffers: EventBuffers, index: int, event_class: EventClass = EventClass.CLASS_1):
@@ -490,3 +491,37 @@ class TestADifferentRequestUnderTheSameSequence:
         session._handle_fragment(_confirm(0))
 
         assert _count(buffers) == 1
+
+
+class TestAnUnsolicitedConfirmation:
+    """The UNS bit tells a confirmation for an unsolicited response apart from
+    one for a solicited response, and the two count sequence numbers
+    separately. This outstation sends no unsolicited responses, so a
+    confirmation carrying the bit names an exchange that never happened."""
+
+    def test_it_does_not_retire_the_solicited_selection(self):
+        buffers = _filled(class_1=2)
+        session = _session(buffers)
+        session._handle_fragment(_read(1, sequence=0))
+
+        session._handle_fragment(_confirm(0, unsolicited=True))
+
+        assert _count(buffers) == 2
+
+    def test_it_is_still_answered_with_silence(self):
+        session = _session(_filled(class_1=1))
+        session._handle_fragment(_read(1, sequence=0))
+
+        assert session._handle_fragment(_confirm(0, unsolicited=True)) == b""
+
+    def test_and_leaves_the_response_confirmable_by_a_solicited_one(self):
+        """Ignored, not consumed. The master's real confirmation is still to
+        come, and swallowing the selection here would lose the events."""
+        buffers = _filled(class_1=2)
+        session = _session(buffers)
+        session._handle_fragment(_read(1, sequence=0))
+        session._handle_fragment(_confirm(0, unsolicited=True))
+
+        session._handle_fragment(_confirm(0))
+
+        assert _count(buffers) == 0

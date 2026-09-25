@@ -515,6 +515,19 @@ class Session:
             # below, which the octet comparison there would now settle on its
             # own -- the order is what keeps it settled if that comparison is
             # ever loosened back to the sequence number.
+            if request.control.uns:
+                # The UNS bit is what tells a confirmation for an unsolicited
+                # response apart from one for a solicited response, and the two
+                # count sequence numbers separately. This outstation sends no
+                # unsolicited responses at all, so a confirmation carrying the
+                # bit names an exchange that never happened -- and answering it
+                # from the solicited selection would retire events on the
+                # strength of a number from a different counter.
+                logger.info(
+                    "dnp3: ignoring an unsolicited confirmation; none was sent (sequence %d)",
+                    sequence,
+                )
+                return b""
             self._confirm(sequence)
             return b""
 
