@@ -12,6 +12,8 @@ bits go on asking for it, and the next read brings it.
 
 from __future__ import annotations
 
+import pytest
+
 from py1815.application import CON_MASK, FunctionCode, IINBit, QualifierCode
 from py1815.events import EventBuffers, EventClass
 from py1815.objects import AnalogPoint, BinaryPoint
@@ -226,3 +228,26 @@ class TestABlockOneOctetOverTheCeiling:
 
         assert len(response) <= self.WHOLE + 3
         assert response[7] == 9, "one event short of the block that did not fit"
+
+
+class TestACeilingBelowTheHeader:
+    """Four octets before a response carries anything, so a smaller ceiling is
+    one nothing can honour -- including the refusal that would be given
+    instead. Refused where the number is rather than logged on every response
+    that overruns it."""
+
+    @pytest.mark.parametrize("ceiling", [0, 1, 3, -1])
+    def test_it_is_refused_at_construction(self, ceiling):
+        with pytest.raises(ValueError, match="max_response"):
+            Session(Provider(), max_response=ceiling)
+
+    def test_room_for_a_header_and_nothing_else_is_allowed(self):
+        """Useless but coherent: every answer is a null response, which is a
+        configuration to honour rather than one to second-guess."""
+        session = Session(Provider(), events=_filled(10), max_response=4)
+
+        response = session._handle_fragment(_read())
+
+        assert len(response) == 4
+        assert response[2] & IINBit.CLASS_1_EVENTS, "still asking for what it cannot send"
+        assert not response[0] & CON_MASK

@@ -323,13 +323,18 @@ class Session:
                 things: one is the largest request this outstation will piece
                 back together, the other the largest fragment the master on the
                 far end can receive. A master advertises its own, and sending
-                past it is a fragment discarded rather than a response.
+                past it is a fragment discarded rather than a response. It must
+                leave room for a response header.
 
-                Until application-layer fragmentation lands, this caps rather
+                Until application-layer fragmentation lands, a read caps rather
                 than splits: events that do not fit stay buffered and come back
                 on the next read, which the class indication bits go on asking
                 for. Static data is not trimmed -- it is the provider's answer
                 and this session cannot tell where one object ends.
+
+                A control request whose echo would not fit is refused before
+                anything is dispatched, because a control that executes and
+                cannot report is worse than one that never ran.
             control_provider: Executes controls. Without one this outstation
                 monitors and does not command, and every control function is
                 refused as unsupported -- which is a truthful answer rather than
@@ -363,6 +368,16 @@ class Session:
         self._master_address = master_address
         self._frames = link.FrameReader()
         self._reassembler = Reassembler(max_fragment=max_fragment)
+        if max_response < RESPONSE_HEADER_SIZE:
+            # A response is four octets before it carries anything, so a smaller
+            # ceiling is one nothing can honour -- every answer this outstation
+            # gives would break it, including the refusal it would give instead.
+            # Refused at construction, where the number is, rather than logged
+            # on each response that overruns it.
+            raise ValueError(
+                f"max_response is {max_response}; a response header alone is "
+                f"{RESPONSE_HEADER_SIZE} octets"
+            )
         self._max_response = max_response
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
@@ -651,6 +666,28 @@ class Session:
             # D15. A fragment that does not parse may leave no complete object,
             # and a per-object status has to be attached to something.
             logger.warning("dnp3: control request refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+
+        # Measured before anything is dispatched, and refused rather than
+        # attempted. A control response is the request echoed with a status per
+        # object, so a master that cannot receive it executes the controls and
+        # then learns nothing about them -- and a master that learns nothing
+        # about an operate is a master that may send it again. Refusing costs a
+        # rejected request; proceeding risks a breaker cycled twice.
+        #
+        # The statuses here are a probe, not an answer. An object's encoding is
+        # a fixed size for its type and the status sits inside it, so the echo
+        # measures the same whichever status is used.
+        echo = _echo(controls, [CommandStatus.SUCCESS] * len(controls))
+        if RESPONSE_HEADER_SIZE + len(echo) > self._max_response:
+            logger.warning(
+                "dnp3: refusing %s: its echo of %d octets exceeds the %d the master can receive",
+                known.name,
+                RESPONSE_HEADER_SIZE + len(echo),
+                self._max_response,
+            )
             return null_response(
                 sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
             )

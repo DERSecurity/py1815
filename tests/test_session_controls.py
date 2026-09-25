@@ -564,3 +564,66 @@ class TestTheOperateMustBeTheRequestAfterTheSelect:
 
         assert _statuses(response) == [CommandStatus.NO_SELECT]
         assert not commands.operated
+
+
+class TestAControlWhoseEchoWillNotFit:
+    """A control response is the request echoed with a status per object. A
+    master that cannot receive it executes the controls and then learns nothing
+    about them -- and a master that learns nothing about an operate is one that
+    may send it again. Refused before anything is dispatched."""
+
+    #: Ten CROBs: four octets of object header, then an index and eleven
+    #: octets each. The response adds its own four.
+    TEN = tuple((12, 1, index, LATCH_ON) for index in range(10))
+    #: One CROB, which is exactly twenty octets answered.
+    ONE_FITS = 4 + 4 + 12
+
+    def test_it_is_refused(self):
+        session, _ = _session(max_response=self.ONE_FITS)
+
+        response = session._handle_fragment(_request(FunctionCode.DIRECT_OPERATE, *self.TEN))
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert response[4:] == b"", "no echo, since the echo is what did not fit"
+
+    def test_and_nothing_is_dispatched(self):
+        """The point of refusing rather than attempting. A breaker cycled by a
+        request whose outcome the master never sees may be cycled again."""
+        session, commands = _session(max_response=self.ONE_FITS)
+
+        session._handle_fragment(_request(FunctionCode.DIRECT_OPERATE, *self.TEN))
+
+        assert commands.operated == []
+
+    def test_a_select_is_neither_dispatched_nor_armed(self):
+        session, commands = _session(max_response=self.ONE_FITS)
+        session._handle_fragment(_request(FunctionCode.SELECT, *self.TEN))
+
+        assert commands.selected == []
+
+        operate = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
+        assert _statuses(operate) == [CommandStatus.NO_SELECT]
+
+    def test_one_that_fits_exactly_is_answered(self):
+        session, commands = _session(max_response=self.ONE_FITS)
+
+        response = session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 0, LATCH_ON))
+        )
+
+        assert len(response) == self.ONE_FITS
+        assert _statuses(response) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
+
+    def test_one_octet_less_of_room_refuses_it(self):
+        """The boundary is the response, header included, not the echo alone."""
+        session, commands = _session(max_response=self.ONE_FITS - 1)
+
+        response = session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 0, LATCH_ON))
+        )
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert commands.operated == []

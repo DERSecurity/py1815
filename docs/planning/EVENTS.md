@@ -205,6 +205,19 @@ sound because the size never falls as events are added.
 This is the cap section 3 replaces with a split. Until then an outstation that
 answers with fewer events than it holds is correct, just chatty.
 
+The ceiling is not only the read path's. A control response is the request
+echoed with a status per object, and one that will not fit is refused *before
+anything is dispatched* -- a control that executes and cannot report its outcome
+is worse than one that never ran, because a master that learns nothing about an
+operate is a master that may send it again. The echo is measured with a probe
+status, since an object's encoding is a fixed size for its type and the status
+sits inside it.
+
+A ceiling below a response header is refused at construction. Every answer such
+an outstation could give would break it, including the refusal it would give
+instead, so the number is rejected where it is set rather than logged on each
+response that overruns it.
+
 ## Work
 
 ### 1. Session wiring
