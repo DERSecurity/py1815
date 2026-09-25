@@ -39,6 +39,7 @@ from py1815 import link
 from py1815.application import (
     IIN,
     REQUEST_HEADER_SIZE,
+    RESPONSE_HEADER_SIZE,
     SEQUENCE_MODULUS,
     AppControl,
     FunctionCode,
@@ -303,6 +304,7 @@ class Session:
         outstation_address: int = 1024,
         master_address: int = 1,
         max_fragment: int = 2048,
+        max_response: int = 2048,
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -316,6 +318,18 @@ class Session:
                 answering an unexpected one would interleave two conversations
                 over one set of sequence numbers.
             max_fragment: Reassembly ceiling for a received fragment.
+            max_response: Ceiling for a response this outstation builds. A
+                separate number from ``max_fragment`` because they are separate
+                things: one is the largest request this outstation will piece
+                back together, the other the largest fragment the master on the
+                far end can receive. A master advertises its own, and sending
+                past it is a fragment discarded rather than a response.
+
+                Until application-layer fragmentation lands, this caps rather
+                than splits: events that do not fit stay buffered and come back
+                on the next read, which the class indication bits go on asking
+                for. Static data is not trimmed -- it is the provider's answer
+                and this session cannot tell where one object ends.
             control_provider: Executes controls. Without one this outstation
                 monitors and does not command, and every control function is
                 refused as unsupported -- which is a truthful answer rather than
@@ -349,6 +363,7 @@ class Session:
         self._master_address = master_address
         self._frames = link.FrameReader()
         self._reassembler = Reassembler(max_fragment=max_fragment)
+        self._max_response = max_response
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
@@ -746,8 +761,25 @@ class Session:
         selected: list[Event] = []
         body = b""
         if event_headers:
-            body, selected = self._event_body(event_headers)
+            # What is left for events once the application header and whatever
+            # the provider returned are paid for. Static data goes first in the
+            # accounting and second on the wire: D20 puts events in front, and
+            # this session cannot trim an opaque body without knowing where its
+            # objects end.
+            budget = self._max_response - RESPONSE_HEADER_SIZE - len(static)
+            body, selected = self._event_body(event_headers, budget)
         body += static
+
+        if len(body) + RESPONSE_HEADER_SIZE > self._max_response:
+            # Only reachable through the provider, since the events were fitted
+            # to what was left after it. Logged rather than truncated: cutting
+            # an encoded body at an arbitrary octet would hand the master half
+            # an object, which is worse than a fragment it has to reject.
+            logger.warning(
+                "dnp3: response of %d octets exceeds the %d the master can receive",
+                len(body) + RESPONSE_HEADER_SIZE,
+                self._max_response,
+            )
 
         iin = self._indications()
         response = build_response(
@@ -819,7 +851,9 @@ class Session:
         static = [h for h in headers if h.event_class not in _EVENT_CLASSES]
         return events, static
 
-    def _event_body(self, headers: Sequence[ObjectHeader]) -> tuple[bytes, list[Event]]:
+    def _event_body(
+        self, headers: Sequence[ObjectHeader], budget: int
+    ) -> tuple[bytes, list[Event]]:
         """The event objects the named classes are holding.
 
         Events lead the response, before any static data beside them (D20): a
@@ -834,6 +868,11 @@ class Session:
         the octets. An event leaves the buffer when the master confirms the
         response carrying it (D18), so a master that reads and never confirms
         sees the same events on its next read.
+
+        ``budget`` is the octets left for events. What does not fit is left in
+        the buffer and left out of the returned selection, so the confirmation
+        that follows retires only what was actually sent and the class
+        indication bits go on asking for the rest (D27).
         """
         assert self._events is not None
         body = b""
@@ -857,15 +896,23 @@ class Session:
                 selected = selected[: header.count]
             emitted.update(id(event) for event in selected)
 
+            # The cursor walks `selected` alongside the blocks, because
+            # `_encoded` partitions it into consecutive runs and a run cut short
+            # by the budget has to record the events it actually carried.
+            cursor = 0
             for group, variation, items in _encoded(selected):
                 # Split at the largest count a header can carry. A buffer wide
                 # enough to hold more than this of one type in a row is legal --
                 # capacity has no upper bound -- and encoding it as one block
                 # would raise out of request handling rather than answer.
                 for start in range(0, len(items), _MAX_BLOCK_EVENTS):
-                    block = items[start : start + _MAX_BLOCK_EVENTS]
-                    body += indexed_block(group, variation, block)
-            sent += selected
+                    chunk = items[start : start + _MAX_BLOCK_EVENTS]
+                    fitted, block = _fitting(group, variation, chunk, budget - len(body))
+                    body += block
+                    sent += selected[cursor : cursor + fitted]
+                    cursor += fitted
+                    if fitted < len(chunk):
+                        return body, sent
         return body, sent
 
     def _handle_write(self, request: Request) -> bytes:
@@ -952,6 +999,34 @@ def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> byt
     if run:
         body += indexed_block(group, variation, run)
     return body
+
+
+def _fitting(
+    group: int, variation: int, items: Sequence[tuple[int, bytes]], budget: int
+) -> tuple[int, bytes]:
+    """The longest prefix of a block that fits a budget, and its octets.
+
+    Found by bisection over the encoder rather than by arithmetic on the header
+    layout. A block's size is not a fixed cost per event: the qualifier widens
+    when the count passes an octet or an index does, and duplicating that rule
+    here would be a second copy to keep in step with the first. Bisection is
+    sound because the size never falls as events are added -- the count only
+    grows and the widest index is a maximum over a growing set.
+    """
+    whole = indexed_block(group, variation, list(items))
+    if len(whole) <= budget:
+        return len(items), whole
+
+    low, high, best, encoded = 1, len(items), 0, b""
+    while low <= high:
+        middle = (low + high) // 2
+        block = indexed_block(group, variation, list(items[:middle]))
+        if len(block) <= budget:
+            best, encoded = middle, block
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best, encoded
 
 
 def _encoded(events: Sequence[Event]) -> list[tuple[int, int, list[tuple[int, bytes]]]]:

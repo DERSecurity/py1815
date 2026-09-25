@@ -181,6 +181,30 @@ merely mistiming them. This is the same asymmetry as **D21** -- an outstation
 that does not send unsolicited responses answers questions about them by
 declining to act, not by pretending the exchange exists.
 
+**D27 -- A response is capped to what the master can receive, and the rest
+stays buffered.** ``max_response`` is its own number rather than the reassembly
+ceiling ``max_fragment``: one is the largest request this outstation will piece
+back together, the other the largest fragment the master on the far end can
+accept, and a master advertises its own. Sending past it is not a long response
+but a discarded one -- the events were readable and then none of them arrived.
+
+Events are fitted to what is left after the application header and whatever the
+provider returned. Static data is paid for first and trimmed never: it is the
+provider's answer, and this session cannot tell where one object inside it ends.
+Events still travel in front of it on the wire, per **D20**.
+
+What does not fit is left in the buffer and left out of the selection, so the
+confirmation retires only what was actually sent and the class indication bits
+go on asking for the rest. A master that reads again gets it.
+
+The fit is found by bisecting the encoder rather than by arithmetic on the
+header layout, because a block's size is not a fixed cost per event -- the
+qualifier widens when the count passes an octet or an index does. Bisection is
+sound because the size never falls as events are added.
+
+This is the cap section 3 replaces with a split. Until then an outstation that
+answers with fewer events than it holds is correct, just chatty.
+
 ## Work
 
 ### 1. Session wiring
