@@ -324,3 +324,47 @@ class TestAClassNamedTwice:
         # The class 3 event was recorded second, so index 1 leads if the order
         # is the master's and index 0 leads if it is the class number's.
         assert body[4] == 1
+
+
+class TestARunTooLongForOneBlock:
+    """``capacity`` has no upper bound, so a legal buffer can hold more events
+    of one type in a row than an object header can count. Encoding that as a
+    single block raises out of request handling instead of answering."""
+
+    #: The largest count a header carries, and the largest index one can
+    #: prefix. 65,536 events at indices 0 to 65,535 sit one past the first and
+    #: exactly on the second, so the split is forced without the index limit
+    #: being what forces it.
+    LIMIT = 0xFFFF
+    #: A five-octet header -- group, variation, qualifier, 16-bit count -- and
+    #: then a 16-bit index in front of each eleven-octet event.
+    WIDE_HEADER = 5
+    WIDE_ITEM = 2 + 11
+
+    @classmethod
+    def _buffers(cls) -> EventBuffers:
+        buffers = EventBuffers(capacity=cls.LIMIT + 2)
+        for index in range(cls.LIMIT + 1):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+            )
+        return buffers
+
+    def test_it_is_split_rather_than_refused(self):
+        session, _ = _session(self._buffers())
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        assert body[0] == 32, "an analog event block, not an exception"
+        first = int.from_bytes(body[3:5], "little")
+        assert first == self.LIMIT, "the first block is filled to the count a header can carry"
+
+    def test_the_remainder_follows_in_a_block_of_its_own(self):
+        session, _ = _session(self._buffers())
+
+        body = session._handle_fragment(_read(1))[4:]
+
+        second = self.WIDE_HEADER + self.LIMIT * self.WIDE_ITEM
+        assert body[second] == 32
+        assert int.from_bytes(body[second + 3 : second + 5], "little") == 1
+        assert len(body) == second + self.WIDE_HEADER + self.WIDE_ITEM, "two blocks, no more"
