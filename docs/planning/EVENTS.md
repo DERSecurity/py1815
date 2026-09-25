@@ -121,6 +121,30 @@ records the event, and under **D6** this library holds no point map for a master
 to reassign. Accepting the request would mean either ignoring it or inventing
 the map the design exists to keep out.
 
+**D25 -- A repeated request is replayed, not rebuilt.** A master that did not
+receive a response repeats the request under the same sequence number. The
+outstation holds the fragment it sent beside the events it selected, and sends
+that fragment back unchanged.
+
+The two shapes differ only when an event arrives in between, and that is the
+case that decides it. The confirmation which follows retires the events the
+response was built from, so a rebuilt response carrying an event the first did
+not would have that event retired under a sequence it was never sent under --
+reported once, acknowledged once, and gone, except that the master's copy of
+the exchange and the outstation's disagree about which events the sequence
+covered. Replaying keeps the two in step at the cost of the newer event waiting
+for the next read, which is the delay a retransmission implies anyway.
+
+The cache this needs is not extra machinery. Confirmation has to record which
+events went out under which sequence regardless, and the fragment is one more
+field beside them.
+
+This was decided without the text of the standard, which was not available.
+**IEEE 1815** may specify the behavior outright, and if it turns out to say
+rebuild, switching is deleting the `fragment` field and re-dispatching the
+request -- the sequence and the event selection stay either way. The decision is
+recorded as a soft one for that reason.
+
 ## Work
 
 ### 1. Session wiring
@@ -217,10 +241,6 @@ plan. Then 6.
 
 ## Open
 
-- **Retransmission.** A master that does not receive a response repeats the
-  request with the same sequence number. Whether to replay the previous response
-  or build a fresh one from the buffer needs settling before section 2 is
-  written; the two differ when an event arrives in between.
 - **Events per fragment.** A bound belongs somewhere, and as with the control
   cap it should be chosen here rather than borrowed. The fragment size already
   bounds it; a lower limit is only worth having if a reason for one appears.
@@ -234,3 +254,8 @@ plan. Then 6.
 
   The parameter therefore still has no caller in `src/`. Section 3 may find one
   in fragment splitting, and it should not be removed before then.
+
+- **Whether the standard agrees with D25.** Not an open design question -- the
+  behavior is decided and implemented -- but the one place in this plan where
+  the text would change an answer rather than confirm it. Worth re-reading the
+  application layer's duplicate-request handling if a copy becomes available.
