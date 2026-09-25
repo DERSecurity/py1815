@@ -414,3 +414,38 @@ class TestAnIndexAnEventBlockCanCarry:
             buffers.record_analog(-1, AnalogPoint(1.0), event_class=EventClass.CLASS_1)
 
         assert buffers.total == 0
+
+
+class TestPeekTakesItsLimitFromTheFront:
+    """The limit is what a caller asking for the few events that fit a response
+    uses to avoid paying for a buffer it has no room for."""
+
+    @staticmethod
+    def _filled(count: int = 6) -> EventBuffers:
+        buffers = EventBuffers(capacity=count)
+        for index in range(count):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+            )
+        return buffers
+
+    def test_the_oldest_events_come_back(self):
+        held = self._filled().peek(EventClass.CLASS_1, limit=2)
+
+        assert [event.index for event in held] == [0, 1]
+
+    def test_a_limit_of_zero_returns_none_of_them(self):
+        assert self._filled().peek(EventClass.CLASS_1, limit=0) == []
+
+    def test_a_limit_past_the_end_is_not_an_error(self):
+        assert len(self._filled().peek(EventClass.CLASS_1, limit=99)) == 6
+
+    def test_no_limit_returns_the_class(self):
+        assert len(self._filled().peek(EventClass.CLASS_1)) == 6
+
+    def test_the_buffer_is_untouched_by_a_limited_read(self):
+        buffers = self._filled()
+
+        buffers.peek(EventClass.CLASS_1, limit=1)
+
+        assert buffers.count(EventClass.CLASS_1) == 6

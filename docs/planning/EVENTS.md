@@ -209,6 +209,21 @@ header layout, because a block's size is not a fixed cost per event -- the
 qualifier widens when the count passes an octet or an index does. Bisection is
 sound because the size never falls as events are added.
 
+The ceiling bounds the work and not only the octets. `capacity` has no upper
+bound, so anything proportional to the buffer is proportional to a number the
+operator chose, paid on every read a peer sends. The selection is therefore cut
+to what could possibly fit *before* anything is encoded -- the remaining budget
+divided by the narrowest an event encodes, which is a strict upper bound rather
+than an estimate -- and the buffer is asked for no more than that plus what the
+deduplication is about to remove. A four-octet response over fifty thousand
+events used to cost fifty thousand encodings; it now costs none.
+
+That is what `peek`'s `limit` is for, and it settles the open question about it.
+The limit is not how a count qualifier is answered -- a limit taken before
+deduplication would come back short -- it is how a caller avoids paying for a
+buffer it has no room for. It has to slice while walking the deque rather than
+after materialising it, or the call still costs the buffer.
+
 This is the cap section 3 replaces with a split. Until then an outstation that
 answers with fewer events than it holds is correct, just chatty.
 
@@ -321,19 +336,15 @@ plan. Then 6.
 
 ## Open
 
+- **Settled: what `peek`'s limit is for.** Recorded here because the answer took
+  three passes to find. It is not how a count qualifier is answered -- the count
+  is applied after deduplication, and a limit taken before it would leave a
+  second header naming the same class short. It is how the response budget
+  avoids paying for a buffer it has no room for. See **D27**.
+
 - **Events per fragment.** A bound belongs somewhere, and as with the control
   cap it should be chosen here rather than borrowed. The fragment size already
   bounds it; a lower limit is only worth having if a reason for one appears.
-- **Whether `peek` needs its limit.** Still open, and an earlier edit of this
-  entry claimed otherwise. Section 1 taught something about it rather than
-  settling it: a class read may carry a count qualifier asking for at most that
-  many events, but `peek`'s limit is *not* what answers one. The count is
-  applied after deduplication, because a limit taken inside `peek` would count
-  events that the deduplication then removes -- so a second header naming the
-  same class would come back short of what the master asked for.
-
-  The parameter therefore still has no caller in `src/`. Section 3 may find one
-  in fragment splitting, and it should not be removed before then.
 
 - **Whether the standard agrees with D25.** Not an open design question -- the
   behavior is decided and implemented -- but the one place in this plan where
