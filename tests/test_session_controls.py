@@ -564,3 +564,226 @@ class TestTheOperateMustBeTheRequestAfterTheSelect:
 
         assert _statuses(response) == [CommandStatus.NO_SELECT]
         assert not commands.operated
+
+
+class TestAControlWhoseEchoWillNotFit:
+    """A control response is the request echoed with a status per object. A
+    master that cannot receive it executes the controls and then learns nothing
+    about them -- and a master that learns nothing about an operate is one that
+    may send it again. Refused before anything is dispatched."""
+
+    #: Ten CROBs: four octets of object header, then an index and eleven
+    #: octets each. The response adds its own four.
+    TEN = tuple((12, 1, index, LATCH_ON) for index in range(10))
+    #: One CROB, which is exactly twenty octets answered.
+    ONE_FITS = 4 + 4 + 12
+
+    def test_it_is_refused(self):
+        session, _ = _session(max_response=self.ONE_FITS)
+
+        response = session._handle_fragment(_request(FunctionCode.DIRECT_OPERATE, *self.TEN))
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert response[4:] == b"", "no echo, since the echo is what did not fit"
+
+    def test_and_nothing_is_dispatched(self):
+        """The point of refusing rather than attempting. A breaker cycled by a
+        request whose outcome the master never sees may be cycled again."""
+        session, commands = _session(max_response=self.ONE_FITS)
+
+        session._handle_fragment(_request(FunctionCode.DIRECT_OPERATE, *self.TEN))
+
+        assert commands.operated == []
+
+    def test_a_select_is_neither_dispatched_nor_armed(self):
+        session, commands = _session(max_response=self.ONE_FITS)
+        session._handle_fragment(_request(FunctionCode.SELECT, *self.TEN))
+
+        assert commands.selected == []
+
+        operate = session._handle_fragment(
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+        )
+        assert _statuses(operate) == [CommandStatus.NO_SELECT]
+
+    def test_one_that_fits_exactly_is_answered(self):
+        session, commands = _session(max_response=self.ONE_FITS)
+
+        response = session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 0, LATCH_ON))
+        )
+
+        assert len(response) == self.ONE_FITS
+        assert _statuses(response) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
+
+    def test_one_octet_less_of_room_refuses_it(self):
+        """The boundary is the response, header included, not the echo alone."""
+        session, commands = _session(max_response=self.ONE_FITS - 1)
+
+        response = session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 0, LATCH_ON))
+        )
+
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert commands.operated == []
+
+
+class TestARequestBetweenASelectAndItsOperate:
+    """A select is a reservation for the operate that follows it, and anything
+    else the master asks for ends the exchange it belongs to.
+
+    Two mechanisms enforce that, deliberately: the operate must arrive on the
+    sequence after the select, and a request in between clears the selection.
+    Either alone leaves a gap -- the sequence rule only binds a master that
+    numbers its requests in order, and a master that reuses a number walks
+    straight through it.
+    """
+
+    #: The select is armed at sequence 0, so an operate at sequence 1 is the
+    #: one request the sequence rule would let through. Every case below sends
+    #: the intervening request at a sequence that keeps that true, which is
+    #: what makes them test the clearing rather than the counting.
+    ARMED = 0
+    SPENDS = 1
+    ELSEWHERE = 5
+
+    def _armed(self, **kwargs):
+        session, commands = _session(**kwargs)
+        session._handle_fragment(
+            _request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON), sequence=self.ARMED)
+        )
+        assert session._select is not None, "the fixture arms a select"
+        return session, commands
+
+    def _operate(self, session):
+        return _statuses(
+            session._handle_fragment(
+                _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=self.SPENDS)
+            )
+        )
+
+    def test_a_refused_select_clears_it(self):
+        """The oversized echo returns before the branch that would replace the
+        selection, so without this the refused request leaves the old one
+        standing."""
+        session, commands = self._armed(max_response=4 + 4 + 12)
+        oversized = tuple((12, 1, index, LATCH_ON) for index in range(10))
+
+        session._handle_fragment(_request(FunctionCode.SELECT, *oversized, sequence=self.ELSEWHERE))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_an_unreadable_control_clears_it(self):
+        session, commands = self._armed()
+        truncated = bytes(
+            [
+                0xC0 | self.ELSEWHERE,
+                FunctionCode.SELECT,
+                12,
+                1,
+                QualifierCode.UINT8_COUNT_UINT8_INDEX,
+                1,
+                0,
+                0x03,
+            ]
+        )
+
+        session._handle_fragment(truncated)
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_direct_operate_clears_it(self):
+        session, commands = self._armed()
+
+        session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 4, LATCH_ON), sequence=self.ELSEWHERE)
+        )
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert len(commands.operated) == 1, "only the direct operate ran"
+
+    def test_an_unacknowledged_direct_operate_clears_it(self):
+        """It answers nothing, which is about what it sends rather than what it
+        leaves behind."""
+        session, commands = self._armed()
+
+        session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE_NR, (12, 1, 4, LATCH_ON), sequence=self.ELSEWHERE)
+        )
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert len(commands.operated) == 1
+
+    def test_a_read_clears_it(self):
+        """Already true before the control paths were brought into line. Here
+        so that the rule is tested as a rule rather than as four exceptions."""
+        session, commands = self._armed()
+
+        session._handle_fragment(
+            bytes([0xC0 | self.ELSEWHERE, FunctionCode.READ, 60, 1, QualifierCode.ALL_OBJECTS])
+        )
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_function_this_outstation_does_not_implement_clears_it(self):
+        """Refused, but still a request the master chose to send."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.ELSEWHERE, FunctionCode.COLD_RESTART]))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_function_that_asks_for_no_response_clears_it(self):
+        """Answered with silence, which says nothing about whether the master
+        has moved on. It has: it sent something else."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.ELSEWHERE, FunctionCode.IMMED_FREEZE_NR]))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_fragment_too_damaged_to_read_clears_it(self):
+        """The opposite of what damage does to a held event response, and on
+        purpose. Replaying a response costs nothing if the guess is wrong;
+        holding a control reservation open through noise can authorise an
+        operate the master never selected."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.ELSEWHERE, FunctionCode.READ, 60]))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_but_a_damaged_operate_keeps_it(self):
+        """The one shape of noise worth keeping a reservation for: a garbled
+        retransmission of the very operate the select was granted to."""
+        session, _ = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.SPENDS, FunctionCode.OPERATE, 12]))
+
+        assert self._operate(session) == [CommandStatus.SUCCESS]
+
+    def test_a_confirmation_in_between_keeps_it(self):
+        """A confirmation is not a request. It is the second half of an
+        exchange this outstation started and carries the sequence of the
+        response it acknowledges, so a master may confirm an earlier read
+        between its select and its operate without forfeiting the selection."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0, FunctionCode.CONFIRM]))
+
+        assert self._operate(session) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
+
+    def test_but_the_operate_that_follows_directly_still_spends_it(self):
+        """The rule must not eat the case it exists to protect."""
+        session, commands = self._armed()
+
+        assert self._operate(session) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1

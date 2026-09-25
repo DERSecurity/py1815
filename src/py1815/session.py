@@ -39,6 +39,7 @@ from py1815 import link
 from py1815.application import (
     IIN,
     REQUEST_HEADER_SIZE,
+    RESPONSE_HEADER_SIZE,
     SEQUENCE_MODULUS,
     AppControl,
     FunctionCode,
@@ -118,6 +119,14 @@ _NO_RESPONSE_FUNCTIONS = frozenset(
         FunctionCode.AUTH_REQUEST_NO_ACK,
     }
 )
+
+#: The two fragments that do not end an armed select's exchange. An OPERATE
+#: because spending a select is what it is for. A CONFIRM because it is not a
+#: request at all -- it is the second half of an exchange this outstation
+#: started, and it carries the sequence of the response it acknowledges rather
+#: than a new one, so a master may legitimately send SELECT, then a confirmation
+#: for an earlier response, then the OPERATE.
+_KEEPS_A_SELECT = frozenset({FunctionCode.OPERATE, FunctionCode.CONFIRM})
 
 #: Functions this outstation answers. Everything else earns IIN2.1.
 _SUPPORTED_FUNCTIONS = frozenset(
@@ -303,6 +312,7 @@ class Session:
         outstation_address: int = 1024,
         master_address: int = 1,
         max_fragment: int = 2048,
+        max_response: int = 2048,
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -316,6 +326,23 @@ class Session:
                 answering an unexpected one would interleave two conversations
                 over one set of sequence numbers.
             max_fragment: Reassembly ceiling for a received fragment.
+            max_response: Ceiling for a response this outstation builds. A
+                separate number from ``max_fragment`` because they are separate
+                things: one is the largest request this outstation will piece
+                back together, the other the largest fragment the master on the
+                far end can receive. A master advertises its own, and sending
+                past it is a fragment discarded rather than a response. It must
+                leave room for a response header.
+
+                Until application-layer fragmentation lands, a read caps rather
+                than splits: events that do not fit stay buffered and come back
+                on the next read, which the class indication bits go on asking
+                for. Static data is not trimmed -- it is the provider's answer
+                and this session cannot tell where one object ends.
+
+                A control request whose echo would not fit is refused before
+                anything is dispatched, because a control that executes and
+                cannot report is worse than one that never ran.
             control_provider: Executes controls. Without one this outstation
                 monitors and does not command, and every control function is
                 refused as unsupported -- which is a truthful answer rather than
@@ -349,6 +376,17 @@ class Session:
         self._master_address = master_address
         self._frames = link.FrameReader()
         self._reassembler = Reassembler(max_fragment=max_fragment)
+        if max_response < RESPONSE_HEADER_SIZE:
+            # A response is four octets before it carries anything, so a smaller
+            # ceiling is one nothing can honour -- every answer this outstation
+            # gives would break it, including the refusal it would give instead.
+            # Refused at construction, where the number is, rather than logged
+            # on each response that overruns it.
+            raise ValueError(
+                f"max_response is {max_response}; a response header alone is "
+                f"{RESPONSE_HEADER_SIZE} octets"
+            )
+        self._max_response = max_response
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
@@ -484,6 +522,23 @@ class Session:
         return IIN(first=first, second=second)
 
     def _handle_fragment(self, fragment: bytes) -> bytes:
+        if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
+            # Anything the master sends other than the operate that spends a
+            # select ends the exchange that select belongs to (D12). Sited here,
+            # above every early return, because siting it lower is what left the
+            # refusals and the no-response functions holding a reservation open
+            # across traffic the master had plainly moved on from.
+            #
+            # Decided on the function code octet rather than after the parse, so
+            # that a fragment too damaged to read clears it too. That is the
+            # opposite of what a damaged fragment does to the outstanding event
+            # response, and deliberately: replaying a response costs nothing if
+            # the guess is wrong, while holding a control reservation open
+            # through noise can authorise an operate the master never selected.
+            # An unreadable fragment claiming to be an OPERATE keeps it, which
+            # is the corrupted-retransmission case worth keeping it for.
+            self._select = None
+
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
             # Table 4-2: "same as function code 5 but outstation shall not send
             # a response". Same as function code 5 -- so it operates, and says
@@ -590,13 +645,6 @@ class Session:
         if known in _CONTROL_FUNCTIONS:
             return self._handle_control(request, known)
 
-        # Anything else the master asks for ends the exchange a select belongs
-        # to. Keeping it would let a selection sit through arbitrary traffic and
-        # still authorise an operate afterwards, which is the stale-selection
-        # case the sequence check above also catches -- both, because either
-        # alone leaves a gap the other covers.
-        self._select = None
-
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
         return self._handle_read(request, fragment)
@@ -636,6 +684,28 @@ class Session:
             # D15. A fragment that does not parse may leave no complete object,
             # and a per-object status has to be attached to something.
             logger.warning("dnp3: control request refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+
+        # Measured before anything is dispatched, and refused rather than
+        # attempted. A control response is the request echoed with a status per
+        # object, so a master that cannot receive it executes the controls and
+        # then learns nothing about them -- and a master that learns nothing
+        # about an operate is a master that may send it again. Refusing costs a
+        # rejected request; proceeding risks a breaker cycled twice.
+        #
+        # The statuses here are a probe, not an answer. An object's encoding is
+        # a fixed size for its type and the status sits inside it, so the echo
+        # measures the same whichever status is used.
+        echo = _echo(controls, [CommandStatus.SUCCESS] * len(controls))
+        if RESPONSE_HEADER_SIZE + len(echo) > self._max_response:
+            logger.warning(
+                "dnp3: refusing %s: its echo of %d octets exceeds the %d the master can receive",
+                known.name,
+                RESPONSE_HEADER_SIZE + len(echo),
+                self._max_response,
+            )
             return null_response(
                 sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
             )
@@ -746,8 +816,39 @@ class Session:
         selected: list[Event] = []
         body = b""
         if event_headers:
-            body, selected = self._event_body(event_headers)
+            # What is left for events once the application header and whatever
+            # the provider returned are paid for. Static data goes first in the
+            # accounting and second on the wire: D20 puts events in front, and
+            # this session cannot trim an opaque body without knowing where its
+            # objects end.
+            budget = self._max_response - RESPONSE_HEADER_SIZE - len(static)
+            body, selected = self._event_body(event_headers, budget)
         body += static
+
+        if len(body) + RESPONSE_HEADER_SIZE > self._max_response:
+            # Only reachable through the provider, since the events were fitted
+            # to what was left after it. Refused rather than truncated: the
+            # provider's body is opaque here and cutting it at an arbitrary
+            # octet would hand the master half an object.
+            #
+            # And refused rather than sent. A fragment past the ceiling is one
+            # the master discards, so sending it loses the whole response and
+            # says nothing about why; four octets carrying PARAM_ERROR arrive,
+            # and a master that knows its request was too large can narrow it.
+            # This is the same answer the control path gives for the same
+            # reason.
+            logger.warning(
+                "dnp3: refusing read: a response of %d octets exceeds the %d the master "
+                "can receive",
+                len(body) + RESPONSE_HEADER_SIZE,
+                self._max_response,
+            )
+            # Returned before anything is recorded as outstanding: no events
+            # were sent, so none are awaiting a confirmation and all of them
+            # stay buffered for the read that follows.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
 
         iin = self._indications()
         response = build_response(
@@ -819,7 +920,9 @@ class Session:
         static = [h for h in headers if h.event_class not in _EVENT_CLASSES]
         return events, static
 
-    def _event_body(self, headers: Sequence[ObjectHeader]) -> tuple[bytes, list[Event]]:
+    def _event_body(
+        self, headers: Sequence[ObjectHeader], budget: int
+    ) -> tuple[bytes, list[Event]]:
         """The event objects the named classes are holding.
 
         Events lead the response, before any static data beside them (D20): a
@@ -834,6 +937,11 @@ class Session:
         the octets. An event leaves the buffer when the master confirms the
         response carrying it (D18), so a master that reads and never confirms
         sees the same events on its next read.
+
+        ``budget`` is the octets left for events. What does not fit is left in
+        the buffer and left out of the returned selection, so the confirmation
+        that follows retires only what was actually sent and the class
+        indication bits go on asking for the rest (D27).
         """
         assert self._events is not None
         body = b""
@@ -857,15 +965,23 @@ class Session:
                 selected = selected[: header.count]
             emitted.update(id(event) for event in selected)
 
+            # The cursor walks `selected` alongside the blocks, because
+            # `_encoded` partitions it into consecutive runs and a run cut short
+            # by the budget has to record the events it actually carried.
+            cursor = 0
             for group, variation, items in _encoded(selected):
                 # Split at the largest count a header can carry. A buffer wide
                 # enough to hold more than this of one type in a row is legal --
                 # capacity has no upper bound -- and encoding it as one block
                 # would raise out of request handling rather than answer.
                 for start in range(0, len(items), _MAX_BLOCK_EVENTS):
-                    block = items[start : start + _MAX_BLOCK_EVENTS]
-                    body += indexed_block(group, variation, block)
-            sent += selected
+                    chunk = items[start : start + _MAX_BLOCK_EVENTS]
+                    fitted, block = _fitting(group, variation, chunk, budget - len(body))
+                    body += block
+                    sent += selected[cursor : cursor + fitted]
+                    cursor += fitted
+                    if fitted < len(chunk):
+                        return body, sent
         return body, sent
 
     def _handle_write(self, request: Request) -> bytes:
@@ -952,6 +1068,34 @@ def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> byt
     if run:
         body += indexed_block(group, variation, run)
     return body
+
+
+def _fitting(
+    group: int, variation: int, items: Sequence[tuple[int, bytes]], budget: int
+) -> tuple[int, bytes]:
+    """The longest prefix of a block that fits a budget, and its octets.
+
+    Found by bisection over the encoder rather than by arithmetic on the header
+    layout. A block's size is not a fixed cost per event: the qualifier widens
+    when the count passes an octet or an index does, and duplicating that rule
+    here would be a second copy to keep in step with the first. Bisection is
+    sound because the size never falls as events are added -- the count only
+    grows and the widest index is a maximum over a growing set.
+    """
+    whole = indexed_block(group, variation, list(items))
+    if len(whole) <= budget:
+        return len(items), whole
+
+    low, high, best, encoded = 1, len(items), 0, b""
+    while low <= high:
+        middle = (low + high) // 2
+        block = indexed_block(group, variation, list(items[:middle]))
+        if len(block) <= budget:
+            best, encoded = middle, block
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best, encoded
 
 
 def _encoded(events: Sequence[Event]) -> list[tuple[int, int, list[tuple[int, bytes]]]]:

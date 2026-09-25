@@ -1,10 +1,15 @@
 """Reading events, and saying there are some.
 
-Sections 1 and 4 of the event plan. Nothing here confirms anything yet: an
-event leaves the buffer when the master confirms the response carrying it
-(D18), and until that lands a master reading twice sees the same events twice.
-The tests say so where it matters rather than asserting the interim as if it
-were the destination.
+Sections 1 and 4 of the event plan: which events a read selects, how they are
+blocked, and the indication bits that tell a master they are waiting.
+
+Nothing here confirms anything, which is a division of labour rather than a
+gap. An event leaves the buffer when the master confirms the response carrying
+it (D18), so a read on its own returns the same events again -- several tests
+below depend on that, and reading twice is how they check it. What a
+confirmation then does with them is in `test_session_confirmation.py`, and the
+budget that decides how many of them a response may carry is in
+`test_session_fragment_budget.py`.
 """
 
 from __future__ import annotations
@@ -341,6 +346,15 @@ class TestARunTooLongForOneBlock:
     WIDE_HEADER = 5
     WIDE_ITEM = 2 + 11
 
+    #: Large enough that the response budget is not what cuts this short. The
+    #: two ceilings are independent -- one is what a master can receive, the
+    #: other what an object header can count -- and this test is about the
+    #: second, so the first is lifted out of its way.
+    ROOM = 2_000_000
+
+    def _session(self) -> Session:
+        return Session(Reader(), events=self._buffers(), max_response=self.ROOM)
+
     @classmethod
     def _buffers(cls) -> EventBuffers:
         buffers = EventBuffers(capacity=cls.LIMIT + 2)
@@ -351,18 +365,14 @@ class TestARunTooLongForOneBlock:
         return buffers
 
     def test_it_is_split_rather_than_refused(self):
-        session, _ = _session(self._buffers())
-
-        body = session._handle_fragment(_read(1))[4:]
+        body = self._session()._handle_fragment(_read(1))[4:]
 
         assert body[0] == 32, "an analog event block, not an exception"
         first = int.from_bytes(body[3:5], "little")
         assert first == self.LIMIT, "the first block is filled to the count a header can carry"
 
     def test_the_remainder_follows_in_a_block_of_its_own(self):
-        session, _ = _session(self._buffers())
-
-        body = session._handle_fragment(_read(1))[4:]
+        body = self._session()._handle_fragment(_read(1))[4:]
 
         second = self.WIDE_HEADER + self.LIMIT * self.WIDE_ITEM
         assert body[second] == 32

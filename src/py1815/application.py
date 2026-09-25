@@ -38,6 +38,9 @@ SEQUENCE_MODULUS = SEQ_MASK + 1
 
 #: Control octet and function code.
 REQUEST_HEADER_SIZE = 2
+#: Application control, function code and the two indication octets. What a
+#: response costs before it carries anything.
+RESPONSE_HEADER_SIZE = 4
 
 #: Group 60 is the class-data group: one variation per class.
 CLASS_GROUP = 60
