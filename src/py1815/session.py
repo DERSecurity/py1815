@@ -231,6 +231,34 @@ class _ArmedSelect:
     sequence: int
 
 
+@dataclass(frozen=True)
+class _Outstanding:
+    """A response carrying events, waiting for the master to confirm it."""
+
+    #: The application sequence it went out under. The confirmation that
+    #: retires these events has to name it (D18).
+    sequence: int
+    #: The events themselves, not their ids. ``EventBuffers.drop`` matches on
+    #: identity, and an id kept while its event is freed can be reused by an
+    #: unrelated one -- which is the failure its docstring warns about. Holding
+    #: the objects keeps them alive, so the ids stay theirs for as long as this
+    #: selection is outstanding, whether or not the buffer still has them.
+    events: tuple[Event, ...]
+    #: The request this answered, octet for octet. A repeat is recognised by
+    #: what was asked and not by the sequence alone: a master that reuses a
+    #: sequence for a different request has not retransmitted anything, and
+    #: replaying an event response to, say, an operate would answer a question
+    #: nobody asked -- and leave its events acknowledged by the confirmation
+    #: that followed.
+    request: bytes
+    #: The response as it was sent, for a master that did not receive it.
+    fragment: bytes
+    #: Whether this response was the one that carried the overflow bit. D23
+    #: clears the flag when such a response is confirmed rather than when it is
+    #: sent: an overflow reported into a void is one the master never learned.
+    reported_overflow: bool
+
+
 class ReadProvider(Protocol):
     """Where the objects in a response come from.
 
@@ -301,6 +329,7 @@ class Session:
         self._select_timeout = select_timeout
         self._clock = clock
         self._select: _ArmedSelect | None = None
+        self._outstanding: _Outstanding | None = None
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._frames = link.FrameReader()
@@ -332,6 +361,7 @@ class Session:
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._select = None
+        self._outstanding = None
 
     def receive(self, data: bytes) -> bytes:
         """Handle received octets, returning the octets to send back."""
@@ -478,19 +508,63 @@ class Session:
         known = request.known_function
         sequence = request.control.sequence
 
+        if known is FunctionCode.CONFIRM:
+            # Answered with silence rather than a fragment: a confirmation is
+            # not a request, and replying to one would be traffic the master
+            # never asked for. Still checked ahead of the retransmission branch
+            # below, which the octet comparison there would now settle on its
+            # own -- the order is what keeps it settled if that comparison is
+            # ever loosened back to the sequence number.
+            if request.control.uns:
+                # The UNS bit is what tells a confirmation for an unsolicited
+                # response apart from one for a solicited response, and the two
+                # count sequence numbers separately. This outstation sends no
+                # unsolicited responses at all, so a confirmation carrying the
+                # bit names an exchange that never happened -- and answering it
+                # from the solicited selection would retire events on the
+                # strength of a number from a different counter.
+                logger.info(
+                    "dnp3: ignoring an unsolicited confirmation; none was sent (sequence %d)",
+                    sequence,
+                )
+                return b""
+            self._confirm(sequence)
+            return b""
+
+        if self._outstanding is not None and self._outstanding.request == fragment:
+            # A master that did not receive a response repeats the request,
+            # octet for octet. It is replayed rather than rebuilt, so that the
+            # master ends up holding the fragment whose events its confirmation
+            # will retire -- rebuilding would answer with whatever the buffer
+            # holds now, and the confirmation that followed would name a set of
+            # events that was never sent under it (D25).
+            logger.info("dnp3: replaying the response for sequence %d", sequence)
+            return self._outstanding.fragment
+
+        # Every other request supersedes what was outstanding (D19): the master
+        # has moved on, and the events go back to being unreported rather than
+        # waiting for a confirmation that would now be two requests late.
+        #
+        # Sited above every remaining return so that it covers the refusals as
+        # well as the work. A refusal is a response like any other, and one that
+        # left the selection standing would let a confirmation for the response
+        # before it still retire those events.
+        #
+        # Two paths are deliberately outside it. The functions returning above
+        # send nothing at all, so there is no response for a confirmation to be
+        # late against. And a fragment that did not parse is not evidence the
+        # master moved on -- it is evidence something arrived garbled, which is
+        # when a retransmission of the held response is most likely to be what
+        # comes next, and discarding the cache on noise would throw it away
+        # exactly then.
+        self._outstanding = None
+
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             return null_response(
                 sequence=sequence,
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
             )
-
-        if known is FunctionCode.CONFIRM:
-            # Nothing is outstanding to confirm until unsolicited responses
-            # exist. Accepted silently rather than refused: a confirmation is
-            # not a request, and answering one would be a fragment the master
-            # never asked for.
-            return b""
 
         if known not in _SUPPORTED_FUNCTIONS:
             return null_response(
@@ -510,7 +584,7 @@ class Session:
 
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
-        return self._handle_read(request)
+        return self._handle_read(request, fragment)
 
     def _operate_unacknowledged(self, fragment: bytes) -> None:
         """Execute a DIRECT_OPERATE_NR and tell nobody, including on failure."""
@@ -624,7 +698,7 @@ class Session:
             raise RequestError("a control request carries no controls")
         return controls
 
-    def _handle_read(self, request: Request) -> bytes:
+    def _handle_read(self, request: Request, fragment: bytes) -> bytes:
         sequence = request.control.sequence
         event_headers, static_headers = self._split_read(request.headers)
 
@@ -643,13 +717,10 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR)),
             )
 
-        body = b""
-        if event_headers:
-            body += self._event_body(event_headers)
-
+        static = b""
         if static_headers or not event_headers:
             try:
-                body += self._provider.read(static_headers)
+                static = self._provider.read(static_headers)
             except UnknownObject as exc:
                 logger.info("dnp3: read refused: %s", exc)
                 return null_response(
@@ -657,11 +728,54 @@ class Session:
                     iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
                 )
 
-        return build_response(
-            control=AppControl(fir=True, fin=True, sequence=sequence),
-            iin=self._indications(),
+        selected: list[Event] = []
+        body = b""
+        if event_headers:
+            body, selected = self._event_body(event_headers)
+        body += static
+
+        iin = self._indications()
+        response = build_response(
+            # ``CON`` only where there is something to confirm. A response
+            # carrying no events asks for nothing back, and a master answering
+            # one would be acknowledging an empty set.
+            control=AppControl(fir=True, fin=True, con=bool(selected), sequence=sequence),
+            iin=iin,
             body=body,
         )
+        if selected:
+            self._outstanding = _Outstanding(
+                sequence=sequence,
+                request=fragment,
+                events=tuple(selected),
+                fragment=response,
+                reported_overflow=bool(iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW),
+            )
+        return response
+
+    def _confirm(self, sequence: int) -> None:
+        """Retire the events the confirmed response carried.
+
+        A confirmation naming anything other than the outstanding sequence
+        retires nothing. It is late, duplicated, or for a response this
+        outstation has already superseded, and in each case the events it names
+        are not the ones the master has just acknowledged.
+
+        Events evicted while the confirmation was in flight are simply gone:
+        ``drop`` skips what it cannot find, so the survivors retire and the
+        overflow bit already set is the whole of the report (D18).
+        """
+        if self._events is None:
+            return
+        pending = self._outstanding
+        if pending is None or pending.sequence != sequence:
+            logger.info("dnp3: ignoring a confirmation for sequence %d", sequence)
+            return
+
+        self._events.drop(pending.events)
+        if pending.reported_overflow:
+            self._events.clear_overflow()
+        self._outstanding = None
 
     def _split_read(
         self, headers: Sequence[ObjectHeader]
@@ -678,7 +792,7 @@ class Session:
         static = [h for h in headers if h.event_class not in _EVENT_CLASSES]
         return events, static
 
-    def _event_body(self, headers: Sequence[ObjectHeader]) -> bytes:
+    def _event_body(self, headers: Sequence[ObjectHeader]) -> tuple[bytes, list[Event]]:
         """The event objects the named classes are holding.
 
         Events lead the response, before any static data beside them (D20): a
@@ -689,9 +803,10 @@ class Session:
         A class with nothing in it is not an error. An empty answer is a normal
         outcome for a master polling to find out whether anything happened.
 
-        Nothing is dropped here. An event leaves the buffer when the master
-        confirms the response carrying it (D18), and until the confirmation
-        handling lands a master reading twice sees the same events twice.
+        Nothing is dropped here, which is why the selection comes back beside
+        the octets. An event leaves the buffer when the master confirms the
+        response carrying it (D18), so a master that reads and never confirms
+        sees the same events on its next read.
         """
         assert self._events is not None
         body = b""
@@ -699,6 +814,7 @@ class Session:
         #: asked about it twice, and sending an event once per header would tell
         #: it the same change happened more than once.
         emitted: set[int] = set()
+        sent: list[Event] = []
 
         # Header order rather than class order: a master that asked for class 3
         # before class 1 gets them back that way, and the count on each header
@@ -716,7 +832,8 @@ class Session:
 
             for group, variation, items in _encoded(selected):
                 body += indexed_block(group, variation, items)
-        return body
+            sent += selected
+        return body, sent
 
     def _handle_write(self, request: Request) -> bytes:
         """The only write a monitor outstation honors: clearing the restart bit.

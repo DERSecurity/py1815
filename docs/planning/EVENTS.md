@@ -82,8 +82,24 @@ below have to cover that case rather than assume a selection outlives the wait.
 **D19 -- One outstanding response at a time, and a new request replaces it.**
 Under **D7** there is one association, so there is one unconfirmed response to
 track. A read arriving while one is outstanding supersedes it: the master has
-evidently moved on, and holding a stale selection would answer the new request
-with the old events.
+evidently moved on, and a confirmation arriving afterwards would name a response
+that is no longer the current one.
+
+A refusal counts. An unsupported function or a control sent to a monitor-role
+outstation is a response like any other, and leaving the selection standing
+across one would let a confirmation for the response *before* it still retire
+those events. The first draft of this decision was written as though only the
+requests that do work superseded, and the implementation followed it -- which
+put two refusal branches on the wrong side of the line.
+
+Two things are outside it, and stay outside it:
+
+- The functions that ask for no response. They send nothing, so there is no
+  response for a later confirmation to be late against.
+- A fragment that did not parse. That is not evidence the master moved on; it
+  is evidence something arrived damaged, which is exactly when a retransmission
+  of the held response is the likely next thing to arrive. Discarding the cache
+  on noise would throw it away at the one moment it is most wanted.
 
 **D20 -- Class 0 is static and classes 1 to 3 are events, answered in one
 response.** The integrity poll a real master sends names all four. Static
@@ -120,6 +136,50 @@ learned about.
 records the event, and under **D6** this library holds no point map for a master
 to reassign. Accepting the request would mean either ignoring it or inventing
 the map the design exists to keep out.
+
+**D25 -- A repeated request is replayed, not rebuilt, and a repeat is one that
+matches octet for octet.** A master that did not receive a response repeats the
+request. The outstation holds the request beside the response it produced and
+the events it selected, and when the same octets arrive again it sends that
+response back unchanged.
+
+The comparison is against the request and not against the sequence number alone.
+A master that reuses a sequence for a *different* question has retransmitted
+nothing, and answering it from the cache would reply to the question before it --
+then have those events retired by the confirmation that followed, acknowledged
+against a response the master never asked for.
+
+The two shapes differ only when an event arrives in between, and that is the
+case that decides it. The confirmation which follows retires the events the
+response was built from, so a rebuilt response carrying an event the first did
+not would have that event retired under a sequence it was never sent under --
+reported once, acknowledged once, and gone, except that the master's copy of
+the exchange and the outstation's disagree about which events the sequence
+covered. Replaying keeps the two in step at the cost of the newer event waiting
+for the next read, which is the delay a retransmission implies anyway.
+
+The cache this needs is not extra machinery. Confirmation has to record which
+events went out under which sequence regardless, and the fragment is one more
+field beside them.
+
+This was decided without the text of the standard, which was not available.
+**IEEE 1815** may specify the behavior outright, and if it turns out to say
+rebuild, switching is deleting the `fragment` field and re-dispatching the
+request -- the sequence and the event selection stay either way. The decision is
+recorded as a soft one for that reason.
+
+**D26 -- A confirmation carrying `UNS` is ignored.** The bit distinguishes a
+confirmation for an unsolicited response from one for a solicited response, and
+the two count sequence numbers separately. This outstation sends no unsolicited
+responses, so a confirmation carrying the bit names an exchange that never
+happened, and retiring the solicited selection on the strength of a number from
+a different counter would delete events the master has not acknowledged.
+
+Ignored rather than consumed: the master's real confirmation may still be
+coming, and swallowing the selection here would lose the events instead of
+merely mistiming them. This is the same asymmetry as **D21** -- an outstation
+that does not send unsolicited responses answers questions about them by
+declining to act, not by pretending the exchange exists.
 
 ## Work
 
@@ -217,10 +277,6 @@ plan. Then 6.
 
 ## Open
 
-- **Retransmission.** A master that does not receive a response repeats the
-  request with the same sequence number. Whether to replay the previous response
-  or build a fresh one from the buffer needs settling before section 2 is
-  written; the two differ when an event arrives in between.
 - **Events per fragment.** A bound belongs somewhere, and as with the control
   cap it should be chosen here rather than borrowed. The fragment size already
   bounds it; a lower limit is only worth having if a reason for one appears.
@@ -234,3 +290,8 @@ plan. Then 6.
 
   The parameter therefore still has no caller in `src/`. Section 3 may find one
   in fragment splitting, and it should not be removed before then.
+
+- **Whether the standard agrees with D25.** Not an open design question -- the
+  behavior is decided and implemented -- but the one place in this plan where
+  the text would change an answer rather than confirm it. Worth re-reading the
+  application layer's duplicate-request handling if a copy becomes available.
