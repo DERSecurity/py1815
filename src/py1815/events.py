@@ -33,6 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from functools import reduce
+from itertools import islice
 from operator import or_
 
 from py1815.objects import AnalogPoint, AnalogQuality, BinaryPoint, BinaryQuality
@@ -168,9 +169,21 @@ class EventBuffers:
         Reads do not consume. An event leaves the buffer when the master
         confirms the response carrying it, because a response that never arrives
         must not have taken the only copy with it.
+
+        ``limit`` is taken from the front, and taken while the deque is walked
+        rather than after. The difference is the whole point of the parameter:
+        materialising the class and slicing it afterwards costs the buffer on
+        every call, and ``capacity`` has no upper bound, so a caller asking for
+        the few events that fit a response would still pay for all of them.
         """
-        events: list[Event] = list(self._buffers[event_class].events)
-        return events[:limit] if limit is not None else events
+        events = self._buffers[event_class].events
+        if limit is None:
+            return list(events)
+        # Clamped to the length as well as to zero. ``islice`` refuses a stop
+        # above ``sys.maxsize``, where a plain slice simply returns everything,
+        # and a limit is an upper bound rather than a promise -- a caller that
+        # names a number larger than the buffer is asking for the buffer.
+        return list(islice(events, min(max(0, limit), len(events))))
 
     def drop(self, events: Iterable[Event]) -> None:
         """Remove events a master has confirmed.

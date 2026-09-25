@@ -162,6 +162,13 @@ _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 #: A range is not among them. Class objects have no indices to range over -- a
 #: class is a reporting priority, not a set of points -- so a start and a stop
 #: name nothing, and honouring one would mean inventing a meaning for it.
+#: The fewest octets an event can occupy on the wire: a one-octet index prefix
+#: in front of a binary event with time, which is a flag octet and a six-octet
+#: timestamp. Nothing encodes smaller, so the remaining budget divided by this
+#: is an upper bound on how many events could still fit -- and a bound that can
+#: be taken before anything is encoded.
+_MIN_EVENT_OCTETS = 8
+
 #: The most events one object header can count, and so the most one block can
 #: carry. Beyond it the encoder refuses, which is a bug report rather than a
 #: response, so a run longer than this is split into several blocks.
@@ -942,6 +949,10 @@ class Session:
         the buffer and left out of the returned selection, so the confirmation
         that follows retires only what was actually sent and the class
         indication bits go on asking for the rest (D27).
+
+        It also bounds the work, not just the octets: the selection is cut to
+        what could possibly fit before anything is encoded, so a small response
+        over a large buffer costs the response rather than the buffer.
         """
         assert self._events is not None
         body = b""
@@ -949,6 +960,10 @@ class Session:
         #: asked about it twice, and sending an event once per header would tell
         #: it the same change happened more than once.
         emitted: set[int] = set()
+        #: How many of each class have gone into this response already. Only
+        #: needed because it is what the deduplication below will discard, so
+        #: the buffer has to be asked for that many more than could fit.
+        taken: dict[int, int] = {}
         sent: list[Event] = []
 
         # Header order rather than class order: a master that asked for class 3
@@ -957,13 +972,34 @@ class Session:
         for header in headers:
             if header.event_class is None:
                 continue
-            held = self._events.peek(EventClass(header.event_class))
+            # Asked for only what could possibly still fit, so that a small
+            # response over a large buffer costs the response rather than the
+            # buffer. Without this the whole class was copied, scanned for
+            # duplicates and encoded, and `_fitting` then discarded nearly all
+            # of it -- a four-octet response over fifty thousand events cost
+            # fifty thousand encodings. `capacity` has no upper bound, so that
+            # is work proportional to a number the operator chose, repeated on
+            # every read a peer sends.
+            #
+            # A strict upper bound rather than an estimate: nothing encodes
+            # smaller than `_MIN_EVENT_OCTETS` and a block costs a header on
+            # top, so nothing that would have fitted is left behind here.
+            #
+            # Plus what deduplication is about to remove. A class named twice
+            # has its earlier events at the front of the buffer -- every
+            # selection takes from the front -- so asking for that many more is
+            # what keeps the second header from coming back short.
+            room = max(0, (budget - len(body)) // _MIN_EVENT_OCTETS)
+            already = taken.get(header.event_class, 0)
+            held = self._events.peek(EventClass(header.event_class), limit=already + room)
+
             selected = [event for event in held if id(event) not in emitted]
             if header.count is not None:
                 # A count qualifier is "at most this many", which is how a
                 # master paces a buffer it does not want in one fragment.
                 selected = selected[: header.count]
             emitted.update(id(event) for event in selected)
+            taken[header.event_class] = already + len(selected)
 
             # The cursor walks `selected` alongside the blocks, because
             # `_encoded` partitions it into consecutive runs and a run cut short

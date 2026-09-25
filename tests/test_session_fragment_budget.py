@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from py1815 import session as session_module
 from py1815.application import CON_MASK, FunctionCode, IIN2Bit, IINBit, QualifierCode
 from py1815.events import EventBuffers, EventClass
 from py1815.objects import AnalogPoint, BinaryPoint
@@ -316,3 +317,98 @@ class TestStaticDataThatWillNotFitOnItsOwn:
 
         assert response[3] & IIN2Bit.PARAM_ERROR
         assert response[4:] == b""
+
+
+class TestTheBudgetBoundsTheWorkAndNotJustTheOctets:
+    """`capacity` has no upper bound, so anything proportional to the buffer is
+    proportional to a number the operator chose and a peer can make it pay on
+    every read. The selection is cut to what could possibly fit before anything
+    is encoded, and the buffer is asked for no more than that."""
+
+    BIG = 20_000
+
+    @classmethod
+    def _buffers(cls) -> EventBuffers:
+        buffers = EventBuffers(capacity=cls.BIG)
+        for index in range(cls.BIG):
+            buffers.record_analog(
+                index % 60_000,
+                AnalogPoint(float(index)),
+                event_class=EventClass.CLASS_1,
+                timestamp_ms=1,
+            )
+        return buffers
+
+    @staticmethod
+    def _counting(monkeypatch) -> list[int]:
+        calls = [0]
+        real = session_module.encode_analog_event
+
+        def counted(*args, **kwargs):
+            calls[0] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(session_module, "encode_analog_event", counted)
+        return calls
+
+    def test_a_response_with_no_room_encodes_nothing(self, monkeypatch):
+        calls = self._counting(monkeypatch)
+        session = _session(self._buffers(), max_response=4)
+
+        assert session._handle_fragment(_read())[4:] == b""
+        assert calls[0] == 0, "not one event of twenty thousand"
+
+    def test_a_full_response_encodes_about_what_it_sends(self, monkeypatch):
+        calls = self._counting(monkeypatch)
+        session = _session(self._buffers())
+
+        response = session._handle_fragment(_read())
+
+        assert len(response) == 2048
+        # The bound is what could fit at the narrowest an event encodes, so it
+        # runs ahead of what actually fits. Ahead by a factor, not by a buffer.
+        assert calls[0] < 400, f"{calls[0]} encodings for a 2,048-octet response"
+
+    def test_a_class_named_twice_still_fills_the_response(self):
+        """The bound asks the buffer for what deduplication is about to remove
+        as well as what fits. Without that the second header would come back
+        short, which a small buffer never shows."""
+        once = _session(self._buffers())._handle_fragment(_read())
+        twice = _session(self._buffers())._handle_fragment(
+            bytes([0xC0, FunctionCode.READ, 60, 2, 0x06, 60, 2, 0x06])
+        )
+
+        assert twice == once
+
+    def test_a_capped_header_does_not_shorten_the_one_after_it(self):
+        """Where forgetting the deduplication actually shows, which needs the
+        first header to take enough that the second's allowance no longer
+        covers both. The bound is struck at the narrowest an event encodes, so
+        a small first header leaves slack that hides the mistake."""
+        capped = bytes(
+            [0xC0, FunctionCode.READ, 60, 2, QualifierCode.UINT8_COUNT, 100, 60, 2, 0x06]
+        )
+
+        body = _session(self._buffers())._handle_fragment(capped)[4:]
+
+        assert body[3] == 100, "the counted header"
+        second = 4 + 100 * 12
+        assert body[second] == 32, "a second block follows it"
+        # 840 octets left, four of them the header, twelve an event: 69. Short
+        # of that means the buffer was asked for the room and not for the
+        # hundred deduplication was about to take out of it.
+        assert body[second + 3] == 69
+        assert body[second + 4] == 100, "carrying on where the first left off"
+
+
+class TestACeilingLargerThanAnyFragment:
+    """No upper bound is enforced on `max_response`, so the read path has to
+    survive one. The budget it derives reaches the buffer as a limit, and the
+    iterator underneath that has a ceiling Python integers do not."""
+
+    def test_a_read_is_still_answered(self):
+        session = _session(_filled(20), max_response=10**100)
+
+        response = session._handle_fragment(_read())
+
+        assert response[7] == 20, "the whole class, since everything fits"
