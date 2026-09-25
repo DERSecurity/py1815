@@ -636,6 +636,10 @@ class Session:
         if self._controls is None:
             logger.info("dnp3: dropping DIRECT_OPERATE_NR: monitor role")
             return
+        # Ends a select's exchange like any other request that is not the
+        # operate spending it. Silence is about what this function answers, not
+        # about what it leaves behind.
+        self._select = None
         try:
             controls = self._decode_controls(
                 parse_request(fragment), FunctionCode.DIRECT_OPERATE_NR
@@ -659,6 +663,21 @@ class Session:
     def _handle_control(self, request: Request, known: FunctionCode) -> bytes:
         sequence = request.control.sequence
         assert self._controls is not None  # refused above when absent
+
+        if known is not FunctionCode.OPERATE:
+            # The same rule the non-control path applies: anything the master
+            # asks for other than the operate that spends a select ends the
+            # exchange that select belongs to. Sited at the top because the
+            # refusals below return before the SELECT branch that would
+            # otherwise replace it -- a selection surviving a refused request
+            # can still authorise an operate that lands on its sequence, which
+            # the belt-and-braces above exists to make impossible rather than
+            # unlikely.
+            #
+            # OPERATE is excluded because spending a select is what it is for,
+            # and because D12 leaves one armed for a master that sent the wrong
+            # operate against the selection it was granted.
+            self._select = None
 
         try:
             controls = self._decode_controls(request, known)

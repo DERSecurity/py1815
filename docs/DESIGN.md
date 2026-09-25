@@ -102,6 +102,14 @@ reservation it was granted; a second select replaces the first; and `connection_
 it, because a reservation held for an operate on a socket that died must not be honoured over the
 connection that replaced it.
 
+Any request other than the operate that spends it also ends the exchange it belongs to -- a read,
+an unreadable control, a direct operate, or a select refused before it reached the provider. Two
+mechanisms enforce that rather than one: the operate has to arrive on the sequence after the
+select, *and* an intervening request clears the selection. Either alone leaves a gap. The sequence
+rule binds only a master that numbers its requests in order, and a master that reuses a number
+walks through it to an operate the outstation never granted; the clearing rule covers requests a
+master sends under any numbering at all.
+
 **D13 -- The control point map belongs to the caller, as with reads.** Under D6 this library does
 not know that index 7 is a power setpoint, and it does not scale. A control arrives at the
 provider as an index, a decoded object and the function that carried it.

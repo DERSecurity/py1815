@@ -627,3 +627,111 @@ class TestAControlWhoseEchoWillNotFit:
 
         assert response[3] & IIN2Bit.PARAM_ERROR
         assert commands.operated == []
+
+
+class TestARequestBetweenASelectAndItsOperate:
+    """A select is a reservation for the operate that follows it, and anything
+    else the master asks for ends the exchange it belongs to.
+
+    Two mechanisms enforce that, deliberately: the operate must arrive on the
+    sequence after the select, and a request in between clears the selection.
+    Either alone leaves a gap -- the sequence rule only binds a master that
+    numbers its requests in order, and a master that reuses a number walks
+    straight through it.
+    """
+
+    #: The select is armed at sequence 0, so an operate at sequence 1 is the
+    #: one request the sequence rule would let through. Every case below sends
+    #: the intervening request at a sequence that keeps that true, which is
+    #: what makes them test the clearing rather than the counting.
+    ARMED = 0
+    SPENDS = 1
+    ELSEWHERE = 5
+
+    def _armed(self, **kwargs):
+        session, commands = _session(**kwargs)
+        session._handle_fragment(
+            _request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON), sequence=self.ARMED)
+        )
+        assert session._select is not None, "the fixture arms a select"
+        return session, commands
+
+    def _operate(self, session):
+        return _statuses(
+            session._handle_fragment(
+                _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=self.SPENDS)
+            )
+        )
+
+    def test_a_refused_select_clears_it(self):
+        """The oversized echo returns before the branch that would replace the
+        selection, so without this the refused request leaves the old one
+        standing."""
+        session, commands = self._armed(max_response=4 + 4 + 12)
+        oversized = tuple((12, 1, index, LATCH_ON) for index in range(10))
+
+        session._handle_fragment(_request(FunctionCode.SELECT, *oversized, sequence=self.ELSEWHERE))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_an_unreadable_control_clears_it(self):
+        session, commands = self._armed()
+        truncated = bytes(
+            [
+                0xC0 | self.ELSEWHERE,
+                FunctionCode.SELECT,
+                12,
+                1,
+                QualifierCode.UINT8_COUNT_UINT8_INDEX,
+                1,
+                0,
+                0x03,
+            ]
+        )
+
+        session._handle_fragment(truncated)
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_direct_operate_clears_it(self):
+        session, commands = self._armed()
+
+        session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 4, LATCH_ON), sequence=self.ELSEWHERE)
+        )
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert len(commands.operated) == 1, "only the direct operate ran"
+
+    def test_an_unacknowledged_direct_operate_clears_it(self):
+        """It answers nothing, which is about what it sends rather than what it
+        leaves behind."""
+        session, commands = self._armed()
+
+        session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE_NR, (12, 1, 4, LATCH_ON), sequence=self.ELSEWHERE)
+        )
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert len(commands.operated) == 1
+
+    def test_a_read_clears_it(self):
+        """Already true before the control paths were brought into line. Here
+        so that the rule is tested as a rule rather than as four exceptions."""
+        session, commands = self._armed()
+
+        session._handle_fragment(
+            bytes([0xC0 | self.ELSEWHERE, FunctionCode.READ, 60, 1, QualifierCode.ALL_OBJECTS])
+        )
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_but_the_operate_that_follows_directly_still_spends_it(self):
+        """The rule must not eat the case it exists to protect."""
+        session, commands = self._armed()
+
+        assert self._operate(session) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
