@@ -378,3 +378,61 @@ class TestARunTooLongForOneBlock:
         assert body[second] == 32
         assert int.from_bytes(body[second + 3 : second + 5], "little") == 1
         assert len(body) == second + self.WIDE_HEADER + self.WIDE_ITEM, "two blocks, no more"
+
+
+class TestTheWideCountQualifier:
+    """`UINT16_COUNT` is accepted alongside the narrow one, and reaches the
+    buffers through a different parse -- a two-octet count rather than one.
+    Exercised end to end here because the narrow form answering correctly says
+    nothing about the wide form, and every earlier test used the narrow one.
+    """
+
+    #: Room for several hundred events, so that what comes back is decided by
+    #: the count the master asked for rather than by the response ceiling.
+    ROOM = 8192
+    HELD = 400
+
+    @classmethod
+    def _session(cls) -> Session:
+        return Session(Reader(), events=_filled(class_1=cls.HELD), max_response=cls.ROOM)
+
+    @staticmethod
+    def _read(count: int) -> bytes:
+        return bytes([0xC0, FunctionCode.READ, 60, 2, QualifierCode.UINT16_COUNT]) + count.to_bytes(
+            2, "little"
+        )
+
+    def test_a_count_above_an_octet_is_honoured(self):
+        """Three hundred, which a one-octet read of the same field would take
+        for forty-four."""
+        body = self._session()._handle_fragment(self._read(300))[4:]
+
+        assert body[2] == QualifierCode.UINT16_COUNT_UINT16_INDEX
+        assert int.from_bytes(body[3:5], "little") == 300
+
+    def test_a_count_whose_low_octet_is_zero(self):
+        """Two hundred and fifty-six. The sharper case: a one-octet read finds
+        zero here and answers with nothing at all."""
+        body = self._session()._handle_fragment(self._read(256))[4:]
+
+        assert int.from_bytes(body[3:5], "little") == 256
+
+    def test_a_count_of_zero_returns_nothing_and_is_not_an_error(self):
+        response = self._session()._handle_fragment(self._read(0))
+
+        assert response[4:] == b""
+        assert not response[3] & IIN2Bit.PARAM_ERROR
+
+    def test_a_count_larger_than_the_class_is_not_an_error(self):
+        body = self._session()._handle_fragment(self._read(self.HELD + 100))[4:]
+
+        assert int.from_bytes(body[3:5], "little") == self.HELD
+
+    def test_what_it_left_behind_stays_buffered(self):
+        buffers = _filled(class_1=self.HELD)
+        session = Session(Reader(), events=buffers, max_response=self.ROOM)
+
+        session._handle_fragment(self._read(300))
+        session._handle_fragment(bytes([0xC0, FunctionCode.CONFIRM]))
+
+        assert buffers.count(EventClass.CLASS_1) == self.HELD - 300
