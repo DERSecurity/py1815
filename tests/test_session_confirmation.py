@@ -525,3 +525,67 @@ class TestAnUnsolicitedConfirmation:
         session._handle_fragment(_confirm(0))
 
         assert _count(buffers) == 0
+
+
+class TestOverflowLostAfterTheResponseWentOut:
+    """A confirmation acknowledges the loss the confirmed response reported.
+    Anything lost since is a loss the master has not been told about, and
+    clearing the flag on its behalf would bury it."""
+
+    @staticmethod
+    def _read_one(sequence: int = 0) -> bytes:
+        """A class 1 read asking for a single event, so the buffer keeps some."""
+        return bytes([0xC0 | sequence, FunctionCode.READ, 60, 2, QualifierCode.UINT8_COUNT, 1])
+
+    def test_a_later_eviction_keeps_the_flag_set(self):
+        buffers = EventBuffers(capacity=2)
+        for index in range(3):
+            _record(buffers, index)  # index 0 evicted: the buffer has overflowed
+        session = _session(buffers)
+        assert session._handle_fragment(self._read_one())[3] & IIN2Bit.EVENT_BUFFER_OVERFLOW
+
+        _record(buffers, 3)  # evicts an event the master has never been sent
+        _record(buffers, 4)
+
+        session._handle_fragment(_confirm(0))
+
+        assert buffers.overflowed(), "the loss since that response is still unreported"
+
+    def test_and_the_next_response_says_so_again(self):
+        buffers = EventBuffers(capacity=2)
+        for index in range(3):
+            _record(buffers, index)
+        session = _session(buffers)
+        session._handle_fragment(self._read_one())
+        _record(buffers, 3)
+        session._handle_fragment(_confirm(0))
+
+        assert session._handle_fragment(_read(1, sequence=1))[3] & IIN2Bit.EVENT_BUFFER_OVERFLOW
+
+    def test_confirming_that_one_clears_it(self):
+        """Nothing was lost between the second response and its confirmation,
+        so this time the acknowledgement covers everything outstanding."""
+        buffers = EventBuffers(capacity=2)
+        for index in range(3):
+            _record(buffers, index)
+        session = _session(buffers)
+        session._handle_fragment(self._read_one())
+        _record(buffers, 3)
+        session._handle_fragment(_confirm(0))
+        session._handle_fragment(_read(1, sequence=1))
+
+        session._handle_fragment(_confirm(1))
+
+        assert not buffers.overflowed()
+
+    def test_nothing_lost_in_between_still_clears_it(self):
+        """The plain case, which the generation must not make stricter."""
+        buffers = EventBuffers(capacity=2)
+        for index in range(3):
+            _record(buffers, index)
+        session = _session(buffers)
+        session._handle_fragment(_read(1))
+
+        session._handle_fragment(_confirm(0))
+
+        assert not buffers.overflowed()

@@ -153,6 +153,11 @@ _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 #: A range is not among them. Class objects have no indices to range over -- a
 #: class is a reporting priority, not a set of points -- so a start and a stop
 #: name nothing, and honouring one would mean inventing a meaning for it.
+#: The most events one object header can count, and so the most one block can
+#: carry. Beyond it the encoder refuses, which is a bug report rather than a
+#: response, so a run longer than this is split into several blocks.
+_MAX_BLOCK_EVENTS = 0xFFFF
+
 _CLASS_QUALIFIERS = frozenset(
     {
         QualifierCode.ALL_OBJECTS,
@@ -253,10 +258,14 @@ class _Outstanding:
     request: bytes
     #: The response as it was sent, for a master that did not receive it.
     fragment: bytes
-    #: Whether this response was the one that carried the overflow bit. D23
-    #: clears the flag when such a response is confirmed rather than when it is
-    #: sent: an overflow reported into a void is one the master never learned.
-    reported_overflow: bool
+    #: The overflow generation this response reported, or ``None`` if it
+    #: carried no overflow bit. D23 clears the flag when such a response is
+    #: confirmed rather than when it is sent, because an overflow reported into
+    #: a void is one the master never learned about -- and the generation is
+    #: what keeps that from clearing a later loss too. A boolean here would
+    #: acknowledge every eviction up to the moment of the confirmation, not the
+    #: ones the confirmed response actually reported.
+    reported_overflow: int | None
 
 
 class ReadProvider(Protocol):
@@ -312,12 +321,18 @@ class Session:
                 refused as unsupported -- which is a truthful answer rather than
                 a degraded one.
             events: Where class 1, 2 and 3 events are read from. The caller
-                records into it as its device polls and the session only ever
-                reads: a deadband is measured against the last value reported
+                records into it as its device polls and the session never
+                records: a deadband is measured against the last value reported
                 rather than the previous reading, so it needs history between
                 requests, and under D6 this library does not know which index is
-                which point. Without one, a class 1 to 3 read reaches the
-                provider like any other.
+                which point.
+
+                The session does write, on one occasion. A confirmation retires
+                the events the response it acknowledges carried, and clears the
+                overflow the same response reported, so a caller reading the
+                buffer after handling a fragment may find both changed. Nothing
+                else here mutates it. Without a buffer, a class 1 to 3 read
+                reaches the provider like any other.
             select_timeout: How long a select stays armed for the operate that
                 follows it.
             clock: Monotonic source for that timeout. Injectable so expiry can
@@ -744,12 +759,17 @@ class Session:
             body=body,
         )
         if selected:
+            assert self._events is not None  # events were selected, so there are buffers
             self._outstanding = _Outstanding(
                 sequence=sequence,
                 request=fragment,
                 events=tuple(selected),
                 fragment=response,
-                reported_overflow=bool(iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW),
+                reported_overflow=(
+                    self._events.overflow_generation
+                    if iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+                    else None
+                ),
             )
         return response
 
@@ -764,6 +784,11 @@ class Session:
         Events evicted while the confirmation was in flight are simply gone:
         ``drop`` skips what it cannot find, so the survivors retire and the
         overflow bit already set is the whole of the report (D18).
+
+        Those evictions are also why the overflow is acknowledged by generation
+        rather than by flag. The master has confirmed the loss this response
+        reported; anything lost since is a loss it has not been told about, and
+        clearing the flag on its behalf would bury it.
         """
         if self._events is None:
             return
@@ -773,7 +798,9 @@ class Session:
             return
 
         self._events.drop(pending.events)
-        if pending.reported_overflow:
+        if pending.reported_overflow == self._events.overflow_generation:
+            # ``None`` never matches a generation, which is how a response that
+            # carried no overflow bit declines to clear one.
             self._events.clear_overflow()
         self._outstanding = None
 
@@ -831,7 +858,13 @@ class Session:
             emitted.update(id(event) for event in selected)
 
             for group, variation, items in _encoded(selected):
-                body += indexed_block(group, variation, items)
+                # Split at the largest count a header can carry. A buffer wide
+                # enough to hold more than this of one type in a row is legal --
+                # capacity has no upper bound -- and encoding it as one block
+                # would raise out of request handling rather than answer.
+                for start in range(0, len(items), _MAX_BLOCK_EVENTS):
+                    block = items[start : start + _MAX_BLOCK_EVENTS]
+                    body += indexed_block(group, variation, block)
             sent += selected
         return body, sent
 

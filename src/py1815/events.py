@@ -104,11 +104,14 @@ class _ClassBuffer:
     events: deque[Event] = field(default_factory=deque)
     overflowed: bool = False
 
-    def add(self, event: Event) -> None:
-        if len(self.events) >= self.capacity:
+    def add(self, event: Event) -> bool:
+        """Buffer an event, reporting whether one had to be dropped for it."""
+        evicted = len(self.events) >= self.capacity
+        if evicted:
             self.events.popleft()
             self.overflowed = True
         self.events.append(event)
+        return evicted
 
 
 class EventBuffers:
@@ -129,6 +132,7 @@ class EventBuffers:
         self._buffers = {cls: _ClassBuffer(capacity) for cls in EventClass}
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
+        self._overflow_generation = 0
 
     def count(self, event_class: EventClass) -> int:
         return len(self._buffers[event_class].events)
@@ -140,6 +144,19 @@ class EventBuffers:
     def overflowed(self) -> bool:
         """Whether any class has dropped an event since it was last reported."""
         return any(buffer.overflowed for buffer in self._buffers.values())
+
+    @property
+    def overflow_generation(self) -> int:
+        """How many events have been lost, counted from the first.
+
+        Monotonic, and deliberately not reset by ``clear_overflow``. A
+        confirmation acknowledges the loss a particular response reported, and
+        the flag alone cannot say whether more has been lost since that response
+        was built -- it reads the same after one eviction and after a hundred.
+        Clearing on the flag would retire a report of data loss the master has
+        never been sent.
+        """
+        return self._overflow_generation
 
     def classes_with_events(self) -> set[EventClass]:
         """Which classes have something to report, for the indication bits."""
@@ -179,6 +196,11 @@ class EventBuffers:
         for buffer in self._buffers.values():
             buffer.overflowed = False
 
+    def _buffer(self, event_class: EventClass, event: Event) -> None:
+        """Hold an event, counting it against the generation if one was lost."""
+        if self._buffers[event_class].add(event):
+            self._overflow_generation += 1
+
     @staticmethod
     def _checked_index(index: int) -> int:
         """An index an event block can actually carry.
@@ -213,7 +235,7 @@ class EventBuffers:
 
         event = AnalogEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
         self._last_analog[index] = point
-        self._buffers[event_class].add(event)
+        self._buffer(event_class, event)
         return event
 
     def record_binary(
@@ -236,7 +258,7 @@ class EventBuffers:
 
         event = BinaryEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
         self._last_binary[index] = point
-        self._buffers[event_class].add(event)
+        self._buffer(event_class, event)
         return event
 
     @staticmethod
