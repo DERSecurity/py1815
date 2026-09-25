@@ -244,6 +244,13 @@ class _Outstanding:
     #: the objects keeps them alive, so the ids stay theirs for as long as this
     #: selection is outstanding, whether or not the buffer still has them.
     events: tuple[Event, ...]
+    #: The request this answered, octet for octet. A repeat is recognised by
+    #: what was asked and not by the sequence alone: a master that reuses a
+    #: sequence for a different request has not retransmitted anything, and
+    #: replaying an event response to, say, an operate would answer a question
+    #: nobody asked -- and leave its events acknowledged by the confirmation
+    #: that followed.
+    request: bytes
     #: The response as it was sent, for a master that did not receive it.
     fragment: bytes
     #: Whether this response was the one that carried the overflow bit. D23
@@ -501,38 +508,50 @@ class Session:
         known = request.known_function
         sequence = request.control.sequence
 
+        if known is FunctionCode.CONFIRM:
+            # Answered with silence rather than a fragment: a confirmation is
+            # not a request, and replying to one would be traffic the master
+            # never asked for. Still checked ahead of the retransmission branch
+            # below, which the octet comparison there would now settle on its
+            # own -- the order is what keeps it settled if that comparison is
+            # ever loosened back to the sequence number.
+            self._confirm(sequence)
+            return b""
+
+        if self._outstanding is not None and self._outstanding.request == fragment:
+            # A master that did not receive a response repeats the request,
+            # octet for octet. It is replayed rather than rebuilt, so that the
+            # master ends up holding the fragment whose events its confirmation
+            # will retire -- rebuilding would answer with whatever the buffer
+            # holds now, and the confirmation that followed would name a set of
+            # events that was never sent under it (D25).
+            logger.info("dnp3: replaying the response for sequence %d", sequence)
+            return self._outstanding.fragment
+
+        # Every other request supersedes what was outstanding (D19): the master
+        # has moved on, and the events go back to being unreported rather than
+        # waiting for a confirmation that would now be two requests late.
+        #
+        # Sited above every remaining return so that it covers the refusals as
+        # well as the work. A refusal is a response like any other, and one that
+        # left the selection standing would let a confirmation for the response
+        # before it still retire those events.
+        #
+        # Two paths are deliberately outside it. The functions returning above
+        # send nothing at all, so there is no response for a confirmation to be
+        # late against. And a fragment that did not parse is not evidence the
+        # master moved on -- it is evidence something arrived garbled, which is
+        # when a retransmission of the held response is most likely to be what
+        # comes next, and discarding the cache on noise would throw it away
+        # exactly then.
+        self._outstanding = None
+
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             return null_response(
                 sequence=sequence,
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
             )
-
-        if known is FunctionCode.CONFIRM:
-            # Answered with silence rather than a fragment: a confirmation is
-            # not a request, and replying to one would be traffic the master
-            # never asked for. Checked before the retransmission branch below,
-            # since a confirmation names the sequence of the response it
-            # confirms and would otherwise read as a repeat of that request.
-            self._confirm(sequence)
-            return b""
-
-        if self._outstanding is not None and self._outstanding.sequence == sequence:
-            # A master that did not receive a response repeats the request
-            # under the same sequence number. It is replayed rather than
-            # rebuilt, so that the master ends up holding the fragment whose
-            # events its confirmation will retire -- rebuilding would answer
-            # with whatever the buffer holds now, and the confirmation that
-            # followed would name a set of events that was never sent under it.
-            logger.info("dnp3: replaying the response for sequence %d", sequence)
-            return self._outstanding.fragment
-
-        # Any other request supersedes what was outstanding (D19): the master
-        # has moved on, and the events go back to being unreported rather than
-        # waiting for a confirmation that would now be two requests late. The
-        # functions returning above are outside this by construction, and
-        # rightly -- they produce no response, so there is nothing to supersede.
-        self._outstanding = None
 
         if known not in _SUPPORTED_FUNCTIONS:
             return null_response(
@@ -552,7 +571,7 @@ class Session:
 
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
-        return self._handle_read(request)
+        return self._handle_read(request, fragment)
 
     def _operate_unacknowledged(self, fragment: bytes) -> None:
         """Execute a DIRECT_OPERATE_NR and tell nobody, including on failure."""
@@ -666,7 +685,7 @@ class Session:
             raise RequestError("a control request carries no controls")
         return controls
 
-    def _handle_read(self, request: Request) -> bytes:
+    def _handle_read(self, request: Request, fragment: bytes) -> bytes:
         sequence = request.control.sequence
         event_headers, static_headers = self._split_read(request.headers)
 
@@ -714,6 +733,7 @@ class Session:
         if selected:
             self._outstanding = _Outstanding(
                 sequence=sequence,
+                request=fragment,
                 events=tuple(selected),
                 fragment=response,
                 reported_overflow=bool(iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW),

@@ -82,8 +82,24 @@ below have to cover that case rather than assume a selection outlives the wait.
 **D19 -- One outstanding response at a time, and a new request replaces it.**
 Under **D7** there is one association, so there is one unconfirmed response to
 track. A read arriving while one is outstanding supersedes it: the master has
-evidently moved on, and holding a stale selection would answer the new request
-with the old events.
+evidently moved on, and a confirmation arriving afterwards would name a response
+that is no longer the current one.
+
+A refusal counts. An unsupported function or a control sent to a monitor-role
+outstation is a response like any other, and leaving the selection standing
+across one would let a confirmation for the response *before* it still retire
+those events. The first draft of this decision was written as though only the
+requests that do work superseded, and the implementation followed it -- which
+put two refusal branches on the wrong side of the line.
+
+Two things are outside it, and stay outside it:
+
+- The functions that ask for no response. They send nothing, so there is no
+  response for a later confirmation to be late against.
+- A fragment that did not parse. That is not evidence the master moved on; it
+  is evidence something arrived damaged, which is exactly when a retransmission
+  of the held response is the likely next thing to arrive. Discarding the cache
+  on noise would throw it away at the one moment it is most wanted.
 
 **D20 -- Class 0 is static and classes 1 to 3 are events, answered in one
 response.** The integrity poll a real master sends names all four. Static
@@ -121,10 +137,17 @@ records the event, and under **D6** this library holds no point map for a master
 to reassign. Accepting the request would mean either ignoring it or inventing
 the map the design exists to keep out.
 
-**D25 -- A repeated request is replayed, not rebuilt.** A master that did not
-receive a response repeats the request under the same sequence number. The
-outstation holds the fragment it sent beside the events it selected, and sends
-that fragment back unchanged.
+**D25 -- A repeated request is replayed, not rebuilt, and a repeat is one that
+matches octet for octet.** A master that did not receive a response repeats the
+request. The outstation holds the request beside the response it produced and
+the events it selected, and when the same octets arrive again it sends that
+response back unchanged.
+
+The comparison is against the request and not against the sequence number alone.
+A master that reuses a sequence for a *different* question has retransmitted
+nothing, and answering it from the cache would reply to the question before it --
+then have those events retired by the confirmation that followed, acknowledged
+against a response the master never asked for.
 
 The two shapes differ only when an event arrives in between, and that is the
 case that decides it. The confirmation which follows retires the events the

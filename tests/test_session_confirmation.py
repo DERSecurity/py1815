@@ -396,3 +396,97 @@ class TestASelectionEvictedWhileTheConfirmWasInFlight:
 
         assert session._handle_fragment(_confirm(0)) == b""
         assert [event.index for event in buffers.peek(EventClass.CLASS_1)] == [2, 3]
+
+
+class TestARefusalSupersedesLikeAnyOtherResponse:
+    """A refusal is a response. One that left the selection standing would let
+    a confirmation for the response before it still retire those events, which
+    is D19 holding for the work and not for the answers that decline it."""
+
+    def test_a_control_refused_for_the_monitor_role(self):
+        """This session has no control provider, so a SELECT comes back
+        unsupported -- from a branch that used to return before the
+        supersession point."""
+        buffers = _filled(class_1=1)
+        session = _session(buffers)
+        session._handle_fragment(_read(1, sequence=0))
+
+        refusal = session._handle_fragment(bytes([0xC1, FunctionCode.SELECT]))
+        assert refusal[3] & IIN2Bit.FUNC_NOT_SUPPORTED, "the branch under test"
+
+        session._handle_fragment(_confirm(0))
+
+        assert _count(buffers) == 1
+
+    def test_a_function_this_outstation_does_not_implement(self):
+        buffers = _filled(class_1=1)
+        session = _session(buffers)
+        session._handle_fragment(_read(1, sequence=0))
+
+        refusal = session._handle_fragment(bytes([0xC1, FunctionCode.COLD_RESTART]))
+        assert refusal[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+
+        session._handle_fragment(_confirm(0))
+
+        assert _count(buffers) == 1
+
+
+class TestAFragmentThatDidNotParse:
+    """Deliberately outside the supersession above. A garbled fragment is not
+    evidence the master moved on -- it is evidence something arrived damaged,
+    which is when a retransmission of the held response is most likely to be
+    what comes next."""
+
+    #: A READ whose object header stops after the group octet.
+    TRUNCATED = bytes([0xC1, FunctionCode.READ, 60])
+
+    def test_it_is_answered_with_a_parameter_error(self):
+        session = _session(_filled(class_1=1))
+
+        assert session._handle_fragment(self.TRUNCATED)[3] & IIN2Bit.PARAM_ERROR
+
+    def test_the_held_response_survives_it(self):
+        buffers = _filled(class_1=1)
+        session = _session(buffers)
+        first = session._handle_fragment(_read(1, sequence=0))
+
+        session._handle_fragment(self.TRUNCATED)
+
+        assert session._handle_fragment(_read(1, sequence=0)) == first, "still replayed"
+
+    def test_and_so_does_the_confirmation_it_is_waiting_for(self):
+        buffers = _filled(class_1=1)
+        session = _session(buffers)
+        session._handle_fragment(_read(1, sequence=0))
+
+        session._handle_fragment(self.TRUNCATED)
+        session._handle_fragment(_confirm(0))
+
+        assert _count(buffers) == 0
+
+
+class TestADifferentRequestUnderTheSameSequence:
+    """Not a retransmission. A master that reuses a sequence for a different
+    question has asked a different question, and a replay would answer the one
+    before it -- then have its events retired by the confirmation that
+    followed, acknowledged against a response that was never sent."""
+
+    def test_it_is_not_replayed(self):
+        buffers = _filled(class_1=1)
+        session = _session(buffers)
+        events = session._handle_fragment(_read(1, sequence=0))
+
+        static = session._handle_fragment(_read(0, sequence=0))
+
+        assert static != events
+        assert static[4:] == Reader.body, "answered as the static read it is"
+
+    def test_and_it_supersedes(self):
+        buffers = _filled(class_1=1)
+        session = _session(buffers)
+        session._handle_fragment(_read(1, sequence=0))
+        session._handle_fragment(_read(0, sequence=0))
+
+        session._handle_fragment(_confirm(0))
+
+        assert _count(buffers) == 1
