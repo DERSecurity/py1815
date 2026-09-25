@@ -132,6 +132,14 @@ response carrying the bit is confirmed -- not when it is sent. An overflow
 reported in a response the master never received is an overflow the master never
 learned about.
 
+A response reporting one therefore sets `CON` whether or not any event travels
+with it. The bit is the thing being acknowledged, so a response carrying it has
+something to confirm on its own account. Without that, a ceiling under which no
+event fits -- which **D27** explicitly allows -- is a configuration where no
+response ever asks for a confirmation, and the flag latches: the master is told
+for ever about a loss it was told about once. The same holds for a master that
+polls only class 0.
+
 **D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller
 records the event, and under **D6** this library holds no point map for a master
 to reassign. Accepting the request would mean either ignoring it or inventing

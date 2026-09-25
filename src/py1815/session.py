@@ -858,26 +858,30 @@ class Session:
             )
 
         iin = self._indications()
+        overflowed = (
+            self._events.overflow_generation
+            if self._events is not None and iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+            else None
+        )
+        # ``CON`` where there is something to confirm, which is the events and
+        # also the overflow. A report of lost data is retired by the master
+        # acknowledging it (D23), so a response that carries the bit and no
+        # events still has to ask -- otherwise the one configuration where no
+        # event ever fits is the one where the flag can never clear, and the
+        # master is told for ever about a loss it was told about once.
+        confirmable = bool(selected) or overflowed is not None
         response = build_response(
-            # ``CON`` only where there is something to confirm. A response
-            # carrying no events asks for nothing back, and a master answering
-            # one would be acknowledging an empty set.
-            control=AppControl(fir=True, fin=True, con=bool(selected), sequence=sequence),
+            control=AppControl(fir=True, fin=True, con=confirmable, sequence=sequence),
             iin=iin,
             body=body,
         )
-        if selected:
-            assert self._events is not None  # events were selected, so there are buffers
+        if confirmable:
             self._outstanding = _Outstanding(
                 sequence=sequence,
                 request=fragment,
                 events=tuple(selected),
                 fragment=response,
-                reported_overflow=(
-                    self._events.overflow_generation
-                    if iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
-                    else None
-                ),
+                reported_overflow=overflowed,
             )
         return response
 

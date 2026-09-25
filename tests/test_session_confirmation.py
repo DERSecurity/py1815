@@ -340,6 +340,49 @@ class TestOverflowIsClearedOnlyOnceAcknowledged:
 
         assert buffers.overflowed()
 
+    def test_a_response_carrying_the_bit_and_no_events_still_asks(self):
+        """Otherwise the report cannot be retired. An overflow is cleared by a
+        master acknowledging it, so a response that reports one has something
+        to confirm whether or not any event fitted beside it."""
+        buffers = self._overflowed()
+        session = Session(Reader(), events=buffers, max_response=4)
+
+        response = session._handle_fragment(_read(1))
+
+        assert response[4:] == b"", "no room for a single event"
+        assert response[3] & IIN2Bit.EVENT_BUFFER_OVERFLOW
+        assert response[0] & CON_MASK
+
+    def test_and_confirming_it_clears_the_flag(self):
+        """The case that latched: a ceiling no event can fit under is the one
+        configuration where no response would ever have carried CON, so the
+        master was told for ever about a loss it was told about once."""
+        buffers = self._overflowed()
+        session = Session(Reader(), events=buffers, max_response=4)
+        session._handle_fragment(_read(1))
+
+        session._handle_fragment(_confirm(0))
+
+        assert not buffers.overflowed()
+
+    def test_a_class_zero_read_reporting_it_asks_too(self):
+        """Nothing about this depends on the ceiling. A master polling static
+        data is told about the overflow and can retire it."""
+        buffers = self._overflowed()
+        session = _session(buffers)
+
+        response = session._handle_fragment(_read(0))
+
+        assert response[0] & CON_MASK
+        session._handle_fragment(_confirm(0))
+        assert not buffers.overflowed()
+
+    def test_but_a_response_with_neither_does_not_ask(self):
+        """The rule is what there is to confirm, not a blanket CON."""
+        session = _session(_filled(class_1=1))
+
+        assert not session._handle_fragment(_read(0))[0] & CON_MASK
+
     def test_a_response_that_did_not_report_it_does_not_clear_it(self):
         """The overflow happened after this response went out, so its
         confirmation says nothing about whether the master has seen the bit."""
