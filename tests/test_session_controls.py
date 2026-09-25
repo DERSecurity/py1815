@@ -729,6 +729,58 @@ class TestARequestBetweenASelectAndItsOperate:
         assert self._operate(session) == [CommandStatus.NO_SELECT]
         assert commands.operated == []
 
+    def test_a_function_this_outstation_does_not_implement_clears_it(self):
+        """Refused, but still a request the master chose to send."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.ELSEWHERE, FunctionCode.COLD_RESTART]))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_function_that_asks_for_no_response_clears_it(self):
+        """Answered with silence, which says nothing about whether the master
+        has moved on. It has: it sent something else."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.ELSEWHERE, FunctionCode.IMMED_FREEZE_NR]))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_a_fragment_too_damaged_to_read_clears_it(self):
+        """The opposite of what damage does to a held event response, and on
+        purpose. Replaying a response costs nothing if the guess is wrong;
+        holding a control reservation open through noise can authorise an
+        operate the master never selected."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.ELSEWHERE, FunctionCode.READ, 60]))
+
+        assert self._operate(session) == [CommandStatus.NO_SELECT]
+        assert commands.operated == []
+
+    def test_but_a_damaged_operate_keeps_it(self):
+        """The one shape of noise worth keeping a reservation for: a garbled
+        retransmission of the very operate the select was granted to."""
+        session, _ = self._armed()
+
+        session._handle_fragment(bytes([0xC0 | self.SPENDS, FunctionCode.OPERATE, 12]))
+
+        assert self._operate(session) == [CommandStatus.SUCCESS]
+
+    def test_a_confirmation_in_between_keeps_it(self):
+        """A confirmation is not a request. It is the second half of an
+        exchange this outstation started and carries the sequence of the
+        response it acknowledges, so a master may confirm an earlier read
+        between its select and its operate without forfeiting the selection."""
+        session, commands = self._armed()
+
+        session._handle_fragment(bytes([0xC0, FunctionCode.CONFIRM]))
+
+        assert self._operate(session) == [CommandStatus.SUCCESS]
+        assert len(commands.operated) == 1
+
     def test_but_the_operate_that_follows_directly_still_spends_it(self):
         """The rule must not eat the case it exists to protect."""
         session, commands = self._armed()

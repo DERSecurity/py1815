@@ -102,13 +102,26 @@ reservation it was granted; a second select replaces the first; and `connection_
 it, because a reservation held for an operate on a socket that died must not be honoured over the
 connection that replaced it.
 
-Any request other than the operate that spends it also ends the exchange it belongs to -- a read,
-an unreadable control, a direct operate, or a select refused before it reached the provider. Two
+Any fragment other than the operate that spends it also ends the exchange it belongs to. Two
 mechanisms enforce that rather than one: the operate has to arrive on the sequence after the
-select, *and* an intervening request clears the selection. Either alone leaves a gap. The sequence
-rule binds only a master that numbers its requests in order, and a master that reuses a number
-walks through it to an operate the outstation never granted; the clearing rule covers requests a
-master sends under any numbering at all.
+select, *and* an intervening fragment clears the selection. Either alone leaves a gap. The
+sequence rule binds only a master that numbers its requests in order, and a master that reuses a
+number walks through it to an operate the outstation never granted; the clearing rule covers
+whatever a master sends under any numbering at all.
+
+The clearing is decided on the function code octet, above every other branch, because siting it
+lower is what let the refusals, the functions that answer nothing, and the unreadable fragments
+hold a reservation open across traffic the master had plainly moved on from. Deciding it there
+also means a fragment too damaged to parse clears the selection -- the opposite of what damage
+does to a held event response, and deliberately. Replaying a response costs nothing if the guess
+is wrong, while holding a control reservation open through noise can authorise an operate the
+master never selected.
+
+Two fragments are excluded. An OPERATE, because spending a select is what it is for, and because
+a damaged one is the corrupted retransmission a reservation is worth keeping for. And a CONFIRM,
+because it is not a request: it is the second half of an exchange this outstation started, and it
+carries the sequence of the response it acknowledges rather than a new one, so a master may
+legitimately confirm an earlier read between its select and its operate.
 
 **D13 -- The control point map belongs to the caller, as with reads.** Under D6 this library does
 not know that index 7 is a power setpoint, and it does not scale. A control arrives at the

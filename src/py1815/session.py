@@ -120,6 +120,14 @@ _NO_RESPONSE_FUNCTIONS = frozenset(
     }
 )
 
+#: The two fragments that do not end an armed select's exchange. An OPERATE
+#: because spending a select is what it is for. A CONFIRM because it is not a
+#: request at all -- it is the second half of an exchange this outstation
+#: started, and it carries the sequence of the response it acknowledges rather
+#: than a new one, so a master may legitimately send SELECT, then a confirmation
+#: for an earlier response, then the OPERATE.
+_KEEPS_A_SELECT = frozenset({FunctionCode.OPERATE, FunctionCode.CONFIRM})
+
 #: Functions this outstation answers. Everything else earns IIN2.1.
 _SUPPORTED_FUNCTIONS = frozenset(
     {FunctionCode.CONFIRM, FunctionCode.READ, FunctionCode.WRITE} | _CONTROL_FUNCTIONS
@@ -514,6 +522,23 @@ class Session:
         return IIN(first=first, second=second)
 
     def _handle_fragment(self, fragment: bytes) -> bytes:
+        if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
+            # Anything the master sends other than the operate that spends a
+            # select ends the exchange that select belongs to (D12). Sited here,
+            # above every early return, because siting it lower is what left the
+            # refusals and the no-response functions holding a reservation open
+            # across traffic the master had plainly moved on from.
+            #
+            # Decided on the function code octet rather than after the parse, so
+            # that a fragment too damaged to read clears it too. That is the
+            # opposite of what a damaged fragment does to the outstanding event
+            # response, and deliberately: replaying a response costs nothing if
+            # the guess is wrong, while holding a control reservation open
+            # through noise can authorise an operate the master never selected.
+            # An unreadable fragment claiming to be an OPERATE keeps it, which
+            # is the corrupted-retransmission case worth keeping it for.
+            self._select = None
+
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
             # Table 4-2: "same as function code 5 but outstation shall not send
             # a response". Same as function code 5 -- so it operates, and says
@@ -620,13 +645,6 @@ class Session:
         if known in _CONTROL_FUNCTIONS:
             return self._handle_control(request, known)
 
-        # Anything else the master asks for ends the exchange a select belongs
-        # to. Keeping it would let a selection sit through arbitrary traffic and
-        # still authorise an operate afterwards, which is the stale-selection
-        # case the sequence check above also catches -- both, because either
-        # alone leaves a gap the other covers.
-        self._select = None
-
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
         return self._handle_read(request, fragment)
@@ -636,10 +654,6 @@ class Session:
         if self._controls is None:
             logger.info("dnp3: dropping DIRECT_OPERATE_NR: monitor role")
             return
-        # Ends a select's exchange like any other request that is not the
-        # operate spending it. Silence is about what this function answers, not
-        # about what it leaves behind.
-        self._select = None
         try:
             controls = self._decode_controls(
                 parse_request(fragment), FunctionCode.DIRECT_OPERATE_NR
@@ -663,21 +677,6 @@ class Session:
     def _handle_control(self, request: Request, known: FunctionCode) -> bytes:
         sequence = request.control.sequence
         assert self._controls is not None  # refused above when absent
-
-        if known is not FunctionCode.OPERATE:
-            # The same rule the non-control path applies: anything the master
-            # asks for other than the operate that spends a select ends the
-            # exchange that select belongs to. Sited at the top because the
-            # refusals below return before the SELECT branch that would
-            # otherwise replace it -- a selection surviving a refused request
-            # can still authorise an operate that lands on its sequence, which
-            # the belt-and-braces above exists to make impossible rather than
-            # unlikely.
-            #
-            # OPERATE is excluded because spending a select is what it is for,
-            # and because D12 leaves one armed for a master that sent the wrong
-            # operate against the selection it was granted.
-            self._select = None
 
         try:
             controls = self._decode_controls(request, known)
