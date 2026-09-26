@@ -216,6 +216,27 @@ CASES: list[Case] = [
         note="refused per object rather than per fragment: the IIN stays clear",
     ),
     _silent(FunctionCode.DIRECT_OPERATE_NR, "control: direct operate, no acknowledgment"),
+    # -- the event classes ----------------------------------------------------
+    *(
+        Case(
+            name=f"read: class {number}",
+            payload=_app(FunctionCode.READ, bytes([60, number + 1, 0x06])),
+            expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+            note="answered from the buffers rather than from the point map",
+        )
+        for number in (1, 2, 3)
+    ),
+    Case(
+        name="read: integrity poll",
+        # Classes 1, 2, 3 and then 0, which is what a real master sends on
+        # startup and the one request that exercises both sources at once.
+        payload=_app(
+            FunctionCode.READ,
+            bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06, 60, 1, 0x06]),
+        ),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+        note="events and static data in one response, the events in front",
+    ),
     # -- the one unsolicited request this outstation can honestly agree to ----
     Case(
         name="unsolicited: disable",

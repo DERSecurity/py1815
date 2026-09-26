@@ -21,7 +21,8 @@ import pytest
 
 from py1815 import link
 from py1815.application import FunctionCode, IINBit, QualifierCode
-from py1815.objects import AnalogQuality
+from py1815.events import EventClass
+from py1815.objects import AnalogQuality, AnalogVariation, analog_range
 from py1815.session import Session
 
 _FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "interop" / "outstation.py"
@@ -290,3 +291,89 @@ class TestAMixedRead:
         body = session._handle_fragment(request)[4:]
 
         assert bytes([30, 1]) not in body
+
+
+def _class_read(outstation, *variations: int, sequence: int = 0) -> bytes:
+    """The application fragment a class read gets back from the seeded fixture."""
+    controls = outstation.FixedControls()
+    session = Session(
+        outstation.FixedProvider(controls),
+        control_provider=controls,
+        events=outstation.seeded_events(),
+        outstation_address=OUTSTATION,
+        master_address=MASTER,
+    )
+    body = b"".join(bytes([60, variation, QualifierCode.ALL_OBJECTS]) for variation in variations)
+    control = link.control_byte(
+        from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+    )
+    request = link.build(
+        control,
+        destination=OUTSTATION,
+        source=MASTER,
+        payload=bytes([0xC0]) + bytes([0xC0 | sequence, FunctionCode.READ]) + body,
+    )
+    frames = link.FrameReader().feed(session.receive(request))
+    return frames[0].payload[1:]
+
+
+class TestTheFixtureHoldsEvents:
+    """What the interoperability peers read that they cannot read as static
+    data. Both masters scan the classes on startup, and until the fixture held
+    events those scans came back empty -- so the class path was the one part of
+    this library no peer had ever exercised."""
+
+    def test_a_class_one_read_returns_objects(self, outstation):
+        body = _class_read(outstation, 2)[4:]
+
+        assert body != b"", "not an empty answer"
+        assert body[0] == 32, "an analog event block leads"
+
+    def test_it_carries_a_value_no_static_read_returns(self, outstation):
+        """The assertion the fixture change is for. A master reporting 101
+        cannot have got it from the point map."""
+        body = _class_read(outstation, 2)[4:]
+
+        seeded = [int(value) for _, value in outstation.EVENTS[EventClass.CLASS_1]]
+        assert not set(seeded) & set(outstation.EXPECTED), "distinct from the static points"
+        # Four octets of object header, then an index octet, a flag octet,
+        # and the little-endian int32 of group 32 variation 3.
+        assert int.from_bytes(body[6:10], "little") == seeded[0]
+
+    def test_the_binary_event_follows_the_analog_ones(self, outstation):
+        """In the order the points changed rather than gathered by type. A peer
+        that reorders them tells its operator a different story about when
+        things happened."""
+        body = _class_read(outstation, 2)[4:]
+
+        analog = 4 + 2 * (1 + 11)
+        assert body[analog] == 2, "the binary event group"
+
+    def test_each_class_answers_with_its_own(self, outstation):
+        for variation, event_class in (
+            (3, EventClass.CLASS_2),
+            (4, EventClass.CLASS_3),
+        ):
+            body = _class_read(outstation, variation)[4:]
+
+            assert body[3] == len(outstation.EVENTS[event_class])
+            value = int.from_bytes(body[6:10], "little")
+            assert value == int(outstation.EVENTS[event_class][0][1])
+
+    def test_an_integrity_poll_carries_events_and_then_the_point_map(self, outstation):
+        """Classes 1, 2, 3 and 0, which is what both peers send on startup."""
+        body = _class_read(outstation, 2, 3, 4, 1)[4:]
+
+        assert body[0] == 32, "the events lead"
+        assert body.endswith(
+            analog_range(0, outstation.POINTS, variation=AnalogVariation.INT32_WITH_FLAG)
+        ), "and the point map follows them"
+
+    def test_the_classes_are_announced_in_the_indications(self, outstation):
+        """How a master knows to ask. Derived from the buffers, so they cannot
+        disagree with what a class read returns."""
+        response = _class_read(outstation, 1)
+
+        assert response[2] & IINBit.CLASS_1_EVENTS
+        assert response[2] & IINBit.CLASS_2_EVENTS
+        assert response[2] & IINBit.CLASS_3_EVENTS
