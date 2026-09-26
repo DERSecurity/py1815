@@ -40,6 +40,41 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
   32, the six-octet timestamp, and index-prefixed event blocks. Events are not a
   range -- they are whichever points changed, in the order they changed -- so
   each carries its own index.
+- **The event path: a master can now read what the buffers hold.** A read naming
+  classes 1, 2 or 3 is answered from them, class 0 still reaches the read
+  provider, and an integrity poll naming both gets one response with the events
+  in front -- a master applies a fragment in order, so a static value written
+  after the events that led to it leaves the point where it should end up.
+
+  Events are not consumed by being read. They leave the buffer when the master
+  confirms the response carrying them, so a response that never arrives has not
+  taken the only copy with it, and a master that reads twice without confirming
+  sees the same events twice. A confirmation retires exactly the events its
+  sequence number covers; one naming any other sequence retires nothing. A
+  request repeated under the same sequence is replayed octet for octet rather
+  than rebuilt, so the confirmation that follows acknowledges what was actually
+  sent.
+
+  The class and overflow indication bits are derived from the buffers on every
+  response rather than tracked beside them, so a bit cannot drift from what is
+  waiting. Overflow is retired when the master acknowledges the response
+  reporting it -- including a response that carries the bit and no events, which
+  would otherwise be a report nothing could ever clear.
+- **A ceiling on the size of a response, and on the work of building one.** A
+  master sizes its receive buffer to the fragment size it advertises, so a
+  response past it is discarded rather than merely long. Events are fitted to
+  what is left after the provider's own objects, which are never trimmed because
+  this library cannot tell where one of them ends; what does not fit stays
+  buffered and the indication bits go on asking for it. A control request whose
+  echo would not fit is refused *before* anything is dispatched, since a control
+  that executes and cannot report is worse than one that never ran.
+
+  The ceiling bounds the work too. A small response over a large buffer costs
+  the response rather than the buffer.
+- **`DISABLE_UNSOLICITED` is answered rather than refused.** An outstation that
+  sends no unsolicited responses is already in the state the request asks for,
+  so refusing it answered a question the master did not ask. `ENABLE_UNSOLICITED`
+  is still refused, which is the honest answer while nothing is sent.
 - **Controls: this outstation commands as well as reports.** `SELECT`,
   `OPERATE`, `DIRECT_OPERATE` and `DIRECT_OPERATE NO ACK`, over control relay
   output blocks and analog output setpoints, with the output status points a

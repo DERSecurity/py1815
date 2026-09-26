@@ -175,6 +175,185 @@ leaves a gap -- a sequence can line up across an intervening request, and a mast
 sequences without sending one.
 
 
+**D17 -- The caller owns the buffers and records into them; the session never does.** The caller
+constructs `EventBuffers`, records into it as its device polls, and hands it to `Session`, which
+calls `peek`, `overflowed`, and -- on a confirmation -- `drop` and `clear_overflow`.
+
+The session's only writes are those two, and both are a master acknowledging what it was sent. An
+earlier wording of this decision said the session only reads, which stopped being true when
+confirmation landed and survived in a docstring until review caught it.
+
+Recording cannot happen inside a request. A deadband is measured against the last value *reported*,
+not the previous reading, so it needs history between requests rather than during one -- and under
+**D6** this library does not know which index is which point or when it moved. An `EventProvider`
+asked for events when a read arrives would have to own a buffer anyway, so the indirection would buy
+nothing and hide where the state lives.
+
+**D18 -- A confirmation is what the outstation retires an event *for*. The buffer bound is the other
+way one leaves.** A response carrying events sets `CON`, and the events stay until the matching
+`CONFIRM` arrives. `peek` selects, `drop` retires, and the gap between them is the window a master
+might fail to answer in.
+
+This is why `EventBuffers.drop` matches on identity rather than equality, and why it is load-bearing
+that the events are still buffered while the confirm is outstanding.
+
+A master that never confirms gets the same events again on its next read, until the buffer fills.
+`_ClassBuffer.add` evicts the oldest at capacity and raises the overflow flag, so continued
+recording can remove an unconfirmed event before the master ever sees it a second time. That is not
+a hole in this decision, it is the decision the buffer already made: unbounded retention for a
+master that has gone quiet is how an outstation runs out of memory, and the overflow bit exists to
+say that data was lost rather than to pretend it was not.
+
+The two interact where a pending selection is evicted. `drop` skips events it cannot find, so a
+confirmation retires whatever survived and silently ignores what did not, which is the right outcome
+-- there is nothing to retire and nothing to report beyond the overflow bit already set. The
+acceptance criteria below have to cover that case rather than assume a selection outlives the wait.
+
+**D19 -- One outstanding response at a time, and a new request replaces it.** Under **D7** there is
+one association, so there is one unconfirmed response to track. A read arriving while one is
+outstanding supersedes it: the master has evidently moved on, and a confirmation arriving afterwards
+would name a response that is no longer the current one.
+
+A refusal counts. An unsupported function or a control sent to a monitor-role outstation is a
+response like any other, and leaving the selection standing across one would let a confirmation for
+the response *before* it still retire those events. The first draft of this decision was written as
+though only the requests that do work superseded, and the implementation followed it -- which put
+two refusal branches on the wrong side of the line.
+
+Two things are outside it, and stay outside it:
+
+- The functions that ask for no response. They send nothing, so there is no
+  response for a later confirmation to be late against.
+- A fragment that did not parse. That is not evidence the master moved on; it
+  is evidence something arrived damaged, which is exactly when a retransmission
+  of the held response is the likely next thing to arrive. Discarding the cache
+  on noise would throw it away at the one moment it is most wanted.
+
+**D20 -- Class 0 is static and classes 1 to 3 are events, answered in one response.** The integrity
+poll a real master sends names all four. Static objects come from the `ReadProvider` as they do
+today; event objects come from the buffers; both travel in one response, events first.
+
+Events first because a master applies them in order: a static value written after the events that
+led to it leaves the point at its current value, which is what the master should end up holding.
+
+**D21 -- `DISABLE_UNSOLICITED` succeeds; `ENABLE_UNSOLICITED` is still refused.** The asymmetry is
+the point. An outstation that sends no unsolicited responses is already in the state `DISABLE` asks
+for, so refusing it answers a question the master did not ask. `ENABLE` asks for something this
+outstation does not do, and saying so is the honest answer.
+
+This halves the warnings a real master's startup produces -- the roadmap's complaint -- without
+implementing anything that sends.
+
+**D22 -- The class-event indication bits are derived from the buffers, not tracked separately.**
+`IIN1.1`, `1.2` and `1.3` say which classes have events waiting. A master polling on indications
+never asks for events it is not told about, so a bit that drifts from the buffer is an outstation
+whose data is invisible. Deriving them on each response makes drift impossible rather than unlikely.
+
+**D23 -- Overflow is reported until a master has seen it.** `IIN2.3` is set while
+`EventBuffers.overflowed()` is true, and `clear_overflow` runs once the response carrying the bit is
+confirmed -- not when it is sent. An overflow reported in a response the master never received is an
+overflow the master never learned about.
+
+A response reporting one therefore sets `CON` whether or not any event travels with it. The bit is
+the thing being acknowledged, so a response carrying it has something to confirm on its own account.
+Without that, a ceiling under which no event fits -- which **D27** explicitly allows -- is a
+configuration where no response ever asks for a confirmation, and the flag latches: the master is
+told for ever about a loss it was told about once. The same holds for a master that polls only class
+0.
+
+**D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller records the event, and
+under **D6** this library holds no point map for a master to reassign. Accepting the request would
+mean either ignoring it or inventing the map the design exists to keep out.
+
+**D25 -- A repeated request is replayed, not rebuilt, and a repeat is one that matches octet for
+octet.** A master that did not receive a response repeats the request. The outstation holds the
+request beside the response it produced and the events it selected, and when the same octets arrive
+again it sends that response back unchanged.
+
+The comparison is against the request and not against the sequence number alone. A master that
+reuses a sequence for a *different* question has retransmitted nothing, and answering it from the
+cache would reply to the question before it -- then have those events retired by the confirmation
+that followed, acknowledged against a response the master never asked for.
+
+The two shapes differ only when an event arrives in between, and that is the case that decides it.
+The confirmation which follows retires the events the response was built from, so a rebuilt response
+carrying an event the first did not would have that event retired under a sequence it was never sent
+under -- reported once, acknowledged once, and gone, except that the master's copy of the exchange
+and the outstation's disagree about which events the sequence covered. Replaying keeps the two in
+step at the cost of the newer event waiting for the next read, which is the delay a retransmission
+implies anyway.
+
+The cache this needs is not extra machinery. Confirmation has to record which events went out under
+which sequence regardless, and the fragment is one more field beside them.
+
+This was decided without the text of the standard, which was not available. **IEEE 1815** may
+specify the behavior outright, and if it turns out to say rebuild, switching is deleting the
+`fragment` field and re-dispatching the request -- the sequence and the event selection stay either
+way. The decision is recorded as a soft one for that reason.
+
+**D26 -- A confirmation carrying `UNS` is ignored.** The bit distinguishes a confirmation for an
+unsolicited response from one for a solicited response, and the two count sequence numbers
+separately. This outstation sends no unsolicited responses, so a confirmation carrying the bit names
+an exchange that never happened, and retiring the solicited selection on the strength of a number
+from a different counter would delete events the master has not acknowledged.
+
+Ignored rather than consumed: the master's real confirmation may still be coming, and swallowing the
+selection here would lose the events instead of merely mistiming them. This is the same asymmetry as
+**D21** -- an outstation that does not send unsolicited responses answers questions about them by
+declining to act, not by pretending the exchange exists.
+
+**D27 -- A response is capped to what the master can receive, and the rest stays buffered.**
+``max_response`` is its own number rather than the reassembly ceiling ``max_fragment``: one is the
+largest request this outstation will piece back together, the other the largest fragment the master
+on the far end can accept, and a master advertises its own. Sending past it is not a long response
+but a discarded one -- the events were readable and then none of them arrived.
+
+Events are fitted to what is left after the application header and whatever the provider returned.
+Static data is paid for first and trimmed never: it is the provider's answer, and this session
+cannot tell where one object inside it ends. Events still travel in front of it on the wire, per
+**D20**.
+
+A provider body that overruns the ceiling on its own is the one case the events cannot be fitted
+around, and the read is refused with `PARAM_ERROR` rather than sent. Sending it past the ceiling
+loses the whole response -- the master discards the fragment -- and says nothing about why; four
+octets that arrive and name the problem let a master narrow its request. Nothing is recorded as
+outstanding on that path, so the events stay buffered for the read that fits.
+
+What does not fit is left in the buffer and left out of the selection, so the confirmation retires
+only what was actually sent and the class indication bits go on asking for the rest. A master that
+reads again gets it.
+
+The fit is found by bisecting the encoder rather than by arithmetic on the header layout, because a
+block's size is not a fixed cost per event -- the qualifier widens when the count passes an octet or
+an index does. Bisection is sound because the size never falls as events are added.
+
+The ceiling bounds the work and not only the octets. `capacity` has no upper bound, so anything
+proportional to the buffer is proportional to a number the operator chose, paid on every read a peer
+sends. The selection is therefore cut to what could possibly fit *before* anything is encoded -- the
+remaining budget divided by the narrowest an event encodes, which is a strict upper bound rather
+than an estimate -- and the buffer is asked for no more than that plus what the deduplication is
+about to remove. A four-octet response over fifty thousand events used to cost fifty thousand
+encodings; it now costs none.
+
+That is what `peek`'s `limit` is for, and it settles the open question about it. The limit is not
+how a count qualifier is answered -- a limit taken before deduplication would come back short -- it
+is how a caller avoids paying for a buffer it has no room for. It has to slice while walking the
+deque rather than after materialising it, or the call still costs the buffer.
+
+This is a cap rather than a split, and it is what application-layer fragmentation replaces. Until
+then an outstation that answers with fewer events than it holds is correct, just chatty -- the class
+indication bits go on asking, and the next read brings the rest.
+
+The ceiling is not only the read path's. A control response is the request echoed with a status per
+object, and one that will not fit is refused *before anything is dispatched* -- a control that
+executes and cannot report its outcome is worse than one that never ran, because a master that
+learns nothing about an operate is a master that may send it again. The echo is measured with a
+probe status, since an object's encoding is a fixed size for its type and the status sits inside it.
+
+A ceiling below a response header is refused at construction. Every answer such an outstation could
+give would break it, including the refusal it would give instead, so the number is rejected where it
+is set rather than logged on each response that overruns it.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
