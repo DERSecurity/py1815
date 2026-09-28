@@ -31,6 +31,11 @@ OUTSTATION = 1024
 MASTER = 1
 
 
+def outstation_module():
+    """The fixture module, for the checks that need no session."""
+    return _fixture()
+
+
 def _fixture():
     """Load ``interop/outstation.py``, which is a script rather than a package."""
     spec = importlib.util.spec_from_file_location("interop_outstation", _FIXTURE)
@@ -318,10 +323,17 @@ def _class_read(outstation, *variations: int, sequence: int = 0) -> bytes:
 
 
 class TestTheFixtureHoldsEvents:
-    """What the interoperability peers read that they cannot read as static
-    data. Both masters scan the classes on startup, and until the fixture held
-    events those scans came back empty -- so the class path was the one part of
-    this library no peer had ever exercised."""
+    """What the interoperability job reads that it cannot read as static data.
+
+    The function code sweep asks for each class and for an integrity poll, and
+    its traffic is dissected by Wireshark and Suricata -- so the event objects
+    are checked on the wire by implementations that are not this one.
+
+    Neither peer *master* reads them yet. The C++ probe scans group 30
+    variation 1 and the Rust master is configured for class 0 only, so a
+    master's interpretation of an event is still unexercised. These tests pin
+    the shape the fixture serves so that the peer work, when it lands, is about
+    the reading rather than the serving."""
 
     def test_a_class_one_read_returns_objects(self, outstation):
         body = _class_read(outstation, 2)[4:]
@@ -329,13 +341,24 @@ class TestTheFixtureHoldsEvents:
         assert body != b"", "not an empty answer"
         assert body[0] == 32, "an analog event block leads"
 
+    def test_no_event_value_repeats_a_static_one(self):
+        """The invariant the fixture rests on, asserted over every class rather
+        than over the one whose wire bytes are checked below. Class 2 or 3
+        reusing a static value would weaken the proof just as much, and would
+        not show up in a class 1 assertion."""
+        seeded = [
+            int(value) for points in outstation_module().EVENTS.values() for _, value in points
+        ]
+
+        assert not set(seeded) & set(outstation_module().EXPECTED)
+        assert len(set(seeded)) == len(seeded), "nor does one repeat another class's"
+
     def test_it_carries_a_value_no_static_read_returns(self, outstation):
-        """The assertion the fixture change is for. A master reporting 101
-        cannot have got it from the point map."""
+        """The assertion the fixture change is for. A peer reporting 101 cannot
+        have got it from the point map."""
         body = _class_read(outstation, 2)[4:]
 
         seeded = [int(value) for _, value in outstation.EVENTS[EventClass.CLASS_1]]
-        assert not set(seeded) & set(outstation.EXPECTED), "distinct from the static points"
         # Four octets of object header, then an index octet, a flag octet,
         # and the little-endian int32 of group 32 variation 3.
         assert int.from_bytes(body[6:10], "little") == seeded[0]
@@ -361,7 +384,8 @@ class TestTheFixtureHoldsEvents:
             assert value == int(outstation.EVENTS[event_class][0][1])
 
     def test_an_integrity_poll_carries_events_and_then_the_point_map(self, outstation):
-        """Classes 1, 2, 3 and 0, which is what both peers send on startup."""
+        """Classes 1, 2, 3 and 0, which is the request the sweep sends and the
+        one a peer would send once configured to."""
         body = _class_read(outstation, 2, 3, 4, 1)[4:]
 
         assert body[0] == 32, "the events lead"

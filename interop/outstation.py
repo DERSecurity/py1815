@@ -10,8 +10,15 @@ answers in one request: some it will operate, and one it deliberately will
 not.
 
 And it holds events, in all three classes, carrying values no static read of
-this fixture ever returns. A master reporting one of those numbers can only have
-read it from the buffers.
+this fixture ever returns and none of which repeats across classes. A peer
+reporting one of those numbers can only have read it from the buffers, and only
+from the class it belongs to.
+
+No peer *master* reads them yet: the C++ probe scans group 30 variation 1 and
+the Rust master is configured for class 0 only. What reads them today is the
+function code sweep, whose traffic Wireshark and Suricata dissect -- so the wire
+format is checked by implementations that are not this one, while a master's
+interpretation of it is not. That gap is named in the event plan.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -74,8 +81,11 @@ POINTS = [
 #: the event cases prove: that the class it asked for was answered from the
 #: buffers rather than from the point map.
 #:
-#: One index per class, so a master that mixes the classes up reports the wrong
-#: number rather than the right one under the wrong heading.
+#: The values are distinct across the classes as well as from the point map,
+#: and that -- not the indices -- is what catches a class being mixed up. The
+#: indices are deliberately reused: class 1 holds analog 0 and 1 and a binary
+#: event at index 0 too, because a peer that keys events by index alone should
+#: be seen to do so rather than accommodated.
 EVENTS = {
     EventClass.CLASS_1: ((0, 101.0), (1, 102.0)),
     EventClass.CLASS_2: ((2, 203.0),),
