@@ -542,6 +542,40 @@ class TestALostFinalFragment:
 
         assert session._handle_fragment(_confirm(before)) == b""
 
+    def test_a_final_fragment_of_nothing_but_the_body_is_replayed_too(self):
+        """It has no events to retire, so nothing about it asks to be kept --
+        which is exactly why it was not, and why losing it deadlocked the
+        exchange. A hundred and seventy events and a thousand-octet body put
+        the body alone in the last fragment."""
+        session, provider = _session(_filled(170), static=1000)
+        first = session._handle_fragment(INTEGRITY)
+        last = session._handle_fragment(_confirm(first[0] & 0x0F))
+        assert last[4:] == provider.body, "the body alone"
+
+        again = session._handle_fragment(_confirm(first[0] & 0x0F))
+
+        assert again == last
+
+    def test_and_it_asks_to_be_confirmed(self):
+        """Its confirmation is the only signal that the response arrived
+        whole. Without CON the master never sends one, and the outstation
+        never learns the exchange finished."""
+        session, _ = _session(_filled(170), static=1000)
+        first = session._handle_fragment(INTEGRITY)
+
+        last = session._handle_fragment(_confirm(first[0] & 0x0F))
+
+        assert last[0] & FIN_MASK
+        assert last[0] & CON_MASK
+
+    def test_confirming_that_one_ends_it_too(self):
+        session, _ = _session(_filled(170), static=1000)
+        first = session._handle_fragment(INTEGRITY)
+        last = session._handle_fragment(_confirm(first[0] & 0x0F))
+
+        assert session._handle_fragment(_confirm(last[0] & 0x0F)) == b""
+        assert session._conversation is None
+
     def test_a_response_of_one_fragment_holds_nothing_open(self):
         """There was never a continuation to lose, so there is nothing to keep
         for the replaying of it."""

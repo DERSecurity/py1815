@@ -1123,24 +1123,29 @@ class Session:
             if self._events is not None and iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
             else None
         )
-        confirmable = bool(selected) or overflowed is not None or not final
         response = build_response(
             # ``FIR`` is false on every fragment but the first: this is the same
             # response continuing, not a new one.
-            control=AppControl(fir=False, fin=final, con=confirmable, sequence=sequence),
+            #
+            # ``CON`` on every one of them, including a last fragment carrying
+            # nothing but the provider's body. It has no events to retire, but
+            # it is the step of an exchange the master is walking through, and
+            # its confirmation is the only signal that the response arrived
+            # whole. Leaving it clear also left nothing cached to replay, so
+            # losing it deadlocked the exchange in exactly the way D34 exists to
+            # prevent -- the master repeats its confirmation and is answered
+            # with silence.
+            control=AppControl(fir=False, fin=final, con=True, sequence=sequence),
             iin=iin,
             body=body,
         )
-        if confirmable:
-            self._outstanding = _Outstanding(
-                sequence=sequence,
-                request=fragment,
-                events=tuple(selected),
-                fragment=response,
-                reported_overflow=overflowed,
-            )
-        else:
-            self._outstanding = None
+        self._outstanding = _Outstanding(
+            sequence=sequence,
+            request=fragment,
+            events=tuple(selected),
+            fragment=response,
+            reported_overflow=overflowed,
+        )
         self._conversation = self._retained(conversation, final)
         return response
 
