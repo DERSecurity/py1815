@@ -177,7 +177,10 @@ sequences without sending one.
 
 **D17 -- The caller owns the buffers and records into them; the session never does.** The caller
 constructs `EventBuffers`, records into it as its device polls, and hands it to `Session`, which
-calls `peek`, `overflowed`, and -- on a confirmation -- `drop` and `clear_overflow`.
+calls `peek`, `overflowed`, `classes_with_events` and `overflow_generation`, and -- on a
+confirmation -- `drop` and `clear_overflow`. The two read alongside `overflowed` are what the
+indication bits are derived from and what keeps a later loss from being cleared by an earlier
+acknowledgement; naming a shorter list would imply a narrower dependency than there is.
 
 The session's only writes are those two, and both are a master acknowledging what it was sent. An
 earlier wording of this decision said the session only reads, which stopped being true when
@@ -261,12 +264,17 @@ after one eviction and after a hundred. If more were evicted while the confirmat
 the flag stands and the next response reports it again, because that later loss is one the master
 has not been told about.
 
-A response reporting one therefore sets `CON` whether or not any event travels with it. The bit is
-the thing being acknowledged, so a response carrying it has something to confirm on its own account.
+A *read* response reporting one therefore sets `CON` whether or not any event travels with it. The
+bit is the thing being acknowledged, so such a response has something to confirm on its own account.
 Without that, a ceiling under which no event fits -- which **D27** explicitly allows -- is a
-configuration where no response ever asks for a confirmation, and the flag latches: the master is
-told for ever about a loss it was told about once. The same holds for a master that polls only class
-0.
+configuration where no read ever asks for a confirmation, and the flag latches: the master is told
+for ever about a loss it was told about once. The same holds for a master that polls only class 0.
+
+Every other response carries the bit without asking. A refusal, a write, a control echo and
+`DISABLE_UNSOLICITED` all report the overflow, because the indications are derived on every response
+and a master should learn of a loss as soon as it speaks to the outstation -- but none of them is a
+place an acknowledgement belongs, and none needs to be: a master that cares about events reads them,
+and that read is what retires the report. A master that never reads events has nothing to retire.
 
 **D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller records the event, and
 under **D6** this library holds no point map for a master to reassign. Accepting the request would

@@ -57,9 +57,11 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
 
   The class and overflow indication bits are derived from the buffers on every
   response rather than tracked beside them, so a bit cannot drift from what is
-  waiting. Overflow is retired when the master acknowledges the response
-  reporting it -- including a response that carries the bit and no events, which
-  would otherwise be a report nothing could ever clear.
+  waiting. Overflow is retired when the master acknowledges the read that
+  reported it -- including a read that carries the bit and no events, which
+  would otherwise be a report nothing could ever clear. Other responses report
+  the overflow without asking to be confirmed, since a refusal or a write is not
+  where an acknowledgement belongs and the next read is what retires it.
 - **A ceiling on the size of a response, and on the work of building one.** A
   master sizes its receive buffer to the fragment size it advertises, so a
   response past it is discarded rather than merely long. Events are fitted to
