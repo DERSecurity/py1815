@@ -123,6 +123,11 @@ with `FIN` as it would have anyway (**D33**). Stopping short of it would answer 
 request for static data with events and nothing else, which is a worse failure
 than being chatty.
 
+Which means the bound is on the fragments of events, and a response may carry one
+more than it for the body. Counting the body's fragment against the bound would
+have an outstation that reached it drop the static data instead -- the failure
+the paragraph above rules out, reintroduced by the arithmetic.
+
 A bound is needed because **D29** lets events recorded mid-conversation join it.
 Without one, an outstation whose device polls faster than its master confirms
 never sends `FIN`, and a master that is waiting for the end of a response is a
@@ -155,13 +160,47 @@ send -- **D31**'s refusal is an answer to a request, not to a continuation of on
 this outstation has already begun. Measuring the body once, at the start, is what
 makes the last fragment's fit knowable from the first.
 
+**D34 -- A confirmation naming the previous fragment re-sends the current one.**
+Not ignored, which is what the rest of this plan would otherwise do and which
+deadlocks the conversation.
+
+Walk it through. The outstation sends fragment *n*, the master confirms it, the
+outstation retires those events and sends *n+1*. If *n+1* is lost, the master
+repeats its confirmation of *n* -- and `_confirm` matches on the *outstanding*
+sequence, which is now *n+1*. The repeat matches nothing, is logged and dropped,
+and the outstation sends nothing. The master waits for a fragment that will never
+come and the outstation waits for a confirmation that will never arrive. Neither
+side is wrong and the exchange is over.
+
+So the outstation remembers one sequence number beyond the current one: the
+fragment just confirmed. A confirmation naming it replays the fragment already
+built and outstanding, byte for byte, and retires nothing -- the events it named
+were retired when it was first confirmed. A confirmation naming anything else
+still retires nothing, as **D18** has it.
+
+This is **D25** one layer up: the same choice between replaying what was sent and
+rebuilding it, answered the same way and for the same reason. Rebuilding would
+send a different set of events under a sequence the master is about to confirm.
+
+One sequence of history is enough because there is only ever one fragment
+outstanding. A master that loses two in a row has lost the conversation, and
+**D30** lets its next request start a new one.
+
 ## Work
 
 ### 1. Saying there is more
 
-`_Outstanding` records that the response is unfinished and holds the provider's
-body for the last fragment (**D33**). It does *not* record the events that did
-not fit (**D29**).
+Two pieces of state, and conflating them is the mistake this section exists to
+avoid. `_Outstanding` is **per fragment**: what was sent, for `drop` and for
+replay, replaced each time a fragment goes out. A conversation needs state that
+outlives it -- the provider's body for the last fragment (**D33**), the fragment
+count for **D32**'s bound, the sequence just confirmed for **D34**, and the
+classes the read named, since a continuation has to peek the same ones.
+
+That belongs beside `_Outstanding` rather than inside it, or the body is
+discarded by the very replacement that sends the fragment after it.
+
+Neither records the events that did not fit (**D29**).
 
 `FIN` goes on the fragment that finishes the response, which is not always the
 one that empties the buffer. For an events-only read it is the fragment after
@@ -213,8 +252,17 @@ and the unsent remainder is back in the buffer rather than retired; a
 
 ### 4. Retransmission across fragments
 
-**D25** replays a repeated request octet for octet. A repeated *confirmation*
-is a different thing and needs settling -- see the open questions.
+**D25** replays a repeated request octet for octet; **D34** replays the
+outstanding fragment for a confirmation naming the one before it.
+
+**Acceptance:** a confirmation repeated after its continuation was lost yields
+that continuation again, byte for byte, and retires nothing a second time; the
+conversation then carries on from there rather than starting over. A
+confirmation naming a sequence that is neither the outstanding one nor the one
+before it is still ignored.
+
+And the case that says the history is bounded: two confirmations back is not
+replayed, and the master's next request starts a new conversation (**D30**).
 
 ### 5. Mixed responses
 
@@ -243,12 +291,11 @@ rewritten; the README status line, which this plan's landing makes wrong again;
 
 ## Open
 
-- **A repeated confirmation.** If the second fragment is lost, the master
-  repeats its confirmation of the first. The outstation has already retired
-  those events and moved on, so it cannot rebuild what it sent. Replaying the
-  cached fragment is the obvious answer and needs the previous fragment kept for
-  one more round. Whether that is one fragment of history or a sequence-keyed
-  cache is the decision.
+- **Settled: a repeated confirmation.** Listed here because it was the question
+  this plan opened with and because leaving it open was not safe: **D28** and
+  **D29** as first written deadlock when a continuation is lost. **D34** answers
+  it -- one sequence of history, replaying the outstanding fragment.
+
 - **Whether `ReadProvider` should return blocks rather than octets.** It would
   let **D31** go away -- static data could split at an object boundary -- at the
   cost of a breaking API change and of this library knowing more about the
