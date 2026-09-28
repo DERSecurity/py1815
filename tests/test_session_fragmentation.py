@@ -461,12 +461,36 @@ class TestTheBoundHoldsWithABodyToDeliver:
     bound would bound nothing."""
 
     def test_a_large_body_does_not_let_the_response_run_past_it(self):
+        """Sixteen fragments of events and one for the body, which is the one
+        extra D32 allows -- not the forty this ran to before."""
         session, _ = _session(_filled(6000), static=1500)
 
         fragments = _walk(session, session._handle_fragment(INTEGRITY), limit=80)
 
-        assert len(fragments) == 16, "not the forty this ran to before"
+        assert len(fragments) == 17
         assert fragments[-1][0] & FIN_MASK
+
+    def test_the_bound_does_not_cost_the_response_its_events(self):
+        """D33: the body takes a fragment of its own rather than displacing
+        events from the last one. Reserving room for it in the sixteenth
+        fragment would answer a mixed read with fewer events than the same
+        read without a body -- the same buffer, fewer events, for asking for
+        more."""
+        mixed, _ = _session(_filled(6000), static=1500)
+        events_only, _ = _session(_filled(6000))
+
+        with_body = _walk(mixed, mixed._handle_fragment(INTEGRITY), limit=80)
+        without = _walk(events_only, events_only._handle_fragment(_read()), limit=80)
+
+        assert _carried(with_body) == _carried(without)
+
+    def test_the_extra_fragment_carries_the_body_and_nothing_else(self):
+        session, provider = _session(_filled(6000), static=1500)
+
+        fragments = _walk(session, session._handle_fragment(INTEGRITY), limit=80)
+
+        assert fragments[-1][4:] == provider.body
+        assert _carried(fragments[-1:]) == 0
 
     def test_and_the_body_still_arrives(self):
         """Stopping the events is not an excuse to drop the static data the
@@ -557,7 +581,7 @@ class TestADeviceThatKeepsRecording:
             fragments = self._run(size)
 
             assert fragments[-1][0] & FIN_MASK, f"a batch of {size} never ended"
-            assert len(fragments) <= 16, f"a batch of {size} ran to {len(fragments)}"
+            assert len(fragments) <= 17, f"a batch of {size} ran to {len(fragments)}"
 
     def test_and_the_body_is_still_delivered(self):
         """Ending the events early is not an excuse to drop the static data the

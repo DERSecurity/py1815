@@ -1014,7 +1014,13 @@ class Session:
         if not conversation.headers:
             return conversation.static, [], True
 
-        owed = list(conversation.counts)
+        if conversation.fragments > _MAX_FRAGMENTS:
+            # Past the bound, which the events have already spent. This is the
+            # one extra fragment D32 allows for the body, and it carries
+            # nothing else -- a response that reached the bound is not owed
+            # more events, but it is still owed the static data it asked for.
+            return conversation.static, [], True
+
         body, selected, complete = self._event_body(
             conversation.headers, conversation.counts, whole
         )
@@ -1028,34 +1034,17 @@ class Session:
         fits = len(body) + len(conversation.static) <= whole
 
         if at_bound:
-            # The response ends here whatever the events did. Asking only when
-            # the *budget* cut them short left the bound bypassed by a device
+            # The events stop here whatever they did. Asking only when the
+            # *budget* cut them short left the bound bypassed by a device
             # recording a batch between every confirmation: each fragment
-            # answers its buffer in full, the body never fits beside it, and the
-            # response never ends. Sixty fragments and counting was observed,
-            # which is the producer-outpacing-the-conversation case D32 exists
-            # to stop.
+            # answered its buffer in full, the body never fit beside it, and the
+            # response never ended.
             if more:
                 logger.info(
                     "dnp3: ending a response at %d fragments with events still buffered",
                     conversation.fragments,
                 )
-            if fits:
-                # Nothing to refit: a body that already follows these events
-                # would be placed identically against the reserved budget, so
-                # this only saves the work and the counts it would disturb.
-                return body + conversation.static, selected, True
-
-            # The body will not follow these events, so they give way to it --
-            # the request asked for static data and this is the last chance to
-            # answer that half of it. The counts go back first: `_event_body`
-            # decrements them by what it placed, and what the discarded fit
-            # placed was never sent.
-            conversation.counts[:] = owed
-            body, selected, _ = self._event_body(
-                conversation.headers, conversation.counts, whole - len(conversation.static)
-            )
-            return body + conversation.static, selected, True
+            return (body + conversation.static, selected, True) if fits else (body, selected, False)
 
         if more:
             return body, selected, False
