@@ -175,12 +175,17 @@ _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 #: be taken before anything is encoded.
 _MIN_EVENT_OCTETS = 8
 
-#: The most fragments one response may take. A count rather than an octet
-#: budget or a deadline (D32), and sixteen because that is one full trip through
-#: the application sequence space -- a conversation reaching it has spent every
-#: sequence number once. A full default buffer is about seven fragments at the
-#: default ceiling, so this carries one twice that size and still stops a buffer
-#: that fills as fast as it drains.
+#: The most *event-carrying* fragments one response may take. A response may
+#: run to one more than this, carrying the provider's body alone, when that body
+#: will not fit beside the last of the events (D32 and D33) -- the bound stops
+#: the events rather than the answer, and a read that asked for static data is
+#: still owed it.
+#:
+#: A count rather than an octet budget or a deadline (D32), and sixteen because
+#: that is one full trip through the application sequence space -- a conversation
+#: reaching it has spent every sequence number once. A full default buffer is
+#: about seven fragments at the default ceiling, so this carries one twice that
+#: size and still stops a buffer that fills as fast as it drains.
 _MAX_FRAGMENTS = 16
 
 #: The most events one object header can count, and so the most one block can
@@ -607,6 +612,7 @@ class Session:
             # Silence survives a body that does not parse, which is the case
             # that early branch exists for: a master that asked for no response
             # is not listening for a parse error either.
+            self._abandon()
             self._operate_unacknowledged(fragment)
             return b""
 
@@ -622,6 +628,7 @@ class Session:
             logger.warning(
                 "dnp3: dropping %s; it asks for no response", FunctionCode(fragment[1]).name
             )
+            self._abandon()
             return b""
 
         try:
@@ -683,15 +690,19 @@ class Session:
         # left the selection standing would let a confirmation for the response
         # before it still retire those events.
         #
-        # Two paths are deliberately outside it. The functions returning above
-        # send nothing at all, so there is no response for a confirmation to be
-        # late against. And a fragment that did not parse is not evidence the
-        # master moved on -- it is evidence something arrived garbled, which is
-        # when a retransmission of the held response is most likely to be what
-        # comes next, and discarding the cache on noise would throw it away
-        # exactly then.
-        self._outstanding = None
-        self._conversation = None
+        # One path is deliberately outside it: a fragment that did not parse is
+        # not evidence the master moved on. It is evidence something arrived
+        # garbled, which is when a retransmission of the held response is most
+        # likely to be what comes next, and discarding the cache on noise would
+        # throw it away exactly then.
+        #
+        # The functions that ask for no response used to be outside it too, on
+        # the grounds that they send nothing for a confirmation to be late
+        # against. That was true of a single held response and false as soon as
+        # responses could span fragments: one arriving mid-conversation left the
+        # rest of an abandoned read to be drawn out by the next confirmation.
+        # They call `_abandon` above instead.
+        self._abandon()
 
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
@@ -1005,10 +1016,11 @@ class Session:
         - the events are done and the body fits beside them, so it rides along;
         - the events are done and it does not, so it takes a fragment of its
           own rather than displacing events to make room;
-        - the fragment bound is reached with events still waiting, and *then*
-          the body has to travel here whether it fits or not. That case refits
-          against a reserved budget, because a body too large to follow a full
-          fragment of events would otherwise defer the ending every time.
+        - the bound is reached, which stops the events whatever they did. The
+          body rides along if it fits; if it does not, this fragment keeps its
+          events and the body follows alone in one more. Reserving room for it
+          here instead would answer a mixed read with fewer events than the same
+          read without a body, which is what D33 exists to prevent.
         """
         whole = self._max_response - RESPONSE_HEADER_SIZE
         if not conversation.headers:
@@ -1056,6 +1068,17 @@ class Session:
         if fits:
             return body + conversation.static, selected, True
         return body, selected, False
+
+    def _abandon(self) -> None:
+        """Forget the response in flight, because the master has moved on.
+
+        Both halves together: the fragment awaiting confirmation and the
+        conversation that would draw out the rest of it. Leaving either is a
+        master that sent something else and is answered, several requests
+        later, with the remainder of a read it has stopped waiting for.
+        """
+        self._outstanding = None
+        self._conversation = None
 
     def _confirm(self, sequence: int) -> bytes:
         """Retire the events the confirmed response carried.

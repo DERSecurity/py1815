@@ -12,6 +12,7 @@ place this session answers something that is not a request.
 from __future__ import annotations
 
 from py1815.application import CON_MASK, FunctionCode, QualifierCode
+from py1815.control import CommandStatus
 from py1815.events import EventBuffers, EventClass
 from py1815.objects import AnalogPoint
 from py1815.session import Session
@@ -244,6 +245,33 @@ class TestARequestEndsTheConversation:
         session._handle_fragment(_read(sequence=5))
 
         assert session._handle_fragment(_confirm(first[0] & 0x0F)) == b""
+
+    def test_a_control_that_asks_for_no_response_ends_it_too(self):
+        """It sends nothing back, which is why it used to be excluded -- there
+        was no response for a confirmation to be late against. True of a single
+        held response and false as soon as one could span fragments: the rest
+        of an abandoned read was still there to be drawn out."""
+        buffers = _filled()
+        provider = Provider(0)
+        commands = _Commands()
+        session = Session(provider, control_provider=commands, events=buffers)
+        first = session._handle_fragment(_read())
+
+        assert session._handle_fragment(_direct_operate_nr(sequence=5)) == b""
+
+        assert session._handle_fragment(_confirm(first[0] & 0x0F)) == b""
+        assert buffers.count(EventClass.CLASS_1) == MANY, "nothing was retired"
+        assert session._conversation is None
+
+    def test_a_function_that_asks_for_no_response_ends_it_as_well(self):
+        buffers = _filled()
+        session, _ = _session(buffers)
+        first = session._handle_fragment(_read())
+
+        session._handle_fragment(bytes([0xC5, FunctionCode.IMMED_FREEZE_NR]))
+
+        assert session._handle_fragment(_confirm(first[0] & 0x0F)) == b""
+        assert buffers.count(EventClass.CLASS_1) == MANY
 
     def test_connection_reset_leaves_every_unconfirmed_event_buffered(self):
         buffers = _filled()
@@ -669,3 +697,34 @@ class TestALostFinalFragment:
 
         assert only[0] & FIN_MASK
         assert session._conversation is None
+
+
+class _Commands:
+    """A control provider that accepts whatever it is given."""
+
+    def select(self, controls):
+        return [CommandStatus.SUCCESS] * len(controls)
+
+    def operate(self, controls):
+        return [CommandStatus.SUCCESS] * len(controls)
+
+
+#: One CROB, latch on.
+_LATCH_ON = bytes.fromhex("030164000000c800000000")
+
+
+def _direct_operate_nr(sequence: int) -> bytes:
+    return (
+        bytes(
+            [
+                0xC0 | sequence,
+                FunctionCode.DIRECT_OPERATE_NR,
+                12,
+                1,
+                QualifierCode.UINT8_COUNT_UINT8_INDEX,
+                1,
+                0,
+            ]
+        )
+        + _LATCH_ON
+    )

@@ -224,14 +224,16 @@ the response *before* it still retire those events. The first draft of this deci
 though only the requests that do work superseded, and the implementation followed it -- which put
 two refusal branches on the wrong side of the line.
 
-Two things are outside it, and stay outside it:
+One thing is outside it, and stays outside it: a fragment that did not parse. That is not evidence
+the master moved on; it is evidence something arrived damaged, which is exactly when a
+retransmission of the held response is the likely next thing to arrive. Discarding the cache on
+noise would throw it away at the one moment it is most wanted.
 
-- The functions that ask for no response. They send nothing, so there is no
-  response for a later confirmation to be late against.
-- A fragment that did not parse. That is not evidence the master moved on; it
-  is evidence something arrived damaged, which is exactly when a retransmission
-  of the held response is the likely next thing to arrive. Discarding the cache
-  on noise would throw it away at the one moment it is most wanted.
+The functions that ask for no response were outside it too, on the grounds that they send nothing
+for a later confirmation to be late against. That held while one response was held at a time and
+stopped holding as soon as a response could span fragments: one arriving mid-conversation left the
+remainder of an abandoned read to be drawn out by the next confirmation, retiring events the master
+had stopped waiting for. They end a response like any other request now.
 
 **D20 -- Class 0 is static and classes 1 to 3 are events, answered in one response.** The integrity
 poll a real master sends names all four. Static objects come from the `ReadProvider` as they do
