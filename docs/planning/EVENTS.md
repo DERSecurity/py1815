@@ -97,10 +97,10 @@ carrying `CON`.
 individually confirmable; the last carries `FIN`; a master that confirms only
 the first keeps the rest.
 
-This is the section most likely to need its own design pass once started. If it
-proves larger than the rest combined, landing sections 1, 2 and 4 with a
-single-fragment cap is a reasonable first release -- an outstation that answers
-with fewer events than it holds is correct, just chatty.
+That design pass happened, and it has its own plan:
+[FRAGMENTATION.md](FRAGMENTATION.md). What is left here is the pointer. Sections
+1, 2, 4 and 5 landed with the single-fragment cap of **D27**, which is what that
+plan replaces.
 
 ### 4. Indications
 
