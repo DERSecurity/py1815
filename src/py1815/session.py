@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from py1815 import control as control_objects
@@ -314,6 +314,11 @@ class _Conversation:
     #: The provider's body, read once when the response began and sent with the
     #: last fragment (D33).
     static: bytes
+    #: What each header has left to send, for the headers that named a count.
+    #: A count qualifier is "at most this many" of the *response*, not of each
+    #: fragment of it, so it is decremented as the conversation goes rather
+    #: than reapplied whole every time.
+    counts: list[int | None] = field(default_factory=list)
     #: How many fragments have gone out, against ``_MAX_FRAGMENTS`` (D32). The
     #: fragment carrying the body is not counted: a response that reached the
     #: bound must still answer the static half of the request it was given.
@@ -928,7 +933,11 @@ class Session:
                 sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
             )
 
-        conversation = _Conversation(headers=tuple(event_headers), static=static)
+        conversation = _Conversation(
+            headers=tuple(event_headers),
+            static=static,
+            counts=[header.count for header in event_headers],
+        )
         body, selected, final = self._fragment(conversation)
 
         iin = self._indications()
@@ -978,7 +987,9 @@ class Session:
         if not conversation.headers:
             return conversation.static, [], True
 
-        body, selected, complete = self._event_body(conversation.headers, whole)
+        body, selected, complete = self._event_body(
+            conversation.headers, conversation.counts, whole
+        )
 
         # Whether another fragment could carry anything this one could not. An
         # incomplete answer that placed no events is not progress -- nothing
@@ -1103,7 +1114,7 @@ class Session:
         return events, static
 
     def _event_body(
-        self, headers: Sequence[ObjectHeader], budget: int
+        self, headers: Sequence[ObjectHeader], counts: list[int | None], budget: int
     ) -> tuple[bytes, list[Event], bool]:
         """The event objects the named classes are holding.
 
@@ -1133,6 +1144,12 @@ class Session:
         qualifier stopping it does not count: a master that asked for at most so
         many has been answered in full, and a response that carried on would be
         sending events it declined.
+
+        ``counts`` is what each header still has coming, and is decremented by
+        what actually went out. A count is a bound on the response rather than
+        on each fragment of it: reapplying it whole to every continuation would
+        answer a request for three hundred events with as many as the buffer
+        held, three hundred at a time.
         """
         assert self._events is not None
         body = b""
@@ -1152,8 +1169,14 @@ class Session:
         # Header order rather than class order: a master that asked for class 3
         # before class 1 gets them back that way, and the count on each header
         # belongs to that header rather than to the class.
-        for header in headers:
+        for index, header in enumerate(headers):
             if header.event_class is None:
+                continue
+            limit = counts[index]
+            if limit is not None and limit <= 0:
+                # Already answered in full by an earlier fragment. Skipped to
+                # save the peek rather than for the answer: the slice below
+                # would take nothing from it anyway.
                 continue
             # Asked for only what could possibly still fit, so that a small
             # response over a large buffer costs the response rather than the
@@ -1180,15 +1203,19 @@ class Session:
 
             selected = [event for event in held if id(event) not in emitted]
             if len(selected) > room:
-                if header.count is None or header.count > room:
+                if limit is None or limit > room:
                     truncated = True
                 selected = selected[:room]
-            if header.count is not None:
+            if limit is not None:
                 # A count qualifier is "at most this many", which is how a
                 # master paces a buffer it does not want in one fragment.
-                selected = selected[: header.count]
+                selected = selected[:limit]
             emitted.update(id(event) for event in selected)
             taken[header.event_class] = already + len(selected)
+            #: What this header had sent before this fragment touched it, so the
+            #: count can be decremented by what went out rather than by what was
+            #: selected -- the encoder may take fewer than the budget allowed.
+            before = len(sent)
 
             # The cursor walks `selected` alongside the blocks, because
             # `_encoded` partitions it into consecutive runs and a run cut short
@@ -1208,7 +1235,12 @@ class Session:
                     if fitted < len(chunk):
                         # The budget cut this block short, so the response is
                         # not complete however the rest of it looks.
+                        if limit is not None:
+                            counts[index] = limit - (len(sent) - before)
                         return body, sent, False
+
+            if limit is not None:
+                counts[index] = limit - (len(sent) - before)
         return body, sent, not truncated
 
     def _handle_write(self, request: Request) -> bytes:

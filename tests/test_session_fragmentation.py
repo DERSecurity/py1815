@@ -352,3 +352,94 @@ class TestABodyThatWillNotFitBesideTheLastEvents:
 
         for fragment in _walk(session, session._handle_fragment(INTEGRITY)):
             assert len(fragment) <= 2048
+
+
+def _counted(asked: int, sequence: int = 0) -> bytes:
+    """A class 1 read asking for at most *asked* events, wide count."""
+    return bytes(
+        [0xC0 | sequence, FunctionCode.READ, 60, 2, QualifierCode.UINT16_COUNT]
+    ) + asked.to_bytes(2, "little")
+
+
+def _carried(fragments: list[bytes]) -> int:
+    """How many events a whole response delivered, across all its fragments."""
+    total = 0
+    for fragment in fragments:
+        body = fragment[4:]
+        while body:
+            wide = body[2] == QualifierCode.UINT16_COUNT_UINT16_INDEX
+            count = int.from_bytes(body[3:5], "little") if wide else body[3]
+            header, item = (5, 13) if wide else (4, 12)
+            total += count
+            body = body[header + count * item :]
+    return total
+
+
+class TestACountIsABoundOnTheResponse:
+    """Not on each fragment of it. Reapplying it whole to every continuation
+    answers a request for three hundred events with as many as the buffer
+    holds, three hundred at a time."""
+
+    def test_a_count_spanning_fragments_delivers_exactly_that_many(self):
+        session, _ = _session(_filled(1000))
+
+        fragments = _walk(session, session._handle_fragment(_counted(300)))
+
+        assert len(fragments) > 1, "it did not fit one fragment"
+        assert _carried(fragments) == 300
+
+    def test_and_the_response_ends_there(self):
+        """FIN once the count is spent, with the rest still buffered -- the
+        master asked for three hundred and is not owed the other seven."""
+        buffers = _filled(1000)
+        session, _ = _session(buffers)
+
+        fragments = _walk(session, session._handle_fragment(_counted(300)))
+
+        assert fragments[-1][0] & FIN_MASK
+        assert buffers.count(EventClass.CLASS_1) > 0
+
+    def test_a_count_larger_than_the_buffer_is_not_an_error(self):
+        session, _ = _session(_filled(1000))
+
+        fragments = _walk(session, session._handle_fragment(_counted(1200)))
+
+        assert _carried(fragments) == 1000
+        assert fragments[-1][0] & FIN_MASK
+
+    def test_a_count_that_fits_one_fragment_is_unchanged(self):
+        session, _ = _session(_filled(1000))
+
+        only = session._handle_fragment(_counted(100))
+
+        assert only[0] & FIN_MASK
+        assert _carried([only]) == 100
+
+    def test_each_header_keeps_its_own(self):
+        """Two classes, two counts, and neither borrows from the other."""
+        # Distinct indices per class. The deadband is keyed by point rather
+        # than by class -- a point belongs to one class -- so recording the same
+        # index into both would have the second call suppressed as unchanged.
+        buffers = EventBuffers(capacity=2000)
+        for index in range(1000):
+            buffers.record_analog(
+                index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+            )
+            buffers.record_analog(
+                1000 + index,
+                AnalogPoint(float(index)),
+                event_class=EventClass.CLASS_2,
+                timestamp_ms=1,
+            )
+        session, _ = _session(buffers)
+        request = (
+            bytes([0xC0, FunctionCode.READ])
+            + bytes([60, 2, QualifierCode.UINT16_COUNT])
+            + (200).to_bytes(2, "little")
+            + bytes([60, 3, QualifierCode.UINT16_COUNT])
+            + (300).to_bytes(2, "little")
+        )
+
+        fragments = _walk(session, session._handle_fragment(request))
+
+        assert _carried(fragments) == 500
