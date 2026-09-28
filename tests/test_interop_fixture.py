@@ -21,13 +21,19 @@ import pytest
 
 from py1815 import link
 from py1815.application import FunctionCode, IINBit, QualifierCode
-from py1815.objects import AnalogQuality
+from py1815.events import EventClass
+from py1815.objects import AnalogQuality, AnalogVariation, analog_range
 from py1815.session import Session
 
 _FIXTURE = pathlib.Path(__file__).resolve().parents[1] / "interop" / "outstation.py"
 
 OUTSTATION = 1024
 MASTER = 1
+
+
+def outstation_module():
+    """The fixture module, for the checks that need no session."""
+    return _fixture()
 
 
 def _fixture():
@@ -290,3 +296,112 @@ class TestAMixedRead:
         body = session._handle_fragment(request)[4:]
 
         assert bytes([30, 1]) not in body
+
+
+def _class_read(outstation, *variations: int, sequence: int = 0) -> bytes:
+    """The application fragment a class read gets back from the seeded fixture."""
+    controls = outstation.FixedControls()
+    session = Session(
+        outstation.FixedProvider(controls),
+        control_provider=controls,
+        events=outstation.seeded_events(),
+        outstation_address=OUTSTATION,
+        master_address=MASTER,
+    )
+    body = b"".join(bytes([60, variation, QualifierCode.ALL_OBJECTS]) for variation in variations)
+    control = link.control_byte(
+        from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+    )
+    request = link.build(
+        control,
+        destination=OUTSTATION,
+        source=MASTER,
+        payload=bytes([0xC0]) + bytes([0xC0 | sequence, FunctionCode.READ]) + body,
+    )
+    frames = link.FrameReader().feed(session.receive(request))
+    return frames[0].payload[1:]
+
+
+class TestTheFixtureHoldsEvents:
+    """What the interoperability job reads that it cannot read as static data.
+
+    The function code sweep asks for each class and for an integrity poll, and
+    its traffic is dissected by Wireshark and Suricata -- so the event objects
+    are checked on the wire by implementations that are not this one.
+
+    Neither peer *master* reads them yet. The C++ probe scans group 30
+    variation 1 and the Rust master is configured for class 0 only, so a
+    master's interpretation of an event is still unexercised. These tests pin
+    the shape the fixture serves so that the peer work, when it lands, is about
+    the reading rather than the serving."""
+
+    def test_a_class_one_read_returns_objects(self, outstation):
+        body = _class_read(outstation, 2)[4:]
+
+        assert body != b"", "not an empty answer"
+        assert body[0] == 32, "an analog event block leads"
+
+    def test_no_event_value_repeats_a_static_one(self):
+        """The invariant the fixture rests on, asserted over every class rather
+        than over the one whose wire bytes are checked below. Class 2 or 3
+        reusing a static value would weaken the proof just as much, and would
+        not show up in a class 1 assertion."""
+        # Rounded, not truncated, because that is what the encoder does for the
+        # INT32 variation. Truncating here would let a future 9.6 go on the wire
+        # as 10, collide with the static point of that name, and pass this
+        # assertion as a 9.
+        seeded = [
+            round(value) for points in outstation_module().EVENTS.values() for _, value in points
+        ]
+
+        assert not set(seeded) & set(outstation_module().EXPECTED)
+        assert len(set(seeded)) == len(seeded), "nor does one repeat another class's"
+
+    def test_it_carries_a_value_no_static_read_returns(self, outstation):
+        """The assertion the fixture change is for. A peer reporting 101 cannot
+        have got it from the point map."""
+        body = _class_read(outstation, 2)[4:]
+
+        seeded = [round(value) for _, value in outstation.EVENTS[EventClass.CLASS_1]]
+        # Four octets of object header, then an index octet, a flag octet,
+        # and the little-endian int32 of group 32 variation 3.
+        assert int.from_bytes(body[6:10], "little") == seeded[0]
+
+    def test_the_binary_event_follows_the_analog_ones(self, outstation):
+        """In the order the points changed rather than gathered by type. A peer
+        that reorders them tells its operator a different story about when
+        things happened."""
+        body = _class_read(outstation, 2)[4:]
+
+        analog = 4 + 2 * (1 + 11)
+        assert body[analog] == 2, "the binary event group"
+
+    def test_each_class_answers_with_its_own(self, outstation):
+        for variation, event_class in (
+            (3, EventClass.CLASS_2),
+            (4, EventClass.CLASS_3),
+        ):
+            body = _class_read(outstation, variation)[4:]
+
+            assert body[3] == len(outstation.EVENTS[event_class])
+            value = int.from_bytes(body[6:10], "little")
+            assert value == round(outstation.EVENTS[event_class][0][1])
+
+    def test_an_integrity_poll_carries_events_and_then_the_point_map(self, outstation):
+        """Classes 1, 2, 3 and 0, which is the request the sweep sends and the
+        one a peer would send once configured to."""
+        body = _class_read(outstation, 2, 3, 4, 1)[4:]
+
+        assert body[0] == 32, "the events lead"
+        assert body.endswith(
+            analog_range(0, outstation.POINTS, variation=AnalogVariation.INT32_WITH_FLAG)
+        ), "and the point map follows them"
+
+    def test_the_classes_are_announced_in_the_indications(self, outstation):
+        """How a master knows to ask. Derived from the buffers, so they cannot
+        disagree with what a class read returns."""
+        response = _class_read(outstation, 1)
+
+        assert response[2] & IINBit.CLASS_1_EVENTS
+        assert response[2] & IINBit.CLASS_2_EVENTS
+        assert response[2] & IINBit.CLASS_3_EVENTS

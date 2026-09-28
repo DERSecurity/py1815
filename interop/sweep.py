@@ -216,6 +216,39 @@ CASES: list[Case] = [
         note="refused per object rather than per fragment: the IIN stays clear",
     ),
     _silent(FunctionCode.DIRECT_OPERATE_NR, "control: direct operate, no acknowledgment"),
+    # -- the event classes ----------------------------------------------------
+    *(
+        Case(
+            name=f"read: class {number}",
+            payload=_app(FunctionCode.READ, bytes([60, number + 1, 0x06])),
+            expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+            note="answered from the buffers rather than from the point map",
+        )
+        for number in (1, 2, 3)
+    ),
+    Case(
+        name="read: integrity poll",
+        # Classes 1, 2, 3 and then 0, which is what a real master sends on
+        # startup and the one request that exercises both sources at once.
+        payload=_app(
+            FunctionCode.READ,
+            bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06, 60, 1, 0x06]),
+        ),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+        note="events and static data in one response, the events in front",
+    ),
+    # -- the one unsolicited request this outstation can honestly agree to ----
+    Case(
+        name="unsolicited: disable",
+        # Naming classes 1, 2 and 3, which is the shape a real master sends
+        # rather than a bare function code.
+        payload=_app(
+            FunctionCode.DISABLE_UNSOLICITED,
+            bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06]),
+        ),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=IIN2Bit.FUNC_NOT_SUPPORTED),
+        note="an outstation that sends none is already in the state this asks for (D21)",
+    ),
     # -- everything else the outstation does not implement --------------------
     _refused(FunctionCode.IMMED_FREEZE, "freeze: immediate"),
     _refused(FunctionCode.FREEZE_CLEAR, "freeze: clear"),
@@ -227,8 +260,11 @@ CASES: list[Case] = [
     _refused(FunctionCode.START_APPLICATION, "application: start"),
     _refused(FunctionCode.STOP_APPLICATION, "application: stop"),
     _refused(FunctionCode.SAVE_CONFIGURATION, "configuration: save"),
-    _refused(FunctionCode.ENABLE_UNSOLICITED, "unsolicited: enable"),
-    _refused(FunctionCode.DISABLE_UNSOLICITED, "unsolicited: disable"),
+    _refused(
+        FunctionCode.ENABLE_UNSOLICITED,
+        "unsolicited: enable",
+        "asks for something this outstation does not do; refused rather than agreed to",
+    ),
     _refused(FunctionCode.ASSIGN_CLASS, "class: assign"),
     _refused(FunctionCode.DELAY_MEASURE, "time: delay measurement"),
     _refused(FunctionCode.RECORD_CURRENT_TIME, "time: record current"),

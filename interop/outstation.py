@@ -1,4 +1,4 @@
-"""The outstation under test, serving a fixed point map.
+"""The outstation under test, serving a fixed point map and a fixed event buffer.
 
 Run by the interoperability job, not by the test suite. It exists so the master
 on the other side has something deterministic to check against: the values below
@@ -8,6 +8,17 @@ negative one and a point marked offline.
 It also accepts controls, over points chosen so that a master can see both
 answers in one request: some it will operate, and one it deliberately will
 not.
+
+And it holds events, in all three classes, carrying values no static read of
+this fixture ever returns and none of which repeats across classes. A peer
+reporting one of those numbers can only have read it from the buffers, and only
+from the class it belongs to.
+
+No peer *master* reads them yet: the C++ probe scans group 30 variation 1 and
+the Rust master is configured for class 0 only. What reads them today is the
+function code sweep, whose traffic Wireshark and Suricata dissect -- so the wire
+format is checked by implementations that are not this one, while a master's
+interpretation of it is not. That gap is named in the event plan.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -29,7 +40,14 @@ from py1815.control import (
     encode_analog_output_status,
     encode_binary_output_status,
 )
-from py1815.objects import AnalogPoint, AnalogVariation, analog_flags, analog_range
+from py1815.events import EventBuffers, EventClass
+from py1815.objects import (
+    AnalogPoint,
+    AnalogVariation,
+    BinaryPoint,
+    analog_flags,
+    analog_range,
+)
 from py1815.server import OutstationServer
 from py1815.session import Control, Session, UnknownObject
 
@@ -54,6 +72,55 @@ POINTS = [
     )
     for index, value in enumerate(EXPECTED)
 ]
+
+
+#: Events this fixture holds, per class, as ``(index, value)``.
+#:
+#: The values are deliberately unlike anything ``EXPECTED`` holds. A master that
+#: reports 101 cannot have got it from a static read, which is the whole of what
+#: the event cases prove: that the class it asked for was answered from the
+#: buffers rather than from the point map.
+#:
+#: The values are distinct across the classes as well as from the point map,
+#: and that -- not the indices -- is what catches a class being mixed up. The
+#: indices are deliberately reused: class 1 holds analog 0 and 1 and a binary
+#: event at index 0 too, because a peer that keys events by index alone should
+#: be seen to do so rather than accommodated.
+EVENTS = {
+    EventClass.CLASS_1: ((0, 101.0), (1, 102.0)),
+    EventClass.CLASS_2: ((2, 203.0),),
+    EventClass.CLASS_3: ((3, 304.0),),
+}
+
+#: A binary event, in class 1 behind the analog ones, so that a class 1 read
+#: comes back as two blocks of different groups in the order the points changed.
+#: A peer that gathers them by type instead of keeping that order is telling its
+#: operator a different story about when things happened.
+BINARY_EVENT_INDEX = 0
+
+
+#: Recorded once at startup rather than driven from a timer. The peers need
+#: something deterministic to assert against, and a clock that keeps adding
+#: events makes every assertion a race -- a master reading twice would see a
+#: different answer for reasons that have nothing to do with the protocol.
+#: Liveness is not what these jobs are testing.
+def seeded_events() -> EventBuffers:
+    """The buffers this fixture serves, filled and ready to read."""
+    buffers = EventBuffers()
+    stamp = 0
+    for event_class, points in EVENTS.items():
+        for index, value in points:
+            stamp += 1
+            buffers.record_analog(
+                index, AnalogPoint(value), event_class=event_class, timestamp_ms=stamp
+            )
+    buffers.record_binary(
+        BINARY_EVENT_INDEX,
+        BinaryPoint(state=True),
+        event_class=EventClass.CLASS_1,
+        timestamp_ms=stamp + 1,
+    )
+    return buffers
 
 
 #: Binary outputs this fixture will operate.
@@ -188,6 +255,7 @@ async def main() -> None:
     session = Session(
         FixedProvider(controls),
         control_provider=controls,
+        events=seeded_events(),
         outstation_address=args.outstation_address,
         master_address=args.master_address,
     )
