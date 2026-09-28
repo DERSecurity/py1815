@@ -273,8 +273,10 @@ for ever about a loss it was told about once. The same holds for a master that p
 Every other response carries the bit without asking. A refusal, a write, a control echo and
 `DISABLE_UNSOLICITED` all report the overflow, because the indications are derived on every response
 and a master should learn of a loss as soon as it speaks to the outstation -- but none of them is a
-place an acknowledgement belongs, and none needs to be: a master that cares about events reads them,
-and that read is what retires the report. A master that never reads events has nothing to retire.
+place an acknowledgement belongs, and none needs to be. *Any* read retires the report, class 0
+included, as the paragraph above says: the line is between a master that reads and one that does
+not, not between one that reads events and one that reads static data. A master that never reads at
+all has nothing to retire, and nothing it would do with the answer.
 
 **D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller records the event, and
 under **D6** this library holds no point map for a master to reassign. Accepting the request would
