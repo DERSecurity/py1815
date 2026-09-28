@@ -361,12 +361,21 @@ def _counted(asked: int, sequence: int = 0) -> bytes:
     ) + asked.to_bytes(2, "little")
 
 
+#: The groups an event block can carry. Anything else in a response body is the
+#: provider's static data, which travels last (D33) and is not walked here.
+_EVENT_GROUPS = (2, 32)
+
+
 def _carried(fragments: list[bytes]) -> int:
-    """How many events a whole response delivered, across all its fragments."""
+    """How many events a whole response delivered, across all its fragments.
+
+    Stops at the first block that is not an event group rather than walking on
+    into the static body, whose objects this parser knows nothing about.
+    """
     total = 0
     for fragment in fragments:
         body = fragment[4:]
-        while body:
+        while len(body) >= 4 and body[0] in _EVENT_GROUPS:
             wide = body[2] == QualifierCode.UINT16_COUNT_UINT16_INDEX
             count = int.from_bytes(body[3:5], "little") if wide else body[3]
             header, item = (5, 13) if wide else (4, 12)
@@ -443,3 +452,102 @@ class TestACountIsABoundOnTheResponse:
         fragments = _walk(session, session._handle_fragment(request))
 
         assert _carried(fragments) == 500
+
+
+class TestTheBoundHoldsWithABodyToDeliver:
+    """The bound decides when the events stop, and the body has to travel in
+    the fragment that ends the response. A body too large to follow a full
+    fragment of events would otherwise defer the ending every time, and the
+    bound would bound nothing."""
+
+    def test_a_large_body_does_not_let_the_response_run_past_it(self):
+        session, _ = _session(_filled(6000), static=1500)
+
+        fragments = _walk(session, session._handle_fragment(INTEGRITY), limit=80)
+
+        assert len(fragments) == 16, "not the forty this ran to before"
+        assert fragments[-1][0] & FIN_MASK
+
+    def test_and_the_body_still_arrives(self):
+        """Stopping the events is not an excuse to drop the static data the
+        same request asked for."""
+        session, provider = _session(_filled(6000), static=1500)
+
+        fragments = _walk(session, session._handle_fragment(INTEGRITY), limit=80)
+
+        assert fragments[-1][4:].endswith(provider.body)
+
+    def test_every_fragment_still_honours_the_ceiling(self):
+        session, _ = _session(_filled(6000), static=1500)
+
+        for fragment in _walk(session, session._handle_fragment(INTEGRITY), limit=80):
+            assert len(fragment) <= 2048
+
+    def test_a_count_above_the_bound_does_not_reduce_what_the_bound_delivers(self):
+        """The refit that makes the body fit runs `_event_body` a second time
+        and decrements the counts as it goes. Without putting them back first,
+        the last fragment is short by whatever the discarded fit placed --
+        events the master asked for and never received.
+
+        It only shows where the count is still live at the last fragment *and*
+        the budget is what cuts it there, which is a count a little above what
+        the response delivers: far enough that the count does not end it, close
+        enough that the double decrement drives the remainder to nothing. Hence
+        the range rather than one number, and the baseline rather than a
+        constant."""
+        calibrate, _ = _session(_filled(6000), static=1500)
+        baseline = _carried(_walk(calibrate, calibrate._handle_fragment(INTEGRITY), limit=80))
+
+        for extra in (130, 140, 150):
+            counted = (
+                bytes([0xC0, FunctionCode.READ, 60, 2, QualifierCode.UINT16_COUNT])
+                + (baseline + extra).to_bytes(2, "little")
+                + bytes([60, 1, 0x06])
+            )
+            session, _ = _session(_filled(6000), static=1500)
+
+            fragments = _walk(session, session._handle_fragment(counted), limit=80)
+
+            assert _carried(fragments) == baseline, f"asking for {extra} more delivered fewer"
+
+
+class TestALostFinalFragment:
+    """The fragment most worth replaying is the one that ends the response.
+    Losing it strands a master with nothing left to confirm and no way to ask
+    again -- the same deadlock D34 exists to prevent, at the last step."""
+
+    def _to_the_end(self, session, first):
+        fragments = _walk(session, first)
+        return fragments[-1], fragments[-2][0] & 0x0F
+
+    def test_repeating_the_confirmation_before_it_sends_it_again(self):
+        session, _ = _session(_filled())
+        last, before = self._to_the_end(session, session._handle_fragment(_read()))
+
+        again = session._handle_fragment(_confirm(before))
+
+        assert again == last, "byte for byte"
+
+    def test_confirming_it_ends_the_conversation(self):
+        session, _ = _session(_filled())
+        last, _ = self._to_the_end(session, session._handle_fragment(_read()))
+
+        assert session._handle_fragment(_confirm(last[0] & 0x0F)) == b""
+        assert session._conversation is None
+
+    def test_and_then_there_is_nothing_left_to_replay(self):
+        session, _ = _session(_filled())
+        last, before = self._to_the_end(session, session._handle_fragment(_read()))
+        session._handle_fragment(_confirm(last[0] & 0x0F))
+
+        assert session._handle_fragment(_confirm(before)) == b""
+
+    def test_a_response_of_one_fragment_holds_nothing_open(self):
+        """There was never a continuation to lose, so there is nothing to keep
+        for the replaying of it."""
+        session, _ = _session(_filled(5))
+
+        only = session._handle_fragment(_read())
+
+        assert only[0] & FIN_MASK
+        assert session._conversation is None

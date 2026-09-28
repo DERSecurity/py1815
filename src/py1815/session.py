@@ -327,6 +327,11 @@ class _Conversation:
     #: repeating it means the continuation was lost, and is answered by sending
     #: that continuation again (D34).
     previous: int | None = None
+    #: Whether the last fragment has gone out. It is kept for one more round
+    #: rather than discarded, because the fragment most worth replaying is the
+    #: one that ends the response: losing it strands a master that has nothing
+    #: left to confirm and no way to ask again.
+    finished: bool = False
 
 
 class ReadProvider(Protocol):
@@ -966,27 +971,50 @@ class Session:
                 fragment=response,
                 reported_overflow=overflowed,
             )
-        self._conversation = None if final else conversation
+        self._conversation = self._retained(conversation, final)
         return response
+
+    @staticmethod
+    def _retained(conversation: _Conversation, final: bool) -> _Conversation | None:
+        """The conversation to carry forward, if any.
+
+        A finished one is kept when it had continuations, so that D34 can
+        replay its *last* fragment -- the one whose loss leaves a master with
+        nothing left to confirm and no way to ask again. It is discarded on the
+        confirmation that follows, or by the next request (D30).
+        """
+        if not final:
+            return conversation
+        if conversation.previous is None:
+            # One fragment, so there was never a continuation to lose.
+            return None
+        conversation.finished = True
+        return conversation
 
     def _fragment(self, conversation: _Conversation) -> tuple[bytes, list[Event], bool]:
         """One fragment of a read's answer: octets, its events, and whether it ends.
 
-        Built twice in the case that matters, and the second build is the point.
-        Events are first fitted to what is left once the provider's body is paid
-        for, because the body travels with the last fragment (D33) and this may
-        be it. If they all fit, it is: the body rides along and `FIN` is set.
+        Events are fitted to the whole budget, not to what is left after the
+        provider's body. The body travels with the last fragment (D33), so
+        reserving room for it in every fragment would hold back a fragment's
+        worth of events for something arriving several round trips later.
 
-        If they do not, this fragment is not the last, so the body is not owed
-        here -- and the events are refitted to the whole budget rather than to a
-        budget reserving room for something that is no longer coming. Leaving the
-        first fit in place would hold back a fragment's worth of events for a
-        body that travels several round trips later.
+        Which leaves three ways a response ends, and the third is the one that
+        is easy to miss:
+
+        - the events are done and the body fits beside them, so it rides along;
+        - the events are done and it does not, so it takes a fragment of its
+          own rather than displacing events to make room;
+        - the fragment bound is reached with events still waiting, and *then*
+          the body has to travel here whether it fits or not. That case refits
+          against a reserved budget, because a body too large to follow a full
+          fragment of events would otherwise defer the ending every time.
         """
         whole = self._max_response - RESPONSE_HEADER_SIZE
         if not conversation.headers:
             return conversation.static, [], True
 
+        owed = list(conversation.counts)
         body, selected, complete = self._event_body(
             conversation.headers, conversation.counts, whole
         )
@@ -1000,11 +1028,25 @@ class Session:
         if more and not at_bound:
             return body, selected, False
 
-        if at_bound and more:
+        if more:
+            # The bound has been reached with events still waiting, so this
+            # fragment ends the response -- which means the body has to travel
+            # in it. Refitted against a budget that reserves room, because a
+            # body too large to follow a full fragment of events would
+            # otherwise defer the ending every time and the bound would bound
+            # nothing: a response of sixteen was observed running to forty.
+            #
+            # The counts go back first. `_event_body` decrements them by what it
+            # placed, and what the discarded fit placed was never sent.
             logger.info(
                 "dnp3: ending a response at %d fragments with events still buffered",
                 conversation.fragments,
             )
+            conversation.counts[:] = owed
+            body, selected, _ = self._event_body(
+                conversation.headers, conversation.counts, whole - len(conversation.static)
+            )
+            return body + conversation.static, selected, True
 
         # The events are done, so the body travels now (D33) -- unless it will
         # not fit beside them, in which case it takes a fragment of its own
@@ -1056,7 +1098,11 @@ class Session:
             self._events.clear_overflow()
         self._outstanding = None
 
-        if conversation is None:
+        if conversation is None or conversation.finished:
+            # The response is over. The conversation was held only so that its
+            # last fragment could be replayed, and this confirmation is the
+            # acknowledgement that made that unnecessary.
+            self._conversation = None
             return b""
         conversation.previous = sequence
         conversation.fragments += 1
@@ -1095,7 +1141,7 @@ class Session:
             )
         else:
             self._outstanding = None
-        self._conversation = None if final else conversation
+        self._conversation = self._retained(conversation, final)
         return response
 
     def _split_read(
