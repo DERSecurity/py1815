@@ -329,12 +329,36 @@ is set until a master clears it, and **D22** and **D23** put the class and
 overflow bits there on their own terms -- a response reporting them is still a
 successful one.
 
-### 6. Interoperability
+### 6. Interoperability -- half landed
 
-`interop/outstation.py` records events on a timer so the peers have something to
-read. The C++ and Rust masters both poll classes on startup, so this is the part
-of the job that has been asking for events since it was written -- the warnings
-in its log are the outstation refusing the questions it was asked.
+`interop/outstation.py` holds events, and the function code sweep reads them:
+each class on its own and an integrity poll naming all four. The sweep's traffic
+is dissected by Wireshark and Suricata, so the event objects are checked on the
+wire by implementations that are not this one.
+
+**No peer master reads them yet**, which this section assumed and which is not
+true. The C++ probe scans group 30 variation 1 rather than any class, and the
+Rust master is configured with `EventClasses::none()` and `Classes::class0()`.
+So a master's *interpretation* of an event -- reassembling a class read,
+confirming it, applying the events in the order they arrived -- is still the
+part nothing outside this repository has exercised.
+
+Making one of them read events is not a configuration change. In `dnp3-rs` an
+event and a static value arrive through the same handler, so a class scan added
+to the Rust master would overwrite the static readings its existing assertions
+depend on, ordered by where the events sit in the response. The collector has to
+tell the two apart first. That is the remaining work, and it belongs with a peer
+run to verify it rather than with the fixture change.
+
+Seeded at startup rather than driven from a timer, which is what this section
+originally said. The peers need something deterministic to assert against, and a
+clock that keeps adding events makes every assertion a race -- a master reading
+twice would see a different answer for reasons that have nothing to do with the
+protocol. Liveness is not what these jobs test.
+
+The values are deliberately unlike anything the point map holds, which is what
+makes the case provable: a master reporting one of them cannot have read it as
+static data.
 
 **Acceptance:** a peer reads events it did not read as static data, and the
 sweep's class 1 to 3 cases return objects rather than an empty response.
