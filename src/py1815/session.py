@@ -1025,34 +1025,46 @@ class Session:
         # sixteen empty fragments. That case ends here, which is D27's cap.
         more = not complete and bool(selected)
         at_bound = conversation.fragments >= _MAX_FRAGMENTS
-        if more and not at_bound:
-            return body, selected, False
+        fits = len(body) + len(conversation.static) <= whole
 
-        if more:
-            # The bound has been reached with events still waiting, so this
-            # fragment ends the response -- which means the body has to travel
-            # in it. Refitted against a budget that reserves room, because a
-            # body too large to follow a full fragment of events would
-            # otherwise defer the ending every time and the bound would bound
-            # nothing: a response of sixteen was observed running to forty.
-            #
-            # The counts go back first. `_event_body` decrements them by what it
-            # placed, and what the discarded fit placed was never sent.
-            logger.info(
-                "dnp3: ending a response at %d fragments with events still buffered",
-                conversation.fragments,
-            )
+        if at_bound:
+            # The response ends here whatever the events did. Asking only when
+            # the *budget* cut them short left the bound bypassed by a device
+            # recording a batch between every confirmation: each fragment
+            # answers its buffer in full, the body never fits beside it, and the
+            # response never ends. Sixty fragments and counting was observed,
+            # which is the producer-outpacing-the-conversation case D32 exists
+            # to stop.
+            if more:
+                logger.info(
+                    "dnp3: ending a response at %d fragments with events still buffered",
+                    conversation.fragments,
+                )
+            if fits:
+                # Nothing to refit: a body that already follows these events
+                # would be placed identically against the reserved budget, so
+                # this only saves the work and the counts it would disturb.
+                return body + conversation.static, selected, True
+
+            # The body will not follow these events, so they give way to it --
+            # the request asked for static data and this is the last chance to
+            # answer that half of it. The counts go back first: `_event_body`
+            # decrements them by what it placed, and what the discarded fit
+            # placed was never sent.
             conversation.counts[:] = owed
             body, selected, _ = self._event_body(
                 conversation.headers, conversation.counts, whole - len(conversation.static)
             )
             return body + conversation.static, selected, True
 
+        if more:
+            return body, selected, False
+
         # The events are done, so the body travels now (D33) -- unless it will
         # not fit beside them, in which case it takes a fragment of its own
         # rather than displacing events to make room. The next call finds no
         # events left and sends the body alone.
-        if len(body) + len(conversation.static) <= whole:
+        if fits:
             return body + conversation.static, selected, True
         return body, selected, False
 

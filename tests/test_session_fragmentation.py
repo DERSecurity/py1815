@@ -511,6 +511,66 @@ class TestTheBoundHoldsWithABodyToDeliver:
             assert _carried(fragments) == baseline, f"asking for {extra} more delivered fewer"
 
 
+class TestADeviceThatKeepsRecording:
+    """The case D32 exists for, and the one the bound kept missing.
+
+    A device polling between every confirmation, in batches that answer in full
+    but leave no room for the body beside them, took every fragment down the
+    path where the events were *complete* -- so the bound, which was only asked
+    about when the budget cut them short, was never consulted. Sixty fragments
+    and counting was observed."""
+
+    BODY = 1500
+
+    @staticmethod
+    def _recorder(buffers: EventBuffers):
+        index = [0]
+
+        def batch(count: int) -> None:
+            for _ in range(count):
+                buffers.record_analog(
+                    index[0] % 250,
+                    AnalogPoint(float(index[0])),
+                    event_class=EventClass.CLASS_1,
+                    timestamp_ms=1,
+                )
+                index[0] += 1
+
+        return batch
+
+    def _run(self, size: int) -> list[bytes]:
+        buffers = EventBuffers(capacity=20_000)
+        batch = self._recorder(buffers)
+        batch(size)
+        session, _ = _session(buffers, static=self.BODY)
+        fragments = [session._handle_fragment(INTEGRITY)]
+        while not fragments[-1][0] & FIN_MASK and len(fragments) < 80:
+            batch(size)
+            nxt = session._handle_fragment(_confirm(fragments[-1][0] & 0x0F))
+            if not nxt:
+                break
+            fragments.append(nxt)
+        return fragments
+
+    def test_the_response_still_ends(self):
+        for size in (60, 100, 150):
+            fragments = self._run(size)
+
+            assert fragments[-1][0] & FIN_MASK, f"a batch of {size} never ended"
+            assert len(fragments) <= 16, f"a batch of {size} ran to {len(fragments)}"
+
+    def test_and_the_body_is_still_delivered(self):
+        """Ending the events early is not an excuse to drop the static data the
+        same request asked for."""
+        fragments = self._run(100)
+
+        assert fragments[-1][4:].endswith(Provider(self.BODY).body)
+
+    def test_every_fragment_honours_the_ceiling(self):
+        for fragment in self._run(100):
+            assert len(fragment) <= 2048
+
+
 class TestALostFinalFragment:
     """The fragment most worth replaying is the one that ends the response.
     Losing it strands a master with nothing left to confirm and no way to ask
