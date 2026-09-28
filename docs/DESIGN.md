@@ -207,7 +207,8 @@ say that data was lost rather than to pretend it was not.
 The two interact where a pending selection is evicted. `drop` skips events it cannot find, so a
 confirmation retires whatever survived and silently ignores what did not, which is the right outcome
 -- there is nothing to retire and nothing to report beyond the overflow bit already set. The
-acceptance criteria below have to cover that case rather than assume a selection outlives the wait.
+acceptance criteria in [the event plan](planning/EVENTS.md) cover that case rather than assume a
+selection outlives the wait.
 
 **D19 -- One outstanding response at a time, and a new request replaces it.** Under **D7** there is
 one association, so there is one unconfirmed response to track. A read arriving while one is
@@ -253,6 +254,12 @@ whose data is invisible. Deriving them on each response makes drift impossible r
 `EventBuffers.overflowed()` is true, and `clear_overflow` runs once the response carrying the bit is
 confirmed -- not when it is sent. An overflow reported in a response the master never received is an
 overflow the master never learned about.
+
+Confirmed, and nothing lost since. A confirmation acknowledges the loss *that response* reported, so
+what is compared is the count of events the buffer has dropped -- not a flag, which reads the same
+after one eviction and after a hundred. If more were evicted while the confirmation was in flight,
+the flag stands and the next response reports it again, because that later loss is one the master
+has not been told about.
 
 A response reporting one therefore sets `CON` whether or not any event travels with it. The bit is
 the thing being acknowledged, so a response carrying it has something to confirm on its own account.

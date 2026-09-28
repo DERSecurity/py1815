@@ -145,11 +145,13 @@ in its log are the outstation refusing the questions it was asked.
 **Acceptance:** a peer reads events it did not read as static data, and the
 sweep's class 1 to 3 cases return objects rather than an empty response.
 
-### 7. Documentation
+### 7. Documentation -- landed
 
-D17 through D24 into `DESIGN.md`; the roadmap entry for events narrowed to the
-unsolicited half that remains; `README.md`'s status line, which currently says
-the event path is not implemented; and `CHANGELOG.md`.
+D17 through **D27** into `DESIGN.md` -- three more than this section was written
+expecting, since D25, D26 and D27 came out of review rather than out of the
+plan. The roadmap entry narrowed to the unsolicited half that remains;
+`README.md`'s status line, which said the event path was not implemented; and
+`CHANGELOG.md`.
 
 ## Sequencing
 
@@ -159,9 +161,9 @@ data. Then 2, which is the state machine. Then 5, which is independent and
 small. Then 3, which is the largest and the one most likely to want its own
 plan. Then 6.
 
-Sections 1, 2, 4 and 5 have landed, along with D25, D26 and D27, none of which
-were in this plan when it was written -- they came out of review. Sections 3, 6
-and 7 remain.
+Sections 1, 2, 4, 5 and 7 have landed, along with D25, D26 and D27, none of
+which were in this plan when it was written -- they came out of review. Sections
+3 and 6 remain, and 3 has [a plan of its own](FRAGMENTATION.md).
 
 ## Open
 
