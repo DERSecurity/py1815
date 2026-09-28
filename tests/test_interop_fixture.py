@@ -346,8 +346,12 @@ class TestTheFixtureHoldsEvents:
         than over the one whose wire bytes are checked below. Class 2 or 3
         reusing a static value would weaken the proof just as much, and would
         not show up in a class 1 assertion."""
+        # Rounded, not truncated, because that is what the encoder does for the
+        # INT32 variation. Truncating here would let a future 9.6 go on the wire
+        # as 10, collide with the static point of that name, and pass this
+        # assertion as a 9.
         seeded = [
-            int(value) for points in outstation_module().EVENTS.values() for _, value in points
+            round(value) for points in outstation_module().EVENTS.values() for _, value in points
         ]
 
         assert not set(seeded) & set(outstation_module().EXPECTED)
@@ -358,7 +362,7 @@ class TestTheFixtureHoldsEvents:
         have got it from the point map."""
         body = _class_read(outstation, 2)[4:]
 
-        seeded = [int(value) for _, value in outstation.EVENTS[EventClass.CLASS_1]]
+        seeded = [round(value) for _, value in outstation.EVENTS[EventClass.CLASS_1]]
         # Four octets of object header, then an index octet, a flag octet,
         # and the little-endian int32 of group 32 variation 3.
         assert int.from_bytes(body[6:10], "little") == seeded[0]
@@ -381,7 +385,7 @@ class TestTheFixtureHoldsEvents:
 
             assert body[3] == len(outstation.EVENTS[event_class])
             value = int.from_bytes(body[6:10], "little")
-            assert value == int(outstation.EVENTS[event_class][0][1])
+            assert value == round(outstation.EVENTS[event_class][0][1])
 
     def test_an_integrity_poll_carries_events_and_then_the_point_map(self, outstation):
         """Classes 1, 2, 3 and 0, which is the request the sweep sends and the
