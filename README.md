@@ -62,6 +62,18 @@ measurements, and those tables are distributed to DNP Users Group members rather
 so a library that embedded them could not be shared. Instead the library defines the map format
 and reads a table supplied by the caller.
 
+## Documentation
+
+The full documentation site, including an introduction to how DNP3 itself works
+and an API reference generated from the source:
+
+<https://dersecurity.github.io/py1815/>
+
+```
+pip install -e ".[docs]"
+mkdocs serve                 # http://127.0.0.1:8000
+```
+
 ## Development
 
 ```
@@ -69,9 +81,10 @@ pytest            # tests
 ruff check .      # lint
 ruff format --check .
 mypy --strict src
+mkdocs build --strict        # docs, warnings are errors
 ```
 
-All four run in CI and all four must pass.
+All five run in CI and all five must pass.
 
 ## Testing approach
 

@@ -1,0 +1,59 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # mkdocstrings imports the package to read its docstrings, so the docs
+      # build doubles as a check that the public API is importable.
+      - run: pip install -e ".[docs]"
+      - name: Build (warnings are errors)
+        run: mkdocs build --strict
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && vars.PUBLISH_DOCS == 'true'
+        with:
+          path: site
+
+  deploy:
+    # Pull requests build the docs but do not publish them.
+    #
+    # Publishing is also opt-in via the PUBLISH_DOCS repository variable,
+    # because a GitHub Pages site is world-readable even when its repository
+    # is private, and this one renders source. Enabling Pages before the
+    # repository itself is public would publish the code ahead of the
+    # decision to do so. Set PUBLISH_DOCS=true once that decision is made;
+    # until then the build above still runs on every push and pull request,
+    # so the documentation stays verified without being served.
+    if: >-
+      github.ref == 'refs/heads/main'
+      && github.event_name != 'pull_request'
+      && vars.PUBLISH_DOCS == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

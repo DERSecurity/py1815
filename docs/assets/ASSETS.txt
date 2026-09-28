@@ -4,6 +4,10 @@ satori.png            Satori lockup, dark text -- for light backgrounds
 satori-dark.png       Satori lockup for dark backgrounds -- the official
                       dark export, with its uniform background lifted to
                       transparency so the mark floats on any dark theme
+satori-mark.png       square Satori mark, charcoal on transparency --
+                      the docs-site favicon
+satori-mark-dark.png  the same mark in the brand cream, for dark
+                      surfaces -- the docs-site header logo
 dersec-dark.png       DER Security lockup, dark text
 dersec-white.png      DER Security lockup, white text
 
