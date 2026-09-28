@@ -163,7 +163,7 @@ plan. Then 6.
 
 Sections 1, 2, 4, 5 and 7 have landed, along with D25, D26 and D27, none of
 which were in this plan when it was written -- they came out of review. Sections
-3 and 6 remain, and 3 has [a plan of its own](FRAGMENTATION.md).
+3 and 6 remain.
 
 ## Open
 
