@@ -52,9 +52,9 @@ it is worth being explicit that it is not an exception being carved out: under
 **D18** a confirmation is already the event that moves the state machine on. It
 retires what was sent. Sending what comes next is the same transition.
 
-**D29 -- Each fragment is built from the buffer as it then stands, and nothing
-is carried between them.** Not built ahead and queued, and -- the part a first
-draft of this plan got wrong -- not carried as a remainder either.
+**D29 -- Each fragment is built from the buffer as it then stands.** Not built
+ahead and queued, and -- the part a first draft of this plan got wrong -- not
+carried as a remainder either.
 
 The obvious design is for `_Outstanding` to hold the events that did not fit and
 for the next fragment to come off that list. It cannot. `_Outstanding.events`
@@ -75,16 +75,33 @@ That last point is why this needs a bound rather than a rule about which events
 belong to which response. A buffer filling as fast as it drains would otherwise
 answer for ever. See **D32**.
 
+The rule this states is not "hold nothing". A response does hold the provider's
+body across its fragments (**D33**), and the difference is worth naming, because
+"carry nothing" and "carry one body" are two rules and a plan that asserts both
+without a reason is a plan that will be read as contradicting itself.
+
+What may not be held is state that is **the caller's to size**, or whose staleness
+would put something on the wire that is no longer true. The event remainder fails
+both: it is bounded only by `capacity`, which the operator chooses and this
+library does not cap, and an evicted event sent from it would be one the
+outstation has already reported losing. The provider's body fails neither. It is
+bounded by construction -- **D31** refuses one that does not fit a single fragment,
+so holding it costs at most one fragment's worth -- and a body a few round trips
+old is a stale *reading*, which is a different thing from a false statement about
+what was lost.
+
 **D30 -- A request arriving mid-sequence ends the conversation.** Under **D19** a
 new request supersedes what was outstanding, and a partly-sent response is no
 different: the master has moved on, and the events it did not take stay buffered
 for the read it just sent. The fragments already confirmed stay retired, because
 they were received.
 
-Under **D29** there is nothing to discard beyond the fact that more was coming,
-since no remainder is held. That makes this decision cheap to implement and easy
-to get wrong in the other direction -- forgetting to clear the flag would have
-the next confirmation continue a response the master has already abandoned.
+Under **D29** what is discarded is the fact that more was coming and the
+provider's body held for the last fragment -- no remainder, because none is held.
+That makes this decision cheap to implement and easy to get wrong in the other
+direction: forgetting to clear the flag would have the next confirmation continue
+a response the master has already abandoned, and forgetting the body would leave
+a read's answer to be delivered inside somebody else's.
 
 **D31 -- Static data is not split, and a provider body that does not fit is
 still refused.** The read provider returns opaque octets and this library cannot
@@ -99,6 +116,12 @@ the open question below on whether `ReadProvider` should change shape.
 conversation carries at most so many, and the last of them sets `FIN` whether or
 not the buffer is empty -- after which the class indication bits go on asking,
 which is **D27**'s cap reached later and with most of the buffer delivered.
+
+Reaching the bound ends the events, not the response. A read that also named
+class 0 still owes the master its static data, so the provider's body goes out
+with `FIN` as it would have anyway (**D33**). Stopping short of it would answer a
+request for static data with events and nothing else, which is a worse failure
+than being chatty.
 
 A bound is needed because **D29** lets events recorded mid-conversation join it.
 Without one, an outstation whose device polls faster than its master confirms
@@ -117,10 +140,20 @@ the fragments that follow, so it ends up holding an event value older than the
 reading the same response carried. The whole point of events-before-static is
 that the static value wins.
 
-The body is read once, when the first fragment is built, and held until the last.
-A fresher body could be read per fragment, and is not, because a response that
-reports two different values for one point over its own length is a worse answer
-than one that is a moment old.
+The body is read once, when the first fragment is built, and held until the last
+-- the one thing a response carries across its own fragments, which **D29**
+explains the shape of.
+
+Three reasons, in increasing order of how much they matter. A response reporting
+two different values for one point over its own length is a worse answer than one
+a moment old. The provider is the caller's code and may poll a device to answer,
+so calling it once per fragment turns one logical read into several.
+
+And the one that decides it: a body re-read at the end might no longer fit. The
+response would then be mid-conversation, already committed, with nothing good to
+send -- **D31**'s refusal is an answer to a request, not to a continuation of one
+this outstation has already begun. Measuring the body once, at the start, is what
+makes the last fragment's fit knowable from the first.
 
 ## Work
 
@@ -128,14 +161,27 @@ than one that is a moment old.
 
 `_Outstanding` records that the response is unfinished and holds the provider's
 body for the last fragment (**D33**). It does *not* record the events that did
-not fit (**D29**). `FIN` is set when the buffer has nothing more for the classes
-the read named, or when **D32**'s bound is reached.
+not fit (**D29**).
+
+`FIN` goes on the fragment that finishes the response, which is not always the
+one that empties the buffer. For an events-only read it is the fragment after
+which the named classes hold nothing more, or the one **D32**'s bound stops at.
+For a read that also named class 0 it is the fragment carrying the provider's
+body -- and if that body does not fit beside the last events, it takes a fragment
+of its own rather than displacing them. A response whose final fragment is
+nothing but static data is correct; one that drops events to make room for it is
+not.
 
 **Acceptance:** a buffer larger than one fragment produces a first fragment with
 `FIR` set, `FIN` clear and `CON` set; the events behind it are still in the
 buffer and are *not* referenced by `_Outstanding`; a read whose events fit in one
 fragment is unchanged, `FIN` set and nothing outstanding beyond the confirmation
 it already asked for.
+
+And the distinction **D29** rests on, which is only visible from outside as a
+count: the provider is called **once per response**, not once per fragment. A
+test that counts its calls is what stops a later simplification from re-reading
+it and reintroducing the fit problem that decided **D33**.
 
 ### 2. Continuing on confirmation
 
@@ -178,6 +224,10 @@ not fit.
 **Acceptance:** the static body arrives in the fragment carrying `FIN` and in no
 other; every event of the response precedes it; the body is the one read when the
 response began, not one read per fragment.
+
+And the case the fit argument is about: a body that does not fit beside the last
+events takes a fragment of its own, with the events before it intact rather than
+trimmed to make room.
 
 ### 6. Interoperability
 
