@@ -24,9 +24,11 @@ and industry consortium members.
 
 A DNP3 (IEEE 1815) outstation in pure Python.
 
-**Status: early development.** The protocol layers, the listener, controls and the event buffers
-are implemented and tested; the point-map loader and the event *path* -- classes 1 to 3 reaching a
-master -- are not. Nothing is released yet, and the API is not stable.
+**Status: early development.** The protocol layers, the listener, controls and the event path are
+implemented and tested: a master reads classes 1 to 3, confirms what it was sent, and is told
+through the indication bits what is still waiting. Not yet done are unsolicited responses --
+outstation-initiated traffic -- and the point-map loader; a response larger than one fragment is
+capped rather than split. Nothing is released yet, and the API is not stable.
 
 ## What it does
 
