@@ -52,21 +52,39 @@ it is worth being explicit that it is not an exception being carved out: under
 **D18** a confirmation is already the event that moves the state machine on. It
 retires what was sent. Sending what comes next is the same transition.
 
-**D29 -- Each fragment is confirmed before the next is built.** Not built ahead
-and queued. Two reasons, and the second is the one that matters:
+**D29 -- Each fragment is built from the buffer as it then stands, and nothing
+is carried between them.** Not built ahead and queued, and -- the part a first
+draft of this plan got wrong -- not carried as a remainder either.
 
-- The buffer can change between fragments. Events recorded meanwhile belong to a
-  later response, and events *evicted* meanwhile must not be sent from a queue
-  that outlived them.
-- A master that stops confirming has to leave the outstation holding one
-  fragment's worth of selection, not the whole buffer. Queuing ahead reinstates
-  exactly the unbounded retention **D18** and **D27** were written to avoid.
+The obvious design is for `_Outstanding` to hold the events that did not fit and
+for the next fragment to come off that list. It cannot. `_Outstanding.events`
+holds strong references on purpose, so that `drop` still matches what it is
+given after an eviction; a remainder held the same way keeps the whole buffer
+alive for as long as a master is slow, which is exactly the unbounded retention
+**D18** and **D27** exist to prevent. Worse, it would let an event that has since
+been *evicted* go out in a later fragment, so a master would receive an event the
+outstation had already reported losing.
 
-**D30 -- A request arriving mid-sequence abandons the rest.** Under **D19** a new
-request supersedes what was outstanding, and a partly-sent response is no
-different: the master has moved on, and the events it did not take stay
-buffered for the read it just sent. The fragments already confirmed stay
-retired, because they were received.
+So a continuation peeks the buffer again and takes what fits, exactly as the
+first fragment did. `_Outstanding` keeps only what it sent, as it does today, plus
+the fact that more remains. Events evicted in between are simply gone, which is
+what the overflow bit is for; events recorded in between join the response, which
+costs nothing and saves a round trip.
+
+That last point is why this needs a bound rather than a rule about which events
+belong to which response. A buffer filling as fast as it drains would otherwise
+answer for ever. See **D32**.
+
+**D30 -- A request arriving mid-sequence ends the conversation.** Under **D19** a
+new request supersedes what was outstanding, and a partly-sent response is no
+different: the master has moved on, and the events it did not take stay buffered
+for the read it just sent. The fragments already confirmed stay retired, because
+they were received.
+
+Under **D29** there is nothing to discard beyond the fact that more was coming,
+since no remainder is held. That makes this decision cheap to implement and easy
+to get wrong in the other direction -- forgetting to clear the flag would have
+the next confirmation continue a response the master has already abandoned.
 
 **D31 -- Static data is not split, and a provider body that does not fit is
 still refused.** The read provider returns opaque octets and this library cannot
@@ -77,25 +95,67 @@ not let a large static read do so.
 That is a real limit rather than a deferral, and the README should say so. See
 the open question below on whether `ReadProvider` should change shape.
 
+**D32 -- A response is bounded in fragments, not only in octets.** One
+conversation carries at most so many, and the last of them sets `FIN` whether or
+not the buffer is empty -- after which the class indication bits go on asking,
+which is **D27**'s cap reached later and with most of the buffer delivered.
+
+A bound is needed because **D29** lets events recorded mid-conversation join it.
+Without one, an outstation whose device polls faster than its master confirms
+never sends `FIN`, and a master that is waiting for the end of a response is a
+master that never issues another request. The number belongs here rather than
+being borrowed; what it should be is open below.
+
+**D33 -- Static data travels in the last fragment.** A read naming class 0 and
+an event class is answered with the provider's body after every event, not
+alongside the first of them.
+
+This falls out of **D20** and is easy to get wrong: putting static data in the
+first fragment -- which is what the current single-fragment code does, and what a
+naive split would keep doing -- has the master apply it *before* the events in
+the fragments that follow, so it ends up holding an event value older than the
+reading the same response carried. The whole point of events-before-static is
+that the static value wins.
+
+The body is read once, when the first fragment is built, and held until the last.
+A fresher body could be read per fragment, and is not, because a response that
+reports two different values for one point over its own length is a worse answer
+than one that is a moment old.
+
 ## Work
 
-### 1. Carrying the rest
+### 1. Saying there is more
 
-`_Outstanding` grows the events that did not fit, and `_handle_read` stops
-discarding them. `FIN` is set when nothing remains.
+`_Outstanding` records that the response is unfinished and holds the provider's
+body for the last fragment (**D33**). It does *not* record the events that did
+not fit (**D29**). `FIN` is set when the buffer has nothing more for the classes
+the read named, or when **D32**'s bound is reached.
 
 **Acceptance:** a buffer larger than one fragment produces a first fragment with
-`FIR` set, `FIN` clear and `CON` set; the events behind it are recorded as
-outstanding and are still in the buffer.
+`FIR` set, `FIN` clear and `CON` set; the events behind it are still in the
+buffer and are *not* referenced by `_Outstanding`; a read whose events fit in one
+fragment is unchanged, `FIN` set and nothing outstanding beyond the confirmation
+it already asked for.
 
 ### 2. Continuing on confirmation
 
-`_confirm` retires what the fragment carried, and returns the next fragment
-rather than `b""` when there is one, under the next application sequence.
+`_confirm` retires what the fragment carried, then peeks the buffer again and
+returns the next fragment rather than `b""`, under the next application sequence
+-- `(sequence + 1) % SEQUENCE_MODULUS`, so a conversation crossing fifteen
+continues at zero rather than storing a sixteen that no wire confirmation can
+match.
 
 **Acceptance:** confirming the first fragment yields the second; its sequence is
 one past the first's; the last carries `FIN`; confirming the last yields `b""`.
 A master that confirms only the first keeps the rest buffered.
+
+And the two the sequence arithmetic decides: a response that begins at sequence
+15 continues at 0, and the confirmation naming 0 is matched rather than ignored;
+a response long enough to wrap twice is answered throughout.
+
+An event evicted between two fragments is not sent in the second, and one
+recorded between them is (**D29**). Both are worth a test, because the first is a
+correctness claim and the second is the reason **D32** exists.
 
 ### 3. Abandonment
 
@@ -110,13 +170,22 @@ and the unsent remainder is back in the buffer rather than retired; a
 **D25** replays a repeated request octet for octet. A repeated *confirmation*
 is a different thing and needs settling -- see the open questions.
 
-### 5. Interoperability
+### 5. Mixed responses
+
+Per **D33**. A read naming class 0 and an event class, over a buffer that does
+not fit.
+
+**Acceptance:** the static body arrives in the fragment carrying `FIN` and in no
+other; every event of the response precedes it; the body is the one read when the
+response began, not one read per fragment.
+
+### 6. Interoperability
 
 Both peer masters should read a buffer that does not fit one fragment and
 reassemble it. This is the assertion that says the sequencing is right, because
 neither master shares any code with this one.
 
-### 6. Documentation
+### 7. Documentation
 
 D28 onwards into `DESIGN.md`; **D27**'s "cap rather than split" paragraph
 rewritten; the README status line, which this plan's landing makes wrong again;
@@ -135,10 +204,11 @@ rewritten; the README status line, which this plan's landing makes wrong again;
   cost of a breaking API change and of this library knowing more about the
   caller's objects than **D6** wants it to. Worth answering explicitly rather
   than by omission.
-- **A bound on fragments per response.** A buffer of two hundred thousand events
-  is a conversation of hundreds of round trips. The buffer bound is the operator's
-  and probably enough, but an outstation that never finishes answering is worth
-  a thought before it is one.
+- **What D32's bound should be.** That there is one is settled; the number is
+  not. It has to be large enough that a full default buffer of a thousand events
+  finishes in one conversation, and small enough that an outstation whose device
+  polls faster than its master confirms still sends `FIN`. Whether it is a
+  fragment count, a total octet budget, or a deadline is part of the question.
 - **Whether the first fragment should be smaller than the rest.** Some masters
   size their first receive differently. Probably not, but it is the kind of thing
   the standard settles and this plan cannot.
