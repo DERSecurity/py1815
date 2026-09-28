@@ -103,14 +103,14 @@ direction: forgetting to clear the flag would have the next confirmation continu
 a response the master has already abandoned, and forgetting the body would leave
 a read's answer to be delivered inside somebody else's.
 
-**D31 -- Static data is not split, and a provider body that does not fit is
-still refused.** The read provider returns opaque octets and this library cannot
-tell where one object inside them ends, so there is no honest place to cut.
-Fragmentation therefore lets a *large buffer of events* reach a master; it does
-not let a large static read do so.
+**D31 -- Opaque static data is not split, and a body that does not fit is
+refused.** `ReadProvider.read` returns octets, and this library cannot tell where
+one object inside them ends, so there is no honest place to cut one.
 
-That is a real limit rather than a deferral, and the README should say so. See
-the open question below on whether `ReadProvider` should change shape.
+That is the fallback rather than the rule -- see **D35**, which gives a provider a
+way to say where its objects end. A provider that does not is answered as it
+always was: fragmentation lets a large buffer of *events* reach a master, and a
+static read too large for one fragment is refused.
 
 **D32 -- A response is bounded in fragments, not only in octets.** One
 conversation carries at most so many, and the last of them sets `FIN` whether or
@@ -131,8 +131,22 @@ the paragraph above rules out, reintroduced by the arithmetic.
 A bound is needed because **D29** lets events recorded mid-conversation join it.
 Without one, an outstation whose device polls faster than its master confirms
 never sends `FIN`, and a master that is waiting for the end of a response is a
-master that never issues another request. The number belongs here rather than
-being borrowed; what it should be is open below.
+master that never issues another request.
+
+The bound is **sixteen fragments**, and it is a count rather than an octet budget
+or a deadline. A count is the one of the three that can be reasoned about from a
+log line, and sixteen is not arbitrary: it is one full trip through the
+application sequence space, so a conversation that reaches it has used every
+sequence number once and is starting over. A full default buffer of a thousand
+events is about seven fragments at the 2,048-octet ceiling, so sixteen leaves
+room for a buffer twice that size while still stopping one that fills as fast as
+it drains.
+
+An octet budget was the alternative worth weighing -- it costs the same for many
+small fragments as for few large ones -- and was not taken because there is no
+number for it that explains itself. A deadline was not taken because the session
+is clock-free apart from the select timeout, and a response whose length depends
+on how fast the machine is is a response that cannot be pinned in a test.
 
 **D33 -- Static data travels in the last fragment.** A read naming class 0 and
 an event class is answered with the provider's body after every event, not
@@ -185,6 +199,29 @@ send a different set of events under a sequence the master is about to confirm.
 One sequence of history is enough because there is only ever one fragment
 outstanding. A master that loses two in a row has lost the conversation, and
 **D30** lets its next request start a new one.
+
+**D35 -- A provider may say where its objects end, and static data then splits
+too.** `ReadProvider` keeps `read`, which returns octets and is the contract.
+Beside it, a provider may implement `read_blocks`, returning the object blocks it
+would have concatenated. A provider that does gets its static data split across
+fragments at a block boundary; a provider that does not is answered under **D31**.
+
+Optional rather than replacing `read`, and that is the whole of the decision.
+Replacing it would be a breaking change before 1.0 for every caller, including
+the ones whose point maps fit a fragment and who would gain nothing. It would
+also have this library holding a list of the caller's objects rather than a body
+it forwards, which is closer to knowing the point map than **D6** wants to be.
+
+The limit it lifts is not hypothetical. A class 0 poll over roughly 290 analog
+points already exceeds the 2,048 octets a master typically advertises, which is
+a mid-sized site rather than a large one. **D31** alone would refuse those reads,
+and an outstation that cannot answer an integrity poll is not much of an
+outstation.
+
+A block is still not split. The unit is the object block the provider hands over,
+so a single block larger than a fragment is refused as **D31** refuses a body --
+this moves the boundary from the whole body to one block of it, and does not
+remove it.
 
 ## Work
 
@@ -277,6 +314,24 @@ And the case the fit argument is about: a body that does not fit beside the last
 events takes a fragment of its own, with the events before it intact rather than
 trimmed to make room.
 
+### 5b. A provider that says where its objects end
+
+Per **D35**. `ReadProvider` gains an optional `read_blocks`; a provider that
+implements it has its static data split at a block boundary, and one that does
+not is answered under **D31**.
+
+Sequenced after the rest because everything before it works without it, and
+because the interesting cases are the ones where the two paths must agree: a
+provider implementing both must be answered identically when its body fits one
+fragment.
+
+**Acceptance:** a provider with only `read` is unchanged in every respect, and a
+body of its that will not fit is still refused; a provider with `read_blocks` has
+the same body delivered across fragments instead; a single block larger than a
+fragment is refused as a whole body would be, since this moves the boundary
+rather than removing it; and the two providers, given the same objects and a
+ceiling that fits them, produce the same octets.
+
 ### 6. Interoperability
 
 Both peer masters should read a buffer that does not fit one fragment and
@@ -291,21 +346,15 @@ rewritten; the README status line, which this plan's landing makes wrong again;
 
 ## Open
 
+- **Settled: the bound is sixteen fragments**, a count rather than an octet
+  budget or a deadline. See **D32** for why.
+- **Settled: `ReadProvider` gains an optional block method** rather than changing
+  the one it has. See **D35**.
 - **Settled: a repeated confirmation.** Listed here because it was the question
   this plan opened with and because leaving it open was not safe: **D28** and
   **D29** as first written deadlock when a continuation is lost. **D34** answers
   it -- one sequence of history, replaying the outstanding fragment.
 
-- **Whether `ReadProvider` should return blocks rather than octets.** It would
-  let **D31** go away -- static data could split at an object boundary -- at the
-  cost of a breaking API change and of this library knowing more about the
-  caller's objects than **D6** wants it to. Worth answering explicitly rather
-  than by omission.
-- **What D32's bound should be.** That there is one is settled; the number is
-  not. It has to be large enough that a full default buffer of a thousand events
-  finishes in one conversation, and small enough that an outstation whose device
-  polls faster than its master confirms still sends `FIN`. Whether it is a
-  fragment count, a total octet budget, or a deadline is part of the question.
 - **Whether the first fragment should be smaller than the rest.** Some masters
   size their first receive differently. Probably not, but it is the kind of thing
   the standard settles and this plan cannot.
