@@ -209,9 +209,9 @@ say that data was lost rather than to pretend it was not.
 
 The two interact where a pending selection is evicted. `drop` skips events it cannot find, so a
 confirmation retires whatever survived and silently ignores what did not, which is the right outcome
--- there is nothing to retire and nothing to report beyond the overflow bit already set. The
-acceptance criteria in [the event plan](planning/EVENTS.md) cover that case rather than assume a
-selection outlives the wait.
+-- there is nothing to retire and nothing to report beyond the overflow bit already set. That case
+is covered by tests of its own rather than assumed away: a selection does not always outlive the
+wait, and an implementation written as though it does is one eviction from being wrong.
 
 **D19 -- One outstanding response at a time, and a new request replaces it.** Under **D7** there is
 one association, so there is one unconfirmed response to track. A read arriving while one is

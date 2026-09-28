@@ -28,6 +28,15 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
 
+# The planning directory is working material -- section-by-section status, what
+# a review changed, what is still open -- and mkdocs builds every page under
+# `docs/` whether or not the nav names it. Without this it is published as
+# reachable orphan pages on a site that is meant to be read by people using the
+# library rather than writing it. `DESIGN.md` is in the nav and is published on
+# purpose; that is the difference.
+exclude_docs: |
+  planning/
+
 plugins:
   - search
   - mkdocstrings:
@@ -65,5 +74,6 @@ nav:
       - Session: reference/session.md
       - Listener: reference/server.md
       - Objects: reference/objects.md
+      - Controls: reference/control.md
       - Events: reference/events.md
       - Protocol layers: reference/protocol.md
