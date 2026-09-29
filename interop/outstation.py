@@ -14,11 +14,13 @@ this fixture ever returns and none of which repeats across classes. A peer
 reporting one of those numbers can only have read it from the buffers, and only
 from the class it belongs to.
 
-No peer *master* reads them yet: the C++ probe scans group 30 variation 1 and
-the Rust master is configured for class 0 only. What reads them today is the
-function code sweep, whose traffic Wireshark and Suricata dissect -- so the wire
-format is checked by implementations that are not this one, while a master's
-interpretation of it is not. That gap is named in the event plan.
+The Rust master reads them, a class at a time, and checks each class against
+its own events. The function code sweep reads them too, and its traffic is
+dissected by Wireshark and Suricata -- so the wire format and a master's
+interpretation of it are both checked by implementations that are not this one.
+
+The C++ probe scans group 30 variation 1 and reads no class. It stays that way
+deliberately, and the event plan says why.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
