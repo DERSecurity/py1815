@@ -475,8 +475,15 @@ whose data the caller had already handed over.
 
 The bound is **sixteen fragments**, and it is a count rather than an octet budget or a deadline. A
 count is the one of the three that can be reasoned about from a log line, and sixteen is not
-arbitrary: it is one full trip through the application sequence space, so a conversation that
-reaches it has used every sequence number once and is starting over. A full default buffer of a
+arbitrary: it is one full trip through the application sequence space, so the *events* of a response
+use every sequence number at most once.
+
+That is a statement about the event half and not about the conversation. Static continuations are
+outside the bound, so a response whose provider answers in blocks can pass sixteen fragments and go
+round the sequence space again -- twenty-eight fragments, with sequences 0 to 15 and then 0 to 11,
+is a legitimate answer. The argument for sixteen is unaffected, because it was always an argument
+about bounding events; what it does not do is characterise the whole exchange. **D34** is where that
+matters. A full default buffer of a
 thousand events is about seven fragments at the 2,048-octet ceiling, so sixteen leaves room for a
 buffer twice that size while still stopping one that fills as fast as it drains.
 
@@ -533,6 +540,17 @@ replayed as often as the master asks for it -- a continuation lost three times i
 What is not answered is a confirmation *two sequence positions old*, which names a fragment this
 outstation has already seen confirmed and moved past. A master in that position has lost the
 conversation rather than a fragment of it, and **D30** lets its next request start a new one.
+
+One position of history is unambiguous locally and not globally, which **D32** makes reachable. A
+conversation that passes sixteen fragments goes round the sequence space again, and a confirmation
+delayed by exactly sixteen then arrives naming the number `previous` now holds -- so it is answered
+with a replay rather than ignored.
+
+That is deliberate rather than overlooked, and it is harmless: a replay retires nothing and sends
+the fragment the master is owed next, so the worst case is a duplicate of something it was waiting
+for. Distinguishing it would mean tracking sequences the association has actually spent, which is
+machinery for a link that has already mislaid sixteen fragments' worth of ordering -- and a master
+that far behind has lost the conversation, which **D30** already answers.
 
 **D35 -- A provider may say where its objects end, and static data then splits too.** `ReadProvider`
 keeps `read`, which returns octets and is the contract. Beside it, a provider may implement
