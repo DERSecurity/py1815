@@ -135,41 +135,47 @@ is set until a master clears it, and **D22** and **D23** put the class and
 overflow bits there on their own terms -- a response reporting them is still a
 successful one.
 
-### 6. Interoperability -- half landed
+### 6. Interoperability -- landed, bar the C++ probe
 
 `interop/outstation.py` holds events, and the function code sweep reads them:
 each class on its own and an integrity poll naming all four. The sweep's traffic
 is dissected by Wireshark and Suricata, so the event objects are checked on the
 wire by implementations that are not this one.
 
-**No peer master reads them yet**, which this section assumed and which is not
-true. The C++ probe scans group 30 variation 1 rather than any class, and the
-Rust master is configured with `EventClasses::none()` and `Classes::class0()`.
-So a master's *interpretation* of an event -- reassembling a class read,
-confirming it, applying the events in the order they arrived -- is still the
-part nothing outside this repository has exercised.
+**The Rust master reads them.** Three class reads of its own, after the static
+one, so a class answered with another class's events fails rather than passing
+as the right values under the wrong heading.
 
-Making one of them read events is not a configuration change. In `dnp3-rs` an
-event and a static value arrive through the same handler, so a class scan added
-to the Rust master would overwrite the static readings its existing assertions
-depend on, ordered by where the events sit in the response. `Readings.analog` is
-keyed by index alone and would have to be split first. The C++ probe is further
-off: it scans a specific group and variation rather than any class, and whether
-its bindings expose event objects distinctly is an open question rather than
-just work.
+That needed less than this section assumed and more than it looked. Less,
+because the master issues an *explicit* read rather than relying on a startup
+scan, so `AssociationConfig` is untouched and events are simply a second read.
+More, because events and static values arrive through the same handler: a class
+read would have overwritten the point map the existing assertions depend on, and
+would have broken the variation check, which asserts every analog header carried
+g30v1. The collector is told between the reads which it is looking at, rather
+than routing on a `HeaderInfo` field that cannot be checked without compiling.
 
-Neither can be built here -- no `cargo`, and the bindings do not import -- so
-that half belongs with someone who has a toolchain, or with several rounds of
-CI.
+`handle_binary_input` is implemented, having been an empty stub. The fixture
+seeds a binary event behind the analog ones of its class, and it is what proves
+a peer sees them in the order the points changed rather than gathered by type.
 
-What the sweep can do without either has been done. It now walks a conversation:
-sending a request, confirming each fragment, and checking what only a walk can
-see -- `FIR` opening the exchange and nothing else setting it, `FIN` closing it,
-the sequence advancing by one around the sequence space, a fragment that asks to
-be confirmed being answered when it is, and the confirmation of the last one
+**The C++ probe stays static-only.** It scans a group and variation rather than
+any class, and whether its bindings expose event objects at all is an open
+question -- they already discard the quality octet, which is why the Rust peer
+exists. One independent master reading events is the assertion worth having, and
+a second adds little against that uncertainty.
+
+**The sweep walks a conversation**, which is the other half of what a master
+does with events and the half no peer covers. `dnp3-rs` reassembles and confirms
+a class read inside the library, so a master asserting on the values it ends up
+with says nothing about the exchange that carried them. So the sweep sends a
+request and confirms each fragment itself, checking what only a walk can see:
+`FIR` opening the exchange and nothing else setting it, `FIN` closing it, the
+sequence advancing by one around the sequence space, a fragment that asks to be
+confirmed being answered when it is, and the confirmation of the last one
 drawing no further traffic. That traffic goes into the capture Wireshark and
-Suricata read, so the framing of an exchange rather than of a single reply is now
-checked by implementations that are not this one.
+Suricata read, so the framing of an exchange rather than of a single reply is
+now checked by implementations that are not this one.
 
 Seeded at startup rather than driven from a timer, which is what this section
 originally said. The peers need something deterministic to assert against, and a
@@ -200,9 +206,14 @@ data. Then 2, which is the state machine. Then 5, which is independent and
 small. Then 3, which is the largest and the one most likely to want its own
 plan. Then 6.
 
-Sections 1, 2, 4, 5 and 7 have landed, along with D25, D26 and D27, none of
-which were in this plan when it was written -- they came out of review. Sections
-3 and 6 remain.
+Sections 1, 2, 4, 5, 6 and 7 have landed, along with D25, D26 and D27, none of
+which were in this plan when it was written -- they came out of review. Section
+3 remains, and has [a plan of its own](FRAGMENTATION.md).
+
+Section 6 landed bar the C++ probe, which reads no class and stays that way
+deliberately. What it would add is a second opinion on an assertion one
+independent master already makes, against a binding whose handling of event
+objects is an open question.
 
 ## Open
 

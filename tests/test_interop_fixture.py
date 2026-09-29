@@ -329,11 +329,14 @@ class TestTheFixtureHoldsEvents:
     its traffic is dissected by Wireshark and Suricata -- so the event objects
     are checked on the wire by implementations that are not this one.
 
-    Neither peer *master* reads them yet. The C++ probe scans group 30
-    variation 1 and the Rust master is configured for class 0 only, so a
-    master's interpretation of an event is still unexercised. These tests pin
-    the shape the fixture serves so that the peer work, when it lands, is about
-    the reading rather than the serving."""
+    The Rust master reads them too, a class at a time, checking each class
+    against its own events in the order they arrived. These tests pin the shape
+    the fixture serves, so a failure there is about the serving and a failure
+    in the peer job is about the reading.
+
+    The C++ probe scans group 30 variation 1 and reads no class, deliberately:
+    its bindings discard the quality octet already, and whether they expose
+    event objects at all is an open question."""
 
     def test_a_class_one_read_returns_objects(self, outstation):
         body = _class_read(outstation, 2)[4:]

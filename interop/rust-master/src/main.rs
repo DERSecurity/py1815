@@ -45,6 +45,63 @@ const UNCONTROLLABLE_INDEX: u8 = 9;
 /// The index the fixture serves offline, with COMM_LOST set.
 const OFFLINE_INDEX: u16 = 3;
 
+/// One event as it arrived, with everything about it that is worth checking.
+///
+/// Both object types in one ordered list rather than an index per type in two.
+/// Separate lists record neither the order the types arrived in nor what the
+/// events carried, so a response with its binary header in front of the analog
+/// ones -- or a binary at the right index carrying the wrong value or
+/// variation -- collects identically to a correct one and passes.
+#[derive(Debug)]
+enum Arrived {
+    Analog(u16, f64, Variation),
+    Binary(u16, bool, Variation),
+}
+
+impl Arrived {
+    fn matches(&self, wanted: &Arrived) -> bool {
+        match (self, wanted) {
+            (Arrived::Analog(i, v, var), Arrived::Analog(j, w, wvar)) => {
+                i == j && (v - w).abs() <= f64::EPSILON && var == wvar
+            }
+            (Arrived::Binary(i, v, var), Arrived::Binary(j, w, wvar)) => {
+                i == j && v == w && var == wvar
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The events the fixture holds, per class and in order. Must match
+/// `interop/outstation.py`.
+///
+/// The values are unlike anything `EXPECTED` holds and unlike each other's
+/// class, so a value here cannot have come from the point map nor from a class
+/// other than the one that returned it. The binary event sits behind the
+/// analog ones of its class, which is the order the points changed -- an
+/// outstation that gathered its events by type would tell a master a different
+/// story about when things happened, and that is what this sequence catches.
+fn expected(class: u8) -> Vec<Arrived> {
+    match class {
+        1 => vec![
+            Arrived::Analog(0, 101.0, Variation::Group32Var3),
+            Arrived::Analog(1, 102.0, Variation::Group32Var3),
+            Arrived::Binary(BINARY_EVENT_INDEX, true, Variation::Group2Var2),
+        ],
+        2 => vec![Arrived::Analog(2, 203.0, Variation::Group32Var3)],
+        3 => vec![Arrived::Analog(3, 304.0, Variation::Group32Var3)],
+        // Named rather than caught by a wildcard. A wildcard here would hand a
+        // fourth class the third's expectations and pass, which is the one
+        // outcome this file exists to rule out.
+        other => panic!("no expectations for class {other}"),
+    }
+}
+
+/// The index of the binary event the fixture seeds in class 1, behind the
+/// analog ones. It is the assertion that the order of a class read is the
+/// order the points changed rather than one gathered by type.
+const BINARY_EVENT_INDEX: u16 = 0;
+
 /// The whole quality octet each point is expected to carry, which is what the
 /// fixture sets: ONLINE alone, or COMM_LOST alone with ONLINE cleared.
 const FLAGS_ONLINE: u8 = 0x01;
@@ -57,6 +114,15 @@ struct Readings {
     variations: Vec<Variation>,
     fragments: usize,
     restart_seen: bool,
+    /// Set by the main task between the two reads. Events and static values
+    /// arrive through the same handler, so without being told which it is
+    /// looking at the collector would have the class read's values overwrite
+    /// the point map's -- and the assertions about the point map would then be
+    /// checking events against static expectations.
+    collecting_events: bool,
+    /// Every event of every class read, in the order it arrived and with both
+    /// object types in the one list, so the sequence itself can be checked.
+    events: Vec<Arrived>,
 }
 
 #[derive(Clone)]
@@ -82,6 +148,17 @@ impl ReadHandler for Collector {
         iter: &mut dyn Iterator<Item = (AnalogInput, u16)>,
     ) {
         let mut readings = self.0.lock().unwrap();
+        if readings.collecting_events {
+            // Kept in arrival order rather than by index: an event is a thing
+            // that happened, and two of them may carry the same index.
+            let variation = info.variation;
+            for (value, index) in iter {
+                readings
+                    .events
+                    .push(Arrived::Analog(index, value.value, variation));
+            }
+            return;
+        }
         // The read names a variation, so the variation that comes back is part
         // of what is being checked. Without this a g30v2 answer to a g30v1
         // request would land in this same handler and pass.
@@ -95,9 +172,21 @@ impl ReadHandler for Collector {
 
     fn handle_binary_input(
         &mut self,
-        _info: HeaderInfo,
-        _iter: &mut dyn Iterator<Item = (BinaryInput, u16)>,
+        info: HeaderInfo,
+        iter: &mut dyn Iterator<Item = (BinaryInput, u16)>,
     ) {
+        let mut readings = self.0.lock().unwrap();
+        if !readings.collecting_events {
+            // The fixture serves no static binary inputs, so anything here
+            // outside a class read is not something this job asked for.
+            return;
+        }
+        let variation = info.variation;
+        for (value, index) in iter {
+            readings
+                .events
+                .push(Arrived::Binary(index, value.value, variation));
+        }
     }
 
     fn handle_double_bit_binary_input(
@@ -146,12 +235,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         NullListener::create(),
     );
 
-    // No unsolicited handling and no startup class scan beyond class 0. This
+    // No unsolicited handling, and no startup class scan beyond class 0. This
     // outstation sends no unsolicited responses: it agrees to DISABLE, having
     // nothing to stop, and refuses ENABLE, which asks for something it does not
     // do. A startup sequence that argued with it about either would be testing
     // that exchange rather than the read, and both answers are covered by the
     // function code sweep.
+    //
+    // The event classes are read further down, explicitly and one at a time.
+    // Leaving them out of the startup scan is what makes that possible: the
+    // point map is asserted against a read that carried nothing else, and each
+    // class against a read that named it alone.
     let mut association_config = AssociationConfig::new(
         EventClasses::none(),
         EventClasses::none(),
@@ -190,6 +284,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => fail(&format!("no response from {endpoint} within 30s")),
         Ok(Err(error)) => fail(&format!("the read failed: {error}")),
         Ok(Ok(())) => println!("rust-master: read completed"),
+    }
+
+    // -- the events ---------------------------------------------------------
+    //
+    // A second read rather than a startup class scan, so the assertions about
+    // the point map above are made against the point map alone. The collector
+    // is told that what follows is events rather than left to infer it, which
+    // needs no more of the crate's API than the reads themselves.
+    //
+    // Three reads rather than one integrity poll, so that a class answered with
+    // another class's events is a failure here rather than something this job
+    // sees as the right values under the wrong heading.
+    readings.lock().unwrap().collecting_events = true;
+
+    for (class, variation) in [
+        (1u8, Variation::Group60Var2),
+        (2, Variation::Group60Var3),
+        (3, Variation::Group60Var4),
+    ] {
+        let before = readings.lock().unwrap().events.len();
+
+        let events = tokio::time::timeout(
+            Duration::from_secs(30),
+            association.read(ReadRequest::all_objects(variation)),
+        )
+        .await;
+
+        match events {
+            Err(_) => fail(&format!("no answer to a class {class} read within 30s")),
+            Ok(Err(error)) => fail(&format!("the class {class} read failed: {error}")),
+            Ok(Ok(())) => (),
+        }
+
+        // Checked here rather than at the end, against what *this* read
+        // returned. Comparing the three classes together at the end would pass
+        // an outstation that answered class 1 with every event and the other
+        // two with nothing.
+        let readings = readings.lock().unwrap();
+        let arrived = &readings.events[before..];
+        let wanted = expected(class);
+        if arrived.len() != wanted.len() {
+            fail(&format!(
+                "class {class} returned {} events, expected {}: {arrived:?}",
+                arrived.len(),
+                wanted.len()
+            ));
+        }
+        for (position, (got, want)) in arrived.iter().zip(wanted.iter()).enumerate() {
+            if !got.matches(want) {
+                fail(&format!(
+                    "class {class} event {position} was {got:?}, expected {want:?}"
+                ));
+            }
+        }
+        println!(
+            "rust-master: class {class} read completed, {} events in order",
+            arrived.len()
+        );
     }
 
     // Two assertions where there was one, because they sit at different layers
@@ -329,8 +481,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // -- the events ---------------------------------------------------------
+    //
+    // The part of this outstation no independent master had read until now.
+    // Each class was checked as it arrived, against its own events, in order,
+    // with their values and variations -- so what is left for the end is the
+    // total, which catches three reads that between them returned nothing
+    // without any one of them noticing its own emptiness.
+    let seen = readings.events.len();
+    let wanted: usize = (1..=3).map(|class| expected(class).len()).sum();
+    if seen != wanted {
+        fail(&format!(
+            "read {seen} events across the classes, expected {wanted}"
+        ));
+    }
+
     println!(
-        "rust-master: OK, {} analog inputs match, and the quality octet with them",
+        "rust-master: OK, {} analog inputs match with their quality octet, and {seen} events \
+         came back from the buffers",
         EXPECTED.len()
     );
     Ok(())
