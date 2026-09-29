@@ -73,7 +73,15 @@ include = [
 # most things but not for all of them. That is why the release workflow asserts
 # the contents rather than trusting this list: the list is the intent, the check
 # is the guarantee.
-exclude = ["docs/planning", "interop"]
+exclude = [
+    "docs/planning",
+    "interop",
+    # Tests the interoperability fixture, which is not in the allow-list and so
+    # is not here to be tested. What ships is the library and the tests of the
+    # library; a test whose subject was left out is one that cannot pass, and a
+    # downstream packager running the shipped suite would report it as a bug.
+    "tests/test_interop_fixture.py",
+]
 
 [tool.ruff]
 target-version = "py311"

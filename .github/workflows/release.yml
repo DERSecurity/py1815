@@ -98,6 +98,24 @@ jobs:
           sys.exit(1 if strays or inside else 0)
           PY
 
+      - name: The sdist must carry a test suite that passes
+        # The allow-list above asserts nothing unwanted is in the sdist. It
+        # cannot see that something wanted is missing: `tests` is inside the
+        # list, so a test whose subject was excluded is allowed and broken at
+        # the same time. That is how a suite referring to `interop` shipped
+        # while `interop` did not.
+        #
+        # So run what ships, in a directory holding nothing else. A PyPI
+        # version cannot be replaced, only yanked, and downstream packagers
+        # build from the sdist and run this suite -- a broken one surfaces as
+        # their bug report, after the only chance to fix it has gone.
+        run: |
+          pip install pytest pytest-asyncio
+          work=$(mktemp -d)
+          tar -xzf dist/*.tar.gz -C "$work"
+          cd "$work"/py1815-*
+          python -m pytest tests -q
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
