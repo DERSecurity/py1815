@@ -46,7 +46,7 @@ from py1815.application import (
     IINBit,
     QualifierCode,
 )
-from py1815.transport import segment
+from py1815.transport import Reassembler, TransportError, segment
 
 #: Long enough that a reply which is coming has arrived on a loopback, short
 #: enough that the cases expecting silence do not dominate the runtime.
@@ -355,9 +355,12 @@ class Conversation:
     #: was sent; an outstation ignoring every confirmation is silent too. This
     #: is what tells the two apart.
     drains: bytes | None = None
-    #: Where a walk stops and calls the exchange a runaway. Sixteen fragments of
-    #: events and one for static data is the outstation's own bound.
-    limit: int = 18
+    #: Where a walk stops and calls the exchange a runaway. Sixteen fragments
+    #: of events and one for static data is the outstation's own bound, and the
+    #: guard runs before asking for another -- so seventeen rejects a non-final
+    #: seventeenth while leaving a final one valid. Eighteen accepted an
+    #: eighteenth fragment outright.
+    limit: int = 17
     note: str = ""
 
 
@@ -383,18 +386,53 @@ CONVERSATIONS = [
 ]
 
 
+def _reassemble(frames: list[link.LinkFrame], reply: bytes) -> bytes:
+    """The application fragment those frames carry, segments and all.
+
+    An application fragment over 249 octets travels as several transport
+    segments in several link frames, so taking the last frame for the whole
+    hands a caller the middle of somebody's object data and lets it call the
+    second octet a function code. Nothing the sweep sends is that large today;
+    the multi-fragment conversations are nothing but.
+    """
+    reassembler = Reassembler()
+    fragment: bytes | None = None
+    for frame in frames:
+        if not frame.payload:
+            # A link acknowledgment carries no transport segment.
+            continue
+        try:
+            completed = reassembler.add(frame.payload)
+        except TransportError as exc:
+            raise Failure(f"the reply did not reassemble: {exc}") from exc
+        if completed is not None:
+            fragment = completed
+
+    if fragment is None:
+        raise Failure(f"the reply carried no complete application fragment: {reply.hex()}")
+    return fragment
+
+
 def _fragment_of(reply: bytes) -> bytes:
     """The application fragment inside a reply, or a failure saying why not.
 
-    The function code is checked here as `_check` checks it for a single
-    reply. Without it this path accepts any four octets whose control flags
-    happen to read as a response, so a continuation carrying the wrong function
-    would be walked as though it were the right one.
+    The segments are reassembled rather than the last frame taken for the
+    whole. An application fragment over 249 octets travels as several, so
+    reading only the last one hands this function the middle of somebody's
+    object data and calls its second octet a function code. Nothing the sweep
+    sends today is that large, and the multi-fragment conversations this walker
+    exists for are nothing but.
+
+    The function code is checked here as `_check` checks it for a single reply.
+    Without it this path accepts any four octets whose control flags happen to
+    read as a response, so a continuation carrying the wrong function would be
+    walked as though it were the right one.
     """
     frames = link.FrameReader().feed(reply)
     if not frames:
         raise Failure(f"reply is not a complete link frame: {reply.hex()}")
-    fragment = frames[-1].payload[1:]
+
+    fragment = _reassemble(frames, reply)
     if len(fragment) < 4:
         raise Failure(f"application fragment is too short: {fragment.hex()}")
     if fragment[1] != FunctionCode.RESPONSE:
@@ -586,9 +624,10 @@ def _check(case: Case, reply: bytes, *, restart_expected: bool | None) -> tuple[
             )
         return f"link {link.SecondaryFunction(frame.function).name}", None
 
-    # The application reply is the last frame: a confirmed request is answered
-    # with a link acknowledgment first.
-    fragment = frames[-1].payload[1:]
+    # Reassembled rather than read off the last frame, which is the same
+    # reason the walker reassembles: a confirmed request is answered with a
+    # link acknowledgment first, and a large one with several segments after.
+    fragment = _reassemble(frames, reply)
     if len(fragment) < 4:
         raise Failure(f"application fragment is too short to be a response: {fragment.hex()}")
 
