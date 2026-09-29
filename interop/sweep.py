@@ -36,7 +36,16 @@ from dataclasses import dataclass, field
 from pcap import Capture
 
 from py1815 import link
-from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
+from py1815.application import (
+    CON_MASK,
+    FIN_MASK,
+    FIR_MASK,
+    SEQUENCE_MODULUS,
+    FunctionCode,
+    IIN2Bit,
+    IINBit,
+    QualifierCode,
+)
 from py1815.transport import segment
 
 #: Long enough that a reply which is coming has arrived on a loopback, short
@@ -324,6 +333,141 @@ class Failure(Exception):
     """A case whose reply did not match its expectation."""
 
 
+@dataclass(frozen=True)
+class Conversation:
+    """A request whose answer the master has to walk rather than just read.
+
+    A response that sets `CON` is only half an exchange: the master confirms it,
+    and an outstation with more to send answers that confirmation with the next
+    fragment. Every other case in this file is one request and one reply, so
+    none of them reaches that path -- the nearest, "confirm", sends a bare
+    confirmation with nothing outstanding to confirm.
+    """
+
+    name: str
+    payload: bytes
+    #: True when the answer must take more than one fragment.
+    multi: bool = False
+    #: True when the first fragment must carry object data.
+    objects: bool = False
+    #: Where a walk stops and calls the exchange a runaway. Sixteen fragments of
+    #: events and one for static data is the outstation's own bound.
+    limit: int = 18
+    note: str = ""
+
+
+#: Conversations, walked after the single-reply sweep so the capture holds both.
+#: The outstation seeds events at startup, and confirming retires them, so these
+#: assert the shape of the exchange rather than how much it carried.
+CONVERSATIONS = [
+    Conversation(
+        name="conversation: class 1",
+        payload=_app(FunctionCode.READ, bytes([60, 2, 0x06])),
+        objects=True,
+        note="events, confirmed, and the confirmation drawing no further traffic",
+    ),
+    Conversation(
+        name="conversation: integrity poll",
+        payload=_app(
+            FunctionCode.READ, bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06, 60, 1, 0x06])
+        ),
+        objects=True,
+        note="what a real master sends on startup",
+    ),
+]
+
+
+def _fragment_of(reply: bytes) -> bytes:
+    """The application fragment inside a reply, or a failure saying why not."""
+    frames = link.FrameReader().feed(reply)
+    if not frames:
+        raise Failure(f"reply is not a complete link frame: {reply.hex()}")
+    fragment = frames[-1].payload[1:]
+    if len(fragment) < 4:
+        raise Failure(f"application fragment is too short: {fragment.hex()}")
+    return fragment
+
+
+def _walk(sock: socket.socket, capture, conversation: Conversation) -> str:
+    """Send a request and confirm each fragment until the outstation is done.
+
+    Checks the things only a walk can see: that `FIR` opens the exchange and
+    nothing else sets it, that `FIN` closes it, that the sequence advances by
+    one each time around the sequence space, and that a fragment asking to be
+    confirmed is answered when it is.
+    """
+    request = _frame_bytes(conversation.payload)
+    sock.sendall(request)
+    if capture:
+        capture.sent(request)
+    reply = _read_reply(sock)
+    if capture:
+        capture.received(reply)
+    if not reply:
+        raise Failure("expected a reply, got silence")
+
+    fragments = [_fragment_of(reply)]
+    while fragments[-1][0] & CON_MASK and not fragments[-1][0] & FIN_MASK:
+        if len(fragments) >= conversation.limit:
+            raise Failure(f"still going after {len(fragments)} fragments")
+        confirm = _frame_bytes(_app(FunctionCode.CONFIRM, sequence=fragments[-1][0] & 0x0F))
+        sock.sendall(confirm)
+        if capture:
+            capture.sent(confirm)
+        reply = _read_reply(sock)
+        if capture:
+            capture.received(reply)
+        if not reply:
+            raise Failure(f"confirming fragment {len(fragments)} drew silence")
+        fragments.append(_fragment_of(reply))
+
+    if not fragments[0][0] & FIR_MASK:
+        raise Failure("the first fragment does not set FIR")
+    for number, fragment in enumerate(fragments[1:], 2):
+        if fragment[0] & FIR_MASK:
+            raise Failure(f"fragment {number} sets FIR")
+    if not fragments[-1][0] & FIN_MASK:
+        raise Failure("the exchange ended without FIN")
+
+    first = fragments[0][0] & 0x0F
+    expected = [(first + n) % SEQUENCE_MODULUS for n in range(len(fragments))]
+    actual = [f[0] & 0x0F for f in fragments]
+    if actual != expected:
+        raise Failure(f"sequences {actual}, expected {expected}")
+
+    if conversation.multi and len(fragments) < 2:
+        raise Failure("expected more than one fragment")
+    if conversation.objects and len(fragments[0]) <= 4:
+        raise Failure("expected objects, got a null response")
+
+    # The last fragment is confirmed like any other, and draws nothing further:
+    # the exchange is over and a confirmation is not a request.
+    if fragments[-1][0] & CON_MASK:
+        confirm = _frame_bytes(_app(FunctionCode.CONFIRM, sequence=fragments[-1][0] & 0x0F))
+        sock.sendall(confirm)
+        if capture:
+            capture.sent(confirm)
+        trailing = _read_reply(sock)
+        if capture:
+            capture.received(trailing)
+        if trailing:
+            raise Failure(f"confirming the last fragment drew {len(trailing)} octets")
+
+    plural = "fragment" if len(fragments) == 1 else "fragments"
+    return f"{len(fragments)} {plural}, confirmed"
+
+
+def _frame_bytes(payload: bytes) -> bytes:
+    """One link frame carrying an application fragment."""
+    control = link.control_byte(
+        from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+    )
+    segments = segment(payload)
+    if len(segments) != 1:
+        raise Failure("request does not fit one transport segment")
+    return link.build(control, destination=OUTSTATION, source=MASTER, payload=segments[0])
+
+
 def _frame(case: Case) -> bytes:
     """One link frame carrying the case.
 
@@ -471,6 +615,16 @@ def run(host: str, port: int, pcap: str | None = None, summary: str | None = Non
                 # A case that declares the bit also sets the running state, so
                 # the clearing write does not need to be recognized by name.
                 restart_expected = case.restart
+
+        for conversation in CONVERSATIONS:
+            try:
+                observed = _walk(sock, capture, conversation)
+            except Failure as exc:
+                failures.append((conversation.name, str(exc)))
+                print(f"sweep: FAIL {conversation.name}: {exc}", file=sys.stderr)
+                continue
+            note = f"  ({conversation.note})" if conversation.note else ""
+            print(f"sweep: ok   {conversation.name}: {observed}{note}")
 
         final = _frame(AFTER_RESTART_CLEARED)
         sock.sendall(final)
