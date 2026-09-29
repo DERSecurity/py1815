@@ -89,7 +89,11 @@ fn expected(class: u8) -> Vec<Arrived> {
             Arrived::Binary(BINARY_EVENT_INDEX, true, Variation::Group2Var2),
         ],
         2 => vec![Arrived::Analog(2, 203.0, Variation::Group32Var3)],
-        _ => vec![Arrived::Analog(3, 304.0, Variation::Group32Var3)],
+        3 => vec![Arrived::Analog(3, 304.0, Variation::Group32Var3)],
+        // Named rather than caught by a wildcard. A wildcard here would hand a
+        // fourth class the third's expectations and pass, which is the one
+        // outcome this file exists to rule out.
+        other => panic!("no expectations for class {other}"),
     }
 }
 
