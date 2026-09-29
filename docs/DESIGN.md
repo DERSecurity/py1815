@@ -321,16 +321,18 @@ selection here would lose the events instead of merely mistiming them. This is t
 **D21** -- an outstation that does not send unsolicited responses answers questions about them by
 declining to act, not by pretending the exchange exists.
 
-**D27 -- A response is capped to what the master can receive, and the rest stays buffered.**
-``max_response`` is its own number rather than the reassembly ceiling ``max_fragment``: one is the
-largest request this outstation will piece back together, the other the largest fragment the master
-on the far end can accept, and a master advertises its own. Sending past it is not a long response
-but a discarded one -- the events were readable and then none of them arrived.
+**D27 -- Every fragment is fitted to what the master can receive.** ``max_response`` is its own
+number rather than the reassembly ceiling ``max_fragment``: one is the largest request this
+outstation will piece back together, the other the largest fragment the master on the far end can
+accept, and a master advertises its own. Sending past it is not a long response but a discarded one
+-- the events were readable and then none of them arrived.
 
-Events are fitted to what is left after the application header and whatever the provider returned.
-Static data is paid for first and trimmed never: it is the provider's answer, and this session
-cannot tell where one object inside it ends. Events still travel in front of it on the wire, per
-**D20**.
+Each fragment is filled with events up to that ceiling. Static data follows them rather than being
+paid for first (**D33**), so a read that asks for both is not answered with fewer events than the
+same read without a body.
+
+This decision was written when a response was one fragment, and said so. **D28** made it a
+conversation; what survives here is the ceiling, applied to each fragment of one.
 
 A provider body that overruns the ceiling on its own is the one case the events cannot be fitted
 around, and the read is refused with `PARAM_ERROR` rather than sent. Sending it past the ceiling
@@ -359,9 +361,10 @@ how a count qualifier is answered -- a limit taken before deduplication would co
 is how a caller avoids paying for a buffer it has no room for. It has to slice while walking the
 deque rather than after materialising it, or the call still costs the buffer.
 
-This is a cap rather than a split, and it is what application-layer fragmentation replaces. Until
-then an outstation that answers with fewer events than it holds is correct, just chatty -- the class
-indication bits go on asking, and the next read brings the rest.
+This was a cap rather than a split until **D28** made a response a conversation. What survives of it
+is the ceiling itself: every fragment is still fitted to what the master can receive, and a response
+that runs out of fragments before it runs out of events still ends with the class indication bits
+asking for the rest (**D32**). What has gone is the assumption that one fragment is all there is.
 
 The ceiling is not only the read path's. A control response is the request echoed with a status per
 object, and one that will not fit is refused *before anything is dispatched* -- a control that
@@ -372,6 +375,184 @@ probe status, since an object's encoding is a fixed size for its type and the st
 A ceiling below a response header is refused at construction. Every answer such an outstation could
 give would break it, including the refusal it would give instead, so the number is rejected where it
 is set rather than logged on each response that overruns it.
+
+**D28 -- A confirmation that continues a response is answered with the next fragment.** `CONFIRM`
+answers with nothing when nothing is outstanding or the outstanding response was the last one; when
+the outstanding response has more behind it, the answer is the next fragment.
+
+This is the one place the session answers something that is not a request, and it is worth being
+explicit that it is not an exception being carved out: under **D18** a confirmation is already the
+event that moves the state machine on. It retires what was sent. Sending what comes next is the same
+transition.
+
+**D29 -- Each fragment is built from the buffer as it then stands.** Not built ahead and queued, and
+-- the part a first draft of this got wrong -- not carried as a remainder either.
+
+The obvious design is for `_Outstanding` to hold the events that did not fit and for the next
+fragment to come off that list. It cannot. `_Outstanding.events` holds strong references on purpose,
+so that `drop` still matches what it is given after an eviction; a remainder held the same way keeps
+the whole buffer alive for as long as a master is slow, which is exactly the unbounded retention
+**D18** and **D27** exist to prevent. Worse, it would let an event that has since been *evicted* go
+out in a later fragment, so a master would receive an event the outstation had already reported
+losing.
+
+So a continuation peeks the buffer again and takes what fits, exactly as the first fragment did.
+`_Outstanding` keeps only what it sent, plus the fact that more remains. Events evicted in between
+are simply gone, which is what the overflow bit is for; events recorded in between join the
+response, which costs nothing and saves a round trip.
+
+That last is true only while the response is still sending events. Once any static data has gone out
+the conversation is in its static half and takes no more (**D33**), because an event placed after
+static already sent would leave the master holding a reading older than the event that superseded
+it. Those events wait for the next response, and the class bits go on asking for them.
+
+That last point is why this needs a bound rather than a rule about which events belong to which
+response. A buffer filling as fast as it drains would otherwise answer for ever. See **D32**.
+
+The rule this states is not "hold nothing". A response does hold the provider's body across its
+fragments (**D33**), and the difference is worth naming, because "carry nothing" and "carry one
+body" are two rules, and asserting both without a reason reads as a contradiction.
+
+What may not be held is state that **grows while it is held**, or whose staleness would put
+something on the wire that is no longer true. The event remainder fails both: the buffer behind it
+keeps filling as the device polls, so holding a remainder means holding against a moving target, and
+an evicted event sent from it would be one the outstation has already reported losing.
+
+The provider's answer fails neither. It is caller-sized too -- **D35** lets a provider return as many
+blocks as its point map needs, and all of them are held until they are sent -- but it is a *snapshot*
+taken once and consumed block by block, so it shrinks with every fragment and cannot grow. And a body
+a few round trips old is a stale *reading*, which is a different thing from a false statement about
+what was lost.
+
+The distinction is therefore not size. It is that one of them is finished being produced and the
+other is not.
+
+**D30 -- A request arriving mid-sequence ends the conversation.** Under **D19** a new request
+supersedes what was outstanding, and a partly-sent response is no different: the master has moved
+on, and the events it did not take stay buffered for the read it just sent. The fragments already
+confirmed stay retired, because they were received.
+
+Under **D29** what is discarded is the fact that more was coming and the provider's body held for
+the last fragment -- no remainder, because none is held. That makes this decision cheap to implement
+and easy to get wrong in the other direction: forgetting to clear the flag would have the next
+confirmation continue a response the master has already abandoned, and forgetting the body would
+leave a read's answer to be delivered inside somebody else's.
+
+**D31 -- Opaque static data is not split, and a body that does not fit is refused.**
+`ReadProvider.read` returns octets, and this library cannot tell where one object inside them ends,
+so there is no honest place to cut one.
+
+That is the fallback rather than the rule -- see **D35**, which gives a provider a way to say where
+its objects end. A provider that does not is answered as it always was: fragmentation lets a large
+buffer of *events* reach a master, and a static read too large for one fragment is refused.
+
+**D32 -- A response is bounded in fragments, not only in octets.** One conversation carries at most
+so many, and the last of them sets `FIN` whether or not the buffer is empty -- after which the class
+indication bits go on asking, which is **D27**'s cap reached later and with most of the buffer
+delivered.
+
+Reaching the bound ends the events, not the response. A read that also named class 0 still owes the
+master its static data, so the provider's body goes out with `FIN` as it would have anyway
+(**D33**). Stopping short of it would answer a request for static data with events and nothing else,
+which is a worse failure than being chatty.
+
+Which means the bound is on the fragments of events, and a response may carry further ones for the
+static data: one for a provider answering in octets, and as many as its blocks need for one
+answering in blocks (D35). Counting those against the bound would have an outstation that reached it
+drop the static data instead -- the failure the paragraph above rules out, reintroduced by the
+arithmetic.
+
+A bound is needed because **D29** lets events recorded mid-conversation join it. Without one, an
+outstation whose device polls faster than its master confirms never sends `FIN`, and a master that
+is waiting for the end of a response is a master that never issues another request.
+
+The bound counts the fragments that carry **events**. Static continuations are outside it, and the
+difference is what the bound is for: a device can keep recording events during a conversation, so
+without a bound the events never end. The provider's blocks are a finite list read once when the
+response began (D33 and D35), and every static fragment consumes at least one of them, so that half
+terminates by construction. Bounding it as well would mean refusing to finish answering a request
+whose data the caller had already handed over.
+
+The bound is **sixteen fragments**, and it is a count rather than an octet budget or a deadline. A
+count is the one of the three that can be reasoned about from a log line, and sixteen is not
+arbitrary: it is one full trip through the application sequence space, so a conversation that
+reaches it has used every sequence number once and is starting over. A full default buffer of a
+thousand events is about seven fragments at the 2,048-octet ceiling, so sixteen leaves room for a
+buffer twice that size while still stopping one that fills as fast as it drains.
+
+An octet budget was the alternative worth weighing -- it costs the same for many small fragments as
+for few large ones -- and was not taken because there is no number for it that explains itself. A
+deadline was not taken because the session is clock-free apart from the select timeout, and a
+response whose length depends on how fast the machine is is a response that cannot be pinned in a
+test.
+
+**D33 -- Static data travels in the last fragment.** A read naming class 0 and an event class is
+answered with the provider's body after every event, not alongside the first of them.
+
+This falls out of **D20** and is easy to get wrong: putting static data in the first fragment --
+which is what the current single-fragment code does, and what a naive split would keep doing -- has
+the master apply it *before* the events in the fragments that follow, so it ends up holding an event
+value older than the reading the same response carried. The whole point of events-before-static is
+that the static value wins.
+
+The body is read once, when the first fragment is built, and held until the last -- the one thing a
+response carries across its own fragments, which **D29** explains the shape of.
+
+Three reasons, in increasing order of how much they matter. A response reporting two different
+values for one point over its own length is a worse answer than one a moment old. The provider is
+the caller's code and may poll a device to answer, so calling it once per fragment turns one logical
+read into several.
+
+And the one that decides it: a body re-read at the end might no longer fit. The response would then
+be mid-conversation, already committed, with nothing good to send -- **D31**'s refusal is an answer
+to a request, not to a continuation of one this outstation has already begun. Measuring the body
+once, at the start, is what makes the last fragment's fit knowable from the first.
+
+**D34 -- A confirmation naming the previous fragment re-sends the current one.** Not ignored, which
+is what the rest of these decisions would otherwise have it do, and which deadlocks the
+conversation.
+
+Walk it through. The outstation sends fragment *n*, the master confirms it, the outstation retires
+those events and sends *n+1*. If *n+1* is lost, the master repeats its confirmation of *n* -- and
+`_confirm` matches on the *outstanding* sequence, which is now *n+1*. The repeat matches nothing, is
+logged and dropped, and the outstation sends nothing. The master waits for a fragment that will
+never come and the outstation waits for a confirmation that will never arrive. Neither side is wrong
+and the exchange is over.
+
+So the outstation remembers one sequence number beyond the current one: the fragment just confirmed.
+A confirmation naming it replays the fragment already built and outstanding, byte for byte, and
+retires nothing -- the events it named were retired when it was first confirmed. A confirmation
+naming anything else still retires nothing, as **D18** has it.
+
+This is **D25** one layer up: the same choice between replaying what was sent and rebuilding it,
+answered the same way and for the same reason. Rebuilding would send a different set of events under
+a sequence the master is about to confirm.
+
+One sequence of history is enough because there is only ever one fragment outstanding, and it is
+replayed as often as the master asks for it -- a continuation lost three times is sent three times.
+What is not answered is a confirmation *two sequence positions old*, which names a fragment this
+outstation has already seen confirmed and moved past. A master in that position has lost the
+conversation rather than a fragment of it, and **D30** lets its next request start a new one.
+
+**D35 -- A provider may say where its objects end, and static data then splits too.** `ReadProvider`
+keeps `read`, which returns octets and is the contract. Beside it, a provider may implement
+`read_blocks`, returning the object blocks it would have concatenated. A provider that does gets its
+static data split across fragments at a block boundary; a provider that does not is answered under
+**D31**.
+
+Optional rather than replacing `read`, and that is the whole of the decision. Replacing it would be
+a breaking change before 1.0 for every caller, including the ones whose point maps fit a fragment
+and who would gain nothing. It would also have this library holding a list of the caller's objects
+rather than a body it forwards, which is closer to knowing the point map than **D6** wants to be.
+
+The limit it lifts is not hypothetical. A class 0 poll over roughly 290 analog points already
+exceeds the 2,048 octets a master typically advertises, which is a mid-sized site rather than a
+large one. **D31** alone would refuse those reads, and an outstation that cannot answer an integrity
+poll is not much of an outstation.
+
+A block is still not split. The unit is the object block the provider hands over, so a single block
+larger than a fragment is refused as **D31** refuses a body -- this moves the boundary from the
+whole body to one block of it, and does not remove it.
 
 ## Layering
 
@@ -429,6 +610,10 @@ this level needs a peer that exposes quality rather than a change to the harness
   indication bits, with D17 through D27.~~ Landed. `DISABLE_UNSOLICITED` is answered rather than
   refused: an outstation that sends none is already in the state the master is asking for, so
   refusing it answered a question the master did not ask.
+- ~~Responses larger than one fragment, with D28 through D35.~~ Landed. A response too large to
+  send at once is a conversation: the master confirms each fragment and the next follows. A provider
+  may also say where its own objects end, so a point map too large for one fragment reaches a master
+  rather than being refused.
 - Unsolicited responses: outstation-initiated traffic with its own retry timer, and
   `ENABLE_UNSOLICITED` becoming something this outstation can agree to. Still refused today,
   which is the honest answer while nothing is sent.
