@@ -7,9 +7,10 @@ A DNP3 (IEEE 1815) outstation in pure Python.
     implemented and tested: a master reads classes 1 to 3, confirms what it was
     sent, and is told through the indication bits what is still waiting. Not yet
     done are unsolicited responses -- outstation-initiated traffic -- and the
-    point-map loader; a response larger than one fragment is capped rather than
-    split. The first release is `0.1.0` and the API is not stable: while the
-    major version is `0`, a minor bump may carry a breaking change.
+    point-map loader. An answer too large for one fragment is a conversation:
+    the master confirms each fragment and the next follows. The first release is
+    `0.1.0` and the API is not stable: while the major version is `0`, a minor
+    bump may carry a breaking change.
 
 ## Why it is pure Python
 
