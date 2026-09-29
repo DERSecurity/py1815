@@ -45,6 +45,18 @@ const UNCONTROLLABLE_INDEX: u8 = 9;
 /// The index the fixture serves offline, with COMM_LOST set.
 const OFFLINE_INDEX: u16 = 3;
 
+/// The events the fixture holds, in the order a class 1, 2, 3 sweep returns
+/// them. Must match `interop/outstation.py`.
+///
+/// The values are unlike anything `EXPECTED` holds, which is what makes this
+/// worth asserting: a value here cannot have come from the point map.
+const EXPECTED_EVENTS: [(u16, f64); 4] = [(0, 101.0), (1, 102.0), (2, 203.0), (3, 304.0)];
+
+/// The index of the binary event the fixture seeds in class 1, behind the
+/// analog ones. It is the assertion that the order of a class read is the
+/// order the points changed rather than one gathered by type.
+const BINARY_EVENT_INDEX: u16 = 0;
+
 /// The whole quality octet each point is expected to carry, which is what the
 /// fixture sets: ONLINE alone, or COMM_LOST alone with ONLINE cleared.
 const FLAGS_ONLINE: u8 = 0x01;
@@ -57,6 +69,15 @@ struct Readings {
     variations: Vec<Variation>,
     fragments: usize,
     restart_seen: bool,
+    /// Set by the main task between the two reads. Events and static values
+    /// arrive through the same handler, so without being told which it is
+    /// looking at the collector would have the class read's values overwrite
+    /// the point map's -- and the assertions about the point map would then be
+    /// checking events against static expectations.
+    collecting_events: bool,
+    analog_events: Vec<(u16, f64)>,
+    binary_events: Vec<u16>,
+    event_variations: Vec<Variation>,
 }
 
 #[derive(Clone)]
@@ -82,6 +103,15 @@ impl ReadHandler for Collector {
         iter: &mut dyn Iterator<Item = (AnalogInput, u16)>,
     ) {
         let mut readings = self.0.lock().unwrap();
+        if readings.collecting_events {
+            // Kept in arrival order rather than by index: an event is a thing
+            // that happened, and two of them may carry the same index.
+            readings.event_variations.push(info.variation);
+            for (value, index) in iter {
+                readings.analog_events.push((index, value.value));
+            }
+            return;
+        }
         // The read names a variation, so the variation that comes back is part
         // of what is being checked. Without this a g30v2 answer to a g30v1
         // request would land in this same handler and pass.
@@ -96,8 +126,17 @@ impl ReadHandler for Collector {
     fn handle_binary_input(
         &mut self,
         _info: HeaderInfo,
-        _iter: &mut dyn Iterator<Item = (BinaryInput, u16)>,
+        iter: &mut dyn Iterator<Item = (BinaryInput, u16)>,
     ) {
+        let mut readings = self.0.lock().unwrap();
+        if !readings.collecting_events {
+            // The fixture serves no static binary inputs, so anything here
+            // outside a class read is not something this job asked for.
+            return;
+        }
+        for (_value, index) in iter {
+            readings.binary_events.push(index);
+        }
     }
 
     fn handle_double_bit_binary_input(
@@ -190,6 +229,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => fail(&format!("no response from {endpoint} within 30s")),
         Ok(Err(error)) => fail(&format!("the read failed: {error}")),
         Ok(Ok(())) => println!("rust-master: read completed"),
+    }
+
+    // -- the events ---------------------------------------------------------
+    //
+    // A second read rather than a startup class scan, so the assertions about
+    // the point map above are made against the point map alone. The collector
+    // is told that what follows is events rather than left to infer it, which
+    // needs no more of the crate's API than the reads themselves.
+    //
+    // Three reads rather than one integrity poll, so that a class answered with
+    // another class's events is a failure here rather than something this job
+    // sees as the right values under the wrong heading.
+    readings.lock().unwrap().collecting_events = true;
+
+    for (class, variation) in [
+        (1u8, Variation::Group60Var2),
+        (2, Variation::Group60Var3),
+        (3, Variation::Group60Var4),
+    ] {
+        let events = tokio::time::timeout(
+            Duration::from_secs(30),
+            association.read(ReadRequest::all_objects(variation)),
+        )
+        .await;
+
+        match events {
+            Err(_) => fail(&format!("no answer to a class {class} read within 30s")),
+            Ok(Err(error)) => fail(&format!("the class {class} read failed: {error}")),
+            Ok(Ok(())) => println!("rust-master: class {class} read completed"),
+        }
     }
 
     // Two assertions where there was one, because they sit at different layers
@@ -329,9 +398,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // -- the events ---------------------------------------------------------
+    //
+    // The part of this outstation no independent master had read until now. A
+    // class read is answered from buffers rather than from the point map, and
+    // the values below appear in neither `EXPECTED` nor each other's class.
+    if readings.analog_events.is_empty() {
+        fail("no events arrived, so the class path was never exercised");
+    }
+    if let Some(other) = readings
+        .event_variations
+        .iter()
+        .find(|variation| **variation != Variation::Group32Var3)
+    {
+        fail(&format!("an event header carried {other:?}, expected g32v3"));
+    }
+
+    let seen = &readings.analog_events;
+    if seen.len() != EXPECTED_EVENTS.len() {
+        fail(&format!(
+            "read {} analog events, expected {}: {seen:?}",
+            seen.len(),
+            EXPECTED_EVENTS.len()
+        ));
+    }
+    for (position, ((index, value), (wanted_index, wanted))) in
+        seen.iter().zip(EXPECTED_EVENTS.iter()).enumerate()
+    {
+        if *index != *wanted_index || (*value - *wanted).abs() > f64::EPSILON {
+            fail(&format!(
+                "event {position} was index {index} value {value}, \
+                 expected index {wanted_index} value {wanted}"
+            ));
+        }
+    }
+
+    // Behind the analog events of its class, which is the order the points
+    // changed. A peer that gathered them by type would tell its operator a
+    // different story about when things happened.
+    if !readings.binary_events.contains(&BINARY_EVENT_INDEX) {
+        fail(&format!(
+            "the class 1 binary event at index {BINARY_EVENT_INDEX} did not arrive: {:?}",
+            readings.binary_events
+        ));
+    }
+
     println!(
-        "rust-master: OK, {} analog inputs match, and the quality octet with them",
-        EXPECTED.len()
+        "rust-master: OK, {} analog inputs match with their quality octet, and {} events \
+         came back from the buffers",
+        EXPECTED.len(),
+        seen.len()
     );
     Ok(())
 }
