@@ -1,0 +1,157 @@
+name: Release
+
+# Publishes a tagged version to PyPI and mirrors the artifacts on a GitHub
+# release. Trusted publishing (OIDC): PyPI accepts this workflow's identity
+# directly, so no API token exists to store, leak, or rotate.
+#
+# The repository is private and the package is public. Nothing here changes
+# that, but it does mean a release makes files from a private repository
+# public, so what goes into the distributions is a disclosure decision.
+#
+# The wheel carries the package alone. The sdist does not: hatchling would put
+# the whole tree in it, so `pyproject.toml` gives it an allow-list, and a path
+# added to this repository is absent from the sdist until someone names it
+# there. Adding a path to that list publishes it. The two checks below assert
+# the parts of this that have gone wrong elsewhere, but the list is the
+# control -- read it before adding to it.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - name: The tag must be the version the package says it is
+        # A tag that disagrees with pyproject would publish a release whose
+        # installed version contradicts its own announcement.
+        #
+        # Read with a TOML parser rather than a regular expression. `version =`
+        # is not unique in this file and a pattern that matches the wrong one
+        # compares the tag against something that is not the package's version.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          test "$tag" = "$version" || { echo "tag v$tag but pyproject says $version"; exit 1; }
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Check package metadata
+        run: twine check dist/*
+      - name: The wheel must carry the typing marker
+        # `pyproject.toml` claims `Typing :: Typed`. Without `py.typed` beside
+        # the modules, every consumer's type checker ignores the annotations
+        # and the claim is false in a way nothing else here would catch --
+        # installs work, imports work, and the types are simply not there.
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q 'py1815/py\.typed' || {
+            echo "py.typed is missing from the wheel"
+            python -m zipfile -l dist/*.whl
+            exit 1
+          }
+      - name: The wheel must carry the library and nothing else
+        # The interop fixtures and the test suite live beside the package and
+        # are not part of it. A packaging change that swept them in would ship
+        # a master, an outstation fixture and a pcap writer to every consumer.
+        run: |
+          strays=$(python -m zipfile -l dist/*.whl \
+            | grep -Eo '^(interop|tests|docs)/[^ ]*' || true)
+          test -z "$strays" || { echo "the wheel carries:"; echo "$strays"; exit 1; }
+      - name: The sdist must carry only what it is meant to
+        # An allow-list, checked rather than assumed. `pyproject.toml` gives
+        # hatchling one too, but hatchling force-includes some files whatever
+        # it says -- README files anywhere in the tree, for one -- so the
+        # configuration states the intent and this states the guarantee.
+        #
+        # A new top-level path fails here rather than being published. If it
+        # belongs in the sdist, add it in both places; if it does not, that is
+        # the check doing its job.
+        run: |
+          python - <<'PY'
+          import glob, sys, tarfile
+
+          ALLOWED = {
+              "PKG-INFO", "pyproject.toml", ".gitignore",
+              "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md",
+              "LICENSE", "NOTICE",
+              "src", "tests", "docs",
+          }
+          # Inside `docs`, which is allowed wholesale above.
+          FORBIDDEN = ("docs/planning/",)
+
+          with tarfile.open(glob.glob("dist/*.tar.gz")[0]) as tar:
+              paths = [n.split("/", 1)[1] for n in tar.getnames() if "/" in n]
+
+          strays = sorted({p.split("/")[0] for p in paths} - ALLOWED)
+          inside = sorted(p for p in paths if p.startswith(FORBIDDEN))
+          for bad, why in ((strays, "not in the allow-list"), (inside, "excluded")):
+              for path in bad:
+                  print(f"the sdist carries {path}, which is {why}")
+          sys.exit(1 if strays or inside else 0)
+          PY
+
+      - name: The sdist must carry a test suite that passes
+        # The allow-list above asserts nothing unwanted is in the sdist. It
+        # cannot see that something wanted is missing: `tests` is inside the
+        # list, so a test whose subject was excluded is allowed and broken at
+        # the same time. That is how a suite referring to `interop` shipped
+        # while `interop` did not.
+        #
+        # So run what ships, in a directory holding nothing else. A PyPI
+        # version cannot be replaced, only yanked, and downstream packagers
+        # build from the sdist and run this suite -- a broken one surfaces as
+        # their bug report, after the only chance to fix it has gone.
+        run: |
+          pip install pytest pytest-asyncio
+          work=$(mktemp -d)
+          tar -xzf dist/*.tar.gz -C "$work"
+          cd "$work"/py1815-*
+          python -m pytest tests -q
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/py1815/
+    permissions:
+      # The OIDC token is the credential; nothing else is granted.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md) for what this release contains."
