@@ -411,7 +411,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|variation| **variation != Variation::Group32Var3)
     {
-        fail(&format!("an event header carried {other:?}, expected g32v3"));
+        fail(&format!(
+            "an event header carried {other:?}, expected g32v3"
+        ));
     }
 
     let seen = &readings.analog_events;
