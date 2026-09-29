@@ -152,9 +152,24 @@ part nothing outside this repository has exercised.
 Making one of them read events is not a configuration change. In `dnp3-rs` an
 event and a static value arrive through the same handler, so a class scan added
 to the Rust master would overwrite the static readings its existing assertions
-depend on, ordered by where the events sit in the response. The collector has to
-tell the two apart first. That is the remaining work, and it belongs with a peer
-run to verify it rather than with the fixture change.
+depend on, ordered by where the events sit in the response. `Readings.analog` is
+keyed by index alone and would have to be split first. The C++ probe is further
+off: it scans a specific group and variation rather than any class, and whether
+its bindings expose event objects distinctly is an open question rather than
+just work.
+
+Neither can be built here -- no `cargo`, and the bindings do not import -- so
+that half belongs with someone who has a toolchain, or with several rounds of
+CI.
+
+What the sweep can do without either has been done. It now walks a conversation:
+sending a request, confirming each fragment, and checking what only a walk can
+see -- `FIR` opening the exchange and nothing else setting it, `FIN` closing it,
+the sequence advancing by one around the sequence space, a fragment that asks to
+be confirmed being answered when it is, and the confirmation of the last one
+drawing no further traffic. That traffic goes into the capture Wireshark and
+Suricata read, so the framing of an exchange rather than of a single reply is now
+checked by implementations that are not this one.
 
 Seeded at startup rather than driven from a timer, which is what this section
 originally said. The peers need something deterministic to assert against, and a
