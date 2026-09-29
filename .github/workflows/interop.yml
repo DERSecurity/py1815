@@ -207,7 +207,25 @@ jobs:
           # -u for the same reason the other jobs use it: a cancelled job
           # loses whatever sits in Python's block buffer, which is exactly
           # the output needed to explain the cancellation.
-          python -u interop/outstation.py --port 20000 > outstation.log 2>&1 &
+          #
+          # --max-response 36 is what makes the conversation cases multi-fragment.
+          # The ceiling is the outstation's own and no master can set it over the
+          # wire, so a fixture given the default 2048 answers every one of these
+          # reads in a single fragment and the walk proves nothing a single-reply
+          # case does not. At 36 a class 1 read spans three fragments, so one of
+          # them carries neither FIR nor FIN -- the state a two-fragment exchange
+          # never produces -- and it goes into the capture the dissectors read.
+          #
+          # 34 is where the fixture's static block stops fitting a fragment,
+          # which the outstation correctly refuses rather than splits -- the
+          # sweep fails at 33 with PARAM_ERROR on every static read. So 36 is
+          # two octets of margin above the floor rather than the floor itself,
+          # and that margin is thin: one more static point in the fixture moves
+          # the real boundary up past 36 and this ceiling has to rise with it.
+          #
+          # The masters in the other jobs keep the default; this is the sweep's
+          # alone.
+          python -u interop/outstation.py --port 20000 --max-response 36 > outstation.log 2>&1 &
           for _ in $(seq 1 30); do
             if grep -q 'outstation listening on' outstation.log 2>/dev/null; then
               echo "outstation listening"

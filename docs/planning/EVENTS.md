@@ -177,6 +177,16 @@ drawing no further traffic. That traffic goes into the capture Wireshark and
 Suricata read, so the framing of an exchange rather than of a single reply is
 now checked by implementations that are not this one.
 
+The exchange it walks is really multi-fragment, which took arranging. How much
+a fragment holds is the outstation's `max_response` and no master can set it
+over the wire, so the sweep's fixture is started with `--max-response 36` while
+the peer jobs keep the default. Class 1 holds five events, enough that reading
+it takes three fragments -- and three is the number that matters, because only
+then does a fragment carry neither `FIR` nor `FIN`. At two the second fragment
+is the last one, and that state never reaches the wire at all. Both numbers are
+pinned in `tests/test_interop_fixture.py`, so seeding one event fewer or raising
+that ceiling fails there rather than quietly downgrading what CI exercises.
+
 Seeded at startup rather than driven from a timer, which is what this section
 originally said. The peers need something deterministic to assert against, and a
 clock that keeps adding events makes every assertion a race -- a master reading

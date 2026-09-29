@@ -322,6 +322,27 @@ def _class_read(outstation, *variations: int, sequence: int = 0) -> bytes:
     return frames[0].payload[1:]
 
 
+def _exchange(
+    session: Session,
+    body: bytes,
+    *,
+    function: int = FunctionCode.READ,
+    sequence: int = 0,
+) -> bytes:
+    """One request in, one application fragment back, link framing and all."""
+    control = link.control_byte(
+        from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+    )
+    request = link.build(
+        control,
+        destination=OUTSTATION,
+        source=MASTER,
+        payload=bytes([0xC0]) + bytes([0xC0 | sequence, function]) + body,
+    )
+    frames = link.FrameReader().feed(session.receive(request))
+    return frames[0].payload[1:]
+
+
 class TestTheFixtureHoldsEvents:
     """What the interoperability job reads that it cannot read as static data.
 
@@ -376,8 +397,67 @@ class TestTheFixtureHoldsEvents:
         things happened."""
         body = _class_read(outstation, 2)[4:]
 
-        analog = 4 + 2 * (1 + 11)
+        # Derived from the fixture rather than written as a number: the count
+        # of class 1 analog events is a thing the fixture chooses, and a test
+        # that restates it goes on asserting the old layout at a new offset
+        # the day one is added.
+        analogs = len(outstation.EVENTS[EventClass.CLASS_1])
+        # Four octets of object header, then one index octet and eleven of
+        # flags, value and timestamp for each event.
+        analog = 4 + analogs * (1 + 11)
         assert body[analog] == 2, "the binary event group"
+
+    def test_a_point_that_changed_twice_is_reported_twice(self, outstation):
+        """Both values, in the order they were recorded. A peer keeping one
+        event per index reports the later one and loses the earlier, which is a
+        different story about the device than the buffers tell."""
+        body = _class_read(outstation, 2)[4:]
+
+        repeated = [index for index, _ in outstation.EVENTS[EventClass.CLASS_1]]
+        assert len(repeated) > len(set(repeated)), "the fixture seeds a repeat"
+
+        # Four octets of object header, then one index octet and eleven of
+        # flags, value and timestamp for each event.
+        reported = [
+            (body[4 + n * 12], int.from_bytes(body[6 + n * 12 : 10 + n * 12], "little"))
+            for n in range(len(repeated))
+        ]
+        assert reported == [
+            (index, round(value)) for index, value in outstation.EVENTS[EventClass.CLASS_1]
+        ]
+
+    def test_a_class_read_spans_three_fragments_at_the_sweep_ceiling(self, outstation):
+        """The arrangement `interop.yml` depends on, pinned where it fails here
+        rather than in CI.
+
+        The sweep's outstation is started with ``--max-response 36`` so that a
+        class 1 read takes three fragments, because only then does one of them
+        carry neither FIR nor FIN. Two fragments make the second one the last,
+        and that state never occurs on the wire. Seeding one event fewer, or
+        raising that ceiling, would quietly take it off again.
+        """
+        controls = outstation.FixedControls()
+        session = Session(
+            outstation.FixedProvider(controls),
+            control_provider=controls,
+            events=outstation.seeded_events(),
+            outstation_address=OUTSTATION,
+            master_address=MASTER,
+            max_response=36,
+        )
+
+        fragments = [_exchange(session, bytes([60, 2, QualifierCode.ALL_OBJECTS]))]
+        while not fragments[-1][0] & 0x40 and len(fragments) < 10:
+            fragments.append(
+                _exchange(
+                    session, b"", function=FunctionCode.CONFIRM, sequence=fragments[-1][0] & 0x0F
+                )
+            )
+
+        assert len(fragments) == 3, [hex(f[0]) for f in fragments]
+        middle = fragments[1][0]
+        assert not middle & 0x80, "the middle fragment does not open the response"
+        assert not middle & 0x40, "nor close it"
 
     def test_each_class_answers_with_its_own(self, outstation):
         for variation, event_class in (

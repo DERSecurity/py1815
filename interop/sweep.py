@@ -347,6 +347,13 @@ class Conversation:
     name: str
     payload: bytes
     #: True when the answer must take more than one fragment.
+    #:
+    #: This is a statement about the outstation under test as well as about the
+    #: request: how much a fragment holds is the outstation's `max_response`,
+    #: which no master can set over the wire. The fixture is started with
+    #: ``--max-response 36`` for this reason, and the failure says so rather
+    #: than leaving a one-fragment answer looking like a defect in a correct
+    #: outstation that was simply given room.
     multi: bool = False
     #: True when the first fragment must carry object data.
     objects: bool = False
@@ -381,6 +388,7 @@ CONVERSATIONS = [
     Conversation(
         name="conversation: class 1",
         payload=_app(FunctionCode.READ, bytes([60, 2, 0x06])),
+        multi=True,
         objects=True,
         drains=_app(FunctionCode.READ, bytes([60, 2, 0x06]), sequence=1),
         note="events confirmed, and gone from the buffers afterwards",
@@ -390,6 +398,7 @@ CONVERSATIONS = [
         payload=_app(
             FunctionCode.READ, bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06, 60, 1, 0x06])
         ),
+        multi=True,
         objects=True,
         note="what a real master sends on startup",
     ),
@@ -505,7 +514,10 @@ def _walk(
         raise Failure(f"sequences {actual}, expected {expected}")
 
     if conversation.multi and len(fragments) < 2:
-        raise Failure("expected more than one fragment")
+        raise Failure(
+            "expected more than one fragment; start the fixture with "
+            "--max-response 36 if it is running with the default ceiling"
+        )
     if conversation.objects and len(fragments[0]) <= 4:
         raise Failure("expected objects, got a null response")
 
