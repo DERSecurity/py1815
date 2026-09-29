@@ -1234,10 +1234,18 @@ class Session:
             # nothing but the provider's body. It has no events to retire, but
             # it is the step of an exchange the master is walking through, and
             # its confirmation is the only signal that the response arrived
-            # whole. Leaving it clear also left nothing cached to replay, so
-            # losing it deadlocked the exchange in exactly the way D34 exists to
-            # prevent -- the master repeats its confirmation and is answered
-            # with silence.
+            # whole.
+            #
+            # Leaving it clear also left nothing cached to replay, so losing
+            # such a fragment deadlocked the exchange in exactly the way D34
+            # exists to prevent -- the master repeats its confirmation and is
+            # answered with silence.
+            #
+            # Unconditional here, where `_handle_read` computes `confirmable`,
+            # and the difference is the conversation rather than the content: a
+            # response that fits one fragment and carries nothing to retire
+            # needs no confirmation, while the last fragment of a conversation
+            # does even when it carries the same nothing.
             control=AppControl(fir=False, fin=final, con=True, sequence=sequence),
             iin=iin,
             body=body,
