@@ -123,15 +123,24 @@ with `FIN` as it would have anyway (**D33**). Stopping short of it would answer 
 request for static data with events and nothing else, which is a worse failure
 than being chatty.
 
-Which means the bound is on the fragments of events, and a response may carry one
-more than it for the body. Counting the body's fragment against the bound would
-have an outstation that reached it drop the static data instead -- the failure
-the paragraph above rules out, reintroduced by the arithmetic.
+Which means the bound is on the fragments of events, and a response may carry
+further ones for the static data: one for a provider answering in octets, and as
+many as its blocks need for one answering in blocks (D35). Counting those against
+the bound would have an outstation that reached it drop the static data instead
+-- the failure the paragraph above rules out, reintroduced by the arithmetic.
 
 A bound is needed because **D29** lets events recorded mid-conversation join it.
 Without one, an outstation whose device polls faster than its master confirms
 never sends `FIN`, and a master that is waiting for the end of a response is a
 master that never issues another request.
+
+The bound counts the fragments that carry **events**. Static continuations are
+outside it, and the difference is what the bound is for: a device can keep
+recording events during a conversation, so without a bound the events never end.
+The provider's blocks are a finite list read once when the response began (D33
+and D35), and every static fragment consumes at least one of them, so that half
+terminates by construction. Bounding it as well would mean refusing to finish
+answering a request whose data the caller had already handed over.
 
 The bound is **sixteen fragments**, and it is a count rather than an octet budget
 or a deadline. A count is the one of the three that can be reasoned about from a

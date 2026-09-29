@@ -216,3 +216,53 @@ class TestBlocksBesideEvents:
 
         assert refused._handle_fragment(INTEGRITY)[3] & IIN2Bit.PARAM_ERROR
         assert not answered._handle_fragment(INTEGRITY)[3] & IIN2Bit.PARAM_ERROR
+
+
+class TestOnceTheStaticHalfBegins:
+    """D20 orders a response as a whole rather than each fragment of it. An
+    event placed after static data already sent leaves the master holding a
+    reading older than the event that superseded it, which is the ordering the
+    rule exists to get right."""
+
+    #: Three blocks, sized so the first fragment takes two and the third
+    #: follows -- the only shape in which a continuation still has static owed.
+    SPANNING = [_block(0, 900), _block(1, 900), _block(2, 900)]
+
+    @staticmethod
+    def _buffers() -> EventBuffers:
+        buffers = EventBuffers(capacity=500)
+        buffers.record_analog(0, AnalogPoint(1.0), event_class=EventClass.CLASS_1, timestamp_ms=1)
+        return buffers
+
+    def test_a_later_fragment_carries_no_events(self):
+        buffers = self._buffers()
+        session = Session(Blocks(self.SPANNING), events=buffers, max_response=2048)
+        first = session._handle_fragment(INTEGRITY)
+        assert not first[0] & FIN_MASK, "the fixture must leave static owed"
+
+        # A device polling between the fragments, which is the ordinary case.
+        buffers.record_analog(5, AnalogPoint(99.0), event_class=EventClass.CLASS_1, timestamp_ms=2)
+        second = session._handle_fragment(bytes([0xC0 | (first[0] & 0x0F), FunctionCode.CONFIRM]))
+
+        assert second[4] == 30, "an event block followed static data"
+
+    def test_and_that_event_is_still_waiting_afterwards(self):
+        """Held back rather than dropped. It belongs to the next response, and
+        the class bits go on asking for it."""
+        buffers = self._buffers()
+        session = Session(Blocks(self.SPANNING), events=buffers, max_response=2048)
+        first = session._handle_fragment(INTEGRITY)
+        buffers.record_analog(5, AnalogPoint(99.0), event_class=EventClass.CLASS_1, timestamp_ms=2)
+
+        _walk(session, first)
+
+        assert buffers.count(EventClass.CLASS_1) == 1
+
+    def test_the_events_of_the_first_fragment_still_lead(self):
+        buffers = self._buffers()
+        session = Session(Blocks(self.SPANNING), events=buffers, max_response=2048)
+
+        fragments = _walk(session, session._handle_fragment(INTEGRITY))
+
+        assert fragments[0][4] == 32, "the events open the response"
+        assert _body(fragments).endswith(b"".join(self.SPANNING))

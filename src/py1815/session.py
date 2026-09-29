@@ -324,6 +324,12 @@ class _Conversation:
     #:
     #: Consumed as the response goes, so this is what is still owed.
     static: list[bytes]
+    #: Whether any of it has gone out. Once it has, the response is in its
+    #: static half and takes no more events: D20 orders a response as a whole,
+    #: not each fragment of it, and an event placed after static data already
+    #: sent would leave the master holding a reading older than the event that
+    #: superseded it -- which is the ordering the rule exists to get right.
+    sending_static: bool = False
     #: What each header has left to send, for the headers that named a count.
     #: A count qualifier is "at most this many" of the *response*, not of each
     #: fragment of it, so it is decremented as the conversation goes rather
@@ -1059,10 +1065,14 @@ class Session:
         """
         whole = self._max_response - RESPONSE_HEADER_SIZE
 
-        if conversation.fragments > _MAX_FRAGMENTS or not conversation.headers:
-            # No events to place: either the read named none, or the bound has
-            # already spent them all. What is left is the static data, which the
-            # request asked for and is still owed however the events ended.
+        if (
+            conversation.fragments > _MAX_FRAGMENTS
+            or conversation.sending_static
+            or not conversation.headers
+        ):
+            # No events to place: the read named none, the bound has spent them
+            # all, or the static half of the response has begun and the events
+            # are behind it now.
             body = self._take_static(conversation, whole)
             return body, [], not conversation.static
 
@@ -1109,6 +1119,8 @@ class Session:
         body = b""
         while conversation.static and len(conversation.static[0]) <= room - len(body):
             body += conversation.static.pop(0)
+        if body:
+            conversation.sending_static = True
         return body
 
     def _static_blocks(self, headers: Sequence[ObjectHeader]) -> list[bytes]:
