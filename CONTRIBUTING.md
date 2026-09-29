@@ -102,6 +102,22 @@ and it carries an approving review. Branches do not have to be up to date with
 `main` first: merging one pull request does not send the others back for a
 rebase, because the peer jobs run against the merge result anyway.
 
+## The changelog
+
+A changelog entry is a file in `changelog.d/`, not an edit to `CHANGELOG.md`.
+Name it `<pull-request>.<category>.md` and write the entry body into it.
+`changelog.d/README.md` has the rules and the reason, which is that two pull
+requests editing the same `[Unreleased]` heading conflict on every pair.
+
+```bash
+python scripts/build_changelog.py --check     # what CI runs
+python scripts/build_changelog.py --preview   # render as it will appear
+```
+
+A release folds the pending fragments in with
+`python scripts/build_changelog.py --release X.Y.Z`, bumps the version in
+`pyproject.toml`, and deletes the fragments it consumed in that same commit.
+
 ## Conventions
 
 - Line length 100, enforced by `ruff`.
