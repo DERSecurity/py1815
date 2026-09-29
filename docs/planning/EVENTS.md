@@ -135,26 +135,35 @@ is set until a master clears it, and **D22** and **D23** put the class and
 overflow bits there on their own terms -- a response reporting them is still a
 successful one.
 
-### 6. Interoperability -- half landed
+### 6. Interoperability -- landed, bar the C++ probe
 
 `interop/outstation.py` holds events, and the function code sweep reads them:
 each class on its own and an integrity poll naming all four. The sweep's traffic
 is dissected by Wireshark and Suricata, so the event objects are checked on the
 wire by implementations that are not this one.
 
-**No peer master reads them yet**, which this section assumed and which is not
-true. The C++ probe scans group 30 variation 1 rather than any class, and the
-Rust master is configured with `EventClasses::none()` and `Classes::class0()`.
-So a master's *interpretation* of an event -- reassembling a class read,
-confirming it, applying the events in the order they arrived -- is still the
-part nothing outside this repository has exercised.
+**The Rust master reads them.** Three class reads of its own, after the static
+one, so a class answered with another class's events fails rather than passing
+as the right values under the wrong heading.
 
-Making one of them read events is not a configuration change. In `dnp3-rs` an
-event and a static value arrive through the same handler, so a class scan added
-to the Rust master would overwrite the static readings its existing assertions
-depend on, ordered by where the events sit in the response. The collector has to
-tell the two apart first. That is the remaining work, and it belongs with a peer
-run to verify it rather than with the fixture change.
+That needed less than this section assumed and more than it looked. Less,
+because the master issues an *explicit* read rather than relying on a startup
+scan, so `AssociationConfig` is untouched and events are simply a second read.
+More, because events and static values arrive through the same handler: a class
+read would have overwritten the point map the existing assertions depend on, and
+would have broken the variation check, which asserts every analog header carried
+g30v1. The collector is told between the reads which it is looking at, rather
+than routing on a `HeaderInfo` field that cannot be checked without compiling.
+
+`handle_binary_input` is implemented, having been an empty stub. The fixture
+seeds a binary event behind the analog ones of its class, and it is what proves
+a peer sees them in the order the points changed rather than gathered by type.
+
+**The C++ probe stays static-only.** It scans a group and variation rather than
+any class, and whether its bindings expose event objects at all is an open
+question -- they already discard the quality octet, which is why the Rust peer
+exists. One independent master reading events is the assertion worth having, and
+a second adds little against that uncertainty.
 
 Seeded at startup rather than driven from a timer, which is what this section
 originally said. The peers need something deterministic to assert against, and a
