@@ -194,9 +194,14 @@ data. Then 2, which is the state machine. Then 5, which is independent and
 small. Then 3, which is the largest and the one most likely to want its own
 plan. Then 6.
 
-Sections 1, 2, 4, 5 and 7 have landed, along with D25, D26 and D27, none of
-which were in this plan when it was written -- they came out of review. Sections
-3 and 6 remain.
+Sections 1, 2, 4, 5, 6 and 7 have landed, along with D25, D26 and D27, none of
+which were in this plan when it was written -- they came out of review. Section
+3 remains, and has [a plan of its own](FRAGMENTATION.md).
+
+Section 6 landed bar the C++ probe, which reads no class and stays that way
+deliberately. What it would add is a second opinion on an assertion one
+independent master already makes, against a binding whose handling of event
+objects is an open question.
 
 ## Open
 
