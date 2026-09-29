@@ -96,7 +96,12 @@ INTERRUPTIONS = {
     "immediate freeze, no acknowledgment": bytes([0xC5, FunctionCode.IMMED_FREEZE_NR]),
     "a read": bytes([0xC5, FunctionCode.READ, 60, 1, QualifierCode.ALL_OBJECTS]),
     "an unsupported function": bytes([0xC5, FunctionCode.COLD_RESTART]),
-    "a write": bytes([0xC5, FunctionCode.WRITE, 80, 1, 0x00, 7, 7]),
+    # Group 80 variation 1 index 7 and its value, which is the write this
+    # outstation honours. Without the trailing octet the object has no value,
+    # `parse_request` leaves the body empty, and the case passes on the
+    # strength of `_is_restart_write` not looking at it -- exercising a
+    # malformed write rather than the ordinary one this row is here for.
+    "a write": bytes([0xC5, FunctionCode.WRITE, 80, 1, QualifierCode.UINT8_START_STOP, 7, 7, 0x00]),
     "disable unsolicited": bytes([0xC5, FunctionCode.DISABLE_UNSOLICITED]),
 }
 
