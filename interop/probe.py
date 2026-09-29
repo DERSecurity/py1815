@@ -135,14 +135,31 @@ def main() -> None:
         # Reproduced locally at 8 hangs in 15 runs with two CPUs, and 0 in 15
         # with this poll removed.
         #
-        # The scan loop below is not the same exposure. Of its six calls per
-        # iteration, the five reads are Python-side -- they look up a dictionary
-        # the read handler filled -- and only send_scan_all_request enters the
-        # C++ stack, once per second, through ScanAllObjects rather than through
-        # GetStatistics. GetStatistics is the accessor that deadlocked, so this
-        # is a narrower claim than "the channel is untouched": a different
-        # entry point, entered sixfold less often, which has not been observed
-        # to deadlock. The watchdog above is what covers the residue.
+        # The scan loop below is not the same exposure, though the reason is
+        # conditional and worth stating as such.
+        #
+        # Its five reads go through get_db_by_group_variation_index, which
+        # serves them from a dictionary the read handler filled while that
+        # dictionary is newer than stale_if_longer_than -- two seconds by
+        # default. Older than that, or on the first iteration before any
+        # response has been recorded, they fall through to
+        # get_db_by_group_variation and reach the C++ stack after all. So:
+        #
+        #   steady state  the loop period is under two seconds, the cache is
+        #                 fresh, and one call per iteration enters the stack
+        #   first pass    no timestamp exists yet, so all five fall through
+        #   degraded      the outstation has stopped answering, the timestamp
+        #                 goes stale, and all five fall through every time
+        #
+        # The last is the one worth naming, because exposure rises exactly when
+        # the peer is already misbehaving, which is when a deadlock would
+        # matter.
+        #
+        # None of it changes the conclusion. Every one of those paths enters
+        # through ScanAllObjects, and GetStatistics is the accessor that
+        # deadlocked. So this is a narrower claim than "the channel is
+        # untouched": a different entry point, not observed to deadlock, with
+        # the watchdog above covering the residue.
         #
         # The loop establishes connectivity by succeeding, so a genuine failure
         # to connect arrives as "the integrity poll returned no analog inputs"
