@@ -5,9 +5,15 @@ name: Release
 # directly, so no API token exists to store, leak, or rotate.
 #
 # The repository is private and the package is public. Nothing here changes
-# that -- what a release publishes is the sdist and the wheel, which is the
-# library's own source. Anything that must not be published must not be in
-# `src/py1815`.
+# that, but it does mean a release makes files from a private repository
+# public, so what goes into the distributions is a disclosure decision.
+#
+# The wheel carries the package alone. The sdist does not: hatchling would put
+# the whole tree in it, so `pyproject.toml` gives it an allow-list, and a path
+# added to this repository is absent from the sdist until someone names it
+# there. Adding a path to that list publishes it. The two checks below assert
+# the parts of this that have gone wrong elsewhere, but the list is the
+# control -- read it before adding to it.
 
 on:
   push:
@@ -59,15 +65,38 @@ jobs:
           strays=$(python -m zipfile -l dist/*.whl \
             | grep -Eo '^(interop|tests|docs)/[^ ]*' || true)
           test -z "$strays" || { echo "the wheel carries:"; echo "$strays"; exit 1; }
-      - name: The sdist must not carry the planning documents
-        # It is public even though this repository is not, and hatchling would
-        # otherwise put the whole tree in it. `mkdocs.yml` keeps these off the
-        # site for the same reason: they are written for the people building
-        # the library rather than the people using it. `DESIGN.md` is published
-        # on purpose and stays.
+      - name: The sdist must carry only what it is meant to
+        # An allow-list, checked rather than assumed. `pyproject.toml` gives
+        # hatchling one too, but hatchling force-includes some files whatever
+        # it says -- README files anywhere in the tree, for one -- so the
+        # configuration states the intent and this states the guarantee.
+        #
+        # A new top-level path fails here rather than being published. If it
+        # belongs in the sdist, add it in both places; if it does not, that is
+        # the check doing its job.
         run: |
-          planning=$(tar -tzf dist/*.tar.gz | grep 'docs/planning/' || true)
-          test -z "$planning" || { echo "the sdist carries:"; echo "$planning"; exit 1; }
+          python - <<'PY'
+          import glob, sys, tarfile
+
+          ALLOWED = {
+              "PKG-INFO", "pyproject.toml", ".gitignore",
+              "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md",
+              "LICENSE", "NOTICE",
+              "src", "tests", "docs",
+          }
+          # Inside `docs`, which is allowed wholesale above.
+          FORBIDDEN = ("docs/planning/",)
+
+          with tarfile.open(glob.glob("dist/*.tar.gz")[0]) as tar:
+              paths = [n.split("/", 1)[1] for n in tar.getnames() if "/" in n]
+
+          strays = sorted({p.split("/")[0] for p in paths} - ALLOWED)
+          inside = sorted(p for p in paths if p.startswith(FORBIDDEN))
+          for bad, why in ((strays, "not in the allow-list"), (inside, "excluded")):
+              for path in bad:
+                  print(f"the sdist carries {path}, which is {why}")
+          sys.exit(1 if strays or inside else 0)
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
@@ -107,4 +136,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md) for what this release contains."
+            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md) for what this release contains."

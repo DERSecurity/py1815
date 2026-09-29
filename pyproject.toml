@@ -46,11 +46,34 @@ packages = ["src/py1815"]
 
 [tool.hatch.build.targets.sdist]
 # An sdist published to PyPI is public even though this repository is not, and
-# by default hatchling puts the whole tree in it. The planning documents are
-# the one part of that tree written for the people building the library rather
-# than for the people using it, which is the same line `mkdocs.yml` draws when
-# it excludes them from the site and publishes `DESIGN.md` on purpose.
-exclude = ["docs/planning"]
+# by default hatchling puts the whole tree in it -- not just the package.
+#
+# So this is an allow-list rather than a list of things to keep out. A path
+# added to this repository tomorrow is absent from the sdist until someone
+# names it here, which is the safe direction to fail: the cost of forgetting is
+# a source distribution missing a file, not a private one published to PyPI.
+include = [
+    "src/py1815",
+    "tests",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE",
+    "NOTICE",
+]
+# `docs` is named above and the planning documents live inside it. They are
+# written for the people building the library rather than the people using it,
+# which is the same line `mkdocs.yml` draws when it keeps them off the site and
+# publishes `DESIGN.md` on purpose.
+#
+# `interop` is not in the allow-list at all, and is named here because hatchling
+# force-includes README files wherever they sit -- an allow-list it honors for
+# most things but not for all of them. That is why the release workflow asserts
+# the contents rather than trusting this list: the list is the intent, the check
+# is the guarantee.
+exclude = ["docs/planning", "interop"]
 
 [tool.ruff]
 target-version = "py311"
