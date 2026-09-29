@@ -5,11 +5,7 @@ Notable changes to this project, newest first. Versions follow
 version is `0`, a minor bump may carry a breaking change and the release note
 says so explicitly.
 
-## [Unreleased]
-
-Nothing yet.
-
-## [0.1.0] - 2026-09-29
+## [0.1.0] — 2026-09-29
 
 First release. The protocol stack, the listener, the event path and controls;
 unsolicited responses and the point-map loader are not in it. The API is not
