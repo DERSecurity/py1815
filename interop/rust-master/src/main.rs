@@ -83,9 +83,15 @@ impl Arrived {
 /// story about when things happened, and that is what this sequence catches.
 fn expected(class: u8) -> Vec<Arrived> {
     match class {
+        // Point 0 twice, and in that order. A master keeping one event per
+        // index reports 106 and loses 101, which is a different story about
+        // the device than the buffers tell -- so the repeat is asserted here
+        // rather than tolerated.
         1 => vec![
             Arrived::Analog(0, 101.0, Variation::Group32Var3),
             Arrived::Analog(1, 102.0, Variation::Group32Var3),
+            Arrived::Analog(4, 105.0, Variation::Group32Var3),
+            Arrived::Analog(0, 106.0, Variation::Group32Var3),
             Arrived::Binary(BINARY_EVENT_INDEX, true, Variation::Group2Var2),
         ],
         2 => vec![Arrived::Analog(2, 203.0, Variation::Group32Var3)],

@@ -87,9 +87,18 @@ POINTS = [
 #: and that -- not the indices -- is what catches a class being mixed up. The
 #: indices are deliberately reused: class 1 holds analog 0 and 1 and a binary
 #: event at index 0 too, because a peer that keys events by index alone should
-#: be seen to do so rather than accommodated.
+#: be seen to do so rather than accommodated. Point 0 appears twice in class 1
+#: for the same reason, a point that changed and then changed again: a peer that
+#: keeps one event per index reports the later value and loses the earlier one,
+#: and that is a different story about the device than the buffers tell.
+#:
+#: Five events in class 1 is also what makes a class 1 read span three fragments
+#: against an outstation started with ``--max-response 36``, which is how the
+#: sweep gets a fragment with neither FIR nor FIN set onto the wire. Fewer events
+#: and the exchange is two fragments, where the second is the last and that state
+#: never occurs.
 EVENTS = {
-    EventClass.CLASS_1: ((0, 101.0), (1, 102.0)),
+    EventClass.CLASS_1: ((0, 101.0), (1, 102.0), (4, 105.0), (0, 106.0)),
     EventClass.CLASS_2: ((2, 203.0),),
     EventClass.CLASS_3: ((3, 304.0),),
 }
@@ -249,6 +258,7 @@ async def main() -> None:
     parser.add_argument("--port", type=int, default=20000)
     parser.add_argument("--outstation-address", type=int, default=1024)
     parser.add_argument("--master-address", type=int, default=1)
+    parser.add_argument("--max-response", type=int, default=2048)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="outstation: %(message)s")
@@ -260,6 +270,7 @@ async def main() -> None:
         events=seeded_events(),
         outstation_address=args.outstation_address,
         master_address=args.master_address,
+        max_response=args.max_response,
     )
     server = OutstationServer(session, bind=f"127.0.0.1:{args.port}")
     await server.start()
