@@ -165,6 +165,18 @@ question -- they already discard the quality octet, which is why the Rust peer
 exists. One independent master reading events is the assertion worth having, and
 a second adds little against that uncertainty.
 
+**The sweep walks a conversation**, which is the other half of what a master
+does with events and the half no peer covers. `dnp3-rs` reassembles and confirms
+a class read inside the library, so a master asserting on the values it ends up
+with says nothing about the exchange that carried them. So the sweep sends a
+request and confirms each fragment itself, checking what only a walk can see:
+`FIR` opening the exchange and nothing else setting it, `FIN` closing it, the
+sequence advancing by one around the sequence space, a fragment that asks to be
+confirmed being answered when it is, and the confirmation of the last one
+drawing no further traffic. That traffic goes into the capture Wireshark and
+Suricata read, so the framing of an exchange rather than of a single reply is
+now checked by implementations that are not this one.
+
 Seeded at startup rather than driven from a timer, which is what this section
 originally said. The peers need something deterministic to assert against, and a
 clock that keeps adding events makes every assertion a race -- a master reading

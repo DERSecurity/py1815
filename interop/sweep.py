@@ -36,8 +36,17 @@ from dataclasses import dataclass, field
 from pcap import Capture
 
 from py1815 import link
-from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
-from py1815.transport import segment
+from py1815.application import (
+    CON_MASK,
+    FIN_MASK,
+    FIR_MASK,
+    SEQUENCE_MODULUS,
+    FunctionCode,
+    IIN2Bit,
+    IINBit,
+    QualifierCode,
+)
+from py1815.transport import Reassembler, TransportError, segment
 
 #: Long enough that a reply which is coming has arrived on a loopback, short
 #: enough that the cases expecting silence do not dominate the runtime.
@@ -324,6 +333,242 @@ class Failure(Exception):
     """A case whose reply did not match its expectation."""
 
 
+@dataclass(frozen=True)
+class Conversation:
+    """A request whose answer the master has to walk rather than just read.
+
+    A response that sets `CON` is only half an exchange: the master confirms it,
+    and an outstation with more to send answers that confirmation with the next
+    fragment. Every other case in this file is one request and one reply, so
+    none of them reaches that path -- the nearest, "confirm", sends a bare
+    confirmation with nothing outstanding to confirm.
+    """
+
+    name: str
+    payload: bytes
+    #: True when the answer must take more than one fragment.
+    multi: bool = False
+    #: True when the first fragment must carry object data.
+    objects: bool = False
+    #: A request whose answer must come back empty once this conversation has
+    #: been confirmed. Silence after a confirmation proves only that nothing
+    #: was sent; an outstation ignoring every confirmation is silent too. This
+    #: is what tells the two apart.
+    drains: bytes | None = None
+    #: Where a walk stops and calls the exchange a runaway.
+    #:
+    #: Seventeen is what *this fixture* can produce, not what the protocol
+    #: allows: `interop/outstation.py` implements `read` alone, so its static
+    #: data is one block and a response runs to sixteen fragments of events and
+    #: one for that block. A provider implementing `read_blocks` is not bounded
+    #: by the sixteen at all -- its blocks continue past them -- and a
+    #: conformant outstation can legitimately run far longer.
+    #:
+    #: So the day this fixture gains `read_blocks`, raise this rather than
+    #: reading the failure as an outstation that will not stop.
+    #:
+    #: The guard runs before asking for another fragment, which is why
+    #: seventeen rejects a non-final seventeenth and leaves a final one valid.
+    #: Eighteen accepted an eighteenth outright.
+    limit: int = 17
+    note: str = ""
+
+
+#: Conversations, walked after the single-reply sweep so the capture holds both.
+#: The outstation seeds events at startup, and confirming retires them, so these
+#: assert the shape of the exchange rather than how much it carried.
+CONVERSATIONS = [
+    Conversation(
+        name="conversation: class 1",
+        payload=_app(FunctionCode.READ, bytes([60, 2, 0x06])),
+        objects=True,
+        drains=_app(FunctionCode.READ, bytes([60, 2, 0x06]), sequence=1),
+        note="events confirmed, and gone from the buffers afterwards",
+    ),
+    Conversation(
+        name="conversation: integrity poll",
+        payload=_app(
+            FunctionCode.READ, bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06, 60, 1, 0x06])
+        ),
+        objects=True,
+        note="what a real master sends on startup",
+    ),
+]
+
+
+def _reassemble(frames: list[link.LinkFrame], reply: bytes) -> bytes:
+    """The application fragment those frames carry, segments and all.
+
+    An application fragment over 249 octets travels as several transport
+    segments in several link frames, so taking the last frame for the whole
+    hands a caller the middle of somebody's object data and lets it call the
+    second octet a function code. Nothing the sweep sends is that large today;
+    the multi-fragment conversations are nothing but.
+
+    One fragment per reply. A second is refused rather than allowed to replace
+    the first, because `_read_reply` reads until it times out and so can return
+    two responses coalesced on a slow link -- and silently checking the second
+    as though it were the only one is the kind of pass that is worse than a
+    failure.
+    """
+    reassembler = Reassembler()
+    fragment: bytes | None = None
+    for frame in frames:
+        if not frame.payload:
+            # A link acknowledgment carries no transport segment.
+            continue
+        try:
+            completed = reassembler.add(frame.payload)
+        except TransportError as exc:
+            raise Failure(f"the reply did not reassemble: {exc}") from exc
+        if completed is None:
+            continue
+        if fragment is not None:
+            raise Failure(f"the reply carried two application fragments: {reply.hex()}")
+        fragment = completed
+
+    if fragment is None:
+        raise Failure(f"the reply carried no complete application fragment: {reply.hex()}")
+    return fragment
+
+
+def _fragment_of(reply: bytes) -> bytes:
+    """The application fragment inside a reply, or a failure saying why not.
+
+    Reassembly and its reasoning are `_reassemble`'s; what this adds is the
+    function code, checked here as `_check` checks it for a single reply.
+    Without it this path accepts any four octets whose control flags happen to
+    read as a response, so a continuation carrying the wrong function would be
+    walked as though it were the right one.
+    """
+    frames = link.FrameReader().feed(reply)
+    if not frames:
+        raise Failure(f"reply is not a complete link frame: {reply.hex()}")
+
+    fragment = _reassemble(frames, reply)
+    if len(fragment) < 4:
+        raise Failure(f"application fragment is too short: {fragment.hex()}")
+    if fragment[1] != FunctionCode.RESPONSE:
+        raise Failure(f"expected function {FunctionCode.RESPONSE:#04x}, got {fragment[1]:#04x}")
+    return fragment
+
+
+def _walk(
+    sock: socket.socket, capture: Capture | None, conversation: Conversation
+) -> tuple[str, int]:
+    """Send a request and confirm each fragment until the outstation is done.
+
+    Checks the things only a walk can see: that `FIR` opens the exchange and
+    nothing else sets it, that `FIN` closes it, that the sequence advances by
+    one each time around the sequence space, and that a fragment asking to be
+    confirmed is answered when it is.
+    """
+    request = _frame_bytes(conversation.payload)
+    sock.sendall(request)
+    if capture:
+        capture.sent(request)
+    reply = _read_reply(sock)
+    if capture:
+        capture.received(reply)
+    if not reply:
+        raise Failure("expected a reply, got silence")
+
+    fragments = [_fragment_of(reply)]
+    confirmations = 0
+    while fragments[-1][0] & CON_MASK and not fragments[-1][0] & FIN_MASK:
+        if len(fragments) >= conversation.limit:
+            raise Failure(f"still going after {len(fragments)} fragments")
+        confirm = _frame_bytes(_app(FunctionCode.CONFIRM, sequence=fragments[-1][0] & 0x0F))
+        sock.sendall(confirm)
+        if capture:
+            capture.sent(confirm)
+        reply = _read_reply(sock)
+        confirmations += 1
+        if capture:
+            capture.received(reply)
+        if not reply:
+            raise Failure(f"confirming fragment {len(fragments)} drew silence")
+        fragments.append(_fragment_of(reply))
+
+    if not fragments[0][0] & FIR_MASK:
+        raise Failure("the first fragment does not set FIR")
+    for number, fragment in enumerate(fragments[1:], 2):
+        if fragment[0] & FIR_MASK:
+            raise Failure(f"fragment {number} sets FIR")
+    if not fragments[-1][0] & FIN_MASK:
+        raise Failure("the exchange ended without FIN")
+
+    first = fragments[0][0] & 0x0F
+    expected = [(first + n) % SEQUENCE_MODULUS for n in range(len(fragments))]
+    actual = [f[0] & 0x0F for f in fragments]
+    if actual != expected:
+        raise Failure(f"sequences {actual}, expected {expected}")
+
+    if conversation.multi and len(fragments) < 2:
+        raise Failure("expected more than one fragment")
+    if conversation.objects and len(fragments[0]) <= 4:
+        raise Failure("expected objects, got a null response")
+
+    # The last fragment is confirmed like any other, and draws nothing further:
+    # the exchange is over and a confirmation is not a request.
+    if fragments[-1][0] & CON_MASK:
+        confirm = _frame_bytes(_app(FunctionCode.CONFIRM, sequence=fragments[-1][0] & 0x0F))
+        sock.sendall(confirm)
+        if capture:
+            capture.sent(confirm)
+        confirmations += 1
+        trailing = _read_reply(sock)
+        if capture:
+            capture.received(trailing)
+        if trailing:
+            raise Failure(f"confirming the last fragment drew {len(trailing)} octets")
+
+    if not confirmations:
+        # Nothing asked to be confirmed, so this case walked no further than an
+        # ordinary read and proved nothing a single-reply case does not. A
+        # response with `CON` accidentally clear would otherwise be reported as
+        # "confirmed" on the strength of never having needed to be.
+        raise Failure("no fragment asked to be confirmed")
+
+    if conversation.drains is not None:
+        # Silence after a confirmation proves only that nothing was sent, and
+        # an outstation that ignores every confirmation is silent too. Asking
+        # again is what tells them apart: the events this exchange carried are
+        # retired when it is confirmed, so the same read comes back empty.
+        again = _frame_bytes(conversation.drains)
+        sock.sendall(again)
+        if capture:
+            capture.sent(again)
+        reply = _read_reply(sock)
+        if capture:
+            capture.received(reply)
+        if not reply:
+            raise Failure("the read after the confirmation drew silence")
+        leftover = _fragment_of(reply)
+        if len(leftover) > 4:
+            raise Failure(f"the confirmed events came back again: {leftover[4:].hex()}")
+
+    plural = "fragment" if len(fragments) == 1 else "fragments"
+    drained = ", and gone afterwards" if conversation.drains is not None else ""
+    # Every reply this walk read, so the summary the capture validators check
+    # against counts them. They enforce a lower bound from it, so a response
+    # missing from the file would otherwise pass unnoticed -- which is the
+    # independent parsing this case exists to get.
+    replies = len(fragments) + (1 if conversation.drains is not None else 0)
+    return f"{len(fragments)} {plural}, {confirmations} confirmed{drained}", replies
+
+
+def _frame_bytes(payload: bytes) -> bytes:
+    """One link frame carrying an application fragment."""
+    control = link.control_byte(
+        from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+    )
+    segments = segment(payload)
+    if len(segments) != 1:
+        raise Failure("request does not fit one transport segment")
+    return link.build(control, destination=OUTSTATION, source=MASTER, payload=segments[0])
+
+
 def _frame(case: Case) -> bytes:
     """One link frame carrying the case.
 
@@ -394,9 +639,10 @@ def _check(case: Case, reply: bytes, *, restart_expected: bool | None) -> tuple[
             )
         return f"link {link.SecondaryFunction(frame.function).name}", None
 
-    # The application reply is the last frame: a confirmed request is answered
-    # with a link acknowledgment first.
-    fragment = frames[-1].payload[1:]
+    # Reassembled rather than read off the last frame, which is the same
+    # reason the walker reassembles: a confirmed request is answered with a
+    # link acknowledgment first, and a large one with several segments after.
+    fragment = _reassemble(frames, reply)
     if len(fragment) < 4:
         raise Failure(f"application fragment is too short to be a response: {fragment.hex()}")
 
@@ -471,6 +717,18 @@ def run(host: str, port: int, pcap: str | None = None, summary: str | None = Non
                 # A case that declares the bit also sets the running state, so
                 # the clearing write does not need to be recognized by name.
                 restart_expected = case.restart
+
+        for conversation in CONVERSATIONS:
+            try:
+                observed, walked = _walk(sock, capture, conversation)
+                replies_received += walked
+                application_replies += walked
+            except Failure as exc:
+                failures.append((conversation.name, str(exc)))
+                print(f"sweep: FAIL {conversation.name}: {exc}", file=sys.stderr)
+                continue
+            note = f"  ({conversation.note})" if conversation.note else ""
+            print(f"sweep: ok   {conversation.name}: {observed}{note}")
 
         final = _frame(AFTER_RESTART_CLEARED)
         sock.sendall(final)
