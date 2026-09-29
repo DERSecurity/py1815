@@ -314,7 +314,7 @@ And the case the fit argument is about: a body that does not fit beside the last
 events takes a fragment of its own, with the events before it intact rather than
 trimmed to make room.
 
-### 5b. A provider that says where its objects end
+### 5b. A provider that says where its objects end -- landed
 
 Per **D35**. `ReadProvider` gains an optional `read_blocks`; a provider that
 implements it has its static data split at a block boundary, and one that does
@@ -331,6 +331,15 @@ the same body delivered across fragments instead; a single block larger than a
 fragment is refused as a whole body would be, since this moves the boundary
 rather than removing it; and the two providers, given the same objects and a
 ceiling that fits them, produce the same octets.
+
+Two things came out of building it. Blocks are taken in the provider's order and
+the first that does not fit ends the fragment -- a smaller one behind it does not
+jump the queue, because a master applies a fragment in order and the answer is
+the provider's rather than a packing problem. And a confirmation had to stop
+requiring event buffers to exist: static data spread over fragments is the first
+multi-fragment response that can happen with no events configured at all, and
+`_confirm` returned early without them, leaving such a response stuck after its
+first fragment.
 
 ### 6. Interoperability
 

@@ -32,7 +32,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from py1815 import control as control_objects
 from py1815 import link
@@ -316,9 +316,14 @@ class _Conversation:
     #: reads the buffer as it then stands (D29), so what it needs is the
     #: question rather than the answer.
     headers: tuple[ObjectHeader, ...]
-    #: The provider's body, read once when the response began and sent with the
-    #: last fragment (D33).
-    static: bytes
+    #: What the provider returned, as the blocks it falls into and in the order
+    #: it returned them, read once when the response began (D33). One element
+    #: for a provider that answers in octets, since this library will not divide
+    #: what it cannot see the seams of; as many as the provider gave for one
+    #: that implements `read_blocks`.
+    #:
+    #: Consumed as the response goes, so this is what is still owed.
+    static: list[bytes]
     #: What each header has left to send, for the headers that named a count.
     #: A count qualifier is "at most this many" of the *response*, not of each
     #: fragment of it, so it is decremented as the conversation goes rather
@@ -358,6 +363,34 @@ class ReadProvider(Protocol):
         for itself whether its group 10 and 40 status points answer a class 0
         read; convention says they do, and under D6 this library holds no point
         map with which to decide otherwise.
+        """
+        ...
+
+
+@runtime_checkable
+class BlockReadProvider(Protocol):
+    """A read provider that says where its objects end.
+
+    Optional, and deliberately a second method rather than a change to the
+    first (D35). Replacing `read` would be a breaking change for every caller,
+    including the ones whose point maps fit a fragment and who would gain
+    nothing from it -- and it would have this library holding a list of the
+    caller's objects rather than a body it forwards, which is closer to knowing
+    the point map than D6 wants to be.
+
+    A provider that implements this has its static data split across the
+    fragments of a response; one that does not is answered under D31, where a
+    body too large for a single fragment is refused.
+    """
+
+    def read_blocks(self, headers: Sequence[ObjectHeader]) -> Sequence[bytes]:
+        """The same objects `read` would return, as the blocks they fall into.
+
+        Each element is an object header and the objects it describes, exactly
+        as `read` would have concatenated them. The split points are the
+        caller's: this library never divides one of them, so a block larger
+        than a fragment is refused as a whole body would be. That moves the
+        boundary rather than removing it.
         """
         ...
 
@@ -908,10 +941,10 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR)),
             )
 
-        static = b""
+        static: list[bytes] = []
         if static_headers or not event_headers:
             try:
-                static = self._provider.read(static_headers)
+                static = self._static_blocks(static_headers)
             except UnknownObject as exc:
                 logger.info("dnp3: read refused: %s", exc)
                 return null_response(
@@ -919,16 +952,18 @@ class Session:
                     iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
                 )
 
-        if len(static) + RESPONSE_HEADER_SIZE > self._max_response:
-            # Decided on the body alone, before any fragment is built. It
-            # travels with the last one (D33), so a body too large for a
-            # fragment is a request this outstation cannot answer however many
-            # fragments it sends -- the refusal is not a property of the
-            # fragment it would have ridden in.
+        oversized = max((len(block) for block in static), default=0)
+        if oversized + RESPONSE_HEADER_SIZE > self._max_response:
+            # Decided before any fragment is built, and on the largest single
+            # block rather than on the total. Blocks travel after the events and
+            # may span fragments (D35), so a body larger than one fragment is
+            # answerable; a *block* larger than one is not, however many
+            # fragments follow.
             #
-            # Refused rather than truncated: the provider's body is opaque here
-            # and cutting it at an arbitrary octet would hand the master half an
-            # object.
+            # Refused rather than truncated. A provider that answers in octets
+            # gives one block this library cannot see the seams of, and one that
+            # answers in blocks has already said where they are -- cutting
+            # either at an arbitrary octet would hand the master half an object.
             #
             # And refused rather than sent. A fragment past the ceiling is one
             # the master discards, so sending it loses the whole response and
@@ -937,9 +972,9 @@ class Session:
             # This is the same answer the control path gives for the same
             # reason.
             logger.warning(
-                "dnp3: refusing read: static data of %d octets exceeds the %d the master "
+                "dnp3: refusing read: a static block of %d octets exceeds the %d the master "
                 "can receive",
-                len(static) + RESPONSE_HEADER_SIZE,
+                oversized + RESPONSE_HEADER_SIZE,
                 self._max_response,
             )
             # Returned before anything is recorded as outstanding: no events
@@ -1010,28 +1045,26 @@ class Session:
         reserving room for it in every fragment would hold back a fragment's
         worth of events for something arriving several round trips later.
 
-        Which leaves three ways a response ends, and the third is the one that
-        is easy to miss:
+        Once the events are done -- or the bound has stopped them -- the static
+        data follows them, as much of it as fits. A provider answering in octets
+        gives one block, so that is all of it or none of it, and none means it
+        travels in the fragment after this one rather than displacing events to
+        make room here (D33). A provider answering in blocks may have its data
+        spread over as many fragments as it takes (D35).
 
-        - the events are done and the body fits beside them, so it rides along;
-        - the events are done and it does not, so it takes a fragment of its
-          own rather than displacing events to make room;
-        - the bound is reached, which stops the events whatever they did. The
-          body rides along if it fits; if it does not, this fragment keeps its
-          events and the body follows alone in one more. Reserving room for it
-          here instead would answer a mixed read with fewer events than the same
-          read without a body, which is what D33 exists to prevent.
+        The response ends when the events are done and nothing static is still
+        owed. Reserving room for the body in an earlier fragment instead would
+        answer a mixed read with fewer events than the same read without a body,
+        which is what D33 exists to prevent.
         """
         whole = self._max_response - RESPONSE_HEADER_SIZE
-        if not conversation.headers:
-            return conversation.static, [], True
 
-        if conversation.fragments > _MAX_FRAGMENTS:
-            # Past the bound, which the events have already spent. This is the
-            # one extra fragment D32 allows for the body, and it carries
-            # nothing else -- a response that reached the bound is not owed
-            # more events, but it is still owed the static data it asked for.
-            return conversation.static, [], True
+        if conversation.fragments > _MAX_FRAGMENTS or not conversation.headers:
+            # No events to place: either the read named none, or the bound has
+            # already spent them all. What is left is the static data, which the
+            # request asked for and is still owed however the events ended.
+            body = self._take_static(conversation, whole)
+            return body, [], not conversation.static
 
         body, selected, complete = self._event_body(
             conversation.headers, conversation.counts, whole
@@ -1043,31 +1076,55 @@ class Session:
         # sixteen empty fragments. That case ends here, which is D27's cap.
         more = not complete and bool(selected)
         at_bound = conversation.fragments >= _MAX_FRAGMENTS
-        fits = len(body) + len(conversation.static) <= whole
 
-        if at_bound:
+        if more and not at_bound:
+            return body, selected, False
+
+        if more:
             # The events stop here whatever they did. Asking only when the
             # *budget* cut them short left the bound bypassed by a device
             # recording a batch between every confirmation: each fragment
             # answered its buffer in full, the body never fit beside it, and the
             # response never ended.
-            if more:
-                logger.info(
-                    "dnp3: ending a response at %d fragments with events still buffered",
-                    conversation.fragments,
-                )
-            return (body + conversation.static, selected, True) if fits else (body, selected, False)
+            logger.info(
+                "dnp3: ending a response at %d fragments with events still buffered",
+                conversation.fragments,
+            )
 
-        if more:
-            return body, selected, False
+        # The events are done, so the static data follows them (D20 and D33) --
+        # as much of it as fits, which for a provider answering in octets is all
+        # of it or none. What does not fit travels in the fragments after this
+        # one rather than displacing events to make room here (D33).
+        body += self._take_static(conversation, whole - len(body))
+        return body, selected, not conversation.static
 
-        # The events are done, so the body travels now (D33) -- unless it will
-        # not fit beside them, in which case it takes a fragment of its own
-        # rather than displacing events to make room. The next call finds no
-        # events left and sends the body alone.
-        if fits:
-            return body + conversation.static, selected, True
-        return body, selected, False
+    def _take_static(self, conversation: _Conversation, room: int) -> bytes:
+        """As many of the provider's blocks as fit, in the order it gave them.
+
+        Stops at the first that does not rather than looking past it for a
+        smaller one. The provider's order is the answer's order, and a response
+        that reordered its objects would be telling the master something the
+        provider did not say.
+        """
+        body = b""
+        while conversation.static and len(conversation.static[0]) <= room - len(body):
+            body += conversation.static.pop(0)
+        return body
+
+    def _static_blocks(self, headers: Sequence[ObjectHeader]) -> list[bytes]:
+        """What the provider answers with, as the blocks it falls into.
+
+        One block for a provider that answers in octets: this library will not
+        divide what it cannot see the seams of, so that body travels whole or
+        the read is refused (D31). As many as it gives for a provider that
+        implements ``read_blocks``, which is how a point map too large for one
+        fragment reaches a master at all (D35).
+        """
+        provider = self._provider
+        if isinstance(provider, BlockReadProvider):
+            return [bytes(block) for block in provider.read_blocks(headers) if block]
+        body = provider.read(headers)
+        return [body] if body else []
 
     def _abandon(self) -> None:
         """Forget the response in flight, because the master has moved on.
@@ -1108,18 +1165,22 @@ class Session:
             logger.info("dnp3: re-sending the fragment after sequence %d", sequence)
             return self._outstanding.fragment if self._outstanding is not None else b""
 
-        if self._events is None:
-            return b""
         pending = self._outstanding
         if pending is None or pending.sequence != sequence:
             logger.info("dnp3: ignoring a confirmation for sequence %d", sequence)
             return b""
 
-        self._events.drop(pending.events)
-        if pending.reported_overflow == self._events.overflow_generation:
-            # ``None`` never matches a generation, which is how a response that
-            # carried no overflow bit declines to clear one.
-            self._events.clear_overflow()
+        # Guarding the retiring rather than the whole method. A confirmation
+        # moves a conversation on whether or not there are events in it: a
+        # provider answering in blocks (D35) can spread static data over several
+        # fragments with no buffers configured at all, and returning here left
+        # such a response stuck after its first fragment.
+        if self._events is not None:
+            self._events.drop(pending.events)
+            if pending.reported_overflow == self._events.overflow_generation:
+                # ``None`` never matches a generation, which is how a response
+                # that carried no overflow bit declines to clear one.
+                self._events.clear_overflow()
         self._outstanding = None
 
         if conversation is None or conversation.finished:
