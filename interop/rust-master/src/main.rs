@@ -45,12 +45,20 @@ const UNCONTROLLABLE_INDEX: u8 = 9;
 /// The index the fixture serves offline, with COMM_LOST set.
 const OFFLINE_INDEX: u16 = 3;
 
-/// The events the fixture holds, in the order a class 1, 2, 3 sweep returns
-/// them. Must match `interop/outstation.py`.
+/// The events the fixture holds, per class. Must match `interop/outstation.py`.
 ///
-/// The values are unlike anything `EXPECTED` holds, which is what makes this
-/// worth asserting: a value here cannot have come from the point map.
-const EXPECTED_EVENTS: [(u16, f64); 4] = [(0, 101.0), (1, 102.0), (2, 203.0), (3, 304.0)];
+/// The values are unlike anything `EXPECTED` holds and unlike each other's
+/// class, which is what makes them worth asserting: a value here cannot have
+/// come from the point map, nor from a class other than the one that returned
+/// it.
+///
+/// Kept per class rather than flattened, and checked after each read rather
+/// than at the end. A single list checked once would pass an outstation that
+/// answered class 1 with all four and classes 2 and 3 with nothing -- which is
+/// exactly the confusion three separate reads exist to catch.
+const CLASS_1_EVENTS: [(u16, f64); 2] = [(0, 101.0), (1, 102.0)];
+const CLASS_2_EVENTS: [(u16, f64); 1] = [(2, 203.0)];
+const CLASS_3_EVENTS: [(u16, f64); 1] = [(3, 304.0)];
 
 /// The index of the binary event the fixture seeds in class 1, behind the
 /// analog ones. It is the assertion that the order of a class read is the
@@ -160,6 +168,25 @@ impl AssociationHandler for Handler {}
 struct Information;
 impl AssociationInformation for Information {}
 
+/// Checks the binary events one class read returned, and describes them.
+fn binary_arrived(arrived: &[u16], wanted: bool, class: u8) -> String {
+    if wanted {
+        if !arrived.contains(&BINARY_EVENT_INDEX) {
+            fail(&format!(
+                "class {class} did not return the binary event at index \
+                 {BINARY_EVENT_INDEX}: {arrived:?}"
+            ));
+        }
+        return format!(", with the binary event at index {BINARY_EVENT_INDEX}");
+    }
+    if !arrived.is_empty() {
+        fail(&format!(
+            "class {class} returned binary events it does not hold: {arrived:?}"
+        ));
+    }
+    String::new()
+}
+
 fn fail(message: &str) -> ! {
     eprintln!("rust-master: FAIL {message}");
     std::process::exit(1);
@@ -243,11 +270,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // sees as the right values under the wrong heading.
     readings.lock().unwrap().collecting_events = true;
 
-    for (class, variation) in [
-        (1u8, Variation::Group60Var2),
-        (2, Variation::Group60Var3),
-        (3, Variation::Group60Var4),
+    for (class, variation, expected, binary) in [
+        (1u8, Variation::Group60Var2, &CLASS_1_EVENTS[..], true),
+        (2, Variation::Group60Var3, &CLASS_2_EVENTS[..], false),
+        (3, Variation::Group60Var4, &CLASS_3_EVENTS[..], false),
     ] {
+        let (analog_before, binary_before) = {
+            let readings = readings.lock().unwrap();
+            (readings.analog_events.len(), readings.binary_events.len())
+        };
+
         let events = tokio::time::timeout(
             Duration::from_secs(30),
             association.read(ReadRequest::all_objects(variation)),
@@ -257,8 +289,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match events {
             Err(_) => fail(&format!("no answer to a class {class} read within 30s")),
             Ok(Err(error)) => fail(&format!("the class {class} read failed: {error}")),
-            Ok(Ok(())) => println!("rust-master: class {class} read completed"),
+            Ok(Ok(())) => (),
         }
+
+        // Checked here rather than at the end, against what *this* read
+        // returned. Comparing the three classes together at the end would pass
+        // an outstation that answered class 1 with all four events and the
+        // other two with nothing.
+        let readings = readings.lock().unwrap();
+        let arrived = &readings.analog_events[analog_before..];
+        if arrived.len() != expected.len() {
+            fail(&format!(
+                "class {class} returned {} analog events, expected {}: {arrived:?}",
+                arrived.len(),
+                expected.len()
+            ));
+        }
+        for (position, ((index, value), (wanted_index, wanted))) in
+            arrived.iter().zip(expected.iter()).enumerate()
+        {
+            if *index != *wanted_index || (*value - *wanted).abs() > f64::EPSILON {
+                fail(&format!(
+                    "class {class} event {position} was index {index} value {value}, \
+                     expected index {wanted_index} value {wanted}"
+                ));
+            }
+        }
+
+        // The fixture seeds one binary event, in class 1 and behind the analog
+        // ones. A class that returns it and should not has mixed its buffers;
+        // a class 1 that does not return it has lost the ordering assertion.
+        let binary = binary_arrived(&readings.binary_events[binary_before..], binary, class);
+        println!("rust-master: class {class} read completed{binary}");
     }
 
     // Two assertions where there was one, because they sit at different layers
@@ -416,40 +478,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
-    let seen = &readings.analog_events;
-    if seen.len() != EXPECTED_EVENTS.len() {
-        fail(&format!(
-            "read {} analog events, expected {}: {seen:?}",
-            seen.len(),
-            EXPECTED_EVENTS.len()
-        ));
-    }
-    for (position, ((index, value), (wanted_index, wanted))) in
-        seen.iter().zip(EXPECTED_EVENTS.iter()).enumerate()
-    {
-        if *index != *wanted_index || (*value - *wanted).abs() > f64::EPSILON {
-            fail(&format!(
-                "event {position} was index {index} value {value}, \
-                 expected index {wanted_index} value {wanted}"
-            ));
-        }
-    }
-
-    // Behind the analog events of its class, which is the order the points
-    // changed. A peer that gathered them by type would tell its operator a
-    // different story about when things happened.
-    if !readings.binary_events.contains(&BINARY_EVENT_INDEX) {
-        fail(&format!(
-            "the class 1 binary event at index {BINARY_EVENT_INDEX} did not arrive: {:?}",
-            readings.binary_events
-        ));
+    // What each class returned was checked as it arrived. What is left for the
+    // end is the total, which catches a read that returned nothing at all
+    // without any class noticing its own emptiness.
+    let seen = readings.analog_events.len();
+    let wanted = CLASS_1_EVENTS.len() + CLASS_2_EVENTS.len() + CLASS_3_EVENTS.len();
+    if seen != wanted {
+        fail(&format!("read {seen} analog events across the classes, expected {wanted}"));
     }
 
     println!(
-        "rust-master: OK, {} analog inputs match with their quality octet, and {} events \
+        "rust-master: OK, {} analog inputs match with their quality octet, and {seen} events \
          came back from the buffers",
-        EXPECTED.len(),
-        seen.len()
+        EXPECTED.len()
     );
     Ok(())
 }
