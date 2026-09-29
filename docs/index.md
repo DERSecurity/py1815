@@ -8,7 +8,8 @@ A DNP3 (IEEE 1815) outstation in pure Python.
     sent, and is told through the indication bits what is still waiting. Not yet
     done are unsolicited responses -- outstation-initiated traffic -- and the
     point-map loader; a response larger than one fragment is capped rather than
-    split. Nothing is released yet and the API is not stable.
+    split. The first release is `0.1.0` and the API is not stable: while the
+    major version is `0`, a minor bump may carry a breaking change.
 
 ## Why it is pure Python
 
