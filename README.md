@@ -19,7 +19,7 @@ an open-source project led by the SunSpec Alliance, DER Security,
 and industry consortium members.
 
 [![Tests](https://github.com/DERSecurity/py1815/actions/workflows/test.yml/badge.svg)](https://github.com/DERSecurity/py1815/actions/workflows/test.yml)
-[![License](https://img.shields.io/github/license/DERSecurity/py1815)](https://github.com/DERSecurity/py1815/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/DERSecurity/py1815/blob/main/LICENSE)
 [![Project Satori](https://img.shields.io/badge/Project-Satori-b7410e)](https://open-satori.org)
 
 A DNP3 (IEEE 1815) outstation in pure Python.
