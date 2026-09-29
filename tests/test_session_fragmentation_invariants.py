@@ -9,6 +9,11 @@ only the provider's body that was neither confirmed nor cached.
 So this asserts the properties that must hold on *every* path instead of
 enumerating the paths, and walks a grid of buffer sizes, ceilings, body sizes,
 count qualifiers and recording rates through them.
+
+A fifth defect then arrived that this file could not have caught, because it
+drove conversations with confirmations and nothing else: a function asking for
+no response, arriving mid-conversation, left the rest of an abandoned read to be
+drawn out by the next confirmation. Interleaving is a dimension now.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import logging
 import pytest
 
 from py1815.application import FunctionCode, QualifierCode
+from py1815.control import CommandStatus
 from py1815.events import EventBuffers, EventClass
 from py1815.objects import AnalogPoint
 from py1815.session import Session
@@ -78,6 +84,66 @@ GRID = list(
         [0, 15],
     )
 )
+
+#: Requests a master might send in the middle of a conversation, each of which
+#: must end it (D30). The first two answer nothing at all, which is what made
+#: them the easy ones to leave out of a rule about responses.
+INTERRUPTIONS = {
+    "direct operate, no acknowledgment": bytes(
+        [0xC5, FunctionCode.DIRECT_OPERATE_NR, 12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1, 0]
+    )
+    + bytes.fromhex("030164000000c800000000"),
+    "immediate freeze, no acknowledgment": bytes([0xC5, FunctionCode.IMMED_FREEZE_NR]),
+    "a read": bytes([0xC5, FunctionCode.READ, 60, 1, QualifierCode.ALL_OBJECTS]),
+    "an unsupported function": bytes([0xC5, FunctionCode.COLD_RESTART]),
+    # Group 80 variation 1 index 7 and its value, which is the write this
+    # outstation honours. Without the trailing octet the object has no value,
+    # `parse_request` leaves the body empty, and the case passes on the
+    # strength of `_is_restart_write` not looking at it -- exercising a
+    # malformed write rather than the ordinary one this row is here for.
+    "a write": bytes([0xC5, FunctionCode.WRITE, 80, 1, QualifierCode.UINT8_START_STOP, 7, 7, 0x00]),
+    "disable unsolicited": bytes([0xC5, FunctionCode.DISABLE_UNSOLICITED]),
+}
+
+
+class _Commands:
+    def select(self, controls):
+        return [CommandStatus.SUCCESS] * len(controls)
+
+    def operate(self, controls):
+        return [CommandStatus.SUCCESS] * len(controls)
+
+
+@pytest.mark.parametrize("interruption", INTERRUPTIONS.values(), ids=list(INTERRUPTIONS))
+@pytest.mark.parametrize("static", [0, 100, 1500])
+def test_a_request_mid_conversation_ends_it(interruption, static, caplog):
+    """D30, over every shape of request rather than the one a test picked.
+
+    A conversation the master has walked away from must not be continuable, and
+    none of its unsent events may be retired by a confirmation that arrives
+    after it -- whether the interrupting request was answered or not.
+    """
+    caplog.set_level(logging.CRITICAL, logger="py1815.session")
+    buffers = EventBuffers(capacity=2000)
+    for index in range(1000):
+        buffers.record_analog(
+            index, AnalogPoint(float(index)), event_class=EventClass.CLASS_1, timestamp_ms=1
+        )
+    session = Session(
+        Provider(static), control_provider=_Commands(), events=buffers, max_response=2048
+    )
+
+    first = session._handle_fragment(_request(None, bool(static)))
+    assert not first[0] & FIN_MASK, "the fixture must leave a conversation open"
+    held = buffers.count(EventClass.CLASS_1)
+
+    session._handle_fragment(interruption)
+
+    assert session._conversation is None, "the conversation outlived the request"
+    assert (
+        session._handle_fragment(bytes([0xC0 | (first[0] & 0x0F), FunctionCode.CONFIRM])) == b""
+    ), "an abandoned conversation was continued"
+    assert buffers.count(EventClass.CLASS_1) == held, "events were retired after the abandonment"
 
 
 @pytest.mark.parametrize(("held", "static", "ceiling", "count", "produce", "start"), GRID)
