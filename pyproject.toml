@@ -45,13 +45,18 @@ dev = ["py1815[docs]", "pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy
 packages = ["src/py1815"]
 
 [tool.hatch.build.targets.sdist]
-# An sdist published to PyPI is public even though this repository is not, and
-# by default hatchling puts the whole tree in it -- not just the package.
+# Hatchling fills an sdist from the whole tree by default, not from the package,
+# so without this a source distribution carries the repository.
 #
-# So this is an allow-list rather than a list of things to keep out. A path
-# added to this repository tomorrow is absent from the sdist until someone
-# names it here, which is the safe direction to fail: the cost of forgetting is
-# a source distribution missing a file, not a private one published to PyPI.
+# This is an allow-list rather than a list of things to keep out. A path added
+# to the repository tomorrow is absent from the sdist until someone names it
+# here, which is the safe direction to fail: the cost of forgetting is a source
+# distribution missing a file, not one carrying something nobody meant to ship.
+#
+# Written when the repository was private, where the asymmetry was sharper. It
+# is public now and the argument is weaker but not gone: an sdist is what a
+# downstream packager builds from, and it should be the library and the means
+# to verify it rather than a copy of the repository.
 include = [
     "src/py1815",
     "tests",
