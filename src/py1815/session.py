@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
 
 from py1815 import control as control_objects
 from py1815 import link
@@ -175,6 +176,19 @@ _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 #: be taken before anything is encoded.
 _MIN_EVENT_OCTETS = 8
 
+#: The most *event-carrying* fragments one response may take. A response may
+#: run to one more than this, carrying the provider's body alone, when that body
+#: will not fit beside the last of the events (D32 and D33) -- the bound stops
+#: the events rather than the answer, and a read that asked for static data is
+#: still owed it.
+#:
+#: A count rather than an octet budget or a deadline (D32), and sixteen because
+#: that is one full trip through the application sequence space -- a conversation
+#: reaching it has spent every sequence number once. A full default buffer is
+#: about seven fragments at the default ceiling, so this carries one twice that
+#: size and still stops a buffer that fills as fast as it drains.
+_MAX_FRAGMENTS = 16
+
 #: The most events one object header can count, and so the most one block can
 #: carry. Beyond it the encoder refuses, which is a bug report rather than a
 #: response, so a run longer than this is split into several blocks.
@@ -290,6 +304,58 @@ class _Outstanding:
     reported_overflow: int | None
 
 
+@dataclass
+class _Conversation:
+    """What a multi-fragment response needs that outlives one fragment.
+
+    Separate from ``_Outstanding``, which is per fragment and is replaced every
+    time one goes out. Held there, the provider's body would be discarded by the
+    very replacement that sends the fragment after it.
+    """
+
+    #: The class headers to peek again for each continuation. A continuation
+    #: reads the buffer as it then stands (D29), so what it needs is the
+    #: question rather than the answer.
+    headers: tuple[ObjectHeader, ...]
+    #: What the provider returned, as the blocks it falls into and in the order
+    #: it returned them, read once when the response began (D33). One element
+    #: for a provider that answers in octets, since this library will not divide
+    #: what it cannot see the seams of; as many as the provider gave for one
+    #: that implements `read_blocks`.
+    #:
+    #: Consumed from the front as the response goes, so this is what is still
+    #: owed. A deque rather than a list: taking the front of a list shifts
+    #: everything behind it, so a provider answering a large point map in many
+    #: small blocks would pay for the whole remainder on every block it sent.
+    #: That is work proportional to a number the caller chose, which is the
+    #: same reason `peek` slices while it walks rather than after.
+    static: deque[bytes]
+    #: Whether any of it has gone out. Once it has, the response is in its
+    #: static half and takes no more events: D20 orders a response as a whole,
+    #: not each fragment of it, and an event placed after static data already
+    #: sent would leave the master holding a reading older than the event that
+    #: superseded it -- which is the ordering the rule exists to get right.
+    sending_static: bool = False
+    #: What each header has left to send, for the headers that named a count.
+    #: A count qualifier is "at most this many" of the *response*, not of each
+    #: fragment of it, so it is decremented as the conversation goes rather
+    #: than reapplied whole every time.
+    counts: list[int | None] = field(default_factory=list)
+    #: How many fragments have gone out, against ``_MAX_FRAGMENTS`` (D32). The
+    #: fragment carrying the body is not counted: a response that reached the
+    #: bound must still answer the static half of the request it was given.
+    fragments: int = 1
+    #: The sequence of the fragment the master last confirmed. A confirmation
+    #: repeating it means the continuation was lost, and is answered by sending
+    #: that continuation again (D34).
+    previous: int | None = None
+    #: Whether the last fragment has gone out. It is kept for one more round
+    #: rather than discarded, because the fragment most worth replaying is the
+    #: one that ends the response: losing it strands a master that has nothing
+    #: left to confirm and no way to ask again.
+    finished: bool = False
+
+
 class ReadProvider(Protocol):
     """Where the objects in a response come from.
 
@@ -309,6 +375,34 @@ class ReadProvider(Protocol):
         for itself whether its group 10 and 40 status points answer a class 0
         read; convention says they do, and under D6 this library holds no point
         map with which to decide otherwise.
+        """
+        ...
+
+
+@runtime_checkable
+class BlockReadProvider(Protocol):
+    """A read provider that says where its objects end.
+
+    Optional, and deliberately a second method rather than a change to the
+    first (D35). Replacing `read` would be a breaking change for every caller,
+    including the ones whose point maps fit a fragment and who would gain
+    nothing from it -- and it would have this library holding a list of the
+    caller's objects rather than a body it forwards, which is closer to knowing
+    the point map than D6 wants to be.
+
+    A provider that implements this has its static data split across the
+    fragments of a response; one that does not is answered under D31, where a
+    body too large for a single fragment is refused.
+    """
+
+    def read_blocks(self, headers: Sequence[ObjectHeader]) -> Sequence[bytes]:
+        """The same objects `read` would return, as the blocks they fall into.
+
+        Each element is an object header and the objects it describes, exactly
+        as `read` would have concatenated them. The split points are the
+        caller's: this library never divides one of them, so a block larger
+        than a fragment is refused as a whole body would be. That moves the
+        boundary rather than removing it.
         """
         ...
 
@@ -385,6 +479,7 @@ class Session:
         self._clock = clock
         self._select: _ArmedSelect | None = None
         self._outstanding: _Outstanding | None = None
+        self._conversation: _Conversation | None = None
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._frames = link.FrameReader()
@@ -428,6 +523,7 @@ class Session:
         self._reassembler.reset()
         self._select = None
         self._outstanding = None
+        self._conversation = None
 
     def receive(self, data: bytes) -> bytes:
         """Handle received octets, returning the octets to send back."""
@@ -561,6 +657,7 @@ class Session:
             # Silence survives a body that does not parse, which is the case
             # that early branch exists for: a master that asked for no response
             # is not listening for a parse error either.
+            self._abandon()
             self._operate_unacknowledged(fragment)
             return b""
 
@@ -576,6 +673,7 @@ class Session:
             logger.warning(
                 "dnp3: dropping %s; it asks for no response", FunctionCode(fragment[1]).name
             )
+            self._abandon()
             return b""
 
         try:
@@ -611,8 +709,7 @@ class Session:
                     sequence,
                 )
                 return b""
-            self._confirm(sequence)
-            return b""
+            return self._confirm(sequence)
 
         if self._outstanding is not None and self._outstanding.request == fragment:
             # A master that did not receive a response repeats the request,
@@ -628,19 +725,29 @@ class Session:
         # has moved on, and the events go back to being unreported rather than
         # waiting for a confirmation that would now be two requests late.
         #
+        # A response only partly sent ends here too, with its unsent events
+        # still buffered and the class bits still asking for them (D30). There
+        # is no remainder to discard, since none is held -- only the fact that
+        # more was coming, and the provider's body held for the last fragment.
+        #
         # Sited above every remaining return so that it covers the refusals as
         # well as the work. A refusal is a response like any other, and one that
         # left the selection standing would let a confirmation for the response
         # before it still retire those events.
         #
-        # Two paths are deliberately outside it. The functions returning above
-        # send nothing at all, so there is no response for a confirmation to be
-        # late against. And a fragment that did not parse is not evidence the
-        # master moved on -- it is evidence something arrived garbled, which is
-        # when a retransmission of the held response is most likely to be what
-        # comes next, and discarding the cache on noise would throw it away
-        # exactly then.
-        self._outstanding = None
+        # One path is deliberately outside it: a fragment that did not parse is
+        # not evidence the master moved on. It is evidence something arrived
+        # garbled, which is when a retransmission of the held response is most
+        # likely to be what comes next, and discarding the cache on noise would
+        # throw it away exactly then.
+        #
+        # The functions that ask for no response used to be outside it too, on
+        # the grounds that they send nothing for a confirmation to be late
+        # against. That was true of a single held response and false as soon as
+        # responses could span fragments: one arriving mid-conversation left the
+        # rest of an abandoned read to be drawn out by the next confirmation.
+        # They call `_abandon` above instead.
+        self._abandon()
 
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
@@ -846,10 +953,10 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR)),
             )
 
-        static = b""
+        static: list[bytes] = []
         if static_headers or not event_headers:
             try:
-                static = self._provider.read(static_headers)
+                static = self._static_blocks(static_headers)
             except UnknownObject as exc:
                 logger.info("dnp3: read refused: %s", exc)
                 return null_response(
@@ -857,23 +964,18 @@ class Session:
                     iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
                 )
 
-        selected: list[Event] = []
-        body = b""
-        if event_headers:
-            # What is left for events once the application header and whatever
-            # the provider returned are paid for. Static data goes first in the
-            # accounting and second on the wire: D20 puts events in front, and
-            # this session cannot trim an opaque body without knowing where its
-            # objects end.
-            budget = self._max_response - RESPONSE_HEADER_SIZE - len(static)
-            body, selected = self._event_body(event_headers, budget)
-        body += static
-
-        if len(body) + RESPONSE_HEADER_SIZE > self._max_response:
-            # Only reachable through the provider, since the events were fitted
-            # to what was left after it. Refused rather than truncated: the
-            # provider's body is opaque here and cutting it at an arbitrary
-            # octet would hand the master half an object.
+        oversized = max((len(block) for block in static), default=0)
+        if oversized + RESPONSE_HEADER_SIZE > self._max_response:
+            # Decided before any fragment is built, and on the largest single
+            # block rather than on the total. Blocks travel after the events and
+            # may span fragments (D35), so a body larger than one fragment is
+            # answerable; a *block* larger than one is not, however many
+            # fragments follow.
+            #
+            # Refused rather than truncated. A provider that answers in octets
+            # gives one block this library cannot see the seams of, and one that
+            # answers in blocks has already said where they are -- cutting
+            # either at an arbitrary octet would hand the master half an object.
             #
             # And refused rather than sent. A fragment past the ceiling is one
             # the master discards, so sending it loses the whole response and
@@ -882,9 +984,9 @@ class Session:
             # This is the same answer the control path gives for the same
             # reason.
             logger.warning(
-                "dnp3: refusing read: a response of %d octets exceeds the %d the master "
+                "dnp3: refusing read: a static block of %d octets exceeds the %d the master "
                 "can receive",
-                len(body) + RESPONSE_HEADER_SIZE,
+                oversized + RESPONSE_HEADER_SIZE,
                 self._max_response,
             )
             # Returned before anything is recorded as outstanding: no events
@@ -893,6 +995,13 @@ class Session:
             return null_response(
                 sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
             )
+
+        conversation = _Conversation(
+            headers=tuple(event_headers),
+            static=deque(static),
+            counts=[header.count for header in event_headers],
+        )
+        body, selected, final = self._fragment(conversation)
 
         iin = self._indications()
         overflowed = (
@@ -906,9 +1015,9 @@ class Session:
         # events still has to ask -- otherwise the one configuration where no
         # event ever fits is the one where the flag can never clear, and the
         # master is told for ever about a loss it was told about once.
-        confirmable = bool(selected) or overflowed is not None
+        confirmable = bool(selected) or overflowed is not None or not final
         response = build_response(
-            control=AppControl(fir=True, fin=True, con=confirmable, sequence=sequence),
+            control=AppControl(fir=True, fin=final, con=confirmable, sequence=sequence),
             iin=iin,
             body=body,
         )
@@ -920,9 +1029,133 @@ class Session:
                 fragment=response,
                 reported_overflow=overflowed,
             )
+        self._conversation = self._retained(conversation, final)
         return response
 
-    def _confirm(self, sequence: int) -> None:
+    @staticmethod
+    def _retained(conversation: _Conversation, final: bool) -> _Conversation | None:
+        """The conversation to carry forward, if any.
+
+        A finished one is kept when it had continuations, so that D34 can
+        replay its *last* fragment -- the one whose loss leaves a master with
+        nothing left to confirm and no way to ask again. It is discarded on the
+        confirmation that follows, or by the next request (D30).
+        """
+        if not final:
+            return conversation
+        if conversation.previous is None:
+            # One fragment, so there was never a continuation to lose.
+            return None
+        conversation.finished = True
+        return conversation
+
+    def _fragment(self, conversation: _Conversation) -> tuple[bytes, list[Event], bool]:
+        """One fragment of a read's answer: octets, its events, and whether it ends.
+
+        Events are fitted to the whole budget, not to what is left after the
+        provider's body. The body travels with the last fragment (D33), so
+        reserving room for it in every fragment would hold back a fragment's
+        worth of events for something arriving several round trips later.
+
+        Once the events are done -- or the bound has stopped them -- the static
+        data follows them, as much of it as fits. A provider answering in octets
+        gives one block, so that is all of it or none of it, and none means it
+        travels in the fragment after this one rather than displacing events to
+        make room here (D33). A provider answering in blocks may have its data
+        spread over as many fragments as it takes (D35).
+
+        The response ends when the events are done and nothing static is still
+        owed. Reserving room for the body in an earlier fragment instead would
+        answer a mixed read with fewer events than the same read without a body,
+        which is what D33 exists to prevent.
+        """
+        whole = self._max_response - RESPONSE_HEADER_SIZE
+
+        if (
+            conversation.fragments > _MAX_FRAGMENTS
+            or conversation.sending_static
+            or not conversation.headers
+        ):
+            # No events to place: the read named none, the bound has spent them
+            # all, or the static half of the response has begun and the events
+            # are behind it now.
+            body = self._take_static(conversation, whole)
+            return body, [], not conversation.static
+
+        body, selected, complete = self._event_body(
+            conversation.headers, conversation.counts, whole
+        )
+
+        # Whether another fragment could carry anything this one could not. An
+        # incomplete answer that placed no events is not progress -- nothing
+        # fits, so no continuation would do better, and a conversation would be
+        # sixteen empty fragments. That case ends here, which is D27's cap.
+        more = not complete and bool(selected)
+        at_bound = conversation.fragments >= _MAX_FRAGMENTS
+
+        if more and not at_bound:
+            return body, selected, False
+
+        if more:
+            # The events stop here whatever they did. Asking only when the
+            # *budget* cut them short left the bound bypassed by a device
+            # recording a batch between every confirmation: each fragment
+            # answered its buffer in full, the body never fit beside it, and the
+            # response never ended.
+            logger.info(
+                "dnp3: ending a response at %d fragments with events still buffered",
+                conversation.fragments,
+            )
+
+        # The events are done, so the static data follows them (D20 and D33) --
+        # as much of it as fits, which for a provider answering in octets is all
+        # of it or none. What does not fit travels in the fragments after this
+        # one rather than displacing events to make room here (D33).
+        body += self._take_static(conversation, whole - len(body))
+        return body, selected, not conversation.static
+
+    def _take_static(self, conversation: _Conversation, room: int) -> bytes:
+        """As many of the provider's blocks as fit, in the order it gave them.
+
+        Stops at the first that does not rather than looking past it for a
+        smaller one. The provider's order is the answer's order, and a response
+        that reordered its objects would be telling the master something the
+        provider did not say.
+        """
+        body = b""
+        while conversation.static and len(conversation.static[0]) <= room - len(body):
+            body += conversation.static.popleft()
+        if body:
+            conversation.sending_static = True
+        return body
+
+    def _static_blocks(self, headers: Sequence[ObjectHeader]) -> list[bytes]:
+        """What the provider answers with, as the blocks it falls into.
+
+        One block for a provider that answers in octets: this library will not
+        divide what it cannot see the seams of, so that body travels whole or
+        the read is refused (D31). As many as it gives for a provider that
+        implements ``read_blocks``, which is how a point map too large for one
+        fragment reaches a master at all (D35).
+        """
+        provider = self._provider
+        if isinstance(provider, BlockReadProvider):
+            return [bytes(block) for block in provider.read_blocks(headers) if block]
+        body = provider.read(headers)
+        return [body] if body else []
+
+    def _abandon(self) -> None:
+        """Forget the response in flight, because the master has moved on.
+
+        Both halves together: the fragment awaiting confirmation and the
+        conversation that would draw out the rest of it. Leaving either is a
+        master that sent something else and is answered, several requests
+        later, with the remainder of a read it has stopped waiting for.
+        """
+        self._outstanding = None
+        self._conversation = None
+
+    def _confirm(self, sequence: int) -> bytes:
         """Retire the events the confirmed response carried.
 
         A confirmation naming anything other than the outstanding sequence
@@ -939,19 +1172,93 @@ class Session:
         reported; anything lost since is a loss it has not been told about, and
         clearing the flag on its behalf would bury it.
         """
-        if self._events is None:
-            return
+        conversation = self._conversation
+        if conversation is not None and sequence == conversation.previous:
+            # The continuation was lost (D34). Sending it again is the only
+            # answer that moves: its events were retired when this confirmation
+            # first arrived, so there is nothing to retire and nothing to
+            # rebuild it from. Without this the master waits for a fragment
+            # that will never come and this outstation for a confirmation that
+            # will never arrive.
+            logger.info("dnp3: re-sending the fragment after sequence %d", sequence)
+            return self._outstanding.fragment if self._outstanding is not None else b""
+
         pending = self._outstanding
         if pending is None or pending.sequence != sequence:
             logger.info("dnp3: ignoring a confirmation for sequence %d", sequence)
-            return
+            return b""
 
-        self._events.drop(pending.events)
-        if pending.reported_overflow == self._events.overflow_generation:
-            # ``None`` never matches a generation, which is how a response that
-            # carried no overflow bit declines to clear one.
-            self._events.clear_overflow()
+        # Guarding the retiring rather than the whole method. A confirmation
+        # moves a conversation on whether or not there are events in it: a
+        # provider answering in blocks (D35) can spread static data over several
+        # fragments with no buffers configured at all, and returning here left
+        # such a response stuck after its first fragment.
+        if self._events is not None:
+            self._events.drop(pending.events)
+            if pending.reported_overflow == self._events.overflow_generation:
+                # ``None`` never matches a generation, which is how a response
+                # that carried no overflow bit declines to clear one.
+                self._events.clear_overflow()
         self._outstanding = None
+
+        if conversation is None or conversation.finished:
+            # The response is over. The conversation was held only so that its
+            # last fragment could be replayed, and this confirmation is the
+            # acknowledgement that made that unnecessary.
+            self._conversation = None
+            return b""
+        conversation.previous = sequence
+        conversation.fragments += 1
+        return self._continue(conversation, (sequence + 1) % SEQUENCE_MODULUS, fragment=b"")
+
+    def _continue(self, conversation: _Conversation, sequence: int, fragment: bytes) -> bytes:
+        """The next fragment of a response the master has asked to see the rest of.
+
+        A confirmation is the only thing that produces one, which is why this is
+        the one place the session answers something that is not a request. Under
+        D18 a confirmation already moves the state machine on by retiring what it
+        acknowledges; sending what comes next is the same transition.
+        """
+        body, selected, final = self._fragment(conversation)
+        iin = self._indications()
+        overflowed = (
+            self._events.overflow_generation
+            if self._events is not None and iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+            else None
+        )
+        response = build_response(
+            # ``FIR`` is false on every fragment but the first: this is the same
+            # response continuing, not a new one.
+            #
+            # ``CON`` on every one of them, including a last fragment carrying
+            # nothing but the provider's body. It has no events to retire, but
+            # it is the step of an exchange the master is walking through, and
+            # its confirmation is the only signal that the response arrived
+            # whole.
+            #
+            # Leaving it clear also left nothing cached to replay, so losing
+            # such a fragment deadlocked the exchange in exactly the way D34
+            # exists to prevent -- the master repeats its confirmation and is
+            # answered with silence.
+            #
+            # Unconditional here, where `_handle_read` computes `confirmable`,
+            # and the difference is the conversation rather than the content: a
+            # response that fits one fragment and carries nothing to retire
+            # needs no confirmation, while the last fragment of a conversation
+            # does even when it carries the same nothing.
+            control=AppControl(fir=False, fin=final, con=True, sequence=sequence),
+            iin=iin,
+            body=body,
+        )
+        self._outstanding = _Outstanding(
+            sequence=sequence,
+            request=fragment,
+            events=tuple(selected),
+            fragment=response,
+            reported_overflow=overflowed,
+        )
+        self._conversation = self._retained(conversation, final)
+        return response
 
     def _split_read(
         self, headers: Sequence[ObjectHeader]
@@ -969,8 +1276,8 @@ class Session:
         return events, static
 
     def _event_body(
-        self, headers: Sequence[ObjectHeader], budget: int
-    ) -> tuple[bytes, list[Event]]:
+        self, headers: Sequence[ObjectHeader], counts: list[int | None], budget: int
+    ) -> tuple[bytes, list[Event], bool]:
         """The event objects the named classes are holding.
 
         Events lead the response, before any static data beside them (D20): a
@@ -994,6 +1301,17 @@ class Session:
         It also bounds the work, not just the octets: the selection is cut to
         what could possibly fit before anything is encoded, so a small response
         over a large buffer costs the response rather than the buffer.
+
+        The third return says whether the budget is what stopped it. A count
+        qualifier stopping it does not count: a master that asked for at most so
+        many has been answered in full, and a response that carried on would be
+        sending events it declined.
+
+        ``counts`` is what each header still has coming, and is decremented by
+        what actually went out. A count is a bound on the response rather than
+        on each fragment of it: reapplying it whole to every continuation would
+        answer a request for three hundred events with as many as the buffer
+        held, three hundred at a time.
         """
         assert self._events is not None
         body = b""
@@ -1001,6 +1319,9 @@ class Session:
         #: asked about it twice, and sending an event once per header would tell
         #: it the same change happened more than once.
         emitted: set[int] = set()
+        #: Whether the budget, rather than the master's own count, is what
+        #: stopped this short. It is what decides `FIN`.
+        truncated = False
         #: How many of each class have gone into this response already. Only
         #: needed because it is what the deduplication below will discard, so
         #: the buffer has to be asked for that many more than could fit.
@@ -1010,8 +1331,14 @@ class Session:
         # Header order rather than class order: a master that asked for class 3
         # before class 1 gets them back that way, and the count on each header
         # belongs to that header rather than to the class.
-        for header in headers:
+        for index, header in enumerate(headers):
             if header.event_class is None:
+                continue
+            limit = counts[index]
+            if limit is not None and limit <= 0:
+                # Already answered in full by an earlier fragment. Skipped to
+                # save the peek rather than for the answer: the slice below
+                # would take nothing from it anyway.
                 continue
             # Asked for only what could possibly still fit, so that a small
             # response over a large buffer costs the response rather than the
@@ -1032,15 +1359,25 @@ class Session:
             # what keeps the second header from coming back short.
             room = max(0, (budget - len(body)) // _MIN_EVENT_OCTETS)
             already = taken.get(header.event_class, 0)
-            held = self._events.peek(EventClass(header.event_class), limit=already + room)
+            # One past what could fit, so that "there is more behind this" is a
+            # fact rather than an inference from having filled the room exactly.
+            held = self._events.peek(EventClass(header.event_class), limit=already + room + 1)
 
             selected = [event for event in held if id(event) not in emitted]
-            if header.count is not None:
+            if len(selected) > room:
+                if limit is None or limit > room:
+                    truncated = True
+                selected = selected[:room]
+            if limit is not None:
                 # A count qualifier is "at most this many", which is how a
                 # master paces a buffer it does not want in one fragment.
-                selected = selected[: header.count]
+                selected = selected[:limit]
             emitted.update(id(event) for event in selected)
             taken[header.event_class] = already + len(selected)
+            #: What this header had sent before this fragment touched it, so the
+            #: count can be decremented by what went out rather than by what was
+            #: selected -- the encoder may take fewer than the budget allowed.
+            before = len(sent)
 
             # The cursor walks `selected` alongside the blocks, because
             # `_encoded` partitions it into consecutive runs and a run cut short
@@ -1058,8 +1395,15 @@ class Session:
                     sent += selected[cursor : cursor + fitted]
                     cursor += fitted
                     if fitted < len(chunk):
-                        return body, sent
-        return body, sent
+                        # The budget cut this block short, so the response is
+                        # not complete however the rest of it looks.
+                        if limit is not None:
+                            counts[index] = limit - (len(sent) - before)
+                        return body, sent, False
+
+            if limit is not None:
+                counts[index] = limit - (len(sent) - before)
+        return body, sent, not truncated
 
     def _handle_write(self, request: Request) -> bytes:
         """The only write a monitor outstation honors: clearing the restart bit.

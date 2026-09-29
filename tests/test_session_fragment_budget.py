@@ -24,6 +24,10 @@ from py1815.session import Session
 #: one-octet index.
 FULL = 1000
 
+#: D32's bound, and one more than it. A walk that runs past this is a response
+#: that never ends, which is a failure to report rather than a suite to hang.
+_MAX_CONVERSATION = 17
+
 #: What fits 2,048 octets. Four for the application header, four for the object
 #: header, then twelve per event -- an index and the event -- so the largest n
 #: with 8 + 12n <= 2048 is 170, and the response lands on 2,048 exactly.
@@ -130,31 +134,61 @@ class TestWhatDidNotFitStaysBuffered:
         assert session._handle_fragment(_read(0, sequence=1))[2] & IINBit.CLASS_1_EVENTS
 
 
-class TestStaticDataIsPaidForFirst:
-    """It cannot be trimmed -- it is the provider's answer, and this session
-    cannot tell where one object in it ends. So the events are fitted to what
-    is left, even though they travel in front of it (D20)."""
+class TestStaticDataTravelsWithTheLastFragment:
+    """D33. It cannot be trimmed -- it is the provider's answer and this session
+    cannot tell where one object in it ends -- but it no longer has to be paid
+    for up front, because it is not owed until the response ends.
+
+    That reverses what this file used to assert. Reserving room for it in every
+    fragment would hold back a fragment's worth of events for a body arriving
+    several round trips later."""
 
     #: Classes 1 and 0 in one request -- the integrity poll a real master
     #: sends, and the only shape in which static data and events share a
     #: response. A class read alone never reaches the provider.
     INTEGRITY = bytes([0xC0, FunctionCode.READ, 60, 2, 0x06, 60, 1, 0x06])
 
-    def test_fewer_events_fit_beside_it(self):
-        session = _session(_filled(), static=1000)
+    def test_one_that_fits_carries_both_in_one_fragment(self):
+        session = _session(_filled(10), static=100)
 
         response = session._handle_fragment(self.INTEGRITY)
 
-        assert response[7] < FITS
-        assert len(response) <= 2048
+        assert response[0] & 0x40, "FIN: nothing more is coming"
+        assert response[4] == 32, "the events lead"
+        assert response[4:].endswith(Provider(100).body), "and the static data follows"
 
-    def test_an_integrity_poll_still_carries_both(self):
-        session = _session(_filled(), static=100)
+    def test_the_events_are_not_trimmed_to_make_room_for_it(self):
+        """The old contract, inverted. A body of a thousand octets used to cost
+        this response most of its events; now it costs it nothing, because the
+        body is not travelling in this fragment."""
+        with_body = _session(_filled(), static=1000)._handle_fragment(self.INTEGRITY)
+        without = _session(_filled())._handle_fragment(_read())
 
-        body = session._handle_fragment(self.INTEGRITY)[4:]
+        assert with_body[7] == without[7] == FITS
+        assert not with_body[0] & 0x40, "and the body is still owed"
 
-        assert body[0] == 32, "the events lead"
-        assert body.endswith(Provider(100).body), "and the static data follows"
+    def test_it_arrives_with_FIN_and_not_before(self):
+        buffers = _filled()
+        session = _session(buffers, static=100)
+        body = Provider(100).body
+
+        first = session._handle_fragment(self.INTEGRITY)
+        assert body not in first, "not in the fragment that opens the response"
+
+        # Bounded deliberately. An unbounded walk turns a response that never
+        # sets FIN into a hung suite rather than a failing test, and D32's cap
+        # is sixteen, so anything past it is the bug this guards.
+        response = first
+        for _ in range(_MAX_CONVERSATION):
+            if response[0] & 0x40:
+                break
+            response = session._handle_fragment(
+                bytes([0xC0 | (response[0] & 0x0F), FunctionCode.CONFIRM])
+            )
+        else:
+            raise AssertionError("the response never set FIN")
+
+        assert response[4:].endswith(body), "and in the one that closes it"
 
     def test_room_for_nothing_sends_no_events(self):
         """Not an error, and not a fragment with half an object in it. The

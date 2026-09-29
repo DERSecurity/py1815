@@ -26,9 +26,11 @@ A DNP3 (IEEE 1815) outstation in pure Python.
 
 **Status: early development.** The protocol layers, the listener, controls and the event path are
 implemented and tested: a master reads classes 1 to 3, confirms what it was sent, and is told
-through the indication bits what is still waiting. Not yet done are unsolicited responses --
-outstation-initiated traffic -- and the point-map loader; a response larger than one fragment is
-capped rather than split. Nothing is released yet, and the API is not stable.
+through the indication bits what is still waiting. An answer too large to send at once is a
+conversation -- the master confirms each fragment and the next follows -- and a provider that says
+where its own objects end has its point map split the same way. Not yet done are unsolicited
+responses, which is outstation-initiated traffic, and the point-map loader. Nothing is released yet,
+and the API is not stable.
 
 ## What it does
 

@@ -64,15 +64,46 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
   where an acknowledgement belongs and the next read is what retires it.
 - **A ceiling on the size of a response, and on the work of building one.** A
   master sizes its receive buffer to the fragment size it advertises, so a
-  response past it is discarded rather than merely long. Events are fitted to
-  what is left after the provider's own objects, which are never trimmed because
-  this library cannot tell where one of them ends; what does not fit stays
-  buffered and the indication bits go on asking for it. A control request whose
+  response past it is discarded rather than merely long. A control request whose
   echo would not fit is refused *before* anything is dispatched, since a control
   that executes and cannot report is worse than one that never ran.
 
   The ceiling bounds the work too. A small response over a large buffer costs
   the response rather than the buffer.
+- **An answer too large to send at once is a conversation.** The outstation
+  sends what fits, the master confirms it, and the next fragment follows under
+  the next sequence number until the last one says so. A confirmation is
+  therefore the thing that draws out a continuation, which is the only case
+  where this outstation answers something that is not a request.
+
+  No list of unsent events is carried between the fragments. Each is built from
+  the buffers as they then stand, so an event evicted while a master was slow is
+  gone rather than sent from a list that outlived it, and one recorded meanwhile
+  joins the answer rather than waiting for the next -- until the static data
+  starts going out, after which the response takes no more events and they wait
+  for the one after it.
+
+  That needs a bound instead of a rule about which events belong where: a device
+  that records faster than its master confirms would otherwise never be finished
+  with, so a response carries at most sixteen fragments of events and the
+  indication bits go on asking for the rest.
+
+  A master that loses a fragment repeats the confirmation before it and is sent
+  that fragment again. Without it the exchange stops dead -- the master waiting
+  for something that will never arrive, the outstation for a confirmation that
+  will never come.
+
+  Static data travels at the end rather than being reserved for in every
+  fragment, which would have held back a fragment's worth of readings for a body
+  arriving several round trips later.
+- **A provider may say where its own objects end.** `ReadProvider` keeps `read`,
+  which answers in octets and stays the contract; beside it a provider may
+  implement `read_blocks` and have its static data spread across the fragments
+  of a response. Without it a point map too large for one fragment is refused,
+  and a class 0 poll over roughly 290 analog points already exceeds what a
+  master typically advertises. This library still divides nothing: the split
+  points are the provider's, and a single block too large to send is refused as
+  a whole body would be.
 - **`DISABLE_UNSOLICITED` is answered rather than refused.** An outstation that
   sends no unsolicited responses is already in the state the request asks for,
   so refusing it answered a question the master did not ask. `ENABLE_UNSOLICITED`
