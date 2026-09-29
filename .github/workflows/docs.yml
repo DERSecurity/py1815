@@ -35,13 +35,15 @@ jobs:
   deploy:
     # Pull requests build the docs but do not publish them.
     #
-    # Publishing is also opt-in via the PUBLISH_DOCS repository variable,
-    # because a GitHub Pages site is world-readable even when its repository
-    # is private, and this one renders source. Enabling Pages before the
-    # repository itself is public would publish the code ahead of the
-    # decision to do so. Set PUBLISH_DOCS=true once that decision is made;
-    # until then the build above still runs on every push and pull request,
-    # so the documentation stays verified without being served.
+    # Publishing is also opt-in via the PUBLISH_DOCS repository variable. A
+    # GitHub Pages site is world-readable even when its repository is not, and
+    # this one renders source, so the gate existed to stop Pages publishing
+    # the code ahead of the decision to make the repository public. That
+    # decision has been made and the variable is set; the gate stays as the
+    # switch for turning publishing off without deleting the workflow.
+    #
+    # The build above runs on every push and pull request either way, so the
+    # documentation stays verified whether or not it is served.
     if: >-
       github.ref == 'refs/heads/main'
       && github.event_name != 'pull_request'

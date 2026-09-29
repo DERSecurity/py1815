@@ -15,7 +15,8 @@ The README pairs the light/dark variants with <picture>
 prefers-color-scheme sources, so the banner is legible in both GitHub
 themes.
 
-Referenced by relative path rather than by raw.githubusercontent URL,
-because this repository is private and those URLs do not resolve without
-a token. Switch to absolute URLs if the README is ever published
-somewhere that does not resolve relative paths, such as a PyPI page.
+Referenced by absolute raw.githubusercontent URL rather than by relative
+path. `pyproject.toml` sets `readme = "README.md"`, which makes the README
+the PyPI long description, and a relative path there resolves against
+pypi.org and 404s. The absolute form renders on both GitHub and PyPI, so
+it is the one that works everywhere the README is shown.
