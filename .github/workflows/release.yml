@@ -4,16 +4,11 @@ name: Release
 # release. Trusted publishing (OIDC): PyPI accepts this workflow's identity
 # directly, so no API token exists to store, leak, or rotate.
 #
-# The repository is private and the package is public. Nothing here changes
-# that, but it does mean a release makes files from a private repository
-# public, so what goes into the distributions is a disclosure decision.
-#
 # The wheel carries the package alone. The sdist does not: hatchling would put
 # the whole tree in it, so `pyproject.toml` gives it an allow-list, and a path
-# added to this repository is absent from the sdist until someone names it
-# there. Adding a path to that list publishes it. The two checks below assert
-# the parts of this that have gone wrong elsewhere, but the list is the
-# control -- read it before adding to it.
+# added to the repository is absent from the sdist until someone names it
+# there. The checks below assert the parts of this that have gone wrong before,
+# but the list is the control -- read it before adding to it.
 
 on:
   push:
