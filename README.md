@@ -118,7 +118,7 @@ and not others, so Satori covers both:
 | [PySunSpec2](https://github.com/sunspec/pysunspec2) | SunSpec Modbus reference library, used in more than 80% of inverter-based products shipped globally |
 | [py20305](https://github.com/DERSecurity/py20305) | IEEE 2030.5 client stack with CSIP and CSIP-AUS support, and a SunSpec Modbus bridge |
 | **py1815** (this repository) | DNP3 outstation stack, targeting the IEEE 1815.2 DER profile |
-| SunSpec DevKit CE | Discover, read and identify SunSpec devices on the wire |
+| Satori Scout | Phone app that finds DER on a network: a SunSpec Modbus sweep of the local subnet, and IEEE 2030.5 discovery over mDNS. A reference implementation rather than an open-source component |
 
 Project website: <https://open-satori.org>
 
