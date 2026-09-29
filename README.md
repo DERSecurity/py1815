@@ -1,14 +1,14 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/satori-dark.png">
-    <img src="docs/assets/satori.png" alt="Satori" height="88">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/DERSecurity/py1815/main/docs/assets/satori-dark.png">
+    <img src="https://raw.githubusercontent.com/DERSecurity/py1815/main/docs/assets/satori.png" alt="Satori" height="88">
   </picture>
 </p>
 
 <p align="center">
   <a href="https://dersec.io/"><picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dersec-white.png">
-    <img src="docs/assets/dersec-dark.png" alt="DER Security" height="32">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/DERSecurity/py1815/main/docs/assets/dersec-white.png">
+    <img src="https://raw.githubusercontent.com/DERSecurity/py1815/main/docs/assets/dersec-dark.png" alt="DER Security" height="32">
   </picture></a>
 </p>
 
@@ -19,7 +19,7 @@ an open-source project led by the SunSpec Alliance, DER Security,
 and industry consortium members.
 
 [![Tests](https://github.com/DERSecurity/py1815/actions/workflows/test.yml/badge.svg)](https://github.com/DERSecurity/py1815/actions/workflows/test.yml)
-[![License](https://img.shields.io/github/license/DERSecurity/py1815)](LICENSE)
+[![License](https://img.shields.io/github/license/DERSecurity/py1815)](https://github.com/DERSecurity/py1815/blob/main/LICENSE)
 [![Project Satori](https://img.shields.io/badge/Project-Satori-b7410e)](https://open-satori.org)
 
 A DNP3 (IEEE 1815) outstation in pure Python.
@@ -126,4 +126,4 @@ Project website: <https://open-satori.org>
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0. See [LICENSE](https://github.com/DERSecurity/py1815/blob/main/LICENSE) and [NOTICE](https://github.com/DERSecurity/py1815/blob/main/NOTICE).
