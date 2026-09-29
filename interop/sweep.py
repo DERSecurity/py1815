@@ -350,6 +350,11 @@ class Conversation:
     multi: bool = False
     #: True when the first fragment must carry object data.
     objects: bool = False
+    #: A request whose answer must come back empty once this conversation has
+    #: been confirmed. Silence after a confirmation proves only that nothing
+    #: was sent; an outstation ignoring every confirmation is silent too. This
+    #: is what tells the two apart.
+    drains: bytes | None = None
     #: Where a walk stops and calls the exchange a runaway. Sixteen fragments of
     #: events and one for static data is the outstation's own bound.
     limit: int = 18
@@ -364,7 +369,8 @@ CONVERSATIONS = [
         name="conversation: class 1",
         payload=_app(FunctionCode.READ, bytes([60, 2, 0x06])),
         objects=True,
-        note="events, confirmed, and the confirmation drawing no further traffic",
+        drains=_app(FunctionCode.READ, bytes([60, 2, 0x06]), sequence=1),
+        note="events confirmed, and gone from the buffers afterwards",
     ),
     Conversation(
         name="conversation: integrity poll",
@@ -378,17 +384,25 @@ CONVERSATIONS = [
 
 
 def _fragment_of(reply: bytes) -> bytes:
-    """The application fragment inside a reply, or a failure saying why not."""
+    """The application fragment inside a reply, or a failure saying why not.
+
+    The function code is checked here as `_check` checks it for a single
+    reply. Without it this path accepts any four octets whose control flags
+    happen to read as a response, so a continuation carrying the wrong function
+    would be walked as though it were the right one.
+    """
     frames = link.FrameReader().feed(reply)
     if not frames:
         raise Failure(f"reply is not a complete link frame: {reply.hex()}")
     fragment = frames[-1].payload[1:]
     if len(fragment) < 4:
         raise Failure(f"application fragment is too short: {fragment.hex()}")
+    if fragment[1] != FunctionCode.RESPONSE:
+        raise Failure(f"expected function {FunctionCode.RESPONSE:#04x}, got {fragment[1]:#04x}")
     return fragment
 
 
-def _walk(sock: socket.socket, capture, conversation: Conversation) -> str:
+def _walk(sock: socket.socket, capture, conversation: Conversation) -> tuple[str, int]:
     """Send a request and confirm each fragment until the outstation is done.
 
     Checks the things only a walk can see: that `FIR` opens the exchange and
@@ -407,6 +421,7 @@ def _walk(sock: socket.socket, capture, conversation: Conversation) -> str:
         raise Failure("expected a reply, got silence")
 
     fragments = [_fragment_of(reply)]
+    confirmations = 0
     while fragments[-1][0] & CON_MASK and not fragments[-1][0] & FIN_MASK:
         if len(fragments) >= conversation.limit:
             raise Failure(f"still going after {len(fragments)} fragments")
@@ -415,6 +430,7 @@ def _walk(sock: socket.socket, capture, conversation: Conversation) -> str:
         if capture:
             capture.sent(confirm)
         reply = _read_reply(sock)
+        confirmations += 1
         if capture:
             capture.received(reply)
         if not reply:
@@ -447,14 +463,46 @@ def _walk(sock: socket.socket, capture, conversation: Conversation) -> str:
         sock.sendall(confirm)
         if capture:
             capture.sent(confirm)
+        confirmations += 1
         trailing = _read_reply(sock)
         if capture:
             capture.received(trailing)
         if trailing:
             raise Failure(f"confirming the last fragment drew {len(trailing)} octets")
 
+    if not confirmations:
+        # Nothing asked to be confirmed, so this case walked no further than an
+        # ordinary read and proved nothing a single-reply case does not. A
+        # response with `CON` accidentally clear would otherwise be reported as
+        # "confirmed" on the strength of never having needed to be.
+        raise Failure("no fragment asked to be confirmed")
+
+    if conversation.drains is not None:
+        # Silence after a confirmation proves only that nothing was sent, and
+        # an outstation that ignores every confirmation is silent too. Asking
+        # again is what tells them apart: the events this exchange carried are
+        # retired when it is confirmed, so the same read comes back empty.
+        again = _frame_bytes(conversation.drains)
+        sock.sendall(again)
+        if capture:
+            capture.sent(again)
+        reply = _read_reply(sock)
+        if capture:
+            capture.received(reply)
+        if not reply:
+            raise Failure("the read after the confirmation drew silence")
+        leftover = _fragment_of(reply)
+        if len(leftover) > 4:
+            raise Failure(f"the confirmed events came back again: {leftover[4:].hex()}")
+
     plural = "fragment" if len(fragments) == 1 else "fragments"
-    return f"{len(fragments)} {plural}, confirmed"
+    drained = ", and gone afterwards" if conversation.drains is not None else ""
+    # Every reply this walk read, so the summary the capture validators check
+    # against counts them. They enforce a lower bound from it, so a response
+    # missing from the file would otherwise pass unnoticed -- which is the
+    # independent parsing this case exists to get.
+    replies = len(fragments) + (1 if conversation.drains is not None else 0)
+    return f"{len(fragments)} {plural}, {confirmations} confirmed{drained}", replies
 
 
 def _frame_bytes(payload: bytes) -> bytes:
@@ -618,7 +666,9 @@ def run(host: str, port: int, pcap: str | None = None, summary: str | None = Non
 
         for conversation in CONVERSATIONS:
             try:
-                observed = _walk(sock, capture, conversation)
+                observed, walked = _walk(sock, capture, conversation)
+                replies_received += walked
+                application_replies += walked
             except Failure as exc:
                 failures.append((conversation.name, str(exc)))
                 print(f"sweep: FAIL {conversation.name}: {exc}", file=sys.stderr)
