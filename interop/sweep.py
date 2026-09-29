@@ -355,11 +355,21 @@ class Conversation:
     #: was sent; an outstation ignoring every confirmation is silent too. This
     #: is what tells the two apart.
     drains: bytes | None = None
-    #: Where a walk stops and calls the exchange a runaway. Sixteen fragments
-    #: of events and one for static data is the outstation's own bound, and the
-    #: guard runs before asking for another -- so seventeen rejects a non-final
-    #: seventeenth while leaving a final one valid. Eighteen accepted an
-    #: eighteenth fragment outright.
+    #: Where a walk stops and calls the exchange a runaway.
+    #:
+    #: Seventeen is what *this fixture* can produce, not what the protocol
+    #: allows: `interop/outstation.py` implements `read` alone, so its static
+    #: data is one block and a response runs to sixteen fragments of events and
+    #: one for that block. A provider implementing `read_blocks` is not bounded
+    #: by the sixteen at all -- its blocks continue past them -- and a
+    #: conformant outstation can legitimately run far longer.
+    #:
+    #: So the day this fixture gains `read_blocks`, raise this rather than
+    #: reading the failure as an outstation that will not stop.
+    #:
+    #: The guard runs before asking for another fragment, which is why
+    #: seventeen rejects a non-final seventeenth and leaves a final one valid.
+    #: Eighteen accepted an eighteenth outright.
     limit: int = 17
     note: str = ""
 
@@ -394,6 +404,12 @@ def _reassemble(frames: list[link.LinkFrame], reply: bytes) -> bytes:
     hands a caller the middle of somebody's object data and lets it call the
     second octet a function code. Nothing the sweep sends is that large today;
     the multi-fragment conversations are nothing but.
+
+    One fragment per reply. A second is refused rather than allowed to replace
+    the first, because `_read_reply` reads until it times out and so can return
+    two responses coalesced on a slow link -- and silently checking the second
+    as though it were the only one is the kind of pass that is worse than a
+    failure.
     """
     reassembler = Reassembler()
     fragment: bytes | None = None
@@ -405,8 +421,11 @@ def _reassemble(frames: list[link.LinkFrame], reply: bytes) -> bytes:
             completed = reassembler.add(frame.payload)
         except TransportError as exc:
             raise Failure(f"the reply did not reassemble: {exc}") from exc
-        if completed is not None:
-            fragment = completed
+        if completed is None:
+            continue
+        if fragment is not None:
+            raise Failure(f"the reply carried two application fragments: {reply.hex()}")
+        fragment = completed
 
     if fragment is None:
         raise Failure(f"the reply carried no complete application fragment: {reply.hex()}")
@@ -416,14 +435,8 @@ def _reassemble(frames: list[link.LinkFrame], reply: bytes) -> bytes:
 def _fragment_of(reply: bytes) -> bytes:
     """The application fragment inside a reply, or a failure saying why not.
 
-    The segments are reassembled rather than the last frame taken for the
-    whole. An application fragment over 249 octets travels as several, so
-    reading only the last one hands this function the middle of somebody's
-    object data and calls its second octet a function code. Nothing the sweep
-    sends today is that large, and the multi-fragment conversations this walker
-    exists for are nothing but.
-
-    The function code is checked here as `_check` checks it for a single reply.
+    Reassembly and its reasoning are `_reassemble`'s; what this adds is the
+    function code, checked here as `_check` checks it for a single reply.
     Without it this path accepts any four octets whose control flags happen to
     read as a response, so a continuation carrying the wrong function would be
     walked as though it were the right one.
@@ -440,7 +453,9 @@ def _fragment_of(reply: bytes) -> bytes:
     return fragment
 
 
-def _walk(sock: socket.socket, capture, conversation: Conversation) -> tuple[str, int]:
+def _walk(
+    sock: socket.socket, capture: Capture | None, conversation: Conversation
+) -> tuple[str, int]:
     """Send a request and confirm each fragment until the outstation is done.
 
     Checks the things only a walk can see: that `FIR` opens the exchange and
