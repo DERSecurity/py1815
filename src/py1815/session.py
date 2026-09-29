@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -322,8 +323,13 @@ class _Conversation:
     #: what it cannot see the seams of; as many as the provider gave for one
     #: that implements `read_blocks`.
     #:
-    #: Consumed as the response goes, so this is what is still owed.
-    static: list[bytes]
+    #: Consumed from the front as the response goes, so this is what is still
+    #: owed. A deque rather than a list: taking the front of a list shifts
+    #: everything behind it, so a provider answering a large point map in many
+    #: small blocks would pay for the whole remainder on every block it sent.
+    #: That is work proportional to a number the caller chose, which is the
+    #: same reason `peek` slices while it walks rather than after.
+    static: deque[bytes]
     #: Whether any of it has gone out. Once it has, the response is in its
     #: static half and takes no more events: D20 orders a response as a whole,
     #: not each fragment of it, and an event placed after static data already
@@ -992,7 +998,7 @@ class Session:
 
         conversation = _Conversation(
             headers=tuple(event_headers),
-            static=static,
+            static=deque(static),
             counts=[header.count for header in event_headers],
         )
         body, selected, final = self._fragment(conversation)
@@ -1118,7 +1124,7 @@ class Session:
         """
         body = b""
         while conversation.static and len(conversation.static[0]) <= room - len(body):
-            body += conversation.static.pop(0)
+            body += conversation.static.popleft()
         if body:
             conversation.sending_static = True
         return body
