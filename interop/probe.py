@@ -99,9 +99,15 @@ def main() -> None:
 
     # Whatever hangs next should say where. faulthandler prints every thread's
     # stack, including the ones with no Python frame, which is what identified
-    # the deadlock this file used to have. Set well beyond the work below so it
-    # fires only on a hang, and before the workflow's own step bound so the dump
-    # survives.
+    # the deadlock this file used to have.
+    #
+    # Armed here rather than after start() on purpose: construction and start()
+    # both enter the C++ stack, and a watchdog that begins afterwards cannot
+    # report a hang inside them. The cost is that the margin past `deadline` is
+    # 30 seconds minus however long they take, since `deadline` is measured from
+    # after they return. They take about a millisecond, and if that ever stops
+    # being true this fires early and says so, which is the failure worth
+    # having.
     faulthandler.dump_traceback_later(args.timeout + 30.0, exit=True)
 
     master = MyMaster(
@@ -122,16 +128,43 @@ def main() -> None:
         # against the stack's own worker thread, which needs the GIL to deliver
         # its logging callbacks into Python while this thread holds the GIL
         # inside a call that does not release it. The process then hangs with no
-        # output, and the loop above never re-evaluates its own deadline because
-        # the block is inside the condition.
+        # output, because the block sat inside the condition of the loop this
+        # replaced: no iteration completed, so its deadline was never
+        # re-evaluated and nothing was ever printed.
         #
         # Reproduced locally at 8 hangs in 15 runs with two CPUs, and 0 in 15
-        # with this poll removed. Nothing else here calls into the channel
-        # outside a bounded retry, and the scan loop below establishes
-        # connectivity by succeeding: a genuine failure to connect arrives as
-        # "the integrity poll returned no analog inputs" once the deadline
-        # expires, which is a less specific message than the one this replaced
-        # and an actual verdict rather than a hang.
+        # with this poll removed.
+        #
+        # The scan loop below is not the same exposure, though the reason is
+        # conditional and worth stating as such.
+        #
+        # Its five reads go through get_db_by_group_variation_index, which
+        # serves them from a dictionary the read handler filled while that
+        # dictionary is newer than stale_if_longer_than -- two seconds by
+        # default. Older than that, or on the first iteration before any
+        # response has been recorded, they fall through to
+        # get_db_by_group_variation and reach the C++ stack after all. So:
+        #
+        #   steady state  the loop period is under two seconds, the cache is
+        #                 fresh, and one call per iteration enters the stack
+        #   first pass    no timestamp exists yet, so all five fall through
+        #   degraded      the outstation has stopped answering, the timestamp
+        #                 goes stale, and all five fall through every time
+        #
+        # The last is the one worth naming, because exposure rises exactly when
+        # the peer is already misbehaving, which is when a deadlock would
+        # matter.
+        #
+        # None of it changes the conclusion. Every one of those paths enters
+        # through ScanAllObjects, and GetStatistics is the accessor that
+        # deadlocked. So this is a narrower claim than "the channel is
+        # untouched": a different entry point, not observed to deadlock, with
+        # the watchdog above covering the residue.
+        #
+        # The loop establishes connectivity by succeeding, so a genuine failure
+        # to connect arrives as "the integrity poll returned no analog inputs"
+        # once the deadline expires. Less specific than the message this
+        # replaced, and an actual verdict rather than a hang.
         say(f"started, polling {args.host}:{args.port} for up to {args.timeout:.0f}s")
 
         # Ask for the variation this outstation serves. The default scan list
