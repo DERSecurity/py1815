@@ -226,7 +226,7 @@ class TestOnceTheStaticHalfBegins:
 
     #: Three blocks, sized so the first fragment takes two and the third
     #: follows -- the only shape in which a continuation still has static owed.
-    SPANNING = [_block(0, 900), _block(1, 900), _block(2, 900)]
+    SPANNING = (_block(0, 900), _block(1, 900), _block(2, 900))
 
     @staticmethod
     def _buffers() -> EventBuffers:
@@ -236,7 +236,7 @@ class TestOnceTheStaticHalfBegins:
 
     def test_a_later_fragment_carries_no_events(self):
         buffers = self._buffers()
-        session = Session(Blocks(self.SPANNING), events=buffers, max_response=2048)
+        session = Session(Blocks(list(self.SPANNING)), events=buffers, max_response=2048)
         first = session._handle_fragment(INTEGRITY)
         assert not first[0] & FIN_MASK, "the fixture must leave static owed"
 
@@ -250,7 +250,7 @@ class TestOnceTheStaticHalfBegins:
         """Held back rather than dropped. It belongs to the next response, and
         the class bits go on asking for it."""
         buffers = self._buffers()
-        session = Session(Blocks(self.SPANNING), events=buffers, max_response=2048)
+        session = Session(Blocks(list(self.SPANNING)), events=buffers, max_response=2048)
         first = session._handle_fragment(INTEGRITY)
         buffers.record_analog(5, AnalogPoint(99.0), event_class=EventClass.CLASS_1, timestamp_ms=2)
 
@@ -260,7 +260,7 @@ class TestOnceTheStaticHalfBegins:
 
     def test_the_events_of_the_first_fragment_still_lead(self):
         buffers = self._buffers()
-        session = Session(Blocks(self.SPANNING), events=buffers, max_response=2048)
+        session = Session(Blocks(list(self.SPANNING)), events=buffers, max_response=2048)
 
         fragments = _walk(session, session._handle_fragment(INTEGRITY))
 
