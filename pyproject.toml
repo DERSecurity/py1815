@@ -44,6 +44,14 @@ dev = ["py1815[docs]", "pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy
 [tool.hatch.build.targets.wheel]
 packages = ["src/py1815"]
 
+[tool.hatch.build.targets.sdist]
+# An sdist published to PyPI is public even though this repository is not, and
+# by default hatchling puts the whole tree in it. The planning documents are
+# the one part of that tree written for the people building the library rather
+# than for the people using it, which is the same line `mkdocs.yml` draws when
+# it excludes them from the site and publishes `DESIGN.md` on purpose.
+exclude = ["docs/planning"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

@@ -1,0 +1,110 @@
+name: Release
+
+# Publishes a tagged version to PyPI and mirrors the artifacts on a GitHub
+# release. Trusted publishing (OIDC): PyPI accepts this workflow's identity
+# directly, so no API token exists to store, leak, or rotate.
+#
+# The repository is private and the package is public. Nothing here changes
+# that -- what a release publishes is the sdist and the wheel, which is the
+# library's own source. Anything that must not be published must not be in
+# `src/py1815`.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - name: The tag must be the version the package says it is
+        # A tag that disagrees with pyproject would publish a release whose
+        # installed version contradicts its own announcement.
+        #
+        # Read with a TOML parser rather than a regular expression. `version =`
+        # is not unique in this file and a pattern that matches the wrong one
+        # compares the tag against something that is not the package's version.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          test "$tag" = "$version" || { echo "tag v$tag but pyproject says $version"; exit 1; }
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Check package metadata
+        run: twine check dist/*
+      - name: The wheel must carry the typing marker
+        # `pyproject.toml` claims `Typing :: Typed`. Without `py.typed` beside
+        # the modules, every consumer's type checker ignores the annotations
+        # and the claim is false in a way nothing else here would catch --
+        # installs work, imports work, and the types are simply not there.
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q 'py1815/py\.typed' || {
+            echo "py.typed is missing from the wheel"
+            python -m zipfile -l dist/*.whl
+            exit 1
+          }
+      - name: The wheel must carry the library and nothing else
+        # The interop fixtures and the test suite live beside the package and
+        # are not part of it. A packaging change that swept them in would ship
+        # a master, an outstation fixture and a pcap writer to every consumer.
+        run: |
+          strays=$(python -m zipfile -l dist/*.whl \
+            | grep -Eo '^(interop|tests|docs)/[^ ]*' || true)
+          test -z "$strays" || { echo "the wheel carries:"; echo "$strays"; exit 1; }
+      - name: The sdist must not carry the planning documents
+        # It is public even though this repository is not, and hatchling would
+        # otherwise put the whole tree in it. `mkdocs.yml` keeps these off the
+        # site for the same reason: they are written for the people building
+        # the library rather than the people using it. `DESIGN.md` is published
+        # on purpose and stays.
+        run: |
+          planning=$(tar -tzf dist/*.tar.gz | grep 'docs/planning/' || true)
+          test -z "$planning" || { echo "the sdist carries:"; echo "$planning"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/py1815/
+    permissions:
+      # The OIDC token is the credential; nothing else is granted.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md) for what this release contains."
