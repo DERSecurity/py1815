@@ -484,7 +484,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seen = readings.analog_events.len();
     let wanted = CLASS_1_EVENTS.len() + CLASS_2_EVENTS.len() + CLASS_3_EVENTS.len();
     if seen != wanted {
-        fail(&format!("read {seen} analog events across the classes, expected {wanted}"));
+        fail(&format!(
+            "read {seen} analog events across the classes, expected {wanted}"
+        ));
     }
 
     println!(
