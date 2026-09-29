@@ -70,6 +70,15 @@ def _body(fragments: list[bytes]) -> bytes:
     return b"".join(fragment[4:] for fragment in fragments)
 
 
+def _carries_events(fragment: bytes) -> bool:
+    """Whether a fragment opens with an event block.
+
+    Events lead a fragment when it has any (D20), so the first block is enough
+    to tell one apart from a static-only continuation.
+    """
+    return len(fragment) > 4 and fragment[4] in (2, 32)
+
+
 #: Six blocks of 500 octets: 3,030 in total, which no single 2,048-octet
 #: fragment can carry and which D31 would therefore refuse outright.
 WIDE = [_block(i, 500) for i in range(6)]
@@ -266,3 +275,69 @@ class TestOnceTheStaticHalfBegins:
 
         assert fragments[0][4] == 32, "the events open the response"
         assert _body(fragments).endswith(b"".join(self.SPANNING))
+
+
+class TestTheBoundAndSplitStaticTogether:
+    """Each is covered on its own and neither reaches the other: `WIDE` needs a
+    handful of static fragments with almost no events, and the bound tests use
+    a body that fits one fragment.
+
+    The contract they cross is the one that would break quietly. Reapplying the
+    old one-extra-fragment cap -- the bound plus a single body fragment --
+    truncates a response whose static data needs more than one, and every test
+    above would still pass.
+    """
+
+    #: Six blocks of nine hundred octets: three fragments of static data behind
+    #: however many the events take.
+    BLOCKS = tuple(_block(i, 900) for i in range(6))
+    EVENTS = 6000
+    BOUND = 16
+
+    def _run(self) -> tuple[list[bytes], Blocks]:
+        buffers = EventBuffers(capacity=self.EVENTS)
+        for index in range(self.EVENTS):
+            buffers.record_analog(
+                index % 60_000,
+                AnalogPoint(float(index)),
+                event_class=EventClass.CLASS_1,
+                timestamp_ms=1,
+            )
+        provider = Blocks(list(self.BLOCKS))
+        session = Session(provider, events=buffers, max_response=2048)
+        return _walk(session, session._handle_fragment(INTEGRITY), limit=40), provider
+
+    def test_it_runs_past_the_one_extra_fragment_a_body_used_to_take(self):
+        fragments, _ = self._run()
+
+        assert len(fragments) > self.BOUND + 1, (
+            f"{len(fragments)} fragments: the static data did not need more than one"
+        )
+
+    def test_every_block_arrives(self):
+        fragments, _ = self._run()
+
+        assert _body(fragments).endswith(b"".join(self.BLOCKS))
+
+    def test_and_the_response_ends(self):
+        fragments, _ = self._run()
+
+        assert fragments[-1][0] & FIN_MASK
+        assert len(fragments) < 40, "the walk hit its own limit rather than FIN"
+
+    def test_the_events_stop_at_the_bound_and_the_static_does_not(self):
+        """The distinction D32 draws. A device can keep producing events, so
+        those are bounded; the provider's blocks are a finite list handed over
+        once, so they are not."""
+        fragments, _ = self._run()
+
+        carrying_events = [n for n, f in enumerate(fragments, 1) if _carries_events(f)]
+
+        assert len(carrying_events) <= self.BOUND
+        assert len(fragments) > len(carrying_events), "no static-only fragment followed"
+
+    def test_every_fragment_honours_the_ceiling(self):
+        fragments, _ = self._run()
+
+        for fragment in fragments:
+            assert len(fragment) <= 2048
