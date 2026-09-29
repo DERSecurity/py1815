@@ -76,13 +76,17 @@ Nothing has been released yet. Everything below is on `main` and unversioned.
   therefore the thing that draws out a continuation, which is the only case
   where this outstation answers something that is not a request.
 
-  Nothing is carried between the fragments. Each is built from the buffers as
-  they then stand, so an event evicted while a master was slow is gone rather
-  than sent from a list that outlived it, and one recorded meanwhile joins the
-  answer rather than waiting for the next. That needs a bound instead of a rule
-  about which events belong where: a device that records faster than its master
-  confirms would otherwise never be finished with, so a response carries at most
-  sixteen fragments of events and the indication bits go on asking for the rest.
+  No list of unsent events is carried between the fragments. Each is built from
+  the buffers as they then stand, so an event evicted while a master was slow is
+  gone rather than sent from a list that outlived it, and one recorded meanwhile
+  joins the answer rather than waiting for the next -- until the static data
+  starts going out, after which the response takes no more events and they wait
+  for the one after it.
+
+  That needs a bound instead of a rule about which events belong where: a device
+  that records faster than its master confirms would otherwise never be finished
+  with, so a response carries at most sixteen fragments of events and the
+  indication bits go on asking for the rest.
 
   A master that loses a fragment repeats the confirmation before it and is sent
   that fragment again. Without it the exchange stops dead -- the master waiting

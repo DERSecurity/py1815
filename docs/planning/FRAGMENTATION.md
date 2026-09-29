@@ -4,10 +4,11 @@ Section 3 of [the event plan](EVENTS.md), lifted into a plan of its own because
 it is the part of that one most likely to need its own design pass, and because
 what it changes is not confined to events.
 
-Today a response is **capped**: events are fitted to what the master can
-receive, what does not fit stays buffered, and the class indication bits go on
-asking for it (**D27**). That is correct and chatty. This is how it becomes a
-split.
+A response used to be **capped**: events were fitted to what the master could
+receive, what did not fit stayed buffered, and the class indication bits went on
+asking for it (**D27**). That was correct and chatty. This is how it became a
+split -- all of it landed, so the tense below is the tense it was written in
+rather than a description of the code.
 
 ## What already exists
 
