@@ -60,6 +60,10 @@ the names the DNP-UG package ships, so a correctly named file stays untracked.
 COPYRIGHT (c) (1993-2025) DNP Users Group, Inc. All Rights Reserved
 ```
 
+`UserData.xslt`, `blank-device-profile.xml` and the `dnp_xsl` helper scripts carry
+no copyright notice, but an absent notice is not a grant either, so they are
+ignored on the same terms.
+
 Neither file carries a redistribution grant, so neither may be committed to this
 repository, which is public and Apache-2.0. The note in IEEE Std 1815-2012 that
 these files "should be distributed with the DNP3 XML instance file for a device"

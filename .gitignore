@@ -40,3 +40,7 @@ DNP3DeviceProfile*.xslt
 DNP3DeviceProfileJan2010.*
 DNP3Spec-*.pdf
 dnp_logo.jpg
+UserData.xslt
+blank-device-profile.xml
+dnp_xsl.bat
+dnp_xsl.ps1
