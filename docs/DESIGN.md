@@ -639,7 +639,9 @@ this level needs a peer that exposes quality rather than a change to the harness
 - Unsolicited responses: outstation-initiated traffic with its own retry timer, and
   `ENABLE_UNSOLICITED` becoming something this outstation can agree to. Still refused today,
   which is the honest answer while nothing is sent.
-- The point-map loader and a published table for the predecessor DER profile.
+- The point-map loader and a published table for the predecessor DER profile. Planned in
+  [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md), which settles what ships (the machinery)
+  and what does not (any table but a synthetic one).
 - Conformance testing.
 
 ## Open
