@@ -138,8 +138,13 @@ def function_codes(std: Standard) -> dict[str, dict[str, Any]]:
         # happened to look like a row.
         if decimal == hexadecimal:
             rows.append((decimal, name, match.start(), match.end()))
-    if len(rows) < 30:
-        raise ExtractionError(f"Table 4-2 yielded only {len(rows)} codes")
+    # This edition assigns exactly this many codes (0 through 33 and 129
+    # through 131; the rest are reserved). A guard on "roughly enough" would
+    # let an omitted code be written out as authoritative, which is the very
+    # gap the checked-in tables exist to close.
+    assigned = {decimal for decimal, _, _, _ in rows}
+    if len(assigned) != 37:
+        raise ExtractionError(f"Table 4-2 yielded {len(assigned)} distinct codes, expected 37")
 
     found = {}
     for position, (decimal, name, _, body_start) in enumerate(rows):
@@ -226,8 +231,11 @@ def valid_qualifier_codes(std: Standard) -> list[int]:
     start = std.find(r"Table 4-6.{0,3}Valid qualifier codes")
     segment = std.page(start).split("Object Prefix")[-1].split("4.2.2.7.3.5")[0]
     found = sorted({int(token, 16) for token in re.findall(r"\b([0-9A-F]{2})\b", segment)})
-    if len(found) < 20:
-        raise ExtractionError(f"Table 4-6 yielded only {len(found)} codes")
+    # Exactly the permitted set: ten with no prefix, three each for one-,
+    # two- and four-octet index prefixes, and one each for the three object
+    # size prefixes.
+    if len(found) != 22:
+        raise ExtractionError(f"Table 4-6 yielded {len(found)} codes, expected 22")
     return found
 
 

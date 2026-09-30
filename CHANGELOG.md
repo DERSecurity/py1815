@@ -25,9 +25,11 @@ says so explicitly.
 
 - `FunctionCode` was missing function code 31, `ACTIVATE_CONFIG`. The reply on
   the wire was already correct, because a code that is not recognized and one
-  that is recognized but unimplemented are both refused with IIN2.0. What was
-  wrong is that `FunctionCode` names every code so a log line can tell those two
-  apart, and for 0x1F it could not.
+  that is recognized but unimplemented are both refused with IIN2.0; what was
+  wrong is that the enum claims to name every code the standard assigns, and
+  did not. The refusal now logs which of the two it was, naming the function
+  when the standard assigns it and the raw code when it does not, which is the
+  distinction the enum exists to make and which nothing surfaced before.
 
 ## [0.1.0] - 2026-09-29
 

@@ -77,7 +77,7 @@ jobs:
               "PKG-INFO", "pyproject.toml", ".gitignore",
               "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md",
               "LICENSE", "NOTICE",
-              "src", "tests", "docs",
+              "src", "tests", "docs", "conformance",
           }
           # Inside `docs`, which is allowed wholesale above.
           FORBIDDEN = ("docs/planning/",)

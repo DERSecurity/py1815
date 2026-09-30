@@ -100,9 +100,12 @@ def _receive(fragment: bytes) -> list[bytes]:
 def test_every_assigned_function_code_is_named(tables: dict) -> None:
     """A code the standard assigns has to have a name here.
 
-    An unnamed code cannot be answered "function not supported" as a named,
-    unimplemented function -- it is refused as unrecognized instead, which tells
-    a master something different about whether to retry.
+    The master sees no difference: a named-but-unimplemented function and an
+    unrecognized code both earn IIN2.0. The difference is local. The refusal
+    log names a function the standard assigns and prints the raw code for one
+    it does not, so an operator reading it can tell "not implemented here"
+    from "not a DNP3 function at all", and that reading is only right if the
+    enum is complete.
     """
     ours = {int(member) for member in FunctionCode}
     rows = tables["4-2"]["function_codes"]

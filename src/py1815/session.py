@@ -11,7 +11,7 @@ arrived and returns the octets to send, so every rule below is testable against
 literal frames with no listener, no TLS and no event loop.
 
 **What it refuses, it refuses out loud.** A control function gets a response
-carrying IIN2.1 rather than silence, because a master that times out learns
+carrying IIN2.0 rather than silence, because a master that times out learns
 nothing and retries.
 
 The exceptions are the function codes IEEE 1815-2012 Table 4-2 defines as taking
@@ -757,6 +757,14 @@ class Session:
             )
 
         if known not in _SUPPORTED_FUNCTIONS:
+            # Same indication either way; the log is where the two differ. A
+            # named function is one the standard assigns and this outstation
+            # does not implement, and an unrecognized code is one the standard
+            # does not assign, which is the case worth a second look.
+            if known is None:
+                logger.info("dnp3: refusing function 0x%02X: unrecognized", request.function)
+            else:
+                logger.info("dnp3: refusing function %s: not implemented", known.name)
             return null_response(
                 sequence=sequence,
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
