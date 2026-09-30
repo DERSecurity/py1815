@@ -30,6 +30,25 @@ device attribute objects the profile marks optional. Counters are in scope
 because the profile's fixed system block carries them, and the library has no
 counter objects today.
 
+Two things the library does not do yet are named here rather than assumed,
+because a caller assembling an outstation from this will ask about both:
+
+- **Unsolicited responses.** The profile's consumers expect outstation-initiated
+  reporting, and this library still refuses `ENABLE_UNSOLICITED`. The generator
+  does not assume it exists: an outstation built under these nine steps reports
+  events when polled, and gains unsolicited reporting when the library does,
+  through the same `EventBuffers` and with no change to the map or the binding.
+  That work is its own roadmap entry in [DESIGN.md](../DESIGN.md), not a step
+  here.
+- **Floating-point analog events.** The library serves floating-point static
+  analog inputs and integer analog events only; a point whose static form is a
+  float has no float event form to report a change in. That asymmetry is not a
+  decision anyone made, and a map that carries scaling and range per point is
+  exactly where it surfaces. The builder therefore reports events for every
+  analog point in the integer variation D39 makes the baseline, scaled by the
+  table, until the event encoders gain the float variations, which is a small
+  addition to `objects.py` that belongs with step 5.
+
 ## The licensing boundary, stated first
 
 Everything else here is shaped by one fact: the profile's point list is
@@ -220,11 +239,14 @@ A map is a list of points. Each carries:
   reconciled between AN2018-001 and 1815.2 can say per point which it followed.
 
 The loader takes a map and a **composition** (how many of each repeating
-component the DER has), resolves every index, and validates: indices unique
-within a kind, every index within the 16-bit space with room for the
-advertisement block, every variation the map asks for present in Table 7's
-implementation table, every mandatory point of a bound function bound. The
-result is immutable and is what the builder consumes.
+component the DER has), resolves every index, and validates what a map can be
+checked for on its own: indices unique within a kind, every index within the
+16-bit space with room for the advertisement block, every variation the map
+asks for present in Table 7's implementation table, every function a point
+names present in the catalog. The result is immutable and is what the builder
+consumes. Whether a bound function's mandatory points are all bound is not a
+property of the map, and the loader never sees a binding; that check belongs
+to the builder, at the moment it receives one (D40).
 
 ### Binding
 
@@ -237,8 +259,13 @@ The write side receives a value and returns a command status from
 
 Outputs bind the write side and may bind a read side for status; a mirror
 point with no read binding reports the last accepted write, which is what the
-profile's paired points mean. A binding may also register a curve receiver and
-a schedule receiver per function, which is how D41 delivers.
+profile's paired points mean. Before any write has been accepted there is no
+such value, and the mirror is not left undefined: the binding may supply an
+initial value, in which case the mirror reports it as good; otherwise the
+mirror reports never-read, with `ONLINE` clear and `RESTART` set, until the
+first accepted write, exactly as an input that has never been read does. A
+binding may also register a curve receiver and a schedule receiver per
+function, which is how D41 delivers.
 
 The simulator's binding keys are its state accessors, one per point, the
 same way its Modbus server is built. The aggregator's binding keys are its store's
@@ -254,9 +281,13 @@ read it walks the resolved map by kind, splits each kind into runs of
 contiguous indices, and emits one object header per run with a start-stop
 qualifier, choosing the variation D39 allows and the range demands: a point
 whose scaled range overflows sixteen bits is served as thirty-two, which the
-profile itself notes is unavoidable for real power in watts. Each run is one
-block for fragmentation purposes, so a map larger than a fragment splits at run
-boundaries and never inside one. Supports flags are served here and only here.
+profile itself notes is unavoidable for real power in watts. A run is then cut
+into blocks that fit the session's response budget, on object boundaries: the
+session refuses any single block larger than a fragment however many fragments
+follow (D31), so a long run served as one block would make a valid map
+unreadable, and a block that split an object would corrupt it. A map larger
+than a fragment therefore splits at index gaps and at the budget, and never
+inside an object. Supports flags are served here and only here.
 A read of a specific range or index is answered from the same walk restricted
 to it, and an index the map does not hold answers `OBJECT_UNKNOWN` (D43).
 
@@ -265,11 +296,20 @@ to it, and an index the map does not hold answers `OBJECT_UNKNOWN` (D43).
 An integer variation carries `round(value * 10 ** scaling)`, with the table's
 scaling column as the exponent and its resolution column as the event deadband
 default. A floating variation carries the value as is. Quality maps onto the
-flag octet: good is `ONLINE`; stale is `ONLINE` with the value and timestamp
-retained, since the timestamp is what tells the master; comm-lost clears
-`ONLINE` and sets `COMM_LOST` with the last value; never-read clears `ONLINE`
-and sets `RESTART`; a value outside the table's range sets `OVER_RANGE`.
-Timestamps are the source's, never the time the frame was built.
+flag octet: good is `ONLINE`; comm-lost clears `ONLINE` and sets `COMM_LOST`
+with the last value; never-read clears `ONLINE` and sets `RESTART`; a value
+outside the table's range sets `OVER_RANGE`.
+
+Stale has no state of its own on the wire, and the plan does not pretend it
+does. The static variations carry no timestamp, only the event variations do,
+so a stale value served `ONLINE` in a class 0 read is indistinguishable from a
+fresh one there, whatever timestamp the binding retained. The policy is
+therefore two-valued at the wire: a value within the age the consumer declares
+is good and served `ONLINE`; one beyond it is reported by the binding as
+comm-lost, which does have a representation, and served that way. The window
+is the consumer's to set, because only it knows what "too old" means for its
+source; the builder never invents a third state. Timestamps are the source's,
+never the time the frame was built, and reach the master on events.
 
 ### Functions
 
