@@ -21,3 +21,11 @@ suricata-out/
 
 # Built documentation site.
 site/
+
+# The IEEE 1815.2 Profile Companion Data Point Tables and the file
+# `scripts/extract_profile.py` reads them into. IEEE distributes the workbook
+# without charge but its download terms forbid redistribution, so both stay on
+# the machine that downloaded them; `conformance/README.md` says how to get
+# the workbook and regenerate the file in one command.
+*.xlsx
+conformance/ieee-1815-2-2025.json

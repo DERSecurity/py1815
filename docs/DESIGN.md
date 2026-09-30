@@ -45,8 +45,12 @@ unreachable device would read as a device reporting `false`.
 
 **D6 -- The library does not embed a point map and does not scale values.** It defines the map
 format and reads a table supplied by the caller. *Trade-off:* one more step for a deployment
-that only wants the standard map, against a library that cannot be shared because the IEEE
-1815.2 tables are distributed to DNP Users Group members rather than published.
+that only wants the standard map, against a library whose runtime holds no table it would have
+to license. The IEEE 1815.2 point tables are distributed without charge, but under terms that
+forbid redistributing them in any form, so the repository carries the extractor that reads them
+and not the file it produces; the predecessor profile's tables are published by EPRI under a
+license that permits redistribution with notice. The runtime treats both the same way, as data a
+caller loads.
 
 **D7 -- One active master association at a time.** Event buffers, confirmation state and
 unsolicited retry ownership belong to an association, not to a socket. A new connection from an
