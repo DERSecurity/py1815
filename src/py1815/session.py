@@ -129,7 +129,7 @@ _NO_RESPONSE_FUNCTIONS = frozenset(
 #: for an earlier response, then the OPERATE.
 _KEEPS_A_SELECT = frozenset({FunctionCode.OPERATE, FunctionCode.CONFIRM})
 
-#: Functions this outstation answers. Everything else earns IIN2.1.
+#: Functions this outstation answers. Everything else earns IIN2.0.
 _SUPPORTED_FUNCTIONS = frozenset(
     {
         FunctionCode.CONFIRM,

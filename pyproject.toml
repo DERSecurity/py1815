@@ -61,6 +61,10 @@ include = [
     "src/py1815",
     "tests",
     "docs",
+    # The tables `tests/test_conformance.py` checks the implementation against.
+    # Without them that test cannot run, and the shipped suite is what a
+    # downstream packager uses to decide whether the build is sound.
+    "conformance",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
