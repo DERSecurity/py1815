@@ -40,18 +40,28 @@ pip install -e ".[dev]"
 There are no runtime dependencies, and that is deliberate -- an outstation that
 drags a dependency tree onto an embedded target is harder to justify than one
 that does not. The development extra is `pytest`, `pytest-asyncio`, `ruff` and
-`mypy`.
+`mypy`, and it pulls the documentation toolchain with them so `mkdocs` works
+without a second install.
 
 Then:
 
 ```bash
 pytest -q
-ruff check src tests interop
-ruff format --check src tests interop
+ruff check src tests interop scripts
+ruff format --check src tests interop scripts
 mypy src
+python scripts/build_changelog.py --check
 ```
 
-CI runs all four on Python 3.11, 3.12 and 3.13.
+CI runs all five on Python 3.11, 3.12 and 3.13.
+
+The documentation site builds from `docs/`, and its build is a check on every
+pull request:
+
+```bash
+mkdocs serve                 # http://127.0.0.1:8000
+mkdocs build --strict        # what CI runs; warnings are errors
+```
 
 ## The interop jobs
 
@@ -101,6 +111,43 @@ A pull request merges when the three test jobs and the `interop` gate are green
 and it carries an approving review. Branches do not have to be up to date with
 `main` first: merging one pull request does not send the others back for a
 rebase, because the peer jobs run against the merge result anyway.
+
+## The changelog
+
+A changelog entry is a file in `changelog.d/`, not an edit to `CHANGELOG.md`.
+Name it `<pull-request>.<category>.md` and write the entry body into it.
+`changelog.d/README.md` has the rules and the reason, which is that two pull
+requests editing the same `[Unreleased]` heading conflict on every pair.
+
+```bash
+python scripts/build_changelog.py --check     # what CI runs
+python scripts/build_changelog.py --preview   # render as it will appear
+```
+
+## Releases
+
+A release is a pull request and then a tag.
+
+The pull request folds the pending fragments in with
+`python scripts/build_changelog.py --release X.Y.Z`, bumps `version` in
+`pyproject.toml`, and deletes the fragments it consumed in that same commit, so
+the entries and the record of them cannot drift apart.
+
+Once it merges, push the tag:
+
+```bash
+git tag -a vX.Y.Z -m "py1815 X.Y.Z" && git push origin vX.Y.Z
+```
+
+That runs `release.yml`, which builds the sdist and wheel, checks them, publishes
+to PyPI through trusted publishing, and mirrors the artifacts on a GitHub
+release. The tag has to match the version `pyproject.toml` declares or the first
+job refuses it, so a tag cannot publish something the repository does not claim
+to be.
+
+Nothing publishes without a tag, and **a version on PyPI can be yanked but never
+replaced** -- so the tag is the step worth being deliberate about, not the
+merge.
 
 ## Conventions
 

@@ -18,7 +18,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: ruff check src tests interop
-      - run: ruff format --check src tests interop
+      - run: ruff check src tests interop scripts
+      - run: ruff format --check src tests interop scripts
       - run: mypy src
+      # Validates changelog.d/, so a malformed entry fails here rather
+      # than at release, when whoever is cutting it has the least context.
+      - run: python scripts/build_changelog.py --check
       - run: pytest -q
