@@ -71,6 +71,11 @@ FRAGMENT_DIR = os.path.join(_REPO_ROOT, "changelog.d")
 CHANGELOG = os.path.join(_REPO_ROOT, "CHANGELOG.md")
 
 _UNRELEASED = "## [Unreleased]"
+
+#: What an empty `[Unreleased]` says, so the heading never stands alone. It
+#: is not content: a release strips it from the body it folds and puts it
+#: back under the heading it leaves behind.
+_PLACEHOLDER = "Nothing yet."
 # `113.fixed.md`. The reference is digits so a typo like `fixed.md` or
 # `#113.fixed.md` fails loudly instead of sorting oddly.
 _NAME = re.compile(r"^(?P<ref>\d+)\.(?P<category>[a-z]+)\.md$")
@@ -252,7 +257,8 @@ def release(
     fragment_dir: str = FRAGMENT_DIR,
 ) -> list[str]:
     """Fold pending fragments and the existing `[Unreleased]` body into a new
-    ``## [version] - date`` section, and leave `[Unreleased]` empty.
+    ``## [version] - date`` section, and leave `[Unreleased]` holding only its
+    placeholder.
 
     Returns the fragment paths consumed, so the caller can delete them in the
     same commit that records their content — the two must not drift.
@@ -275,11 +281,17 @@ def release(
     next_section = text.find("\n## [", body_start)
     end = next_section if next_section != -1 else len(text)
     existing = text[body_start:end].strip()
+    # The placeholder is a sign that nothing is pending, not an entry. Left in,
+    # it would be released as the new section's first line and the heading it
+    # came from would be left bare.
+    existing = "\n".join(
+        line for line in existing.splitlines() if line.strip() != _PLACEHOLDER
+    ).strip()
 
     fragments = read_fragments(fragment_dir)
     section = merge_sections(existing, fragments).strip()
 
-    new = f"{_UNRELEASED}\n\n## [{version}] - {when}\n\n{section}\n"
+    new = f"{_UNRELEASED}\n\n{_PLACEHOLDER}\n\n## [{version}] - {when}\n\n{section}\n"
     with open(changelog, "w", encoding="utf-8") as handle:
         handle.write(text[:start] + new + text[end:])
 

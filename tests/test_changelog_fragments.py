@@ -109,9 +109,38 @@ class TestTheRelease:
         assert "A thing changed (#42)" in text
         # The older section survives: a tooling change must not lose history.
         assert "## [0.1.0] - 2026-01-01" in text and "- First." in text
-        # And Unreleased is left in place, empty, for the next entry.
+        # And Unreleased is left in place for the next entry, carrying the
+        # placeholder rather than nothing, since an empty heading reads as a
+        # mistake and the placeholder is the repository's convention.
         assert text.index("## [Unreleased]") < text.index("## [0.2.0]")
+        unreleased = text[text.index("## [Unreleased]") : text.index("## [0.2.0]")]
+        assert "Nothing yet." in unreleased
+        # The placeholder is not content, so it does not travel into the release.
+        released = text[text.index("## [0.2.0]") : text.index("## [0.1.0]")]
+        assert "Nothing yet." not in released
         assert [pathlib.Path(p).name for p in consumed] == ["42.added.md"]
+
+    def test_a_release_of_real_unreleased_entries_still_restores_the_placeholder(self, tmp_path):
+        """Entries written straight under Unreleased are released, and the
+        heading they leave behind gets the placeholder back."""
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text(
+            "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- A hand-written fix.\n\n"
+            "## [0.1.0] - 2026-01-01\n\n- First.\n",
+            encoding="utf-8",
+        )
+        fragments = tmp_path / "changelog.d"
+        fragments.mkdir()
+
+        build_changelog.release(
+            "0.2.0", when="2026-02-02", changelog=str(changelog), fragment_dir=str(fragments)
+        )
+
+        text = changelog.read_text(encoding="utf-8")
+        unreleased = text[text.index("## [Unreleased]") : text.index("## [0.2.0]")]
+        released = text[text.index("## [0.2.0]") : text.index("## [0.1.0]")]
+        assert "Nothing yet." in unreleased and "A hand-written fix." not in unreleased
+        assert "A hand-written fix." in released and "Nothing yet." not in released
 
     def test_a_release_without_an_unreleased_heading_is_refused(self, tmp_path):
         changelog = tmp_path / "CHANGELOG.md"
