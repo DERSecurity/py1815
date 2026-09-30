@@ -32,14 +32,16 @@ counter objects today.
 
 ## The licensing boundary, stated first
 
-Everything else here is shaped by one fact. The profile's point list is
-normative and licensed. IEEE 1815.2 specifies its points in the Profile
-Companion Data Point Tables, a spreadsheet distributed by IEEE; the standard
-says in as many words that the spreadsheet's content is normative because an
-implementation cannot be built without it. AN2018-001's tables are DNP Users
-Group material. Neither can be committed to a public repository, and a map that
-is nearly right is worse than one that is openly custom, because it will appear
-to interoperate.
+Everything else here is shaped by one fact: the profile's point list is
+normative, and where it comes from decides what may ship. IEEE 1815.2
+specifies its points in the Profile Companion Data Point Tables, a workbook the
+standard declares normative because an implementation cannot be built without
+it, and which IEEE distributes without charge alongside the standard. A
+machine-readable form of it is checked in as `conformance/ieee-1815-2-2025.json`,
+with its source named. AN2018-001's tables are DNP Users Group material and
+cannot be committed. A map that is nearly right is worse than one that is
+openly custom, because it will appear to interoperate, so nothing is derived
+by guesswork from either.
 
 The one exception is EPRI's reference outstation for AN2018-001, whose point
 tables are published under a BSD-style license: index, name, range, event class,
@@ -48,15 +50,16 @@ table and carries a notice obligation with it. [DESIGN.md](../DESIGN.md) already
 lists confirming that reading as an open item, and this plan does not resolve
 it; it is written so that nothing waits on it.
 
-So the library ships the machinery and none of the data, which is
-[DESIGN.md](../DESIGN.md) **D6** carried through: the map format, the loader
-that resolves it, the builder that turns it into an outstation, the catalog
-of DER functions the profile defines, and an extractor that reads a caller's own
-copy of the source document into the map format. What it does not ship is any
-point table beyond a synthetic example small enough to be obviously invented.
-This is the same split `tests/test_conformance.py` and
-`scripts/extract_conformance.py` already make for the base standard, and for the
-same reason.
+So the library ships the machinery, and of the data only what its publisher
+lets it: the map format, the loader that resolves it, the builder that turns
+it into an outstation, the catalog of DER functions the profile defines, the
+extractor that reads a source workbook into the map format, and the 1815.2
+tables that extractor produced. What it does not ship is a map derived from
+AN2018-001 or from the EPRI tables. The runtime treats both the same way, as
+data a caller loads, which is [DESIGN.md](../DESIGN.md) **D6**; the difference
+is only whether the repository can carry the file. This is the same split
+`tests/test_conformance.py` and `scripts/extract_conformance.py` already make
+for the base standard, and for the same reason.
 
 ## What already exists
 
@@ -94,8 +97,13 @@ with the semantic columns the EPRI tables lack: scaling, resolution, units, the
 IEC 61850 logical node and attribute each point originates from, and the clause
 that defines it. The EPRI tables themselves, with their license. EPRI's test
 procedure for AN2018-001, which is the acceptance suite for the simulator.
-The IEEE 1815.2 companion tables are not yet in hand; obtaining them
-is the first open question.
+
+**In hand, and committed.** The IEEE 1815.2 companion tables, read by
+`scripts/extract_profile.py` into `conformance/ieee-1815-2-2025.json` and held
+to shape by `tests/test_profile_tables.py`. The workbook disagrees with itself
+in three places (the auto-discovery block's start, three per-unit block
+lengths, and the spelling of some paired references); `conformance/README.md`
+lists them, and the file records the rows rather than the summary each time.
 
 **In the consumers.** The simulator allocates a DNP3 port and outstation address per
 simulated device when the interface is enabled, then creates nothing: the slot
@@ -118,12 +126,14 @@ single-device one.
 
 Continuing the numbering in [DESIGN.md](../DESIGN.md).
 
-**D36 -- The library ships the profile's machinery and none of its data.** Map
-format, loader, validator, builder, function catalog and extractor are in the
-package. Point tables are read from the caller's own copy of the source document
-by the extractor, and the only table committed is a synthetic example.
-*Trade-off:* every deployment runs the extractor once against a document it must
-obtain, against a library that could not be public.
+**D36 -- The library ships the profile's machinery, and only the data its
+publisher distributes openly.** Map format, loader, validator, builder, function
+catalog and extractor are in the package, and so are the IEEE 1815.2 tables,
+which IEEE publishes without charge. A table whose source is not open, which
+today means AN2018-001 and anything derived from it, is read from the caller's
+own copy by the extractor and is not committed. *Trade-off:* a deployment
+wanting the predecessor profile runs the extractor once against a document it
+must obtain, against a repository that carries only what it may.
 
 **D37 -- Relative indices are resolved once, at load, into a flat map.** The
 profile's block arithmetic (this component's block start, plus this instance
@@ -348,9 +358,10 @@ this step.
 
 ### 2. The extractor -- `scripts/extract_profile.py`
 
-Reads a caller's copy of AN2018-001 into the map form, with the semantic
-columns the tables carry. Reads the IEEE 1815.2 companion tables into the same
-form when a copy is supplied. A `--reconcile` mode diffs two maps by name and
+Reads the IEEE 1815.2 companion tables into the map form; this half exists,
+and produced the checked-in file. Reads a caller's copy of AN2018-001 into the
+same form, with the semantic columns its tables carry. A `--reconcile` mode
+diffs two maps by name and
 reports moved, added, removed and changed points, which is the deliverable
 the aggregator's first phase needs and which nobody should do by eye across a
 thousand points. Like the conformance extractor it finds tables by their
@@ -431,17 +442,18 @@ events, with 5 alongside, which is the monitoring outstation both consumers
 need first. Then 3 with the rest of 4, which is functions, controls and curves.
 Then 6, which is small and only the aggregator needs. 7 runs throughout; 8 closes.
 
-Nothing here waits on the companion tables. The map format and every mechanism
-are exercised by the AN2018-001-derived map and the synthetic example, and
-reconciling against 1815.2 when its tables arrive is a data change through the
-extractor rather than a code change.
+The companion tables are in; the map format can be designed against the real
+thing from the start, and reconciling AN2018-001 against it is a data change
+through the extractor rather than a code change.
 
 ## Open
 
-- **Obtaining the IEEE 1815.2 companion tables.** The standard says they are
-  distributed on IEEE's downloads page; whether that is free with the standard
-  or a separate purchase, and under what terms, is the first thing to settle,
-  because the reconciliation in step 2 waits on it and nothing else does.
+- **Redistributing the IEEE 1815.2 companion tables.** They are distributed
+  without charge, which settled obtaining them; free to download is not the
+  same as free to redistribute, and the checked-in copy rests on the reading
+  that a machine-readable form of an openly published table, with its source
+  named, is a reasonable use. That reading should be confirmed before a release
+  carries the file.
 - **The EPRI notice obligation**, already open in [DESIGN.md](../DESIGN.md).
   Resolving it decides whether a derived AN2018-001 map may ever be published
   from here. D36 assumes not, which is the safe side, and is easily relaxed.
