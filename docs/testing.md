@@ -1,6 +1,6 @@
 # Testing
 
-Two rules, both learned the hard way.
+Three rules, all learned the hard way.
 
 ## Wire behavior is pinned to literal octets
 
@@ -61,12 +61,62 @@ Closing that gap needed a peer that exposes quality rather than a change to the
 harness, which is what the Rust master is for. Quality is also pinned at the
 object level by the unit suite.
 
+## The standard is checked mechanically, not remembered
+
+The function codes, indication bits and qualifier codes here were transcribed
+from IEEE Std 1815-2012 by hand. Nothing checked that the transcription was
+complete, and it was not: function code 31, `ACTIVATE_CONFIG`, was missing.
+
+The sweep above could not have found that. Its cases are written out one per
+function code, and nobody writes a case for a code they do not know exists. A
+gap in a hand-written list of checks is invisible to the checks in the list.
+
+So the tables are checked against the standard's own tables instead.
+`conformance/ieee-1815-2012.json` holds the code assignments, names and field
+widths read out of the document, and the suite diffs this package against them:
+
+| Checked | Against |
+|---|---|
+| Every assigned function code is named, none invented, names agree | Table 4-2 |
+| The codes that draw no response are exactly the five marked so | Table 4-2 |
+| Every unimplemented request code is refused rather than dropped | Table 4-2 |
+| Indication bits carry the mask for the position they are given | Table 4-3 |
+| Index prefix widths | Table 4-4 |
+| Range field widths, from both sides | Table 4-5 |
+| Every accepted qualifier is one the standard permits | Table 4-6 |
+| The sweep has a case for every assigned request code | Table 4-2 |
+
+The last row is the one that closes the hole `ACTIVATE_CONFIG` fell through: the
+sweep no longer has to notice its own gaps.
+
+Two of these are worth separating from the rest, because they fail on wire
+behavior rather than on a name. The no-response codes are checked behaviorally,
+one case per code, by sending each one and asserting silence. The range field
+widths are checked from both sides, because a parser that reads too few octets
+does not raise; it leaves the remainder to be misread as the next object header.
+
+Where this package departs from a table on purpose (seven names the standard
+abbreviates, two indication-bit names, and the two reserved bits that are always
+zero) the departure is listed beside the test with its reason. Anything not on
+that list fails, which is the only property here that matters.
+
+The standard is a paid document and is not in the repository, so regenerating
+the tables is a step someone takes deliberately, with their own copy:
+
+```bash
+pip install pypdf
+python scripts/extract_conformance.py --pdf "IEEE 1815-2012.pdf" --check
+```
+
+`conformance/README.md` covers what that file holds and what it deliberately
+does not.
+
 ## Running them
 
 ```bash
 pytest                      # the unit suite, no network
-ruff check src tests interop
-ruff format --check src tests interop
+ruff check src tests interop scripts
+ruff format --check src tests interop scripts
 mypy src
 ```
 
