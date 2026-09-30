@@ -52,33 +52,37 @@ because a caller assembling an outstation from this will ask about both:
 ## The licensing boundary, stated first
 
 Everything else here is shaped by one fact: the profile's point list is
-normative, and where it comes from decides what may ship. IEEE 1815.2
-specifies its points in the Profile Companion Data Point Tables, a workbook the
-standard declares normative because an implementation cannot be built without
-it, and which IEEE distributes without charge alongside the standard. A
-machine-readable form of it is checked in as `conformance/ieee-1815-2-2025.json`,
-with its source named. AN2018-001's tables are DNP Users Group material and
-cannot be committed. A map that is nearly right is worse than one that is
-openly custom, because it will appear to interoperate, so nothing is derived
-by guesswork from either.
+normative, and its terms decide what may ship. IEEE 1815.2 specifies its
+points in the Profile Companion Data Point Tables, a workbook the standard
+declares normative because an implementation cannot be built without it. IEEE
+distributes it without charge, but under terms that forbid copying or
+distributing it, or significant portions of it, in any form without written
+permission; a public repository is distribution, so neither the workbook nor
+a machine-readable form of it is committed. AN2018-001's tables are DNP Users
+Group material and are not committed either. A map that is nearly right is
+worse than one that is openly custom, because it will appear to interoperate,
+so nothing is derived by guesswork from either.
 
 The one exception is EPRI's reference outstation for AN2018-001, whose point
 tables are published under a BSD-style license: index, name, range, event class,
-and for each output the input that mirrors it. That license permits deriving a
-table and carries a notice obligation with it. [DESIGN.md](../DESIGN.md) already
-lists confirming that reading as an open item, and this plan does not resolve
-it; it is written so that nothing waits on it.
+and for each output the input that mirrors it. That license permits
+redistribution with the copyright notice retained and no use of EPRI's name for
+endorsement, which settles the open item [DESIGN.md](../DESIGN.md) carried: a
+committed table of the predecessor profile, derived from that header and
+carrying its notice, is permissible.
 
 So the library ships the machinery, and of the data only what its publisher
 lets it: the map format, the loader that resolves it, the builder that turns
 it into an outstation, the catalog of DER functions the profile defines, the
-extractor that reads a source workbook into the map format, and the 1815.2
-tables that extractor produced. What it does not ship is a map derived from
-AN2018-001 or from the EPRI tables. The runtime treats both the same way, as
-data a caller loads, which is [DESIGN.md](../DESIGN.md) **D6**; the difference
-is only whether the repository can carry the file. This is the same split
-`tests/test_conformance.py` and `scripts/extract_conformance.py` already make
-for the base standard, and for the same reason.
+extractor that reads a source workbook into the map format, and, when it is
+written, a predecessor-profile table derived from EPRI's under its notice.
+What it does not ship is the 1815.2 tables themselves; the extractor makes
+them from a caller's own copy in one command, and the tests that hold them to
+shape skip where the file is absent. The runtime treats every table the same
+way, as data a caller loads, which is [DESIGN.md](../DESIGN.md) **D6**; the
+difference is only whether the repository can carry the file. This is the
+same split `tests/test_conformance.py` and `scripts/extract_conformance.py`
+already make for the base standard, and for the same reason.
 
 ## What already exists
 
@@ -117,12 +121,14 @@ IEC 61850 logical node and attribute each point originates from, and the clause
 that defines it. The EPRI tables themselves, with their license. EPRI's test
 procedure for AN2018-001, which is the acceptance suite for the simulator.
 
-**In hand, and committed.** The IEEE 1815.2 companion tables, read by
-`scripts/extract_profile.py` into `conformance/ieee-1815-2-2025.json` and held
-to shape by `tests/test_profile_tables.py`. The workbook disagrees with itself
-in three places (the auto-discovery block's start, three per-unit block
-lengths, and the spelling of some paired references); `conformance/README.md`
-lists them, and the file records the rows rather than the summary each time.
+**In hand, and not committable.** The IEEE 1815.2 companion tables, read by
+`scripts/extract_profile.py` into `conformance/ieee-1815-2-2025.json` on any
+machine that holds the workbook, and held to shape by
+`tests/test_profile_tables.py`. The workbook disagrees with itself in three
+places (the auto-discovery block's start, three per-unit block lengths, and
+the spelling of some paired references) and states each equipment block
+twice; `conformance/README.md` lists all of it, and the file records the rows
+rather than the summary each time.
 
 **In the consumers.** The simulator allocates a DNP3 port and outstation address per
 simulated device when the interface is enabled, then creates nothing: the slot
@@ -146,13 +152,15 @@ single-device one.
 Continuing the numbering in [DESIGN.md](../DESIGN.md).
 
 **D36 -- The library ships the profile's machinery, and only the data its
-publisher distributes openly.** Map format, loader, validator, builder, function
-catalog and extractor are in the package, and so are the IEEE 1815.2 tables,
-which IEEE publishes without charge. A table whose source is not open, which
-today means AN2018-001 and anything derived from it, is read from the caller's
-own copy by the extractor and is not committed. *Trade-off:* a deployment
-wanting the predecessor profile runs the extractor once against a document it
-must obtain, against a repository that carries only what it may.
+publisher permits it to redistribute.** Map format, loader, validator, builder,
+function catalog and extractor are in the package. The IEEE 1815.2 tables are
+not: IEEE distributes the workbook without charge but forbids redistributing
+it or significant portions of it in any form, so the extractor reads a caller's
+own copy and the result is ignored by the repository. A predecessor-profile
+table derived from EPRI's BSD-licensed map may be committed with its notice.
+*Trade-off:* a deployment wanting the current profile downloads the workbook
+and runs the extractor once, against a repository that carries only what it
+may.
 
 **D37 -- Relative indices are resolved once, at load, into a flat map.** The
 profile's block arithmetic (this component's block start, plus this instance
@@ -488,12 +496,12 @@ through the extractor rather than a code change.
 
 ## Open
 
-- **Redistributing the IEEE 1815.2 companion tables.** They are distributed
-  without charge, which settled obtaining them; free to download is not the
-  same as free to redistribute, and the checked-in copy rests on the reading
-  that a machine-readable form of an openly published table, with its source
-  named, is a reasonable use. That reading should be confirmed before a release
-  carries the file.
+- **Written permission from IEEE for the companion tables.** Their terms
+  name a contact for it. The profile is free and the standard says it cannot
+  be implemented without the tables, so a request to redistribute a
+  machine-readable form with the source named may well be granted; until it
+  is, the file stays generated rather than committed, and nothing here waits
+  on the answer.
 - **The EPRI notice obligation**, already open in [DESIGN.md](../DESIGN.md).
   Resolving it decides whether a derived AN2018-001 map may ever be published
   from here. D36 assumes not, which is the safe side, and is easily relaxed.
