@@ -283,6 +283,7 @@ CASES: list[Case] = [
     _refused(FunctionCode.GET_FILE_INFO, "file: get info"),
     _refused(FunctionCode.AUTHENTICATE_FILE, "file: authenticate"),
     _refused(FunctionCode.ABORT_FILE, "file: abort"),
+    _refused(FunctionCode.ACTIVATE_CONFIG, "configuration: activate"),
     _refused(FunctionCode.AUTH_REQUEST, "secure authentication: request"),
     _refused(0x7F, "a function code the standard does not define"),
     # -- the rest of the no-response family -----------------------------------

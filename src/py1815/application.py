@@ -86,6 +86,7 @@ class FunctionCode(IntEnum):
     GET_FILE_INFO = 0x1C
     AUTHENTICATE_FILE = 0x1D
     ABORT_FILE = 0x1E
+    ACTIVATE_CONFIG = 0x1F
     AUTH_REQUEST = 0x20
     AUTH_REQUEST_NO_ACK = 0x21
     RESPONSE = 0x81

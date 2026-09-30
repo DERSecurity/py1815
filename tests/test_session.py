@@ -304,6 +304,23 @@ class TestRefusals:
 
         assert fragment[3] & IIN2Bit.FUNC_NOT_SUPPORTED
 
+    def test_the_refusal_log_says_whether_the_code_is_assigned(self, caplog):
+        """Same indication on the wire; the log tells the two refusals apart.
+
+        A function the standard assigns is refused by name, and a code it does
+        not assign is refused as unrecognized with the raw octet. That is the
+        distinction ``FunctionCode`` exists to make, and it is only right if
+        the enum is complete, which ``test_conformance`` checks.
+        """
+        session, _ = _session()
+
+        with caplog.at_level("INFO", logger="py1815.session"):
+            session.receive(_user_data(bytes([0xC0, FunctionCode.COLD_RESTART])))
+            session.receive(_user_data(bytes([0xC0, 0x7F])))
+
+        assert "refusing function COLD_RESTART: not implemented" in caplog.text
+        assert "refusing function 0x7F: unrecognized" in caplog.text
+
     def test_a_malformed_request_is_answered_on_its_own_sequence(self):
         """Answering on the wrong sequence has the master discard the answer it
         needs."""

@@ -7,7 +7,29 @@ says so explicitly.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- The normative tables of IEEE Std 1815-2012 are now checked against this
+  package's own on every test run. `scripts/extract_conformance.py` reads the
+  tables out of a local copy of the standard into
+  `conformance/ieee-1815-2012.json`, and `tests/test_conformance.py` diffs the
+  function codes, indication bits, qualifier codes and field widths against it.
+  The standard is a paid document and is not in the repository;
+  `conformance/README.md` covers what the checked-in tables hold and what they
+  deliberately do not.
+- The interoperability sweep is now checked for coverage against the function
+  code table. Its cases are written out one per code, so a code nobody wrote a
+  case for was simply not swept, and passed for want of anything to fail.
+
+### Fixed
+
+- `FunctionCode` was missing function code 31, `ACTIVATE_CONFIG`. The reply on
+  the wire was already correct, because a code that is not recognized and one
+  that is recognized but unimplemented are both refused with IIN2.0; what was
+  wrong is that the enum claims to name every code the standard assigns, and
+  did not. The refusal now logs which of the two it was, naming the function
+  when the standard assigns it and the raw code when it does not, which is the
+  distinction the enum exists to make and which nothing surfaced before.
 
 ## [0.1.0] - 2026-09-29
 
