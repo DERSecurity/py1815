@@ -6,14 +6,14 @@ Today the library serves whatever objects a `ReadProvider` returns and commands
 whatever a `ControlProvider` accepts; it knows nothing about which point is
 the real power measurement, which binary input says a function is supported,
 or where the second inverter's block begins. Every consumer would have to
-rediscover that from the standard, and two consumers are waiting: DERSim, a
+rediscover that from the standard, and two consumers are waiting: a
 DER simulator that reserves a port and a link address per simulated device for
-an outstation it does not yet create, and DERSync, an aggregator whose own plan
+an outstation it does not yet create, and a fleet aggregator whose own plan
 already specifies the adapter and leaves the outstation to this library.
 
-The two want different shapes of outstation from the same profile. DERSim wants
+The two want different shapes of outstation from the same profile. The simulator wants
 one outstation per simulated DER, which is the shape IEEE 1815.2 describes.
-DERSync wants one outstation presenting a fleet, with each device in a strided
+The aggregator wants one outstation presenting a fleet, with each device in a strided
 block. A generator that serves both has to separate the profile's structure from
 the deployment's layout, and that separation is most of this plan.
 
@@ -93,11 +93,11 @@ standard's tables were.
 with the semantic columns the EPRI tables lack: scaling, resolution, units, the
 IEC 61850 logical node and attribute each point originates from, and the clause
 that defines it. The EPRI tables themselves, with their license. EPRI's test
-procedure for AN2018-001, which is the acceptance suite for the DERSim
-consumer. The IEEE 1815.2 companion tables are not yet in hand; obtaining them
+procedure for AN2018-001, which is the acceptance suite for the simulator.
+The IEEE 1815.2 companion tables are not yet in hand; obtaining them
 is the first open question.
 
-**In the consumers.** DERSim allocates a DNP3 port and outstation address per
+**In the consumers.** The simulator allocates a DNP3 port and outstation address per
 simulated device when the interface is enabled, then creates nothing: the slot
 is shaped for exactly this and is empty. Its Modbus server binds each SunSpec
 point to the simulator through a pair of read and write callables keyed by model
@@ -105,7 +105,7 @@ and point, and that idiom is the one the DNP3 binding should mirror, so an
 operator who has configured one interface recognizes the other. A separate
 DNP3 agent from an earlier test harness sits beside it, built on an end-of-life
 stack through a subprocess and referenced by nothing in the simulator; this
-plan retires it rather than wrapping it. DERSync's own plan specifies its
+plan retires it rather than wrapping it. The aggregator's own plan specifies its
 adapter fully: an aggregate endpoint with strided per-device blocks, devices
 ordered deterministically so a master's cached indices survive a restart, a
 monitor role first with writable points omitted rather than refused, quality
@@ -221,7 +221,7 @@ result is immutable and is what the builder consumes.
 A binding is a mapping from point name to a callable pair. The read side
 returns `(value, quality, source_timestamp)` where quality is one of good,
 stale, comm-lost or never-read, chosen to line up with the three-state health
-model the DERSync store already uses plus the startup state DNP3 distinguishes.
+model the aggregator's store already uses plus the startup state DNP3 distinguishes.
 The write side receives a value and returns a command status from
 `control.CommandStatus`.
 
@@ -230,8 +230,8 @@ point with no read binding reports the last accepted write, which is what the
 profile's paired points mean. A binding may also register a curve receiver and
 a schedule receiver per function, which is how D41 delivers.
 
-DERSim's binding keys are its simulator's state accessors, one per point, the
-same way its Modbus server is built. DERSync's binding keys are its store's
+The simulator's binding keys are its state accessors, one per point, the
+same way its Modbus server is built. The aggregator's binding keys are its store's
 `(device, quantity)` pairs through the adapter's snapshot, which serves the
 measurement points its store holds, declares nameplate points and reports them
 offline until a retention plane exists, and omits points it has no source for.
@@ -309,7 +309,7 @@ by the point's scaling and checked against its range before the binding sees
 it; out of range is refused with the status the standard defines for it rather
 than clamped. `select` runs every check but the binding; `operate` runs the
 binding. Direct operate is both. A control on a point with no write binding is
-`NOT_SUPPORTED` per point, which is the more informative answer DERSync's plan
+`NOT_SUPPORTED` per point, which is the more informative answer the aggregator's plan
 wanted and could not have until group 12 and 41 codecs existed; they exist.
 
 ### Events
@@ -352,7 +352,7 @@ Reads a caller's copy of AN2018-001 into the map form, with the semantic
 columns the tables carry. Reads the IEEE 1815.2 companion tables into the same
 form when a copy is supplied. A `--reconcile` mode diffs two maps by name and
 reports moved, added, removed and changed points, which is the deliverable
-DERSync's first phase needs and which nobody should do by eye across a
+the aggregator's first phase needs and which nobody should do by eye across a
 thousand points. Like the conformance extractor it finds tables by their
 headings and refuses to write a table that comes out short.
 
@@ -410,14 +410,14 @@ Each consumer's own repository carries its own step list. What this library
 owes each is the contract above, and two things are worth recording here so
 they are not lost.
 
-DERSim gets one outstation per simulated device, on the port and link address
+The simulator gets one outstation per simulated device, on the port and link address
 it already reserves, bound to its simulator through the same callable idiom
 its Modbus server uses; the earlier subprocess agent is removed rather than
 kept beside it. Its acceptance suite is EPRI's test procedure for AN2018-001,
 which it already holds. Until this lands, its documentation lists the interface
 as available, and that should be withdrawn rather than left standing.
 
-DERSync gets the builder plus `stride` and `concatenate`, and keeps its index
+The aggregator gets the builder plus `stride` and `concatenate`, and keeps its index
 table, its ordering rule, its ceiling policy and its role model exactly as its
 plan states them. Its first phase (build the map's semantic half, obtain the
 companion tables, reconcile, record deltas) is what step 2 mechanizes.
@@ -426,10 +426,10 @@ companion tables, reconcile, record deltas) is what step 2 mechanizes.
 
 Steps 1 and 2 first, together, because the extractor is what turns the
 in-hand AN2018-001 into a map the loader can validate, and that pair is useful
-to DERSync's first phase before anything serves a frame. Then 4 as far as
+to the aggregator's first phase before anything serves a frame. Then 4 as far as
 events, with 5 alongside, which is the monitoring outstation both consumers
 need first. Then 3 with the rest of 4, which is functions, controls and curves.
-Then 6, which is small and only DERSync needs. 7 runs throughout; 8 closes.
+Then 6, which is small and only the aggregator needs. 7 runs throughout; 8 closes.
 
 Nothing here waits on the companion tables. The map format and every mechanism
 are exercised by the AN2018-001-derived map and the synthetic example, and
@@ -448,7 +448,7 @@ extractor rather than a code change.
 - **How far 1815.2 moved.** The profile revision is described as relocating
   indices into subject-area blocks and adding points for several functions;
   until the tables are reconciled, the size of the delta is an estimate. It
-  affects DERSync's stride and nothing in the library.
+  affects the aggregator's stride and nothing in the library.
 - **Where clause 7 arbitration runs.** This plan puts it with the consumer, on
   the argument that the builder does not produce power. A simulator might
   prefer a reference arbitration it can borrow; if so it belongs in the
@@ -456,7 +456,7 @@ extractor rather than a code change.
 - **Time synchronization authority.** The profile expects the outstation to
   accept a time write and clear the need-time indication. A device whose clock
   is disciplined elsewhere should record the write without applying it, and
-  the device profile document should say so; DERSync's plan raises the same
+  the device profile document should say so; the aggregator's plan raises the same
   question and the answer should be one answer.
 - **Operational states and role-based access.** IEEE 1815.2's informative
   annex on operational states (normal, local or maintenance, lockout) describes
