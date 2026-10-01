@@ -377,14 +377,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(Ok(())) => println!("rust-master: the control was accepted"),
     }
 
-    // A point it does not. The refusal has to arrive as a per-object status
-    // rather than as an indication against the fragment, which is what D14
-    // promises and what a master driving one point at a time can prove.
+    // A point it does not. The outstation answers with the request echoed, a
+    // status of NOT_SUPPORTED against that point, and the parameter error
+    // indication as well, which is what the certification procedures require
+    // of a control to a point that is not installed. This library reads the
+    // indication first and reports the request as rejected by it, so that is
+    // the form the refusal is expected in. A master that reads the objects
+    // first would report the status, and that is accepted too.
     //
-    // This library checks the echo on the way past: a response whose objects
-    // differ from the request is ObjectValueMismatch, and one whose header
-    // count differs is HeaderCountMismatch. Either would surface here as a
-    // failure that is not BadStatus.
+    // What must not happen is acceptance, a timeout, or a response this
+    // library cannot match to its request: ObjectValueMismatch and
+    // HeaderCountMismatch would both land in the last arm.
     let refused = tokio::time::timeout(
         Duration::from_secs(30),
         association.operate(
@@ -408,8 +411,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("rust-master: the uncontrolled point was refused per object, as it should be");
         }
+        Ok(Err(CommandError::Task(TaskError::RejectedByIin2(iin)))) => {
+            if !iin.iin2.get_parameter_error() || iin.iin2.get_no_func_code_support() {
+                fail(&format!(
+                    "the point was refused, but not with PARAMETER_ERROR alone; iin2 was {:?}",
+                    iin.iin2
+                ));
+            }
+            println!(
+                "rust-master: the uncontrolled point was refused with PARAMETER_ERROR, as it should be"
+            );
+        }
         Ok(Err(other)) => fail(&format!(
-            "the refusal did not arrive as a per-object status: {other}"
+            "the refusal arrived as neither a status nor a parameter error: {other}"
         )),
     }
 
