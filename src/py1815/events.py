@@ -402,17 +402,25 @@ class EventBuffers:
         """The oldest events of one type, across every class, without removing them.
 
         For a master that reads an event group by name rather than a class.
-        Class 1 first, then 2, then 3: the classes are priorities, and a read
-        that crosses them has no better order to offer than the one they state.
+        Oldest first whichever class each is in: a master that asks for the
+        next three binary changes is asking for the three that happened first,
+        and taking them a class at a time would hand it a later change ahead
+        of an earlier one.
+
+        Each class is already in order, so the oldest ``limit`` overall are
+        among the oldest ``limit`` of each, and no class is walked further.
         """
         found: list[Event] = []
         for event_class in EventClass:
+            taken = 0
             for event in self._buffers[event_class].events:
-                if limit is not None and len(found) >= limit:
-                    return found
+                if limit is not None and taken >= limit:
+                    break
                 if isinstance(event, kind):
                     found.append(event)
-        return found
+                    taken += 1
+        found.sort(key=lambda event: event.order)
+        return found if limit is None else found[: max(0, limit)]
 
     def record_binary(
         self,
