@@ -97,10 +97,11 @@ class TestAClassReadAnswersFromTheBuffers:
 
         body = session._handle_fragment(_read(1, 2))[4:]
 
-        assert body[3] == 1
-        second = 4 + (1 + 11)
-        assert body[second] == 32
-        assert body[second + 3] == 1
+        # One block holding both: events of one kind that happened one
+        # after the other travel together whichever class each is in.
+        assert body[0] == 32
+        assert body[3] == 2
+        assert len(body) == 4 + 2 * (1 + 11)
 
     def test_a_class_with_nothing_in_it_is_an_empty_answer(self):
         """Not an error. A master polls a class to find out whether anything
@@ -321,14 +322,15 @@ class TestAClassNamedTwice:
         assert body[3] == 2
         assert len(body) == 4 + 2 * (1 + 11), "one block, not two"
 
-    def test_header_order_is_the_masters(self):
+    def test_the_order_is_the_order_things_happened(self):
         session, _ = _session(_filled(class_1=1, class_3=1))
 
         body = session._handle_fragment(_read(3, 1))[4:]
 
-        # The class 3 event was recorded second, so index 1 leads if the order
-        # is the master's and index 0 leads if it is the class number's.
-        assert body[4] == 1
+        # The class 1 event was recorded first, so index 0 leads however
+        # the master ordered its headers and whatever the class numbers.
+        assert body[4] == 0
+        assert body[4 + 12] == 1
 
 
 class TestARunTooLongForOneBlock:

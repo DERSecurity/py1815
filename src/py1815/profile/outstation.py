@@ -66,7 +66,7 @@ from py1815.objects import (
 )
 from py1815.profile.binding import Binding, Output, Quality, Reader, Reading
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
-from py1815.session import Control, Session, UnknownObject
+from py1815.session import Control, ParameterError, Session, UnknownObject
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,14 @@ _DEFAULT_VARIATIONS = {
     GROUP_FROZEN_COUNTER: int(FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME),
     GROUP_ANALOG_INPUT: int(AnalogVariation.INT32_WITH_FLAG),
     GROUP_ANALOG_OUTPUT_STATUS: 1,
+}
+
+#: What changes when the outstation is held to DNP3 Subset Level 2. The
+#: profile's own choices for these two groups are not Level 2 objects: a
+#: frozen counter with its time, and a 32-bit analog output status.
+_LEVEL_2_VARIATIONS = {
+    GROUP_FROZEN_COUNTER: int(FrozenCounterVariation.INT32_WITH_FLAG),
+    GROUP_ANALOG_OUTPUT_STATUS: 2,
 }
 
 #: The variations a master may also name outright. Integers only: the
@@ -134,6 +142,7 @@ class DerOutstation:
         event_capacity: int = 2000,
         block_octets: int = 1024,
         clock_ms: Callable[[], int] = wall_clock_ms,
+        level2: bool = False,
     ) -> None:
         """
         Args:
@@ -148,6 +157,13 @@ class DerOutstation:
                 fragment a master can receive.
             clock_ms: Wall-clock milliseconds, UTC. Event and freeze times are
                 taken from it, corrected by whatever time a master has written.
+            level2: Answer as a DNP3 Subset Level 2 outstation and nothing
+                more. The DER profile is built on Level 2 and adds to it;
+                IEEE 1815.2 has every such addition be one an outstation can
+                turn off, and this turns them off. Frozen counters are
+                reported without their time, analog output status in 16
+                bits, a freeze buffers no event, and freeze-and-clear clears.
+                A master may still name the fuller variations outright.
         """
         if block_octets < 32:
             raise ValueError(f"block_octets is {block_octets}; too small to hold an object range")
@@ -155,6 +171,14 @@ class DerOutstation:
         self._binding = binding
         self._block_octets = block_octets
         self._clock_ms = clock_ms
+        self._level2 = level2
+        self._defaults = dict(_DEFAULT_VARIATIONS)
+        if level2:
+            self._defaults.update(_LEVEL_2_VARIATIONS)
+        #: What each counter read when it was last cleared, so that a
+        #: counter bound to a running total can be cleared without the
+        #: source being asked to forget.
+        self._cleared_at: dict[int, int] = {}
         #: What a master's time write moved this outstation's clock by.
         self._time_offset_ms = 0
         self.events = EventBuffers(capacity=event_capacity, analog_latest_only=True)
@@ -253,6 +277,15 @@ class DerOutstation:
         """The map this outstation was built from."""
         return self._map
 
+    @property
+    def level2(self) -> bool:
+        """Whether this outstation is held to Subset Level 2."""
+        return self._level2
+
+    def default_variation(self, group: int) -> int:
+        """The variation a static group is reported in when none is named."""
+        return self._defaults[group]
+
     def served(self, kind: Kind) -> list[Point]:
         """The points of one kind this outstation serves, in index order."""
         return list(self._served[kind])
@@ -305,7 +338,8 @@ class DerOutstation:
             Quality.COMM_LOST: CounterQuality.COMM_LOST,
             Quality.NEVER_READ: CounterQuality.RESTART,
         }[reading.quality]
-        return CounterPoint(max(0, round(float(reading.value))), int(flags))
+        count = max(0, round(float(reading.value)))
+        return CounterPoint(max(0, count - self._cleared_at.get(point.index, 0)), int(flags))
 
     # ---------------------------------------------------------------- reads
 
@@ -320,7 +354,7 @@ class DerOutstation:
             if header.group == CLASS_GROUP and header.event_class == 0:
                 for group in _CLASS_0_GROUPS:
                     points = [p for p in self._served[_GROUP_KINDS[group]] if p.in_class_0]
-                    blocks += self._ranges(group, _DEFAULT_VARIATIONS[group], points)
+                    blocks += self._ranges(group, self._defaults[group], points)
                 continue
             blocks += self._ranges(header.group, self._variation(header), self._selected(header))
         return blocks
@@ -330,7 +364,7 @@ class DerOutstation:
         if served is None:
             raise UnknownObject(f"group {header.group} is not served")
         if header.variation == 0:
-            return _DEFAULT_VARIATIONS[header.group]
+            return self._defaults[header.group]
         if header.variation not in served:
             raise UnknownObject(f"group {header.group} variation {header.variation} is not offered")
         return header.variation
@@ -341,10 +375,15 @@ class DerOutstation:
         if header.qualifier is QualifierCode.ALL_OBJECTS:
             return points
         if header.qualifier in _RANGES and header.start is not None and header.stop is not None:
+            if not points:
+                raise UnknownObject(f"group {header.group} holds no points")
             named = [p for p in points if header.start <= p.index <= header.stop]
-            if not named:
-                raise UnknownObject(
-                    f"group {header.group} holds no point in {header.start}..{header.stop}"
+            # A range that runs past the last point, or lands between
+            # points, names something that is not there. The object is
+            # one this outstation knows; it is the range that is wrong.
+            if not named or header.stop > points[-1].index:
+                raise ParameterError(
+                    f"group {header.group} has no points across {header.start}..{header.stop}"
                 )
             return named
         raise UnknownObject(
@@ -481,16 +520,20 @@ class DerOutstation:
     def freeze(self, headers: Sequence[ObjectHeader], *, clear: bool) -> None:
         """Freeze the counters a master named.
 
-        The counters are not cleared, whichever freeze was asked for: the
-        profile has a controlling station compute an interval's energy by
-        subtracting two frozen values, which a counter that restarted from
-        zero would break.
+        Under the DER profile the counters are not cleared, whichever freeze
+        was asked for: the profile has a controlling station compute an
+        interval's energy by subtracting two frozen values, which a counter
+        that restarted from zero would break. Held to Subset Level 2, a
+        freeze-and-clear clears, as the base standard has it.
         """
         named: list[Point] = []
         for header in headers:
             if header.group != GROUP_COUNTER:
                 raise UnknownObject(f"group {header.group} cannot be frozen")
             named += self._selected(header)
+        if clear and self._level2:
+            self._freeze(named, clear=True)
+            return
         if clear:
             logger.info("profile: freeze-and-clear froze %d counter(s), clearing none", len(named))
         self._freeze(named)
@@ -499,7 +542,7 @@ class DerOutstation:
         """Freeze every counter at the same moment. Returns how many froze."""
         return self._freeze(self._served[Kind.CTR])
 
-    def _freeze(self, points: Iterable[Point]) -> int:
+    def _freeze(self, points: Iterable[Point], *, clear: bool = False) -> int:
         now = self.now_ms()
         frozen = 0
         for point in points:
@@ -507,6 +550,12 @@ class DerOutstation:
                 continue
             value = self._counter(point)
             self._frozen[point.index] = (value, now)
+            if clear:
+                self._cleared_at[point.index] = self._cleared_at.get(point.index, 0) + value.value
+            if self._level2:
+                # Frozen counter events are not Level 2 objects.
+                frozen += 1
+                continue
             event_class = point.frozen_event_class
             self.events.record_frozen_counter(
                 point.index,

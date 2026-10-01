@@ -234,8 +234,10 @@ class TestSelectBeforeOperate:
         session._handle_fragment(_request(FunctionCode.SELECT, (12, 1, 0, LATCH_ON)))
         session._handle_fragment(_request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1))
 
+        # Under a new sequence number, so that it is a second operate and
+        # not the first one retried.
         again = session._handle_fragment(
-            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=1)
+            _request(FunctionCode.OPERATE, (12, 1, 0, LATCH_ON), sequence=2)
         )
 
         assert _statuses(again) == [CommandStatus.NO_SELECT]

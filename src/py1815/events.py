@@ -70,6 +70,10 @@ class AnalogEvent:
     index: int
     point: AnalogPoint
     timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    #: Not part of what the event says, so two events are still equal
+    #: without it; it is what puts a response in the order things happened.
+    order: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,10 @@ class BinaryEvent:
     index: int
     point: BinaryPoint
     timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    #: Not part of what the event says, so two events are still equal
+    #: without it; it is what puts a response in the order things happened.
+    order: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True)
@@ -88,6 +96,10 @@ class FrozenCounterEvent:
     index: int
     point: CounterPoint
     timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    #: Not part of what the event says, so two events are still equal
+    #: without it; it is what puts a response in the order things happened.
+    order: int = field(default=0, compare=False)
 
 
 #: Any kind of event. The buffers hold them together, because a class is a
@@ -163,6 +175,7 @@ class EventBuffers:
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
         self._overflow_generation = 0
+        self._recorded = 0
         self._analog_latest_only = analog_latest_only
         self._capacity = capacity
         #: The analog event each point currently has buffered, when only the
@@ -194,9 +207,26 @@ class EventBuffers:
         """
         return self._overflow_generation
 
-    def classes_with_events(self) -> set[EventClass]:
-        """Which classes have something to report, for the indication bits."""
-        return {cls for cls, buffer in self._buffers.items() if buffer.events}
+    def classes_with_events(self, excluding: Iterable[Event] = ()) -> set[EventClass]:
+        """Which classes have something to report, for the indication bits.
+
+        ``excluding`` names events a response is already carrying. A class
+        whose every event is in the response being built has nothing *more*
+        to report, and saying it has would send the master back for events
+        it is holding.
+        """
+        carried = set(map(id, excluding))
+        if not carried:
+            return {cls for cls, buffer in self._buffers.items() if buffer.events}
+        return {
+            cls
+            for cls, buffer in self._buffers.items()
+            if any(id(event) not in carried for event in buffer.events)
+        }
+
+    def _next_order(self) -> int:
+        self._recorded += 1
+        return self._recorded
 
     def peek(self, event_class: EventClass, limit: int | None = None) -> list[Event]:
         """The oldest events of a class, without removing them.
@@ -300,7 +330,12 @@ class EventBuffers:
         if previous is not None and not self._analog_changed(previous, point, deadband):
             return None
 
-        event = AnalogEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
+        event = AnalogEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
         self._last_analog[index] = point
         if self._analog_latest_only:
             superseded = self._pending_analog.get(index)
@@ -355,7 +390,10 @@ class EventBuffers:
         """
         self._checked_index(index)
         event = FrozenCounterEvent(
-            index, point, timestamp_ms if timestamp_ms is not None else now_ms()
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
         )
         self._buffer(event_class, event)
         return event
@@ -394,7 +432,12 @@ class EventBuffers:
         if previous is not None and not self._binary_changed(previous, point):
             return None
 
-        event = BinaryEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
+        event = BinaryEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
         self._last_binary[index] = point
         self._buffer(event_class, event)
         return event

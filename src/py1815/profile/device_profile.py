@@ -141,20 +141,24 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 )
             )
 
-    def events(group: int, name: str, variation: int, description: str) -> None:
+    def events(group: int, name: str, variations: dict[int, str]) -> None:
         if not facts.events:
             return
+        if group == 23 and outstation.level2:
+            # Read, and answered with nothing: a Level 2 outstation buffers none.
+            variations = {}
         select = tuple(_ALL + _COUNT)
         rows.append(Row(group, 0, f"{name} - any variation", request=(READ, select)))
-        rows.append(
-            Row(
-                group,
-                variation,
-                description,
-                request=(READ, select),
-                response=(RESPONSE, tuple(_INDEXED)),
+        for variation, description in variations.items():
+            rows.append(
+                Row(
+                    group,
+                    variation,
+                    description,
+                    request=(READ, select),
+                    response=(RESPONSE, tuple(_INDEXED)),
+                )
             )
-        )
 
     def controls(group: int, variations: dict[int, str]) -> None:
         for variation, description in variations.items():
@@ -172,7 +176,11 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
 
     if served[Kind.BI]:
         static(1, "Binary Input", {2: "Binary Input - with flags"})
-        events(2, "Binary Input Event", facts.binary_event_variation, "Binary Input Event")
+        events(
+            2,
+            "Binary Input Event",
+            {1: "Binary Input Event - without time", 2: "Binary Input Event - with absolute time"},
+        )
     if served[Kind.BO]:
         static(10, "Binary Output", {2: "Binary Output - output status with flags"})
         if facts.controls:
@@ -194,10 +202,21 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
             },
         )
         if facts.events:
-            rows.append(
-                Row(22, 0, "Counter Event - any variation", request=(READ, tuple(_ALL + _COUNT)))
-            )
-        events(23, "Frozen Counter Event", 5, "Frozen Counter Event - 32-bit with flag and time")
+            for variation, description in (
+                (0, "Counter Event - any variation"),
+                (1, "Counter Event - 32-bit with flag"),
+                (2, "Counter Event - 16-bit with flag"),
+            ):
+                # Read, and answered with nothing: none are ever buffered.
+                rows.append(Row(22, variation, description, request=(READ, tuple(_ALL + _COUNT))))
+        events(
+            23,
+            "Frozen Counter Event",
+            {
+                1: "Frozen Counter Event - 32-bit with flag",
+                5: "Frozen Counter Event - 32-bit with flag and time",
+            },
+        )
     if served[Kind.AI]:
         static(
             30,
@@ -209,7 +228,16 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 4: "Analog Input - 16-bit without flag",
             },
         )
-        events(32, "Analog Input Event", facts.analog_event_variation, "Analog Input Event")
+        events(
+            32,
+            "Analog Input Event",
+            {
+                1: "Analog Input Event - 32-bit without time",
+                2: "Analog Input Event - 16-bit without time",
+                3: "Analog Input Event - 32-bit with time",
+                4: "Analog Input Event - 16-bit with time",
+            },
+        )
     if served[Kind.AO]:
         static(
             40,
@@ -246,7 +274,8 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, disable unsolicited (which
     # is agreed to because none are sent), and delay measurement.
-    return Implementation(rows=tuple(rows), function_codes=(0, 21, 23))
+    codes = (0, 13, 21, 23) if facts.cold_restart else (0, 21, 23)
+    return Implementation(rows=tuple(rows), function_codes=codes)
 
 
 def _tag(name: str) -> str:
@@ -422,7 +451,15 @@ def _application(facts: SessionFacts, statuses: Sequence[int]) -> Items:
 def _outstation(facts: SessionFacts) -> Items:
     capacity = facts.event_capacity
     return [
-        _both("applicationLayerConfirmTimeout", ["none"]),
+        (
+            _setting(
+                "applicationLayerConfirmTimeout",
+                [("configurableOther", [("description", "Any period, set in software")])],
+                [("value", round(facts.confirm_timeout * 1000))],
+            )
+            if facts.confirm_timeout is not None
+            else _both("applicationLayerConfirmTimeout", ["none"])
+        ),
         _both("timeSyncRequired", ["never"]),
         _both("deviceTroubleBit", ["neverUsed"]),
         _both("fileHandleTimeout", ["notApplicable"]),
@@ -522,8 +559,12 @@ def _select_timeout(facts: SessionFacts) -> tuple[str, list[Any]]:
     )
 
 
-def _database(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
+def _database(
+    served: dict[Kind, list[Point]], facts: SessionFacts, outstation: DerOutstation
+) -> Items:
     groups: list[Any] = []
+    level2 = outstation.level2
+    frozen = outstation.default_variation(21)
     if served[Kind.BI]:
         groups.append(
             (
@@ -581,10 +622,18 @@ def _database(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
                         [
                             _both("defaultCounterStaticVariation", _variation(1)),
                             _both("counterClass0ResponseMode", ["always"]),
-                            _both("defaultFrozenCounterStaticVariation", _variation(5)),
-                            _both("defaultFrozenCounterEventVariation", _variation(5)),
+                            _both("defaultFrozenCounterStaticVariation", _variation(frozen)),
+                            *(
+                                []
+                                if level2
+                                else [_both("defaultFrozenCounterEventVariation", _variation(5))]
+                            ),
                             _both("frozenCounterClass0ResponseMode", ["always"]),
-                            _both("frozenCounterEventReportingMode", ["allEvents"]),
+                            *(
+                                []
+                                if level2
+                                else [_both("frozenCounterEventReportingMode", ["allEvents"])]
+                            ),
                             _both("counterRollOver", ["thirtyTwoBits"]),
                             _setting(
                                 "countersFrozen",
@@ -636,7 +685,10 @@ def _database(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
                     (
                         "configuration",
                         [
-                            _both("defaultStaticVariation", _variation(1)),
+                            _both(
+                                "defaultStaticVariation",
+                                _variation(outstation.default_variation(40)),
+                            ),
                             _both("class0ResponseMode", ["never"]),
                             _both("outputCommandEventObjects", ["never"]),
                             _select_timeout(facts),
@@ -888,7 +940,7 @@ def build(
                     ("outstationPerformance", _performance(facts)),
                 ],
             ),
-            ("database", _database(served, facts)),
+            ("database", _database(served, facts, outstation)),
             ("implementationTable", _table(implementation(outstation, facts))),
             ("dataPointsList", _points(served, facts)),
         ],
