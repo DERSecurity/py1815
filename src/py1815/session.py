@@ -773,6 +773,10 @@ class Session:
         self._restart = True
         self._freezer = freeze_provider
         self._time_sink = time_sink
+        if need_time and time_sink is None:
+            # An outstation that asks for the time has to be able to take
+            # it. One that could not would ask in every response, forever.
+            raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = need_time
         self._analog_event_variation = AnalogEventVariation(analog_event_variation)
         self._confirm_timeout = confirm_timeout
@@ -857,6 +861,8 @@ class Session:
 
     @need_time.setter
     def need_time(self, wanted: bool) -> None:
+        if wanted and self._time_sink is None:
+            raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = bool(wanted)
 
     def connection_reset(self) -> None:

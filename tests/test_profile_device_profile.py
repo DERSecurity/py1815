@@ -455,7 +455,7 @@ class TestConfigurationIsReadFromTheSession:
             NS,
         )
         names = {child.tag.split("}")[1] for child in codes}
-        assert names == {"code1", "code2", "code4", "code12", "code15"}
+        assert names == {"code1", "code2", "code3", "code4", "code12", "code15"}
 
 
 class TestThePointLists:

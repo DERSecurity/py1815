@@ -898,12 +898,14 @@ def _points(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
 
 
 #: The command statuses an outstation built here can answer with on its own
-#: account: the session's select checks, and the builder's refusals. A binding
+#: account: the session's select checks and its refusal of a request that carries a
+#: status of its own, and the builder's refusals. A binding
 #: may return any other status the standard defines, and that is the binding's
 #: to state.
 _OWN_STATUSES = (
     CommandStatus.TIMEOUT,
     CommandStatus.NO_SELECT,
+    CommandStatus.FORMAT_ERROR,
     CommandStatus.NOT_SUPPORTED,
     CommandStatus.OUT_OF_RANGE,
 )
