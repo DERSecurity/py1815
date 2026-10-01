@@ -47,7 +47,11 @@ jobs:
         # They may not be redistributed, and an image is a thing people push.
         # `.dockerignore` is what keeps a copy in a checkout out of the build;
         # this is the check that it did.
+        #
+        # `find` exits non-zero over the directories an unprivileged user may
+        # not read, which says nothing about what it found. So its status is
+        # not the test; what it printed is.
         run: |
           found=$(docker run --rm --entrypoint sh py1815-der -c \
-            'find / -xdev \( -name "*.xlsx" -o -name "ieee-1815-2-*.json" \) 2>/dev/null')
+            'find / -xdev \( -name "*.xlsx" -o -name "ieee-1815-2-*.json" \) 2>/dev/null || true')
           test -z "$found" || { echo "the image carries: $found"; exit 1; }
