@@ -59,7 +59,10 @@ packages = ["src/py1815"]
 # to verify it rather than a copy of the repository.
 include = [
     "src/py1815",
-    "tests",
+    # Anchored to the root: hatchling reads these as gitignore patterns, and a
+    # bare "tests" also matches tools/tests, which would sweep the release
+    # tooling's own tests into the sdist without the tool they test.
+    "/tests",
     "docs",
     # The tables `tests/test_conformance.py` checks the implementation against.
     # Without them that test cannot run, and the shipped suite is what a
