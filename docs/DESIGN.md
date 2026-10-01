@@ -630,6 +630,17 @@ size. Binary and frozen counter events are never collapsed, because for those th
 is the information. *Trade-off:* two ways to report an analog change, against a profile
 whose masters are promised one of them.
 
+**D48 -- The Device Profile is generated from the objects it describes, and says nothing it
+cannot read from them.** The point lists come from what the outstation serves, the limits
+from `Session.facts`, and the implementation table from the same facts the session
+dispatches on; the tests send the session every request the table lists and a sample of
+what it omits. Figures that need a measurement (clock drift, response time, timestamp
+error) and a conformance test result are left out, which the schema permits: an absent
+element says "not stated", where a plausible default would be a claim nobody checked.
+The schema and stylesheet are the DNP Users Group's and are named by the document, not
+shipped with it. *Trade-off:* a sparser document than a hand-written one, against one
+that cannot drift from the device.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

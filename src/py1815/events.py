@@ -164,6 +164,7 @@ class EventBuffers:
         self._last_binary: dict[int, BinaryPoint] = {}
         self._overflow_generation = 0
         self._analog_latest_only = analog_latest_only
+        self._capacity = capacity
         #: The analog event each point currently has buffered, when only the
         #: newest is kept. What makes superseding one a lookup rather than a
         #: scan of every class on every reading.
@@ -311,6 +312,16 @@ class EventBuffers:
             self._pending_analog[index] = event
         self._buffer(event_class, event)
         return event
+
+    @property
+    def capacity(self) -> int:
+        """Events each class holds before its oldest is dropped."""
+        return self._capacity
+
+    @property
+    def analog_latest_only(self) -> bool:
+        """Whether only the newest event per analog point is kept."""
+        return self._analog_latest_only
 
     def prime_analog(self, index: int, point: AnalogPoint) -> None:
         """Note where an analog point stands, without reporting it.

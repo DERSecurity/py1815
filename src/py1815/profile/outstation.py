@@ -584,7 +584,8 @@ class DerOutstation:
         Analog events travel in the 32-bit variation without time, which is
         the profile's selection and the one a Level 2 master is certain to
         parse; the time is asked for from the first response; and the freeze
-        functions are served only when there are counters to freeze.
+        functions are served only when there are counters to freeze. The
+        first two are defaults a caller may override by naming the option.
         """
         if self._block_octets + RESPONSE_HEADER_SIZE > max_response:
             raise ValueError(
@@ -592,13 +593,13 @@ class DerOutstation:
                 f"{max_response}-octet response"
             )
         options.setdefault("need_time", True)
+        options.setdefault("analog_event_variation", AnalogEventVariation.INT32)
         return Session(
             self,
             control_provider=self if self._binding.outputs else None,
             events=self.events,
             freeze_provider=self if self._served[Kind.CTR] else None,
             time_sink=self.set_time,
-            analog_event_variation=AnalogEventVariation.INT32,
             max_response=max_response,
             **options,
         )
