@@ -32,7 +32,7 @@ import logging
 import struct
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
@@ -40,10 +40,13 @@ from py1815 import control as control_objects
 from py1815 import link
 from py1815.application import (
     CON_MASK,
+    FIN_MASK,
+    FIR_MASK,
     IIN,
     REQUEST_HEADER_SIZE,
     RESPONSE_HEADER_SIZE,
     SEQUENCE_MODULUS,
+    UNS_MASK,
     AppControl,
     FunctionCode,
     IIN2Bit,
@@ -107,6 +110,8 @@ RESTART_INDEX = 7
 #: Group 50 variation 1: the absolute time a master writes to set the clock.
 TIME_GROUP = 50
 TIME_VARIATION = 1
+#: The time a master says its request to record the current time was sent.
+LAST_RECORDED_TIME_VARIATION = 3
 
 #: Group 52 variation 2: the fine time delay a delay measurement and a cold
 #: restart are answered with, in milliseconds.
@@ -175,6 +180,11 @@ _SUPPORTED_FUNCTIONS = frozenset(
 #: than perform one, and no profile this library serves asks for them.
 _FREEZE_FUNCTIONS = frozenset({FunctionCode.IMMED_FREEZE, FunctionCode.FREEZE_CLEAR})
 _FREEZE_NR_FUNCTIONS = frozenset({FunctionCode.IMMED_FREEZE_NR, FunctionCode.FREEZE_CLEAR_NR})
+
+#: Every function that is never answered, whatever comes of it.
+_SILENT_FUNCTIONS = (
+    _NO_RESPONSE_FUNCTIONS | _FREEZE_NR_FUNCTIONS | frozenset({FunctionCode.DIRECT_OPERATE_NR})
+)
 _CLEARING_FREEZES = frozenset({FunctionCode.FREEZE_CLEAR, FunctionCode.FREEZE_CLEAR_NR})
 
 #: How long a fragment that asked for confirmation waits for it. A
@@ -298,6 +308,22 @@ class UnknownObject(Exception):
     """Raised by a read provider for a group or range it does not serve."""
 
 
+def _well_formed(fragment: bytes) -> bool:
+    """Whether a fragment could be a request at all.
+
+    It has to hold an application header. A request fits one fragment, so it
+    is both the first and the last of its message. And the unsolicited bit
+    belongs to the confirmation of an unsolicited response and to nothing
+    else a master sends.
+    """
+    if len(fragment) < REQUEST_HEADER_SIZE:
+        return False
+    control, function = fragment[0], fragment[1]
+    if control & (FIR_MASK | FIN_MASK) != FIR_MASK | FIN_MASK:
+        return False
+    return not (control & UNS_MASK and function != FunctionCode.CONFIRM)
+
+
 class ParameterError(Exception):
     """Raised by a provider for a group it serves, asked for points it does not hold.
 
@@ -398,6 +424,8 @@ class SessionFacts:
     cold_restart: bool = False
     #: Whether a control sent to a broadcast address is operated.
     broadcast_controls: bool = False
+    #: Function codes turned off by configuration, and refused as unsupported.
+    disabled_functions: frozenset[int] = frozenset()
 
 
 class FreezeProvider(Protocol):
@@ -589,6 +617,7 @@ class Session:
         confirm_timeout: float | None = DEFAULT_CONFIRM_TIMEOUT,
         restart_handler: Callable[[], int] | None = None,
         broadcast_controls: bool = False,
+        disabled_functions: Iterable[int] = (),
     ) -> None:
         """
         Args:
@@ -669,6 +698,14 @@ class Session:
                 answered by nobody, so nothing reports how the control went.
                 Freezes and writes sent to a broadcast address are always
                 honored.
+            disabled_functions: Function codes this outstation is
+                configured not to accept, though it implements them. Each
+                is refused exactly as a function it never implemented:
+                with the unsupported indication, or with silence for a
+                function that takes no response or arrives as a
+                broadcast. An outstation with no use for a function is
+                safer not accepting it. Confirm cannot be disabled; a
+                response that asks for confirmation would never be done.
         """
         self._provider = provider
         self._controls = control_provider
@@ -678,6 +715,23 @@ class Session:
         self._select: _ArmedSelect | None = None
         self._outstanding: _Outstanding | None = None
         self._conversation: _Conversation | None = None
+        for name, address in (
+            ("outstation_address", outstation_address),
+            ("master_address", master_address),
+        ):
+            if not 0 <= address <= link.MAX_ADDRESS:
+                # The addresses above this are the protocol's own: the
+                # broadcast addresses, the self-address and a reserved
+                # range. A device assigned one would answer, or be
+                # answered, as every device at once.
+                raise ValueError(
+                    f"{name} is {address}; a device address is 0 to {link.MAX_ADDRESS}"
+                )
+        if outstation_address == master_address:
+            raise ValueError(
+                f"outstation_address and master_address are both {master_address}; "
+                "the two ends of an association have different addresses"
+            )
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._frames = link.FrameReader()
@@ -704,6 +758,12 @@ class Session:
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
         self._broadcast_controls = broadcast_controls
+        self._disabled = frozenset(int(function) for function in disabled_functions)
+        if FunctionCode.CONFIRM in self._disabled:
+            raise ValueError("the confirm function cannot be disabled")
+        #: When a request to record the current time arrived, by this
+        #: session's clock, until the write that uses it.
+        self._recorded_at: float | None = None
         self._need_time_at_start = need_time
         #: The data link's secondary station state: whether the master has
         #: reset the link, and the frame count bit the next confirmed frame
@@ -737,6 +797,7 @@ class Session:
         self._restart = True
         self._need_time = self._need_time_at_start
         self._broadcast = None
+        self._recorded_at = None
 
     @property
     def facts(self) -> SessionFacts:
@@ -761,6 +822,7 @@ class Session:
             confirm_timeout=self._confirm_timeout,
             cold_restart=self._restart_handler is not None,
             broadcast_controls=self._broadcast_controls,
+            disabled_functions=self._disabled,
         )
 
     @property
@@ -826,6 +888,21 @@ class Session:
         if frame.fcv != counted:
             logger.warning(
                 "dnp3: dropping link function %d: frame count valid bit is %s", function, frame.fcv
+            )
+            return b""
+
+        carries_data = function in (
+            link.PrimaryFunction.CONFIRMED_USER_DATA,
+            link.PrimaryFunction.UNCONFIRMED_USER_DATA,
+        )
+        if bool(frame.payload) != carries_data:
+            # User data with nothing in it, or a link function with data
+            # behind it: the length and the function disagree, and a frame
+            # that contradicts itself is not acted on.
+            logger.warning(
+                "dnp3: dropping link function %d carrying %d octet(s)",
+                function,
+                len(frame.payload),
             )
             return b""
 
@@ -909,7 +986,12 @@ class Session:
         if len(fragment) < REQUEST_HEADER_SIZE:
             return
         function = fragment[1]
-        if function in _FREEZE_FUNCTIONS | _FREEZE_NR_FUNCTIONS:
+        if function in self._disabled:
+            logger.info("dnp3: broadcast function 0x%02X not acted on: disabled", function)
+        elif function == FunctionCode.RECORD_CURRENT_TIME:
+            if self._time_sink is not None and len(fragment) == REQUEST_HEADER_SIZE:
+                self._recorded_at = self._clock()
+        elif function in _FREEZE_FUNCTIONS | _FREEZE_NR_FUNCTIONS:
             if self._freezer is not None:
                 self._freeze_unacknowledged(fragment)
         elif function in (FunctionCode.DIRECT_OPERATE, FunctionCode.DIRECT_OPERATE_NR):
@@ -1028,6 +1110,18 @@ class Session:
         #: When this request reached the application layer, which is where a
         #: delay measurement counts from.
         started = self._clock()
+        if not _well_formed(fragment):
+            # Too short to hold an application header, or marked as part
+            # of a longer message, or as an unsolicited exchange this
+            # outstation never began. A request is one whole fragment, so
+            # none of these is a request, and what is not a request is not
+            # answered. It still ends a select, like anything else a
+            # master sends in place of the operate.
+            logger.warning(
+                "dnp3: dropping a fragment that is not a request: %s", fragment[:2].hex()
+            )
+            self._select = None
+            return b""
         if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
             # Anything the master sends other than the operate that spends a
             # select ends the exchange that select belongs to (D12). Sited here,
@@ -1044,6 +1138,11 @@ class Session:
             # An unreadable fragment claiming to be an OPERATE keeps it, which
             # is the corrupted-retransmission case worth keeping it for.
             self._select = None
+
+        if fragment[1] in self._disabled and fragment[1] in _SILENT_FUNCTIONS:
+            logger.info("dnp3: dropping function 0x%02X: disabled by configuration", fragment[1])
+            self._abandon()
+            return b""
 
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
             # Table 4-2: "same as function code 5 but outstation shall not send
@@ -1165,6 +1264,15 @@ class Session:
         # They call `_abandon` above instead.
         self._abandon()
 
+        if request.function in self._disabled:
+            logger.info(
+                "dnp3: refusing function 0x%02X: disabled by configuration", request.function
+            )
+            return null_response(
+                sequence=sequence,
+                iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
+            )
+
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             # Answered as an unknown object, not an unsupported function.
@@ -1181,6 +1289,7 @@ class Session:
             known not in _SUPPORTED_FUNCTIONS
             and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
             and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
+            and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
         ):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
@@ -1209,6 +1318,18 @@ class Session:
 
         if known is FunctionCode.DELAY_MEASURE:
             return self._delay_measure(request, started)
+
+        if known is FunctionCode.RECORD_CURRENT_TIME:
+            if request.body:
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+                )
+            # The first half of time synchronization over a network: note
+            # when this arrived. The master then writes when it sent it,
+            # and the difference is how long ago that was. A second
+            # request before the write replaces the first.
+            self._recorded_at = started
+            return null_response(sequence=sequence, iin=self._indications())
 
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
@@ -1512,6 +1633,12 @@ class Session:
 
     def _handle_read(self, request: Request, fragment: bytes) -> bytes:
         sequence = request.control.sequence
+        if not request.headers:
+            # A read names what it reads. One naming nothing is malformed,
+            # and an empty answer would say it had been carried out.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
         event_headers, static_headers = self._split_read(request.headers)
 
         unusable = [h for h in event_headers if h.qualifier not in _CLASS_QUALIFIERS]
@@ -2100,19 +2227,37 @@ class Session:
             logger.info("dnp3: time written by master")
             return null_response(sequence=sequence, iin=self._indications())
 
-        return null_response(
-            sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN))
-        )
+        if self._time_sink is not None and self._is_time_write(
+            request, LAST_RECORDED_TIME_VARIATION
+        ):
+            if len(request.body) != TIME_SIZE or self._recorded_at is None:
+                # The time written is when a request to record the time
+                # was sent. With no such request received there is nothing
+                # to measure from, and the clock is left alone.
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+                )
+            elapsed_ms = max(0, round((self._clock() - self._recorded_at) * 1000))
+            self._time_sink(int.from_bytes(request.body, "little") + elapsed_ms)
+            self._recorded_at = None
+            self._need_time = False
+            logger.info("dnp3: time written by master, %d ms after it was recorded", elapsed_ms)
+            return null_response(sequence=sequence, iin=self._indications())
+
+        # A write naming nothing is malformed; one naming an object this
+        # outstation does not take a write of is an unknown object.
+        bit = IIN2Bit.OBJECT_UNKNOWN if request.headers else IIN2Bit.PARAM_ERROR
+        return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
 
     @staticmethod
-    def _is_time_write(request: Request) -> bool:
-        """Whether this is the one absolute time a master sets the clock with."""
+    def _is_time_write(request: Request, variation: int = TIME_VARIATION) -> bool:
+        """Whether this writes one time object: the time now, or the last recorded time."""
         if not request.headers:
             return False
         header = request.headers[0]
         return (
             header.group == TIME_GROUP
-            and header.variation == TIME_VARIATION
+            and header.variation == variation
             and header.qualifier is QualifierCode.UINT8_COUNT
             and header.count == 1
         )

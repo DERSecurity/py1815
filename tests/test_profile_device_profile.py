@@ -134,11 +134,15 @@ class TestEveryRequestTheTableListsIsAnswered:
 
     def test_writes(self, simulation):
         sender, rows = self._rows(simulation, {device_profile.WRITE})
-        assert {row.group for row in rows} == {50, 80}
+        assert {(row.group, row.variation) for row in rows} == {(50, 1), (50, 3), (80, 1)}
         for row in rows:
             for qualifier in row.request[1]:
                 if row.group == 50:
-                    body = bytes([50, 1, qualifier, 1]) + (1_700_000_000_000).to_bytes(6, "little")
+                    if row.variation == 3:
+                        # The last recorded time is written after asking for one to be recorded.
+                        assert not _refused(sender.send(FunctionCode.RECORD_CURRENT_TIME))
+                    moment = (1_700_000_000_000).to_bytes(6, "little")
+                    body = bytes([50, row.variation, qualifier, 1]) + moment
                 else:
                     span = bytes([7, 7]) if qualifier == 0x00 else struct.pack("<HH", 7, 7)
                     body = bytes([80, 1, qualifier]) + span + b"\x00"
@@ -192,10 +196,11 @@ class TestEveryRequestTheTableListsIsAnswered:
         session = simulation.outstation.session()
         table = device_profile.implementation(simulation.outstation, session.facts)
         sender = Sender(session)
-        assert set(table.function_codes) == {0, 21, 23}
+        assert set(table.function_codes) == {0, 21, 23, 24}
         assert sender.send(FunctionCode.CONFIRM) == b""
         assert not _refused(sender.send(FunctionCode.DISABLE_UNSOLICITED, bytes([60, 2, 6])))
         assert not _refused(sender.send(FunctionCode.DELAY_MEASURE))
+        assert not _refused(sender.send(FunctionCode.RECORD_CURRENT_TIME))
 
 
 class TestEveryResponseTheTableListsIsWhatIsSent:
