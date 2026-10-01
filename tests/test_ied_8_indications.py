@@ -181,6 +181,16 @@ class TestTime:
         assert event.time is not None
         assert abs(event.time - (moment + 2500)) <= 20
 
+    def test_8_7_1_2_2_time_is_asked_for_again_after_a_restart(self):
+        """The written time does not survive a restart, so the request for it returns."""
+        dut = Dut(need_time=True)
+        moment = 1_800_000_000_000
+        time_write = header(50, 1, Q_COUNT_8, 1) + moment.to_bytes(6, "little")
+        assert not dut.master.request(WRITE, time_write).fragment.iin1 & IIN1_NEED_TIME
+        assert not dut.master.read(classes(0)).fragment.iin1 & IIN1_NEED_TIME
+        dut.restart()
+        assert dut.master.read(classes(0)).fragment.iin1 & IIN1_NEED_TIME
+
     def test_8_7_a_device_that_never_asks_for_time_never_sets_the_indication(self):
         dut = Dut(need_time=False)
         dut.restart()
