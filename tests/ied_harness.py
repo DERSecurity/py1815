@@ -474,14 +474,27 @@ COUNTERS = (0, 1, 2)
 DEADBAND = 10
 
 
-def _tables() -> dict[str, Any]:
+#: The one analog output that holds more than sixteen bits.
+WIDE_OUTPUT = 3
+
+
+def _tables(extra_analogs: int = 0) -> dict[str, Any]:
+    measures = dict(ANALOG_INPUTS)
+    more = range(len(ANALOG_INPUTS), len(ANALOG_INPUTS) + extra_analogs)
+    measures.update(dict.fromkeys(more, 3))
     return document(
         {
             "BI": [row(f"Input {i}", i, event_class=cls) for i, cls in BINARY_INPUTS.items()],
             "BO": [row(f"Output {i}", i) for i in BINARY_OUTPUTS],
-            "AI": [analog(f"Measure {i}", i, event_class=cls) for i, cls in ANALOG_INPUTS.items()],
+            "AI": [analog(f"Measure {i}", i, event_class=cls) for i, cls in measures.items()],
             "AO": [
-                analog(f"Setpoint {i}", i, minimum=-30000, maximum=30000) for i in ANALOG_OUTPUTS
+                analog(
+                    f"Setpoint {i}",
+                    i,
+                    minimum=-(2**31) if i == WIDE_OUTPUT else -30000,
+                    maximum=2**31 - 1 if i == WIDE_OUTPUT else 30000,
+                )
+                for i in ANALOG_OUTPUTS
             ],
             "CTR": [row(f"Count {i}", i, frozen=True, frozen_event_class=3) for i in COUNTERS],
         }
@@ -517,11 +530,13 @@ class Dut:
         binary_inputs: bool = True,
         analog_inputs: bool = True,
         capacity: int = 50,
+        extra_analogs: int = 0,
+        block_octets: int = 1024,
         **session_options: Any,
     ) -> None:
         self.clock = Clock()
         self.binary = dict.fromkeys(BINARY_INPUTS, False)
-        self.analog = dict.fromkeys(ANALOG_INPUTS, 100.0)
+        self.analog = dict.fromkeys(range(len(ANALOG_INPUTS) + extra_analogs), 100.0)
         self.counts = dict.fromkeys(COUNTERS, 5)
         self.quality: dict[tuple[Kind, int], Quality] = {}
         #: Every operation that reached the device, as (kind, index, value).
@@ -533,7 +548,7 @@ class Dut:
             for index in BINARY_INPUTS:
                 binding.read(Kind.BI, index, self._reader(Kind.BI, self.binary, index))
         if analog_inputs:
-            for index in ANALOG_INPUTS:
+            for index in self.analog:
                 binding.read(
                     Kind.AI, index, self._reader(Kind.AI, self.analog, index), deadband=DEADBAND
                 )
@@ -548,10 +563,11 @@ class Dut:
                 binding.output(Kind.AO, index, self._writer("AO", index), initial=0.0)
 
         self.outstation = DerOutstation(
-            load.resolve(_tables(), Composition()),
+            load.resolve(_tables(extra_analogs), Composition()),
             binding,
             strict=False,
             event_capacity=capacity,
+            block_octets=block_octets,
             clock_ms=self.clock.ms,
             level2=level2,
         )

@@ -418,8 +418,8 @@ class FreezeProvider(Protocol):
 class _ArmedSelect:
     """What a select left behind for the operate that may follow."""
 
-    #: ``(group, variation, index, octets)`` per control, in order received.
-    key: tuple[tuple[int, int, int, bytes], ...]
+    #: ``(group, variation, qualifier, index, octets)`` per control, in order received.
+    key: tuple[tuple[int, int, int | None, int, bytes], ...]
     at: float
     #: The application sequence the select arrived under. The operate that
     #: spends it has to be the next one, which is how a stale selection is told
@@ -2146,7 +2146,9 @@ def _checked(statuses: Sequence[CommandStatus], controls: Sequence[Control]) -> 
     return answered
 
 
-def _match_key(controls: Sequence[Control]) -> tuple[tuple[int, int, int, bytes], ...]:
+def _match_key(
+    controls: Sequence[Control],
+) -> tuple[tuple[int, int, int | None, int, bytes], ...]:
     """What an operate has to reproduce to spend the select it follows.
 
     The octets rather than the decoded objects. The comparison has to be exact,
@@ -2158,8 +2160,21 @@ def _match_key(controls: Sequence[Control]) -> tuple[tuple[int, int, int, bytes]
     different header boundary is still asking for the same points to move, and
     refusing it would fail a master over a detail the standard does not make
     part of the command.
+
+    The qualifier is present. An operate has to match its select in object,
+    variation, qualifier and data, and one that names the same point with a
+    different index size is not the request that was selected.
     """
-    return tuple((c.group, c.variation, c.index, c.raw) for c in controls)
+    return tuple(
+        (
+            c.group,
+            c.variation,
+            None if c.qualifier is None else int(c.qualifier),
+            c.index,
+            c.raw,
+        )
+        for c in controls
+    )
 
 
 def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> bytes:

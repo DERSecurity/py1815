@@ -378,11 +378,14 @@ class DerOutstation:
     def _selected(self, header: ObjectHeader) -> list[Point]:
         """The served points a static read header names."""
         points = self._served[_GROUP_KINDS[header.group]]
+        if not points:
+            # A kind this outstation has none of is, to a master, an object
+            # it does not have. Answering with nothing and no indication
+            # would read as a kind that exists and happens to be empty.
+            raise UnknownObject(f"group {header.group} holds no points")
         if header.qualifier is QualifierCode.ALL_OBJECTS:
             return points
         if header.qualifier in _RANGES and header.start is not None and header.stop is not None:
-            if not points:
-                raise UnknownObject(f"group {header.group} holds no points")
             named = [p for p in points if header.start <= p.index <= header.stop]
             # A range that runs past the last point, or lands between
             # points, names something that is not there. The object is
