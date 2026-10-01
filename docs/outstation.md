@@ -159,6 +159,14 @@ nothing and retries. A control sent to an outstation with no outputs is answered
 with `OBJECT_UNKNOWN`: the function is one it knows, and what is missing is
 anything for it to act on.
 
+A function can also be turned off: `Session(disabled_functions=[...])` refuses each
+one named exactly as it refuses a function it never implemented, which is the safer
+configuration for an outstation with no use for it.
+
+Something that is not a request at all is not answered: a fragment too short to hold
+a header, one marked as part of a longer message, a link frame whose length
+contradicts its function.
+
 The exceptions are the five function codes the standard defines as taking no
 reply, which are dropped and logged rather than answered. See
 [How DNP3 works](dnp3.md#the-functions-that-expect-no-reply) and

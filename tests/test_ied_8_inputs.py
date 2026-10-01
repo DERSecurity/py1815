@@ -272,7 +272,9 @@ class TestBinaryInputChanges:
         dut.restart()
         dut.master.empty_events()
         _toggles(dut, [0])
-        moment = 1_800_000_000_000
+        # Written as the time the clock already shows, so the two events are a
+        # moment apart and only the clock's state separates them.
+        moment = dut.clock.ms()
         dut.master.request(WRITE, header(50, 1, Q_COUNT_8, 1) + moment.to_bytes(6, "little"))
         _toggles(dut, [1])
         fragment = dut.master.read(header(2, 3)).fragment
@@ -326,6 +328,15 @@ class TestBinaryInputChanges:
         assert again.con
         dut.master.confirm(again)
         assert dut.master.read(header(2, 3)).fragment.is_null
+
+    def test_8_15_3_a_restart_leaves_the_clock_unset_again(self):
+        dut = Dut(need_time=True)
+        moment = header(50, 1, Q_COUNT_8, 1) + (1_800_000_000_000).to_bytes(6, "little")
+        dut.master.request(WRITE, moment)
+        dut.restart()
+        dut.master.empty_events()
+        _toggles(dut, [0])
+        _relative_times(dut.master.read(header(2, 3)).fragment, [2])
 
     def test_8_15_3_a_class_poll_before_the_time_is_set_uses_relative_time(self):
         """An absolute time would claim a clock that had been set, so none is sent."""

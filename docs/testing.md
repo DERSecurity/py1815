@@ -138,6 +138,28 @@ them by section number and describe what they check in their own words.
 This is the project's own assessment. It is not a certification, and the device
 profile the outstation generates does not claim one.
 
+## Bulletins and application notes are checked one document at a time
+
+The standard has been corrected and clarified since it was published, in the DNP Users
+Group's technical bulletins and application notes: a replacement for the transport
+reception table, rules for the special addresses, which error indication answers which
+fault, how events stamped by an unset clock are reported, a checklist for validating
+what arrives. `tests/test_technical_bulletins.py` holds one group of tests per
+document, each test named for it (`test_tb2013_003_...`), and
+`tests/test_bulletin_coverage.py` lists every bulletin and note as tested, or as asking
+nothing of this outstation and why. Several are carried out by the certification
+procedures and the catalog points there.
+
+One check needs a file the repository does not hold. The Users Group publishes the
+subset definitions as a workbook: for every object, which requests an outstation of
+each level must accept. `tests/test_subset_tables.py` reads it, sends every request
+marked for Level 2, and requires that none is refused as unsupported. It skips unless
+the workbook is named:
+
+```bash
+PY1815_SUBSET_TABLES="Request-Response Subset Tables.xlsx" pytest tests/test_subset_tables.py
+```
+
 ## The DER profile's test procedure runs against the simulated DER
 
 EPRI's *Test Procedure for Validating DNP Application Note AN2018-001 in Distributed
