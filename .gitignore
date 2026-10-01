@@ -29,3 +29,18 @@ site/
 # the workbook and regenerate the file in one command.
 *.xlsx
 conformance/ieee-1815-2-2025.json
+
+# DNP Users Group Device Profile artifacts. Both the schema and the rendering
+# stylesheet carry "COPYRIGHT (c) (1993-2025) DNP Users Group, Inc. All Rights
+# Reserved" with no redistribution grant, and the specification volumes are
+# member-library material. Fetch them into schema/ locally; never commit them.
+# See schema/README.md.
+DNP3DeviceProfile*.xsd
+DNP3DeviceProfile*.xslt
+DNP3DeviceProfileJan2010.*
+DNP3Spec-*.pdf
+dnp_logo.jpg
+UserData.xslt
+blank-device-profile.xml
+dnp_xsl.bat
+dnp_xsl.ps1

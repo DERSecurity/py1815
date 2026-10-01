@@ -65,6 +65,14 @@ include = [
     # Without them that test cannot run, and the shipped suite is what a
     # downstream packager uses to decide whether the build is sound.
     "conformance",
+    # Only a README: what the Device Profile schema is and where to get it. The
+    # schema itself is ignored, so this is the whole of what the directory
+    # holds in a checkout and in the sdist.
+    "schema",
+    # Pending changelog fragments and the README that explains them. Hatchling
+    # would force-include that README whatever this list said, so naming the
+    # directory is what keeps the release check honest about it.
+    "changelog.d",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
