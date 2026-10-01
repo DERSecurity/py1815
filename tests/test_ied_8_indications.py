@@ -29,6 +29,8 @@ from ied_harness import (
     header,
 )
 
+from py1815.profile import device_profile
+
 FREEZE_ALL = header(20, 0)
 
 
@@ -240,6 +242,17 @@ class TestTime:
     def test_8_7_2_recording_the_time_carries_no_objects(self):
         dut = Dut(need_time=True)
         assert dut.master.request(RECORD_CURRENT_TIME, header(50, 1)).fragment.iin2 & IIN2_PARAMETER
+
+    def test_8_7_2_the_device_profile_claims_the_procedure(self):
+        """It is tested where the profile claims it, so the profile has to."""
+        dut = Dut(need_time=True)
+        root = device_profile.build(dut.outstation, dut.session)
+        (setting,) = root.iter(f"{{{device_profile.NAMESPACE}}}timeSynchronization")
+        claimed = {child.tag.rsplit("}", 1)[1] for part in setting for child in part}
+        assert claimed == {"dnpLANProcedure", "dnpWriteTimeProcedure"}
+        table = device_profile.implementation(dut.outstation, dut.session.facts)
+        assert RECORD_CURRENT_TIME in table.function_codes
+        assert (50, 3) in {(row.group, row.variation) for row in table.rows}
 
     def test_8_7_a_device_that_never_asks_for_time_never_sets_the_indication(self):
         dut = Dut(need_time=False)
