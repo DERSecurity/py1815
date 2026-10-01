@@ -73,8 +73,10 @@ python scripts/build_changelog.py --release X.Y.Z
 ```
 
 That writes a `## [X.Y.Z] - YYYY-MM-DD` section containing the existing
-`[Unreleased]` body **and** the rendered fragments, empties `[Unreleased]`, and
-prints the fragments it consumed so they can be deleted in the same commit.
+`[Unreleased]` body **and** the rendered fragments, leaves `[Unreleased]`
+holding only its "Nothing yet." placeholder, and prints the fragments it
+consumed so they can be deleted in the same commit. The placeholder is not an
+entry: it is dropped from what is folded and put back under the heading.
 Commit that alongside the `version` bump in `pyproject.toml` — the deletion and
 the content it became belong together, so the two cannot drift.
 

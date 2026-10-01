@@ -142,6 +142,27 @@ class TestTheRelease:
         assert "Nothing yet." in unreleased and "A hand-written fix." not in unreleased
         assert "A hand-written fix." in released and "Nothing yet." not in released
 
+    def test_only_the_leading_placeholder_is_removed(self, tmp_path):
+        """The same words deeper in a hand-written body are that body's own."""
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text(
+            "# Changelog\n\n## [Unreleased]\n\nNothing yet.\n\n### Changed\n\n"
+            "- The empty state now reads:\n\n  Nothing yet.\n\n"
+            "## [0.1.0] - 2026-01-01\n\n- First.\n",
+            encoding="utf-8",
+        )
+        fragments = tmp_path / "changelog.d"
+        fragments.mkdir()
+
+        build_changelog.release(
+            "0.2.0", when="2026-02-02", changelog=str(changelog), fragment_dir=str(fragments)
+        )
+
+        text = changelog.read_text(encoding="utf-8")
+        released = text[text.index("## [0.2.0]") : text.index("## [0.1.0]")]
+        assert released.count("Nothing yet.") == 1, "the hand-written line was folded intact"
+        assert "The empty state now reads:" in released
+
     def test_a_release_without_an_unreleased_heading_is_refused(self, tmp_path):
         changelog = tmp_path / "CHANGELOG.md"
         changelog.write_text(

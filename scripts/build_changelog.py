@@ -283,10 +283,13 @@ def release(
     existing = text[body_start:end].strip()
     # The placeholder is a sign that nothing is pending, not an entry. Left in,
     # it would be released as the new section's first line and the heading it
-    # came from would be left bare.
-    existing = "\n".join(
-        line for line in existing.splitlines() if line.strip() != _PLACEHOLDER
-    ).strip()
+    # came from would be left bare. Only the conventional placeholder is
+    # removed, the one standing first under the heading; the same words deeper
+    # in a hand-written body are that body's own, and a release must not edit
+    # what it folds.
+    first, _, rest = existing.partition("\n")
+    if first.strip() == _PLACEHOLDER:
+        existing = rest.strip()
 
     fragments = read_fragments(fragment_dir)
     section = merge_sections(existing, fragments).strip()
