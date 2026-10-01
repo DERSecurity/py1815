@@ -9,6 +9,8 @@ requires or refuse it, the tests say which this one does.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 from ied_harness import (
     ASSIGN_CLASS,
@@ -168,7 +170,7 @@ class TestBinaryInputChanges:
         assert [o.index for o in events] == made
         assert {o.qualifier for o in events} <= INDEXED
         times = [o.time for o in events]
-        gaps = [later - earlier for earlier, later in zip(times, times[1:], strict=False)]
+        gaps = [later - earlier for earlier, later in itertools.pairwise(times)]
         assert all(990 <= gap <= 1030 for gap in gaps), "about a second apart, as generated"
         assert fragment.con
         dut.master.confirm(fragment)

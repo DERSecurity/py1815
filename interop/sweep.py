@@ -100,6 +100,10 @@ class Case:
     #: Link-layer function carrying it. Everything is unconfirmed user data
     #: except the cases that exist to exercise the link layer itself.
     link_function: int = link.PrimaryFunction.UNCONFIRMED_USER_DATA
+    #: Whether the frame counts: the frame count valid bit, and the count bit
+    #: a link expects first after a reset. Set on the functions that count
+    #: frames and on no other.
+    counted: bool = False
     note: str = ""
     #: The restart indication expected in this reply, when it differs from the
     #: running state. The write that clears the bit is already cleared in its
@@ -180,7 +184,15 @@ CASES: list[Case] = [
     Case(
         name="link: test link states",
         link_function=link.PrimaryFunction.TEST_LINK_STATES,
+        counted=True,
         expect=Expect(link_function=link.SecondaryFunction.ACK),
+        note="after the reset above, carrying the frame count it expects",
+    ),
+    Case(
+        name="link: test link states, frame count not valid",
+        link_function=link.PrimaryFunction.TEST_LINK_STATES,
+        expect=Expect(silent=True),
+        note="a counting function without a valid count is not answered",
     ),
     Case(
         name="link: request link status",
@@ -221,8 +233,13 @@ CASES: list[Case] = [
     Case(
         name="control: direct operate, a point it does not",
         payload=_app(FunctionCode.DIRECT_OPERATE, _crob_block(9)),
-        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
-        note="refused per object rather than per fragment: the IIN stays clear",
+        expect=Expect(
+            function=FunctionCode.RESPONSE,
+            iin2=IIN2Bit.PARAM_ERROR,
+            iin2_clear=IIN2Bit.FUNC_NOT_SUPPORTED | IIN2Bit.OBJECT_UNKNOWN,
+            objects=True,
+        ),
+        note="refused per object, with a status, and flagged as a parameter error",
     ),
     _silent(FunctionCode.DIRECT_OPERATE_NR, "control: direct operate, no acknowledgment"),
     # -- the event classes ----------------------------------------------------
@@ -595,7 +612,13 @@ def _frame(case: Case) -> bytes:
     request here is small enough to be one segment; using the segmenter anyway
     keeps the transport header honest rather than hard-coding FIR and FIN.
     """
-    control = link.control_byte(from_master=True, primary=True, function=case.link_function)
+    control = link.control_byte(
+        from_master=True,
+        primary=True,
+        function=case.link_function,
+        fcb=case.counted,
+        fcv=case.counted,
+    )
     payload = b""
     if case.payload:
         segments = segment(case.payload)
