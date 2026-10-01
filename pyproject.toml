@@ -106,6 +106,9 @@ exclude = [
     # library; a test whose subject was left out is one that cannot pass, and a
     # downstream packager running the shipped suite would report it as a bug.
     "tests/test_interop_fixture.py",
+    # The same, for the changelog assembler under `scripts/`, which is release
+    # tooling and is not shipped either.
+    "tests/test_changelog_fragments.py",
 ]
 
 [tool.ruff]
