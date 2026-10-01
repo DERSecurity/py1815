@@ -132,8 +132,47 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
+  # Release SBOM in CycloneDX 1.6 and SPDX 2.3, attached to the GitHub
+  # release rather than committed. A committed document describes whatever the
+  # resolver produced at commit time and rots the first time a dependency
+  # changes and nobody regenerates it; a release artifact can only describe
+  # the release it came from.
+  sbom:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Resolve and cross-check the release version
+        id: version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          SRC_VERSION="$(python3 -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ "$TAG_VERSION" != "$SRC_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $SRC_VERSION"
+            exit 1
+          fi
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build SBOM
+        run: |
+          tools/build_sbom.sh             --project-dir .             --version "${{ steps.version.outputs.version }}"             --release-tag "${GITHUB_REF_NAME}"             --product-license "Apache-2.0"             --download-location "https://pypi.org/project/py1815/"             --out-dir dist/sbom
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: dist/sbom/
+
   github-release:
-    needs: publish
+    needs: [publish, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -141,6 +180,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
           path: dist/
       - name: Create the GitHub release
         env:
