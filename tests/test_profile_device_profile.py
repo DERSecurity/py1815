@@ -21,6 +21,7 @@ from profile_fixtures import REAL_TABLES, for_reference_der, small, units
 
 from py1815.application import FunctionCode, IIN2Bit
 from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType, encode_crob
+from py1815.objects import AnalogEventVariation
 from py1815.profile import cli, der, device_profile, load
 from py1815.profile.binding import Binding
 from py1815.profile.device_profile import NAMESPACE, Identity, Row
@@ -297,7 +298,7 @@ class TestTheTableFollowsTheConfiguration:
         row = Row(41, 1, "", request=(device_profile.DIRECT, (0x17,)))
         body = bytes([41, 1, 0x17, 1, 0]) + struct.pack("<i", 1) + b"\x00"
         response = Sender(outstation.session()).send(row.request[0], body)
-        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_outputs_served_by_a_session_given_no_control_provider_list_no_controls(
         self, simulation
@@ -311,7 +312,7 @@ class TestTheTableFollowsTheConfiguration:
         assert not groups & {12, 41}
         body = _command(outstation, Row(41, 1, ""), 0x17)
         response = Sender(session).send(device_profile.DIRECT, body)
-        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_counters_served_by_a_session_given_no_freeze_provider_list_no_freezes(
         self, simulation
@@ -325,15 +326,52 @@ class TestTheTableFollowsTheConfiguration:
         response = Sender(session).send(device_profile.FREEZE, bytes([20, 0, 0x06]))
         assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
 
-    def test_the_analog_event_variation_listed_is_the_one_the_session_reports(self, simulation):
-        from py1815.objects import AnalogEventVariation
-
+    def test_the_default_analog_event_variation_is_the_one_the_session_reports(self, simulation):
         session = simulation.outstation.session(
             analog_event_variation=AnalogEventVariation.INT16_WITH_TIME
         )
-        table = device_profile.implementation(simulation.outstation, session.facts)
-        assert (32, 4) in {(row.group, row.variation) for row in table.rows}
-        assert (32, 1) not in {(row.group, row.variation) for row in table.rows}
+        root = device_profile.build(simulation.outstation, session)
+        default = root.find(
+            "d:referenceDevice/d:database/d:analogInputGroup/d:configuration/"
+            "d:defaultEventVariation/d:currentValue/d:four",
+            NS,
+        )
+        assert default is not None
+        response = Sender(session).send(1, bytes([60, 3, 0x06]))
+        assert tuple(response[4:6]) == (32, 4)
+
+    def test_a_level_2_outstation_lists_and_sends_level_2_objects(self):
+        """Frozen counters without time, analog output status in 16 bits, no frozen events."""
+        point_map = load.resolve(for_reference_der(), Composition())
+        device = der.ReferenceDer()
+        outstation = DerOutstation(point_map, device.bind(point_map), level2=True)
+        outstation.freeze_all()
+        session = outstation.session()
+        table = device_profile.implementation(outstation, session.facts)
+        listed = {(row.group, row.variation) for row in table.rows if row.response}
+        assert (23, 5) not in listed and (23, 1) not in listed
+        sender = Sender(session)
+        assert tuple(sender.send(1, bytes([21, 0, 0x06]))[4:6]) == (21, 1)
+        assert tuple(sender.send(1, bytes([40, 0, 0x06]))[4:6]) == (40, 2)
+        assert sender.send(1, bytes([60, 4, 0x06]))[4:] == b"", "the freeze buffered no event"
+        root = device_profile.build(outstation, session)
+        base = "d:referenceDevice/d:database/"
+        assert (
+            root.find(
+                base + "d:counterGroup/d:configuration/d:defaultFrozenCounterStaticVariation/"
+                "d:currentValue/d:one",
+                NS,
+            )
+            is not None
+        )
+        assert (
+            root.find(
+                base + "d:analogOutputGroup/d:configuration/d:defaultStaticVariation/"
+                "d:currentValue/d:two",
+                NS,
+            )
+            is not None
+        )
 
 
 class TestConfigurationIsReadFromTheSession:

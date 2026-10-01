@@ -108,12 +108,14 @@ class TestWithoutAControlProvider:
         "function",
         [FunctionCode.SELECT, FunctionCode.OPERATE, FunctionCode.DIRECT_OPERATE],
     )
-    def test_a_control_is_still_refused_as_unsupported(self, function):
+    def test_a_control_is_refused_as_an_unknown_object(self, function):
+        """Not as an unsupported function, and not as a parameter error."""
         session = Session(Reader())
 
         response = session._handle_fragment(_request(function, (12, 1, 0, LATCH_ON)))
 
-        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
+        assert not response[3] & (IIN2Bit.FUNC_NOT_SUPPORTED | IIN2Bit.PARAM_ERROR)
 
     def test_direct_operate_no_ack_is_still_dropped(self):
         session = Session(Reader())

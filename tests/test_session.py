@@ -234,7 +234,9 @@ class TestRefusals:
         fragment = _fragments(session.receive(_user_data(bytes([0xC0, function]))))[0]
 
         assert fragment[1] == FunctionCode.RESPONSE
-        assert fragment[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        # As an unknown object: the function is one every outstation knows,
+        # and what this one lacks is any output for it to act on.
+        assert fragment[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_direct_operate_no_ack_is_dropped_rather_than_executed(self):
         """It asks for no response, so it cannot be refused in band. What must

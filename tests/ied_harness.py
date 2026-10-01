@@ -459,7 +459,7 @@ def corrupt_body_crc(frame: bytes) -> bytes:
 def with_start(frame: bytes, first: int, second: int) -> bytes:
     """The same frame with other start octets and a header checksum to match."""
     head = bytes([first, second]) + frame[2:8]
-    return head + crc.append(head)[-2:] + frame[10:]
+    return crc.encode(head) + frame[10:]
 
 
 # ---------------------------------------------------------- device under test

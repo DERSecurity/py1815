@@ -449,14 +449,14 @@ class TestARefusalSupersedesLikeAnyOtherResponse:
 
     def test_a_control_refused_for_the_monitor_role(self):
         """This session has no control provider, so a SELECT comes back
-        unsupported -- from a branch that used to return before the
+        refused -- from a branch that used to return before the
         supersession point."""
         buffers = _filled(class_1=1)
         session = _session(buffers)
         session._handle_fragment(_read(1, sequence=0))
 
         refusal = session._handle_fragment(bytes([0xC1, FunctionCode.SELECT]))
-        assert refusal[3] & IIN2Bit.FUNC_NOT_SUPPORTED, "the branch under test"
+        assert refusal[3] & IIN2Bit.OBJECT_UNKNOWN, "the branch under test"
 
         session._handle_fragment(_confirm(0))
 

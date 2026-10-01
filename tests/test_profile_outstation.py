@@ -586,7 +586,7 @@ class TestTheSessionItWires:
         response = session._handle_fragment(
             _control(FunctionCode.DIRECT_OPERATE, _analog_command(0, 1), 0)
         )
-        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_an_output_status_can_be_a_window_onto_something_else(self):
         point_map = load.resolve(small(), units(0))

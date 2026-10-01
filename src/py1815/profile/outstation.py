@@ -101,6 +101,12 @@ _SERVED_VARIATIONS = {
     GROUP_ANALOG_OUTPUT_STATUS: {1, 2},
 }
 
+#: The analog input variation that carries the same value with its flags.
+_FLAGGED_ANALOG = {
+    int(AnalogVariation.INT32): int(AnalogVariation.INT32_WITH_FLAG),
+    int(AnalogVariation.INT16): int(AnalogVariation.INT16_WITH_FLAG),
+}
+
 _GROUP_KINDS = {
     GROUP_BINARY_INPUT: Kind.BI,
     GROUP_BINARY_OUTPUT_STATUS: Kind.BO,
@@ -390,31 +396,47 @@ class DerOutstation:
             f"qualifier 0x{int(header.qualifier):02X} does not select static group {header.group}"
         )
 
-    def _encode(self, group: int, variation: int, point: Point) -> bytes | None:
-        """One point as one object, or None where it has nothing to report."""
+    def _encode(self, group: int, variation: int, point: Point) -> tuple[int, bytes] | None:
+        """One point as one object and the variation it took, or None for nothing to report.
+
+        The variation is the one asked for unless that one has no flag
+        octet and the point has something to say in it. A variation
+        without flags stands for a point that is online and nothing else;
+        a point that is anything else is sent in the matching variation
+        with flags, so that asking for the compact form never hides that
+        a value is not to be trusted.
+        """
         if group == GROUP_BINARY_INPUT:
-            return encode_binary(self._binary(point))
+            return variation, encode_binary(self._binary(point))
         if group == GROUP_ANALOG_INPUT:
-            return encode_analog(self._analog(point), AnalogVariation(variation))
+            analog = self._analog(point)
+            if analog.flags != AnalogQuality.ONLINE:
+                variation = _FLAGGED_ANALOG.get(variation, variation)
+            return variation, encode_analog(analog, AnalogVariation(variation))
         if group == GROUP_COUNTER:
-            return encode_counter(self._counter(point))
+            return variation, encode_counter(self._counter(point))
         if group == GROUP_FROZEN_COUNTER:
             frozen = self._frozen.get(point.index)
             if frozen is None:
                 # Never frozen, so there is no frozen value; the counter is
                 # absent from this group until its first freeze.
                 return None
+            if (
+                variation == FrozenCounterVariation.INT32
+                and frozen[0].flags != CounterQuality.ONLINE
+            ):
+                variation = int(FrozenCounterVariation.INT32_WITH_FLAG)
             timed = variation == FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME
-            return encode_frozen_counter(
+            return variation, encode_frozen_counter(
                 frozen[0],
                 variation=FrozenCounterVariation(variation),
                 timestamp_ms=frozen[1] if timed else None,
             )
         value, flags = self._output_status(point)
         if group == GROUP_BINARY_OUTPUT_STATUS:
-            return encode_binary_output_status(state=bool(value), flags=flags)
+            return variation, encode_binary_output_status(state=bool(value), flags=flags)
         raw = point.to_wire(float(value or 0))
-        return encode_analog_output_status(float(round(raw)), variation, flags=flags)
+        return variation, encode_analog_output_status(float(round(raw)), variation, flags=flags)
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""
@@ -437,32 +459,39 @@ class DerOutstation:
         """Points as object ranges: split at index gaps and at the block budget.
 
         Never inside an object. A run of contiguous indices is one header and
-        its objects until it would outgrow a block, and then it is two.
+        its objects until it would outgrow a block, and then it is two. A
+        point that takes a different variation from its neighbors starts a
+        run of its own, since a header names one variation.
         """
         blocks: list[bytes] = []
         start = previous = -1
+        current = variation
         objects: list[bytes] = []
         size = 0
 
         def flush() -> None:
             nonlocal objects, size
             if objects:
-                header = range_header(group, variation, start=start, stop=previous)
+                header = range_header(group, current, start=start, stop=previous)
                 blocks.append(header + b"".join(objects))
             objects, size = [], 0
 
         for point in points:
-            encoded = self._encode(group, variation, point)
-            if encoded is None:
+            result = self._encode(group, variation, point)
+            if result is None:
                 continue
+            taken, encoded = result
             # Seven octets is the widest range header: group, variation,
             # qualifier and two sixteen-bit indices.
             if objects and (
-                point.index != previous + 1 or size + len(encoded) + 7 > self._block_octets
+                point.index != previous + 1
+                or taken != current
+                or size + len(encoded) + 7 > self._block_octets
             ):
                 flush()
             if not objects:
                 start = point.index
+                current = taken
             objects.append(encoded)
             size += len(encoded)
             previous = point.index

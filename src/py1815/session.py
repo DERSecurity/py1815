@@ -1167,9 +1167,14 @@ class Session:
 
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
+            # Answered as an unknown object, not an unsupported function.
+            # The function codes are ones every outstation knows; what a
+            # monitor lacks is anything for them to act on, and a master is
+            # told so in the terms the certification procedures expect of
+            # a device with no outputs.
             return null_response(
                 sequence=sequence,
-                iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
+                iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
             )
 
         if (
