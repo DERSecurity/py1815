@@ -59,7 +59,10 @@ packages = ["src/py1815"]
 # to verify it rather than a copy of the repository.
 include = [
     "src/py1815",
-    "tests",
+    # Anchored to the root: hatchling reads these as gitignore patterns, and a
+    # bare "tests" also matches tools/tests, which would sweep the release
+    # tooling's own tests into the sdist without the tool they test.
+    "/tests",
     "docs",
     # The tables `tests/test_conformance.py` checks the implementation against.
     # Without them that test cannot run, and the shipped suite is what a
@@ -114,7 +117,10 @@ warn_return_any = true
 warn_unused_configs = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# tools/tests holds the release tooling's own tests. They live beside the
+# tool rather than in tests/ because the sdist ships tests/ and not tools/,
+# and the release workflow runs the shipped suite from an extracted sdist.
+testpaths = ["tests", "tools/tests"]
 pythonpath = ["src"]
 # Strict rather than auto: an async test without the marker is a test that never
 # ran, and silence is how that goes unnoticed.
