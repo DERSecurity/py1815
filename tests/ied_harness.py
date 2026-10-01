@@ -307,9 +307,9 @@ class TestMaster:
         for frame in reader.feed(out):
             reply.frames.append(frame)
             if frame.payload:
-                header = frame.payload[0]
+                first = frame.payload[0]
                 reply.segments.append(
-                    (bool(header & 0x80), bool(header & 0x40), header & 0x3F, frame.payload[1:])
+                    (bool(first & 0x80), bool(first & 0x40), first & 0x3F, frame.payload[1:])
                 )
                 whole = self._reassembler.add(frame.payload)
                 if whole is not None:

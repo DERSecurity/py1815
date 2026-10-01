@@ -111,6 +111,33 @@ python scripts/extract_conformance.py --pdf "IEEE 1815-2012.pdf" --check
 `conformance/README.md` covers what that file holds and what it deliberately
 does not.
 
+## The certification procedures are carried out section by section
+
+The DNP Users Group's *DNP3 IED Certification Procedure* (version 3.1) is what a test
+house follows to certify a Subset Level 2 outstation. The files `tests/test_ied_*.py`
+carry it out: a test master built in `tests/ied_harness.py` sends each request as
+octets, over the link layer and in one file over a real TCP listener, and the
+assertions are the pass criteria of the section. A test is named for the section it
+performs, so `test_8_2_1_2_4_...` is section 8.2.1.2.4.
+
+The harness shares nothing with the library above the frame and object encoders, and
+it parses responses itself, for the reason the first section of this page gives: a
+master built from the session's own decoder would agree with the session's mistakes.
+
+`tests/test_ied_coverage.py` is the catalog. Every section of the procedures appears
+there once, either with the tests that carry it out or with the reason it does not
+apply (the outstation never requests link confirmation, does not send unsolicited
+responses, has no serial port, and so on). Two checks hold the catalog and the tests
+together: a section listed as tested must have a test, and a test may not claim a
+section the catalog has not accounted for. Adding a feature that makes a section
+applicable means moving its entry and writing its test in the same change.
+
+The procedures are the Users Group's and are not in the repository. The tests refer to
+them by section number and describe what they check in their own words.
+
+This is the project's own assessment. It is not a certification, and the device
+profile the outstation generates does not claim one.
+
 ## The DER profile is tested against tables invented for the purpose
 
 The IEEE 1815.2 point tables may not be redistributed, so the repository has none and CI

@@ -66,9 +66,10 @@ whoever connected, so it identifies rather than authorizes. The check runs immed
 handshake and before any session is admitted, because under D7 an admitted connection displaces
 the active one.
 
-**D9 -- What is refused is refused out loud.** A control function receives a response carrying
-`FUNC_NOT_SUPPORTED` rather than silence, because a master that times out learns nothing and
-retries.
+**D9 -- What is refused is refused out loud.** A function this outstation does not implement
+receives a response carrying `FUNC_NOT_SUPPORTED` rather than silence, because a master that
+times out learns nothing and retries. A control sent to an outstation with no outputs is
+refused out loud too, with the indication **D53** chooses for it.
 
 The exceptions are the function codes the standard defines as taking no reply. IEEE 1815-2012
 Table 4-2 describes each as "same as function code N but outstation shall not send a response":
@@ -618,7 +619,8 @@ variation this session reports; another variation is left to the provider, so th
 hears that the object is unknown rather than receiving a variation it did not name. Counter
 change events are never buffered, and reading that group is answered with nothing. Without
 buffers nothing changes: the header reaches the provider as it always did.
-*Trade-off:* a read crossing classes has no order to offer but the classes' own.
+*Trade-off:* a read crossing classes has no order to offer but the classes' own;
+**D52** later gave events an order of their own and uses it.
 
 **D47 -- The analog event variation and reporting mode are the caller's to choose.** The
 default stays timed, and stays every change, for the reasons **D17** gives. IEEE 1815.2
@@ -640,6 +642,88 @@ element says "not stated", where a plausible default would be a claim nobody che
 The schema and stylesheet are the DNP Users Group's and are named by the document, not
 shipped with it. *Trade-off:* a sparser document than a hand-written one, against one
 that cannot drift from the device.
+
+**D49 -- A request that acts is acted on once, and its retry is answered again.** A master
+that does not hear the answer to an operate, a direct operate or a freeze sends the same
+request again, with the same sequence number, and cannot tell whether the first one arrived.
+The session keeps the last such request and its answer; one that repeats it octet for octet
+is answered from that record and nothing is done a second time. A pulse that fires twice
+because a response was lost is the failure this prevents. A select is different and keeps its
+own rule: a repeated select with the same sequence number is the same selection, and its
+timer is not restarted, so a master cannot hold a selection open by retrying it.
+*Trade-off:* a master that really does mean the same control twice must advance its
+sequence number, which is what the protocol already asks of it.
+
+**D50 -- A broadcast is acted on, never answered, and reported in the next response.**
+Nothing is sent in reply to a broadcast at any layer, including a link acknowledgment. A
+freeze and a time write are always carried out. A direct operate is carried out only when
+the session was built with `broadcast_controls=True`, because a control that reaches every
+outstation on a network at once is the caller's decision and not a default. The indication
+`IIN1.0` is set in the next response to the master. Under the two addresses that ask for it
+to be confirmed, that response requests a confirmation and the indication stands until one
+arrives; under the address that does not, it is cleared once it has been reported.
+`OutstationServer(broadcast_datagrams=True)` listens for datagrams on the listening port
+and takes only broadcasts from them, since a stream reaches one outstation and a master
+addressing several uses a datagram. It is off by default and refused with TLS: a datagram
+carries no certificate, and would go around the allow-list **D8** requires.
+*Trade-off:* a plaintext listener that enables it accepts a freeze or a time write from
+anyone who can reach the port, which is why it is not the default.
+
+**D51 -- A confirmation has a deadline, and a late one does nothing.** `confirm_timeout`,
+ten seconds unless set, is how long a response waits for its confirmation. One arriving
+after that retires no events and continues no multi-fragment response: the events stay
+buffered for the next read. A master that timed out and moved on has, by then, no record of
+what the confirmation would have acknowledged, and an outstation that honored it would drop
+events the master never kept. `None` restores the old behavior of waiting indefinitely.
+*Trade-off:* events are sent twice to a master that confirms slowly, against events lost to
+one that gave up.
+
+**D52 -- Events are chosen by the headers of the read and sent in the order they happened.**
+Every event carries the order in which it was recorded. A read naming several classes, or
+several event groups, selects what each header asks for and then sends the selection oldest
+first, so a master replaying the response sees a point close before it opens if that is what
+happened. This replaces the order **D46** settled for, in which a read crossing classes
+took them highest class first. A header with a count takes the oldest events of its kind,
+whichever class holds them.
+*Trade-off:* an object header per run of same-type events rather than one per type, which
+costs a few octets in a response that mixes them.
+
+**D53 -- The indications say what is wrong with a request as precisely as the standard
+allows.** Three cases were answered more coarsely than they could be:
+
+- A control function sent to an outstation with no control provider is answered with
+  `IIN2.1`, object unknown. Every outstation knows the function; what a monitor lacks is
+  an output for it to act on. This narrows **D9**, which stays true of functions this
+  library does not implement.
+- A read whose range names no point, or runs past the last one, is answered with `IIN2.2`,
+  parameter error, and a read of a type the outstation has none of with `IIN2.1`. A provider
+  says which by raising `ParameterError` or `UnknownObject`.
+- A control naming a point that is not installed is echoed with status 4 and `IIN2.2` is
+  set as well. One arriving with a status other than zero is a format error and is not
+  passed to the provider.
+
+A class indication (`IIN1.1` to `IIN1.3`) is no longer set for events the response itself
+carries, since a master reading it would poll again for events it is already holding.
+
+**D54 -- The data link's secondary station keeps the frame count.** The outstation never
+asks for link confirmation, but a master may, and the secondary side of that exchange has
+state: confirmed user data is accepted only after the master has reset the link, the frame
+count bit alternates from there, and a frame repeating the last count is acknowledged
+without being handed up a second time. A frame whose count-valid bit disagrees with its
+function is not answered. Before this the link layer acknowledged anything well formed,
+which a master retrying over a poor link could turn into a duplicated request.
+*Trade-off:* state per association in a layer that had none.
+
+**D55 -- A DER outstation can be held to Subset Level 2 exactly.** `DerOutstation(level2=True)`
+answers a variation 0 read with the variations a Level 2 master is required to parse,
+reports no frozen counter events, clears counters on a freeze-and-clear, and substitutes
+the flagged variation for an unflagged one whenever a point's quality is not normal, so a
+master never reads a healthy-looking number from a point that is offline. IEEE 1815.2 asks
+for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared),
+so this is a mode for testing against the subset and for masters that implement only that,
+and not the default. A cold restart is supported when the session is given a
+`restart_handler`; without one the function is refused, because a library cannot restart a
+process it does not own.
 
 ## Layering
 
@@ -686,6 +770,13 @@ discards the quality octet, so the interoperability run checks values and not fl
 outstation it drives deliberately serves one point offline, and that point reads back as a
 number like any other. Quality is pinned by the wire-level tests instead, and closing the gap at
 this level needs a peer that exposes quality rather than a change to the harness.
+
+**The certification procedures, section by section.** The DNP Users Group publishes the
+procedures a test house follows to certify an outstation. `tests/test_ied_*.py` carries
+them out against a Level 2 configuration, each test named for the section it performs,
+and `tests/test_ied_coverage.py` lists every section as either tested or not applicable
+with the reason. Passing them is this project's own assessment and is not a
+certification, which only an authorized test house can grant.
 
 ## Roadmap
 
