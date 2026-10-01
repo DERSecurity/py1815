@@ -49,8 +49,10 @@ The DNP Users Group distributes the package through its member document library 
 anonymous visitors to a login. The direct download URL that older `opendnp3`
 checkouts cite in their `profile/README` is long dead and now returns 404.
 
-Place the files in this directory once obtained. The names in `.gitignore` match
-the names the DNP-UG package ships, so a correctly named file stays untracked.
+Place the files in this directory once obtained. `.gitignore` ignores everything
+here except this README, so the package's contents stay untracked whatever a given
+release names them, including the examples archive, release notes and
+specification documents that ship beside the schema.
 
 ## Licensing
 
