@@ -82,11 +82,14 @@ from py1815.objects import (
     GROUP_BINARY_INPUT_EVENT,
     GROUP_COUNTER_EVENT,
     GROUP_FROZEN_COUNTER_EVENT,
+    MAX_RELATIVE_MS,
     TIME_SIZE,
     AnalogEventVariation,
     BinaryEventVariation,
+    common_time,
     encode_analog_event,
     encode_binary_event,
+    encode_binary_event_relative,
     encode_counter,
     encode_frozen_counter_event,
 )
@@ -197,7 +200,7 @@ DEFAULT_CONFIRM_TIMEOUT = 10.0
 #: this session's default. Group 22, counter change events, is never
 #: buffered, so its entries are variations that are answered with nothing.
 _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
-    GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2}),
+    GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2, 3}),
     GROUP_ANALOG_INPUT_EVENT: frozenset({0, 1, 2, 3, 4}),
     GROUP_FROZEN_COUNTER_EVENT: frozenset({0, 1, 5}),
     GROUP_COUNTER_EVENT: frozenset({0, 1, 2}),
@@ -269,6 +272,7 @@ _MIN_EVENT_OCTETS = 8
 _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_BINARY_INPUT_EVENT, 1): 1,
     (GROUP_BINARY_INPUT_EVENT, 2): 1 + TIME_SIZE,
+    (GROUP_BINARY_INPUT_EVENT, 3): 3,
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
     **{
@@ -306,6 +310,22 @@ _CLASS_QUALIFIERS = frozenset(
 
 class UnknownObject(Exception):
     """Raised by a read provider for a group or range it does not serve."""
+
+
+@dataclass
+class _Block:
+    """One run of events that share an object header."""
+
+    group: int
+    variation: int
+    members: list[tuple[Event, int, bytes]]
+    #: Octets that have to come before the block in the same fragment: the
+    #: common time of occurrence that relative times count from.
+    prefix: bytes = b""
+    #: The time that common time carries, for relative-time blocks.
+    base: int | None = None
+    #: Whether the clock behind the block's times had been set.
+    synchronized: bool = True
 
 
 def _well_formed(fragment: bytes) -> bool:
@@ -765,6 +785,9 @@ class Session:
         #: session's clock, until the write that uses it.
         self._recorded_at: float | None = None
         self._need_time_at_start = need_time
+        if events is not None:
+            # A session that asks for the time has a clock nobody has set.
+            events.synchronized = not need_time
         #: The data link's secondary station state: whether the master has
         #: reset the link, and the frame count bit the next confirmed frame
         #: has to carry.
@@ -798,6 +821,8 @@ class Session:
         self._need_time = self._need_time_at_start
         self._broadcast = None
         self._recorded_at = None
+        if self._events is not None:
+            self._events.synchronized = not self._need_time
 
     @property
     def facts(self) -> SessionFacts:
@@ -2112,7 +2137,8 @@ class Session:
                     counts[index] = limit - taken
             return body, sent, complete
 
-        for group, variation, members in self._event_blocks(chosen, headers):
+        for block in self._event_blocks(chosen, headers):
+            group, variation, members = block.group, block.variation, block.members
             # Split at the largest count a header can carry. A buffer wide
             # enough to hold more than this of one type in a row is legal --
             # capacity has no upper bound -- and encoding it as one block
@@ -2120,8 +2146,14 @@ class Session:
             for start in range(0, len(members), _MAX_BLOCK_EVENTS):
                 chunk = members[start : start + _MAX_BLOCK_EVENTS]
                 items = [(event.index, encoded) for event, _, encoded in chunk]
-                fitted, block = _fitting(group, variation, items, budget - len(body))
-                body += block
+                # What must precede the block goes with it or not at all: a
+                # common time with no events behind it says nothing, and
+                # relative times with no common time before them in the same
+                # fragment cannot be read.
+                room_left = budget - len(body) - len(block.prefix)
+                fitted, octets = _fitting(group, variation, items, room_left)
+                if fitted:
+                    body += block.prefix + octets
                 for event, index, _ in chunk[:fitted]:
                     sent.append(event)
                     used[index] += 1
@@ -2145,6 +2177,9 @@ class Session:
             _MIN_EVENT_OCTETS,
             1 + _EVENT_SIZES[(GROUP_ANALOG_INPUT_EVENT, int(self._analog_event_variation))],
         )
+        if self._events is not None and self._events.holds_unsynchronized:
+            # Those travel with relative time, which is smaller than the default.
+            defaults = min(defaults, 1 + _EVENT_SIZES[(GROUP_BINARY_INPUT_EVENT, 3)])
         smallest = defaults
         for header in headers:
             if header.event_class is None and header.variation:
@@ -2155,7 +2190,7 @@ class Session:
 
     def _event_blocks(
         self, chosen: Sequence[tuple[Event, int]], headers: Sequence[ObjectHeader]
-    ) -> list[tuple[int, int, list[tuple[Event, int, bytes]]]]:
+    ) -> list[_Block]:
         """Events grouped into the blocks they travel in, in the order given.
 
         Consecutive events of one group and variation share a block. A run of
@@ -2165,11 +2200,24 @@ class Session:
 
         The variation is the one the selecting header named, or the session's
         default where it named none: a class header, or variation 0.
+
+        **A binary event stamped before the clock was set travels with
+        relative time.** An absolute time is a claim that the clock was right,
+        so such an event is sent as an offset from a common time of occurrence
+        marked unsynchronized, whatever timed variation was asked for. A
+        master that names the relative variation gets it for every event,
+        behind a common time that says which kind of clock stamped them. A
+        relative time is sixteen bits, so a run is broken, and given a new
+        common time, when an event falls outside that reach or the clock's
+        state changes.
         """
-        blocks: list[tuple[int, int, list[tuple[Event, int, bytes]]]] = []
+        blocks: list[_Block] = []
         for event, index in chosen:
             header = headers[index]
             named = header.variation if header.event_class is None else 0
+            prefix = b""
+            base: int | None = None
+            synchronized = True
             if isinstance(event, AnalogEvent):
                 group = GROUP_ANALOG_INPUT_EVENT
                 analog = AnalogEventVariation(named) if named else self._analog_event_variation
@@ -2190,16 +2238,44 @@ class Session:
             else:
                 group = GROUP_BINARY_INPUT_EVENT
                 variation = named or int(_BINARY_EVENT_VARIATION)
-                timed = variation == BinaryEventVariation.WITH_TIME
-                encoded = encode_binary_event(
-                    event.point,
-                    with_time=timed,
-                    timestamp_ms=event.timestamp_ms if timed else None,
-                )
-            if blocks and blocks[-1][0] == group and blocks[-1][1] == variation:
-                blocks[-1][2].append((event, index, encoded))
+                synchronized = event.synchronized
+                if variation == BinaryEventVariation.WITH_TIME and not synchronized:
+                    variation = int(BinaryEventVariation.RELATIVE_TIME)
+                if variation == BinaryEventVariation.RELATIVE_TIME:
+                    last = blocks[-1] if blocks else None
+                    if (
+                        last is not None
+                        and last.group == group
+                        and last.variation == variation
+                        and last.synchronized == synchronized
+                        and last.base is not None
+                        and 0 <= event.timestamp_ms - last.base <= MAX_RELATIVE_MS
+                    ):
+                        base = last.base
+                    else:
+                        base = event.timestamp_ms
+                        prefix = common_time(base, synchronized=synchronized)
+                    encoded = encode_binary_event_relative(event.point, event.timestamp_ms - base)
+                else:
+                    timed = variation == BinaryEventVariation.WITH_TIME
+                    encoded = encode_binary_event(
+                        event.point,
+                        with_time=timed,
+                        timestamp_ms=event.timestamp_ms if timed else None,
+                    )
+            last = blocks[-1] if blocks else None
+            if (
+                last is not None
+                and last.group == group
+                and last.variation == variation
+                and not prefix
+                and last.synchronized == synchronized
+            ):
+                last.members.append((event, index, encoded))
             else:
-                blocks.append((group, variation, [(event, index, encoded)]))
+                blocks.append(
+                    _Block(group, variation, [(event, index, encoded)], prefix, base, synchronized)
+                )
         return blocks
 
     def _handle_write(self, request: Request) -> bytes:
@@ -2223,7 +2299,7 @@ class Session:
             # Handed over before the indication clears, so a sink that raises
             # leaves this outstation still asking for the time it did not get.
             self._time_sink(int.from_bytes(request.body, "little"))
-            self._need_time = False
+            self._time_was_set()
             logger.info("dnp3: time written by master")
             return null_response(sequence=sequence, iin=self._indications())
 
@@ -2240,7 +2316,7 @@ class Session:
             elapsed_ms = max(0, round((self._clock() - self._recorded_at) * 1000))
             self._time_sink(int.from_bytes(request.body, "little") + elapsed_ms)
             self._recorded_at = None
-            self._need_time = False
+            self._time_was_set()
             logger.info("dnp3: time written by master, %d ms after it was recorded", elapsed_ms)
             return null_response(sequence=sequence, iin=self._indications())
 
@@ -2248,6 +2324,12 @@ class Session:
         # outstation does not take a write of is an unknown object.
         bit = IIN2Bit.OBJECT_UNKNOWN if request.headers else IIN2Bit.PARAM_ERROR
         return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
+
+    def _time_was_set(self) -> None:
+        """A master has written the time: stop asking, and trust the clock from here."""
+        self._need_time = False
+        if self._events is not None:
+            self._events.synchronized = True
 
     @staticmethod
     def _is_time_write(request: Request, variation: int = TIME_VARIATION) -> bool:
@@ -2379,41 +2461,3 @@ def _fitting(
         else:
             high = middle - 1
     return best, encoded
-
-
-def _encoded(
-    events: Sequence[Event],
-    analog_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
-) -> list[tuple[int, int, list[tuple[int, bytes]]]]:
-    """Events grouped into the blocks they travel in, in the order they happened.
-
-    Consecutive events of one kind share a block. The order is the buffer's --
-    which is the order the points changed -- so a run of analog events
-    interrupted by a binary one becomes three blocks rather than two, because
-    reordering them into two would tell the master a different story about when
-    things happened.
-    """
-    blocks: list[tuple[int, int, list[tuple[int, bytes]]]] = []
-    for event in events:
-        if isinstance(event, AnalogEvent):
-            group, variation = GROUP_ANALOG_INPUT_EVENT, int(analog_variation)
-            encoded = encode_analog_event(
-                event.point,
-                variation=analog_variation,
-                timestamp_ms=(
-                    event.timestamp_ms if analog_variation in _TIMED_ANALOG_EVENTS else None
-                ),
-            )
-        elif isinstance(event, FrozenCounterEvent):
-            group, variation = GROUP_FROZEN_COUNTER_EVENT, FROZEN_COUNTER_EVENT_VARIATION
-            encoded = encode_frozen_counter_event(event.point, timestamp_ms=event.timestamp_ms)
-        else:
-            group, variation = GROUP_BINARY_INPUT_EVENT, int(_BINARY_EVENT_VARIATION)
-            encoded = encode_binary_event(
-                event.point, with_time=True, timestamp_ms=event.timestamp_ms
-            )
-        if blocks and blocks[-1][0] == group and blocks[-1][1] == variation:
-            blocks[-1][2].append((event.index, encoded))
-        else:
-            blocks.append((group, variation, [(event.index, encoded)]))
-    return blocks

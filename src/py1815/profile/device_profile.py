@@ -180,7 +180,11 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         events(
             2,
             "Binary Input Event",
-            {1: "Binary Input Event - without time", 2: "Binary Input Event - with absolute time"},
+            {
+                1: "Binary Input Event - without time",
+                2: "Binary Input Event - with absolute time",
+                3: "Binary Input Event - with relative time",
+            },
         )
     if served[Kind.BO]:
         static(10, "Binary Output", {2: "Binary Output - output status with flags"})
@@ -266,6 +270,25 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 3,
                 "Time and Date - absolute time at last recorded time",
                 request=(WRITE, (0x07,)),
+            )
+        )
+    if facts.events and served[Kind.BI]:
+        # What a binary event with relative time counts from, and whether the
+        # clock that gave it had been set.
+        rows.append(
+            Row(
+                51,
+                1,
+                "Time and Date CTO - absolute time, synchronized",
+                response=(RESPONSE, (0x07,)),
+            )
+        )
+        rows.append(
+            Row(
+                51,
+                2,
+                "Time and Date CTO - absolute time, unsynchronized",
+                response=(RESPONSE, (0x07,)),
             )
         )
     rows.append(Row(52, 2, "Time Delay - fine", response=(RESPONSE, (0x07,))))
