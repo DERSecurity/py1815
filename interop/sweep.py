@@ -275,7 +275,12 @@ CASES: list[Case] = [
         "asks for something this outstation does not do; refused rather than agreed to",
     ),
     _refused(FunctionCode.ASSIGN_CLASS, "class: assign"),
-    _refused(FunctionCode.DELAY_MEASURE, "time: delay measurement"),
+    Case(
+        name="time: delay measurement",
+        payload=_app(FunctionCode.DELAY_MEASURE),
+        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
+        note="answered with how long the request was held, as one fine time delay object",
+    ),
     _refused(FunctionCode.RECORD_CURRENT_TIME, "time: record current"),
     _refused(FunctionCode.OPEN_FILE, "file: open"),
     _refused(FunctionCode.CLOSE_FILE, "file: close"),

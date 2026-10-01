@@ -36,7 +36,13 @@ from functools import reduce
 from itertools import islice
 from operator import or_
 
-from py1815.objects import AnalogPoint, AnalogQuality, BinaryPoint, BinaryQuality
+from py1815.objects import (
+    AnalogPoint,
+    AnalogQuality,
+    BinaryPoint,
+    BinaryQuality,
+    CounterPoint,
+)
 
 #: Events a class buffer holds before the oldest is dropped. A master polling on
 #: any sane interval never approaches it; a master that has gone away fills it,
@@ -75,10 +81,19 @@ class BinaryEvent:
     timestamp_ms: int
 
 
-#: Either kind of event. The buffers hold both, because a class is a reporting
-#: priority rather than a data type -- a master asking for class 1 wants
-#: everything assigned to class 1.
-Event = AnalogEvent | BinaryEvent
+@dataclass(frozen=True)
+class FrozenCounterEvent:
+    """One counter, as it stood at one freeze."""
+
+    index: int
+    point: CounterPoint
+    timestamp_ms: int
+
+
+#: Any kind of event. The buffers hold them together, because a class is a
+#: reporting priority rather than a data type -- a master asking for class 1
+#: wants everything assigned to class 1.
+Event = AnalogEvent | BinaryEvent | FrozenCounterEvent
 
 #: The largest index an event block can prefix an object with, the wider of the
 #: two qualifiers this outstation accepts being sixteen bits.
@@ -125,7 +140,21 @@ class EventBuffers:
     a change that has already happened.
     """
 
-    def __init__(self, *, capacity: int = DEFAULT_CAPACITY) -> None:
+    def __init__(
+        self, *, capacity: int = DEFAULT_CAPACITY, analog_latest_only: bool = False
+    ) -> None:
+        """
+        Args:
+            capacity: Events each class holds before its oldest is dropped.
+            analog_latest_only: Keep one event per analog point, the newest.
+                The default keeps every change, which is the sequence of
+                record. The alternative is what the IEEE 1815.2 profile
+                selects for analog inputs: a measurement that moved five times
+                between polls is reported once, at its latest value, and a
+                slow master is not handed a backlog of readings it has no use
+                for. Binary and frozen counter events are never collapsed,
+                because for those the sequence is the information.
+        """
         if capacity < 1:
             # Otherwise the first event drops one from an empty buffer, and the
             # IndexError names a deque rather than the configuration.
@@ -134,6 +163,11 @@ class EventBuffers:
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
         self._overflow_generation = 0
+        self._analog_latest_only = analog_latest_only
+        #: The analog event each point currently has buffered, when only the
+        #: newest is kept. What makes superseding one a lookup rather than a
+        #: scan of every class on every reading.
+        self._pending_analog: dict[int, AnalogEvent] = {}
 
     def count(self, event_class: EventClass) -> int:
         return len(self._buffers[event_class].events)
@@ -203,6 +237,21 @@ class EventBuffers:
         for buffer in self._buffers.values():
             remaining = deque(e for e in buffer.events if id(e) not in confirmed)
             buffer.events = remaining
+        for index, pending in list(self._pending_analog.items()):
+            if id(pending) in confirmed:
+                del self._pending_analog[index]
+
+    def _discard(self, event: Event) -> None:
+        """Remove one event, found by identity, without rebuilding a buffer.
+
+        ``drop`` rebuilds every class to retire a batch, which is the right
+        cost once per confirmation and the wrong one once per reading.
+        """
+        for buffer in self._buffers.values():
+            for position, held in enumerate(buffer.events):
+                if held is event:
+                    del buffer.events[position]
+                    return
 
     def clear_overflow(self) -> None:
         """Forget the overflow, once it has been reported to a master."""
@@ -211,8 +260,12 @@ class EventBuffers:
 
     def _buffer(self, event_class: EventClass, event: Event) -> None:
         """Hold an event, counting it against the generation if one was lost."""
-        if self._buffers[event_class].add(event):
+        buffer = self._buffers[event_class]
+        evicted = buffer.events[0] if len(buffer.events) >= buffer.capacity else None
+        if buffer.add(event):
             self._overflow_generation += 1
+        if isinstance(evicted, AnalogEvent) and self._pending_analog.get(evicted.index) is evicted:
+            del self._pending_analog[evicted.index]
 
     @staticmethod
     def _checked_index(index: int) -> int:
@@ -248,8 +301,69 @@ class EventBuffers:
 
         event = AnalogEvent(index, point, timestamp_ms if timestamp_ms is not None else now_ms())
         self._last_analog[index] = point
+        if self._analog_latest_only:
+            superseded = self._pending_analog.get(index)
+            if superseded is not None:
+                # Removed rather than overwritten in place: the event moves to
+                # the back of its class, because it now reports a change that
+                # happened after everything buffered ahead of it.
+                self._discard(superseded)
+            self._pending_analog[index] = event
         self._buffer(event_class, event)
         return event
+
+    def prime_analog(self, index: int, point: AnalogPoint) -> None:
+        """Note where an analog point stands, without reporting it.
+
+        For the first reading after start. A change is measured against the
+        last value a master was told, and at start it has been told nothing --
+        it learns every point from its integrity poll, so an event per point
+        here would report a few hundred changes that did not happen.
+        """
+        self._last_analog[self._checked_index(index)] = point
+
+    def prime_binary(self, index: int, point: BinaryPoint) -> None:
+        """Note where a binary point stands, without reporting it."""
+        self._last_binary[self._checked_index(index)] = point
+
+    def record_frozen_counter(
+        self,
+        index: int,
+        point: CounterPoint,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+    ) -> FrozenCounterEvent:
+        """Record one counter's value at a freeze. Always an event.
+
+        No comparison against the previous freeze, unlike the other two. A
+        frozen counter event is an entry in a log -- the value at this moment
+        -- and two freezes of a counter that did not move are two entries the
+        master is owed, since their absence would read as freezes that never
+        happened.
+        """
+        self._checked_index(index)
+        event = FrozenCounterEvent(
+            index, point, timestamp_ms if timestamp_ms is not None else now_ms()
+        )
+        self._buffer(event_class, event)
+        return event
+
+    def peek_kind(self, kind: type, limit: int | None = None) -> list[Event]:
+        """The oldest events of one type, across every class, without removing them.
+
+        For a master that reads an event group by name rather than a class.
+        Class 1 first, then 2, then 3: the classes are priorities, and a read
+        that crosses them has no better order to offer than the one they state.
+        """
+        found: list[Event] = []
+        for event_class in EventClass:
+            for event in self._buffers[event_class].events:
+                if limit is not None and len(found) >= limit:
+                    return found
+                if isinstance(event, kind):
+                    found.append(event)
+        return found
 
     def record_binary(
         self,
