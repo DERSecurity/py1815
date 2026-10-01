@@ -37,10 +37,11 @@ target, over TCP and TLS.
 | Data link | `link` | FT3 framing, control byte, addresses, stream reader |
 | Transport | `transport` | Segmentation and reassembly |
 | Application | `application` | Control octet, function codes, internal indications, object headers |
-| Objects | `objects` | Binary and analog inputs, static and event, with quality flags |
+| Objects | `objects` | Binary inputs, analog inputs and counters, static and event, with quality flags |
 | Events | `events` | Class buffers, deadbands, overflow |
 | Session | `session` | One master association: octets in, octets out |
 | Listener | `server` | TCP, TLS, and which connection is allowed to be the master |
+| DER profile | `profile` | The IEEE 1815.2 point map, and an outstation built from it |
 
 Each layer is testable without the ones above it. The session does no I/O at
 all, so protocol behavior is pinned against literal frames rather than against a
@@ -51,6 +52,8 @@ socket.
 - **[How DNP3 works](dnp3.md)** if the protocol is new to you, or if you need
   the shape of a frame in front of you.
 - **[Serving an outstation](outstation.md)** to get one answering a master.
+- **[Serving a DER](der.md)** to run an IEEE 1815.2 outstation, simulated or
+  over your own device.
 - **[Design decisions](DESIGN.md)** for why the library is shaped the way it
   is, numbered so they can be argued with.
 - **[Testing](testing.md)** for how the wire behavior is held to, and what is

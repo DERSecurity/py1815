@@ -68,6 +68,7 @@ nav:
   - Home: index.md
   - How DNP3 works: dnp3.md
   - Serving an outstation: outstation.md
+  - Serving a DER: der.md
   - Design decisions: DESIGN.md
   - Testing: testing.md
   - Reference:
@@ -76,4 +77,5 @@ nav:
       - Objects: reference/objects.md
       - Controls: reference/control.md
       - Events: reference/events.md
+      - DER profile: reference/profile.md
       - Protocol layers: reference/protocol.md

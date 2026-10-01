@@ -155,10 +155,15 @@ a point without a trace.
 ### Regenerating it
 
 ```bash
-pip install openpyxl
 python scripts/extract_profile.py --cdpt "IEEE 1815.2-2025 Profile Companion Data Point Tables.xlsx" --check
 python scripts/extract_profile.py --cdpt "IEEE 1815.2-2025 Profile Companion Data Point Tables.xlsx" --write
 ```
+
+Nothing needs installing: the workbook is read by `py1815.profile.xlsx`, with
+the standard library alone. The script writes the repository's copy under
+`conformance/`, which is what the tests read. The same extraction is behind
+`py1815-der tables fetch` and `py1815-der tables build`, which write a copy
+for the outstation to serve from, by default under `~/.py1815/`.
 
 The extractor locates every column by its header text and refuses a sheet
 whose headers have moved, so a later edition of the workbook fails loudly
