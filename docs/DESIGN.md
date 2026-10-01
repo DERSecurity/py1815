@@ -700,7 +700,9 @@ allows.** Three cases were answered more coarsely than they could be:
   says which by raising `ParameterError` or `UnknownObject`.
 - A control naming a point that is not installed is echoed with status 4 and `IIN2.2` is
   set as well. One arriving with a status other than zero is a format error and is not
-  passed to the provider.
+  passed to the provider. The echo is still per object, as **D14** has it; a master that
+  reads the indications before the objects reports the whole request as rejected, which
+  one of the interoperability peers does, and the request was one point to begin with.
 
 A class indication (`IIN1.1` to `IIN1.3`) is no longer set for events the response itself
 carries, since a master reading it would poll again for events it is already holding.
