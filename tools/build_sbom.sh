@@ -26,10 +26,14 @@ NPM_LOCK=""
 VERSION=""
 OUT_DIR=""
 PYTHON_VERSION="3.13"
+# Pinned: an unpinned uvx resolves whatever cyclonedx-bom is newest at release
+# time, so identical source could produce different documents, or fail, on a
+# day the tool publishes a change. Upgrades should be a reviewed commit.
+CYCLONEDX_BOM_VERSION="7.1.0"
 RELEASE_TAG=""
-# Defaults to the commercial identifier; an open-source project passes its
-# own SPDX id. Getting this wrong is easy when copying an invocation between
-# repositories, so it is an explicit argument rather than a hidden default.
+# The project's own SPDX license expression. Getting this wrong is easy when
+# copying an invocation between repositories under different terms, so it is
+# an explicit argument with no default rather than something inferred.
 PRODUCT_LICENSE=""
 DOWNLOAD_LOCATION=""
 
@@ -137,7 +141,7 @@ uv pip install --python "$WORK/venv" --require-hashes "${INSTALL_ARGS[@]}" \
   -r "$WORK/requirements.txt" >/dev/null
 
 echo "==> scanning environment"
-uvx --from cyclonedx-bom cyclonedx-py environment "$WORK/venv" \
+uvx --from "cyclonedx-bom==$CYCLONEDX_BOM_VERSION" cyclonedx-py environment "$WORK/venv" \
   --pyproject "${PACKAGE:+packages/$PACKAGE/}pyproject.toml" \
   --sv 1.6 --of JSON --output-reproducible \
   -o "$WORK/environment.cdx.json"

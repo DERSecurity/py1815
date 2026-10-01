@@ -164,7 +164,14 @@ jobs:
 
       - name: Build SBOM
         run: |
-          tools/build_sbom.sh             --project-dir .             --version "${{ steps.version.outputs.version }}"             --release-tag "${GITHUB_REF_NAME}"             --product-license "Apache-2.0"             --download-location "https://pypi.org/project/py1815/"             --out-dir dist/sbom
+          set -euo pipefail
+          tools/build_sbom.sh \
+            --project-dir . \
+            --version "${{ steps.version.outputs.version }}" \
+            --release-tag "${GITHUB_REF_NAME}" \
+            --product-license "Apache-2.0" \
+            --download-location "https://pypi.org/project/py1815/" \
+            --out-dir dist/sbom
 
       - uses: actions/upload-artifact@v4
         with:

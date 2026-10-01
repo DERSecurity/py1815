@@ -254,17 +254,13 @@ def license_expression(component: dict[str, Any]) -> tuple[str, str | None]:
 
 
 # DERSec repositories that are public. Their URLs arrive in this document as
-# upstream package metadata -- py20305 publishes its source link on PyPI, so
-# reproducing it discloses nothing that is not already public, and stripping
-# it would remove genuine provenance for a dependency customers can inspect.
-# Verified public at the time of writing; anything not listed is treated as
-# private.
-PUBLIC_DERSEC_REPOS = ("py20305",)
+# upstream package metadata -- this project publishes its source link on
+# PyPI, so reproducing it discloses nothing that is not already public, and
+# stripping it would remove genuine provenance for a package anyone can
+# inspect. Verified public at the time of writing; anything not listed is
+# treated as private, which is the safe direction for the check to fail in.
+PUBLIC_DERSEC_REPOS = ("py1815",)
 
-# Patterns that must never appear in a published SBOM. Narrower here than
-# in a closed-source project: this repository's dependency tree is public
-# by construction, so the only thing worth catching is a local path or an
-# account identifier leaking in from a build machine.
 # Patterns that must never appear in a published SBOM. These documents go to
 # customers, so an internal index host, a cloud account id, or a private
 # repository URL reaching one is a disclosure, not a cosmetic defect. The
@@ -283,10 +279,15 @@ INTERNAL_PATTERNS = [
     # a public package. The negative lookahead is an allowlist rather than a
     # blanket exemption for the org: a DERSec repo that is not named here
     # fails the build, so a new private repo leaking is caught and a new
-    # public one is a one-line, deliberate addition.
+    # public one is a one-line, deliberate addition. The trailing boundary
+    # is what makes it a whole-name match -- without it the exemption also
+    # covers any private repo whose name begins with a public one, so a
+    # repository named for an internal fork of one would pass unflagged.
     (
         re.compile(
-            r"github\.com/DERSecurity/(?!" + "|".join(PUBLIC_DERSEC_REPOS) + r")",
+            r"github\.com/DERSecurity/(?!(?:"
+            + "|".join(PUBLIC_DERSEC_REPOS)
+            + r")(?![A-Za-z0-9_-]))",
             re.I,
         ),
         "private source repository",
@@ -313,9 +314,33 @@ def find_internal_references(path: Path) -> list[str]:
     text = UUID_SHAPED.sub("<uuid>", path.read_text(encoding="utf-8"))
     found: list[str] = []
     for pattern, label in INTERNAL_PATTERNS:
-        for match in sorted(set(pattern.findall(text))):
-            found.append(f"{path.name}: {label}: {match}")
+        seen: set[str] = set()
+        for match in pattern.finditer(text):
+            value = match.group(0)
+            if value in seen:
+                continue
+            seen.add(value)
+            # Report the surrounding text, not just the match. A bare value
+            # says something leaked; it does not say which component carried
+            # it in, which is what someone has to know to remove it.
+            start = max(0, match.start() - 110)
+            context = " ".join(text[start : match.end() + 60].split())
+            found.append(f"{path.name}: {label}: {value}\n      ...{context}...")
     return found
+
+
+def npm_purl(name: str, version: str) -> str:
+    """Build a Package URL for an npm component.
+
+    A scoped name carries its scope as the PURL namespace, and the leading
+    "@" is percent-encoded there: `@vue/shared` is `pkg:npm/%40vue/shared`.
+    Emitting the raw "@" produces a reference that will not resolve, which
+    matters precisely because a PURL is the key a scanner matches on.
+    """
+    if name.startswith("@") and "/" in name:
+        scope, _, bare = name.partition("/")
+        return f"pkg:npm/%40{scope[1:]}/{bare}@{version}"
+    return f"pkg:npm/{name}@{version}"
 
 
 def load_npm_lock(lock_path: Path) -> list[dict[str, Any]]:
@@ -368,7 +393,7 @@ def load_npm_lock(lock_path: Path) -> list[dict[str, Any]]:
             {
                 "name": name,
                 "version": pkg_version,
-                "purl": f"pkg:npm/{name}@{pkg_version}",
+                "purl": npm_purl(name, pkg_version),
                 "description": None,
                 # npm records a license string only sometimes; an absent one
                 # is reported as unknown rather than guessed from the name.
@@ -382,8 +407,22 @@ def load_npm_lock(lock_path: Path) -> list[dict[str, Any]]:
                 "download_url": resolved if is_public_asset_url(resolved) else "",
                 "private_source": bool(resolved) and not is_public_asset_url(resolved),
                 "ecosystem": "npm",
+                # The lockfile knows which packages depend on which. Keeping
+                # the edges is what makes the emitted graph a dependency graph
+                # rather than a flat list hung off the root.
+                "npm_dependencies": sorted((entry.get("dependencies") or {}).keys()),
             }
         )
+    out_by_name = {c["name"]: c for c in out}
+    # The root entry ("" in the lockfile) names the direct dependencies. Only
+    # those are direct; everything else is reached through them.
+    root_entry = (data.get("packages") or {}).get("", {})
+    direct = set((root_entry.get("dependencies") or {}).keys())
+    for component in out:
+        component["npm_direct"] = component["name"] in direct
+        component["npm_resolved_edges"] = [
+            out_by_name[d]["name"] for d in component["npm_dependencies"] if d in out_by_name
+        ]
     return out
 
 
@@ -484,18 +523,29 @@ def build_model(
         edges[dep["ref"]] = list(dep.get("dependsOn") or [])
 
     root_ref = root_meta["bom-ref"]
+    extra_refs: dict[str, str] = {}
     for asset in extra or []:
         # Namespaced so a browser library can never collide with a Python
         # distribution of the same name.
         ref = f"npm:{asset['name']}@{asset['version']}"
         by_ref[ref] = asset
+        extra_refs[asset["name"]] = ref
         edges.setdefault(ref, [])
-        # A vendored library is a direct dependency of the product: it is
-        # shipped inside it and loaded by its UI, so the graph should say so
-        # rather than leaving it as an orphan component.
-        edges.setdefault(root_ref, [])
-        if ref not in edges[root_ref]:
+
+    edges.setdefault(root_ref, [])
+    for asset in extra or []:
+        ref = extra_refs[asset["name"]]
+        # A vendored file has no manifest and no edges of its own: it is
+        # committed into the product, so the product depends on it directly.
+        # A package from a lockfile does have edges, and only the ones the
+        # lockfile calls direct belong on the root -- claiming a whole
+        # transitive closure is direct describes a graph that does not exist.
+        if asset.get("npm_direct", True) and ref not in edges[root_ref]:
             edges[root_ref].append(ref)
+        for dependency_name in asset.get("npm_resolved_edges", []):
+            target = extra_refs.get(dependency_name)
+            if target and target not in edges[ref]:
+                edges[ref].append(target)
 
     return {
         "root": {
@@ -877,10 +927,12 @@ def main() -> int:
         "--product-license",
         default="",
         help=(
-            "SPDX license expression for the product itself. Defaults to the "
-            "DERSec commercial identifier; its terms are defined in the "
-            "document's extracted-licensing section so a reader is not left "
-            "with an identifier they cannot resolve."
+            "SPDX license expression for the project itself. Nothing is "
+            "inferred: this is the detail most easily got wrong when the "
+            "tooling is shared between projects under different terms, so "
+            "the caller states it. An expression naming a LicenseRef- must "
+            "have that ref defined in EXTRACTED_LICENSES, or a reader is "
+            "left with an identifier they cannot resolve."
         ),
     )
     ap.add_argument(
@@ -935,9 +987,27 @@ def main() -> int:
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     # A deterministic serial keyed to the document's content means rebuilding
     # the same release produces the same identifier rather than a new one.
-    seed = f"{model['root']['name']}@{args.version}:" + ",".join(
-        sorted(f"{c['name']}@{c['version']}" for c in model["components"].values())
-    )
+    # Keyed to everything the documents actually assert, not just names and
+    # versions: a change to a license, a digest or a dependency edge produces
+    # a different document, and a different document must not reuse the
+    # previous identity.
+    seed_parts = [f"{model['root']['name']}@{args.version}"]
+    for component in sorted(model["components"].values(), key=lambda c: (c["name"], c["version"])):
+        digest = component.get("digest")
+        seed_parts.append(
+            "|".join(
+                [
+                    component["name"],
+                    component["version"],
+                    component.get("purl") or "",
+                    component["license_expression"],
+                    f"{digest[0]}:{digest[1]}" if digest else "",
+                ]
+            )
+        )
+    for ref, targets in sorted(model["edges"].items()):
+        seed_parts.append(ref + "->" + ",".join(sorted(targets)))
+    seed = "\n".join(seed_parts)
     serial = str(uuid.UUID(hashlib.sha256(seed.encode()).hexdigest()[:32]))
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
