@@ -332,3 +332,142 @@ def _headers(body: bytes):
     from py1815.application import parse_request
 
     return parse_request(bytes([0xC0, FunctionCode.READ]) + body).headers
+
+
+class TestFunctionsThatFollowACurve:
+    """Volt-var and volt-watt, driven through the curve window as a master would."""
+
+    def _curve(self, session, number: int, kind: int, y_units: int, points) -> int:
+        """Define one curve and return the next free sequence number."""
+        first = der.AO_CURVE_SELECTOR + 1
+        writes = [
+            (der.AO_CURVE_SELECTOR, number),
+            (first, kind),
+            (first + 2, 129),
+            (first + 3, y_units),
+        ]
+        for position, (x, y) in enumerate(points):
+            writes += [(first + 4 + 2 * position, x), (first + 5 + 2 * position, y)]
+        writes.append((first + 1, len(points)))
+        for sequence, (index, raw) in enumerate(writes):
+            assert _setpoint(session, index, raw, sequence % 16) is CommandStatus.SUCCESS
+        return len(writes) % 16
+
+    def _voltage(self, simulation: der.Simulation, percent: float) -> None:
+        """Move the nominal voltage so the measured one is *percent* of it."""
+        reference = (Kind.AO, der.AO_REFERENCE_VOLTAGE)
+        simulation.der.settings[reference] = simulation.der.ratings.volts * 100.0 / percent
+
+    VOLT_VAR = ((920, 500), (980, 0), (1020, 0), (1080, -500))
+    VOLT_WATT = ((1000, 1000), (1060, 1000), (1100, 200))
+
+    def test_volt_var_injects_when_voltage_is_low_and_absorbs_when_high(self, simulation):
+        session = simulation.outstation.session()
+        self._curve(session, 1, der.CURVE_VOLT_VAR, der.Y_PERCENT_MAX_VARS, self.VOLT_VAR)
+        _setpoint(session, der.AO_VOLT_VAR_CURVE, 1)
+        _latch(session, der.BO_ENABLE_VOLT_VAR, True, 1)
+        rated = simulation.der.ratings.vars
+        self._voltage(simulation, 92.0)
+        _settle(simulation)
+        assert simulation.der.vars == pytest.approx(0.5 * rated, rel=0.05)
+        self._voltage(simulation, 108.0)
+        _settle(simulation)
+        assert simulation.der.vars == pytest.approx(-0.5 * rated, rel=0.05)
+        self._voltage(simulation, 100.0)
+        _settle(simulation)
+        assert abs(simulation.der.vars) < 0.02 * rated, "inside the deadband it asks for nothing"
+
+    def test_volt_var_does_nothing_until_enabled_or_without_a_curve(self, simulation):
+        session = simulation.outstation.session()
+        self._voltage(simulation, 92.0)
+        self._curve(session, 1, der.CURVE_VOLT_VAR, der.Y_PERCENT_MAX_VARS, self.VOLT_VAR)
+        _setpoint(session, der.AO_VOLT_VAR_CURVE, 1)
+        _settle(simulation)
+        assert abs(simulation.der.vars) < 1.0, "named a curve, not enabled"
+        _setpoint(session, der.AO_VOLT_VAR_CURVE, 0, 1)
+        _latch(session, der.BO_ENABLE_VOLT_VAR, True, 2)
+        _settle(simulation)
+        assert abs(simulation.der.vars) < 1.0, "enabled, names no curve"
+
+    def test_a_fixed_reactive_function_takes_precedence_over_volt_var(self, simulation):
+        session = simulation.outstation.session()
+        self._voltage(simulation, 92.0)
+        self._curve(session, 1, der.CURVE_VOLT_VAR, der.Y_PERCENT_MAX_VARS, self.VOLT_VAR)
+        _setpoint(session, der.AO_VOLT_VAR_CURVE, 1)
+        _latch(session, der.BO_ENABLE_VOLT_VAR, True, 1)
+        _setpoint(session, der.AO_CONSTANT_VARS_TARGET, -20, 2)
+        _latch(session, der.BO_ENABLE_CONSTANT_VARS, True, 3)
+        _settle(simulation)
+        assert simulation.der.vars == pytest.approx(-0.2 * simulation.der.ratings.vars, rel=0.02)
+
+    def test_volt_watt_curtails_as_voltage_rises(self, simulation):
+        session = simulation.outstation.session()
+        self._curve(session, 2, der.CURVE_VOLT_WATT, der.Y_PERCENT_MAX_WATTS, self.VOLT_WATT)
+        _setpoint(session, der.AO_VOLT_WATT_CURVE, 2)
+        _latch(session, der.BO_ENABLE_VOLT_WATT, True, 1)
+        rated = simulation.der.ratings.watts
+        self._voltage(simulation, 100.0)
+        _settle(simulation)
+        assert simulation.der.watts > 0.5 * rated, "at nominal voltage the curve allows everything"
+        self._voltage(simulation, 110.0)
+        _settle(simulation)
+        assert simulation.der.watts == pytest.approx(0.2 * rated, rel=0.05)
+        assert simulation.der.volt_watt_limit() == pytest.approx(0.2 * rated, rel=0.05)
+
+    def test_a_curve_in_units_the_simulation_does_not_follow_has_no_effect(self, simulation):
+        session = simulation.outstation.session()
+        self._voltage(simulation, 110.0)
+        self._curve(session, 2, der.CURVE_VOLT_WATT, 38, self.VOLT_WATT)
+        _setpoint(session, der.AO_VOLT_WATT_CURVE, 2)
+        _latch(session, der.BO_ENABLE_VOLT_WATT, True, 1)
+        _settle(simulation)
+        assert simulation.der.volt_watt_limit() is None
+        assert simulation.der.watts > 0.5 * simulation.der.ratings.watts
+
+    def test_what_each_function_asks_for_is_reported(self, simulation):
+        """Read as a master reads them; the synthetic tables carry no scaling."""
+        session = simulation.outstation.session()
+        device = simulation.der
+
+        def read(index: int, sequence: int) -> float:
+            header = struct.pack("<BBBHH", 30, 0, 0x01, index, index)
+            response = session._handle_fragment(
+                bytes([0xC0 | sequence, FunctionCode.READ]) + header
+            )
+            static, _ = probe.parse_objects(response[4:])
+            return static[0].value
+
+        assert read(der.AI_VOLT_WATT_OUTPUT, 0) == device.ratings.watts
+        assert read(der.AI_VOLT_VAR_OUTPUT, 1) == 0
+        assert read(der.AI_VOLT_VAR_REFERENCE, 2) == device.ratings.volts
+        assert read(der.AI_VOLT_VAR_VOLTAGE, 3) == pytest.approx(device.line_volts, abs=1)
+        assert read(der.AI_VOLT_WATT_VOLTAGE, 4) == pytest.approx(device.line_volts, abs=1)
+
+
+class TestStartingAndStoppingTakeAMoment:
+    def test_a_stop_is_seen_under_way_before_it_is_done(self, simulation):
+        session = simulation.outstation.session()
+        assert _latch(session, der.BO_STOP, True) is CommandStatus.SUCCESS
+        assert simulation.der.stopping and simulation.der.started
+        _settle(simulation, 2)
+        assert not simulation.der.stopping and not simulation.der.started
+
+    def test_a_start_reverses_a_stop_that_has_not_finished(self, simulation):
+        session = simulation.outstation.session()
+        _latch(session, der.BO_STOP, True)
+        assert _latch(session, der.BO_START, True, 1) is CommandStatus.SUCCESS
+        assert simulation.der.starting and not simulation.der.stopping
+        _settle(simulation, 2)
+        assert simulation.der.started
+
+    def test_stopping_a_stopped_der_starts_nothing(self, simulation):
+        session = simulation.outstation.session()
+        _latch(session, der.BO_STOP, True)
+        _settle(simulation, 2)
+        _latch(session, der.BO_STOP, True, 1)
+        assert not simulation.der.stopping and not simulation.der.starting
+
+    def test_starting_a_started_der_starts_nothing(self, simulation):
+        session = simulation.outstation.session()
+        assert _latch(session, der.BO_START, True) is CommandStatus.SUCCESS
+        assert not simulation.der.starting

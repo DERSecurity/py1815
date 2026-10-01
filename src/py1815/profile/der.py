@@ -717,7 +717,8 @@ class ReferenceDer:
             (lambda: self.phase_volts, 10),
             (lambda: 0.0, None),
             (lambda: self.phase_volts, 10),
-            (lambda: -120.0, None),
+            # Angles are reported from zero to a full turn: phase B lags A by a third.
+            (lambda: 240.0, None),
             (lambda: self.phase_volts, 10),
             (lambda: 120.0, None),
             (lambda: self.phase_volts * math.sqrt(3), 10),

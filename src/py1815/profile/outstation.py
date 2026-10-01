@@ -128,6 +128,7 @@ _QUALITY_FLAGS = {
     Quality.GOOD: int(AnalogQuality.ONLINE),
     Quality.COMM_LOST: int(AnalogQuality.COMM_LOST),
     Quality.NEVER_READ: int(AnalogQuality.RESTART),
+    Quality.OFFLINE: 0,
 }
 
 
@@ -149,6 +150,7 @@ class DerOutstation:
         block_octets: int = 1024,
         clock_ms: Callable[[], int] = wall_clock_ms,
         level2: bool = False,
+        disabled_offline: bool = True,
     ) -> None:
         """
         Args:
@@ -170,6 +172,12 @@ class DerOutstation:
                 reported without their time, analog output status in 16
                 bits, a freeze buffers no event, and freeze-and-clear clears.
                 A master may still name the fuller variations outright.
+            disabled_offline: Report the inputs of a function that is
+                disabled with the ONLINE flag clear, as IEEE 1815.2
+                clause 6.1.1 requires: the value is still sent, marked
+                as not in effect. Turn it off for a controlling station
+                that discards any value not flagged ONLINE, and so
+                could not check a setting before enabling its function.
         """
         if block_octets < 32:
             raise ValueError(f"block_octets is {block_octets}; too small to hold an object range")
@@ -204,6 +212,8 @@ class DerOutstation:
             if output.initial is not None
         }
         self._sources = self._resolve_sources()
+        #: For each input of a function, the output that enables the function.
+        self._gates: dict[Address, Address] = self._function_gates() if disabled_offline else {}
         self._served: dict[Kind, list[Point]] = {
             kind: [p for p in point_map.of(kind) if self._is_served(p)] for kind in Kind
         }
@@ -263,6 +273,37 @@ class DerOutstation:
                 sources[address] = _constant(point.fixed_value)
         return sources
 
+    def _function_gates(self) -> dict[Address, Address]:
+        """Which enable output each function input answers to.
+
+        A function is the points the tables give one purpose, under one
+        heading, around an enable output that a supports input is paired
+        with. Two of its inputs are left out, because they say something
+        about the function that is true whether or not it is enabled: the
+        input that says it is supported, and the one that says whether it
+        is enabled.
+        """
+        functions: dict[tuple[str, str | None], Point] = {}
+        exempt: set[Address] = set()
+        for point in self._map.points.values():
+            if point.enabled_by is None or point.enabled_by not in self._binding.outputs:
+                continue
+            enable = self._map.point(*point.enabled_by)
+            if not enable.purpose:
+                continue
+            functions[(enable.purpose.casefold(), enable.section)] = enable
+            exempt.add(point.address)
+            if enable.associated is not None:
+                exempt.add(enable.associated)
+        gates: dict[Address, Address] = {}
+        for point in self._map.points.values():
+            if point.kind.is_output or not point.purpose or point.address in exempt:
+                continue
+            gate = functions.get((point.purpose.casefold(), point.section))
+            if gate is not None and point.address in self._sources:
+                gates[point.address] = gate.address
+        return gates
+
     def _mirror(self, output: Address) -> Reader:
         def read() -> Reading:
             if output not in self._state:
@@ -321,7 +362,13 @@ class DerOutstation:
             # is told this value cannot be trusted.
             logger.exception("profile: reading %s%d failed", point.kind.value, point.index)
             return Reading(0, Quality.COMM_LOST)
-        return result if isinstance(result, Reading) else Reading(result)
+        reading = result if isinstance(result, Reading) else Reading(result)
+        gate = self._gates.get(point.address)
+        if gate is not None and reading.quality is Quality.GOOD and not self._state.get(gate):
+            # The function this input belongs to is disabled. The value is
+            # sent as it stands and marked as not in effect.
+            return Reading(reading.value, Quality.OFFLINE, reading.timestamp_ms)
+        return reading
 
     def _binary(self, point: Point) -> BinaryPoint:
         reading = self._reading(point)
@@ -343,6 +390,7 @@ class DerOutstation:
             Quality.GOOD: CounterQuality.ONLINE,
             Quality.COMM_LOST: CounterQuality.COMM_LOST,
             Quality.NEVER_READ: CounterQuality.RESTART,
+            Quality.OFFLINE: 0,
         }[reading.quality]
         count = max(0, round(float(reading.value)))
         return CounterPoint(max(0, count - self._cleared_at.get(point.index, 0)), int(flags))

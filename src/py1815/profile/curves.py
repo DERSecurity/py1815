@@ -90,7 +90,7 @@ class Curve:
         independent values, so a curve that doubles back to describe
         hysteresis is not followed as one.
         """
-        points = sorted(self.points)
+        points = sorted(self.points, key=lambda point: point[0])
         if not points:
             return None
         if x <= points[0][0]:
