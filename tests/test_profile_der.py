@@ -414,6 +414,23 @@ class TestFunctionsThatFollowACurve:
         assert simulation.der.watts == pytest.approx(0.2 * rated, rel=0.05)
         assert simulation.der.volt_watt_limit() == pytest.approx(0.2 * rated, rel=0.05)
 
+    def test_volt_watt_does_nothing_until_enabled(self, simulation):
+        """The control: a curve that is named and not enabled limits nothing."""
+        session = simulation.outstation.session()
+        self._voltage(simulation, 110.0)
+        self._curve(session, 2, der.CURVE_VOLT_WATT, der.Y_PERCENT_MAX_WATTS, self.VOLT_WATT)
+        _setpoint(session, der.AO_VOLT_WATT_CURVE, 2)
+        _settle(simulation)
+        assert simulation.der.volt_watt_limit() is None
+        assert simulation.der.watts > 0.5 * simulation.der.ratings.watts
+
+    def test_a_lockout_blocks_a_functions_curve_number_too(self, simulation):
+        session = simulation.outstation.session()
+        self._curve(session, 2, der.CURVE_VOLT_WATT, der.Y_PERCENT_MAX_WATTS, self.VOLT_WATT)
+        assert _latch(session, der.BO_LOCKOUT, True) is CommandStatus.SUCCESS
+        assert _setpoint(session, der.AO_VOLT_WATT_CURVE, 2, 1) is CommandStatus.BLOCKED
+        assert not simulation.der.curves.referenced(2)
+
     def test_a_curve_in_units_the_simulation_does_not_follow_has_no_effect(self, simulation):
         session = simulation.outstation.session()
         self._voltage(simulation, 110.0)

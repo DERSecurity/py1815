@@ -204,6 +204,20 @@ class TestReferences:
         bound.write(INDEX, 0)
         assert bound.field(curves.TYPE, VOLT_WATT) is CommandStatus.SUCCESS
 
+    def test_a_refusal_of_the_callers_comes_before_the_curve_number_is_looked_at(self):
+        bound = Bound()
+        bound.store.reference(
+            bound.binding,
+            INDEX + 1,
+            types=[VOLT_VAR],
+            enabled=lambda: False,
+            check=lambda _value: CommandStatus.BLOCKED,
+        )
+        self._defined(bound, 1)
+        assert bound.write(INDEX + 1, 1) is CommandStatus.BLOCKED
+        assert bound.write(INDEX + 1, 0) is CommandStatus.BLOCKED
+        assert not bound.store.referenced(1)
+
     def test_two_functions_may_name_one_curve_and_either_locks_it(self):
         bound = Bound()
         other_enabled = False
