@@ -710,8 +710,8 @@ def render_cyclonedx(
                 "value": (
                     "build-time; this project declares dependency ranges rather "
                     "than pinning a tree, so the versions here are the resolution "
-                    "this release was built and tested against, not necessarily "
-                    "what a consumer installs"
+                    "this release was built from, not necessarily what a consumer "
+                    "installs"
                 ),
             }
         )
@@ -821,8 +821,9 @@ def render_spdx(
         root_comment.append(
             "This project declares dependency ranges rather than pinning a tree, "
             "so the dependency versions recorded here are the resolution this "
-            "release was built and tested against, not necessarily what a "
-            "consumer installs."
+            "release was built from. A consumer resolving the same ranges later "
+            "may get different versions, and the test suite resolves them "
+            "independently, so this set is not asserted to be the tested one."
         )
 
     root_pkg: dict[str, Any] = {
@@ -916,9 +917,9 @@ def render_spdx(
     if prov.get("resolution") == "build-time":
         resolution_note = (
             "Generated from the runtime dependency resolution this release "
-            "was built and tested against. This project declares version "
-            "ranges rather than pinning a tree, so a consumer resolving them "
-            "later may get different versions."
+            "was built from. This project declares version ranges rather than "
+            "pinning a tree, so a consumer resolving them later may get "
+            "different versions."
         )
     else:
         resolution_note = "Generated from the locked runtime dependency closure."
@@ -993,8 +994,7 @@ def main() -> int:
             "Pinned requirements with hashes, from `uv pip compile "
             "--generate-hashes`. For a library, which declares ranges and has "
             "no lockfile: the document then describes the resolution this "
-            "release was built and tested against, not one every consumer "
-            "will get."
+            "release was built from, not one every consumer will get."
         ),
     )
     ap.add_argument("--version", required=True)
