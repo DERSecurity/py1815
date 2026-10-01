@@ -212,8 +212,15 @@ class TestEveryResponseTheTableListsIsWhatIsSent:
         assert len(rows) > 10
         for row in rows:
             response = sender.send(1, bytes([row.group, row.variation, 0x06]))
-            assert tuple(response[4:6]) == (row.group, row.variation), row
-            assert response[6] in row.response[1], (row, "qualifier", hex(response[6]))
+            body = response[4:]
+            if (row.group, row.variation) == (2, 3):
+                # Relative times count from a common time, which comes first.
+                assert body[0] == 51 and (51, body[1]) in {
+                    (r.group, r.variation) for r in table.rows
+                }
+                body = body[10:]
+            assert tuple(body[:2]) == (row.group, row.variation), row
+            assert body[2] in row.response[1], (row, "qualifier", hex(body[2]))
 
     def test_variation_zero_is_answered_in_a_variation_the_table_lists(self, simulation):
         session = simulation.outstation.session()

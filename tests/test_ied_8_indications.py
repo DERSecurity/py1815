@@ -19,8 +19,10 @@ from ied_harness import (
     IIN2_BAD_FUNCTION,
     IIN2_OBJECT_UNKNOWN,
     IIN2_OVERFLOW,
+    IIN2_PARAMETER,
     Q_COUNT_8,
     Q_RANGE_8,
+    RECORD_CURRENT_TIME,
     WRITE,
     Dut,
     classes,
@@ -190,6 +192,54 @@ class TestTime:
         assert not dut.master.read(classes(0)).fragment.iin1 & IIN1_NEED_TIME
         dut.restart()
         assert dut.master.read(classes(0)).fragment.iin1 & IIN1_NEED_TIME
+
+    def test_8_7_2_lan_time_synchronization(self):
+        """Record the time by broadcast, then write when that request was sent."""
+        dut = Dut(need_time=True)
+        dut.restart()
+        assert dut.master.read(classes(2)).fragment.iin1 & IIN1_NEED_TIME
+        assert dut.master.request(RECORD_CURRENT_TIME, destination=0xFFFF).silent
+        sent_at = 1_800_000_000_000
+        dut.clock.advance(5.0)
+        written = dut.master.request(
+            WRITE, header(50, 3, Q_COUNT_8, 1) + sent_at.to_bytes(6, "little")
+        ).fragment
+        assert not written.body and not written.is_error
+        assert written.iin1 & IIN1_BROADCAST
+        assert not written.iin1 & IIN1_NEED_TIME
+        if written.con:
+            dut.master.confirm(written)
+        dut.clock.advance(2.5)
+        dut.toggle(2)
+        (event,) = dut.master.read(classes(2)).fragment.of(2)
+        assert (event.group, event.variation) == (2, 2), "the clock is set, so the time is absolute"
+        assert abs(event.time - (sent_at + 5000 + 2500)) <= 20
+
+    def test_8_7_2_the_time_is_recorded_for_a_request_to_this_outstation_too(self):
+        dut = Dut(need_time=True)
+        recorded = dut.master.request(RECORD_CURRENT_TIME).fragment
+        assert recorded.is_null
+        dut.clock.advance(1.0)
+        sent_at = 1_800_000_000_000
+        time_write = header(50, 3, Q_COUNT_8, 1) + sent_at.to_bytes(6, "little")
+        assert not dut.master.request(WRITE, time_write).fragment.iin1 & IIN1_NEED_TIME
+        dut.toggle(2)
+        (event,) = dut.master.read(classes(2)).fragment.of(2)
+        assert abs(event.time - (sent_at + 1000)) <= 20
+
+    def test_8_7_2_a_recorded_time_is_used_once_and_is_needed(self):
+        """With no request to record the time there is nothing to measure from."""
+        dut = Dut(need_time=True)
+        time_write = header(50, 3, Q_COUNT_8, 1) + (1_800_000_000_000).to_bytes(6, "little")
+        refused = dut.master.request(WRITE, time_write).fragment
+        assert refused.iin2 & IIN2_PARAMETER and refused.iin1 & IIN1_NEED_TIME
+        dut.master.request(RECORD_CURRENT_TIME)
+        assert not dut.master.request(WRITE, time_write).fragment.is_error
+        assert dut.master.request(WRITE, time_write).fragment.iin2 & IIN2_PARAMETER
+
+    def test_8_7_2_recording_the_time_carries_no_objects(self):
+        dut = Dut(need_time=True)
+        assert dut.master.request(RECORD_CURRENT_TIME, header(50, 1)).fragment.iin2 & IIN2_PARAMETER
 
     def test_8_7_a_device_that_never_asks_for_time_never_sets_the_indication(self):
         dut = Dut(need_time=False)

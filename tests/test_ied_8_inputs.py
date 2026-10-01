@@ -15,12 +15,14 @@ import pytest
 from ied_harness import (
     ASSIGN_CLASS,
     DEADBAND,
+    DELAY_MEASURE,
     ERROR_IIN,
     FLAG_ONLINE,
     FREEZE,
     FREEZE_CLEAR,
     FREEZE_CLEAR_NR,
     FREEZE_NR,
+    IIN1_NEED_TIME,
     IIN2_BAD_FUNCTION,
     IIN2_OBJECT_UNKNOWN,
     IIN2_PARAMETER,
@@ -30,6 +32,7 @@ from ied_harness import (
     Q_INDEX_16,
     Q_RANGE_8,
     Q_RANGE_16,
+    WRITE,
     Dut,
     classes,
     header,
@@ -190,32 +193,186 @@ class TestBinaryInputChanges:
         dut.master.confirm(rest)
         assert dut.master.read(header(2, 0)).fragment.is_null
 
-    @pytest.mark.parametrize(
-        "request_header",
-        [
-            pytest.param(header(2, 3), id="8_14_2_13_qualifier_06"),
-            pytest.param(header(2, 3, Q_COUNT_8, 2), id="8_14_2_14_qualifier_07"),
-            pytest.param(header(2, 3, Q_COUNT_16, 2), id="8_14_2_15_qualifier_08"),
-        ],
-    )
-    def test_8_14_2_13_to_15_relative_time_is_not_supported(self, request_header):
-        """Refused as an unknown object, which the procedure accepts and notes."""
+    def test_8_14_2_13_relative_time_qualifier_06(self):
+        """Before the time is set the common time says unsynchronized; after, synchronized."""
+        dut = Dut(need_time=True)
+        dut.restart()
+        dut.clear_restart()
+        dut.master.empty_events()
+        assert dut.master.read(header(2, 0)).fragment.iin1 & IIN1_NEED_TIME
+
+        made = []
+        for index in (0, 3, 2):
+            dut.clock.advance(1.0)
+            dut.toggle(index)
+            made.append(index)
+        fragment = dut.master.read(header(2, 3)).fragment
+        times = _relative_times(fragment, [2])
+        assert [o.index for o in fragment.of(2)] == made
+        assert {o.qualifier for o in fragment.of(2)} <= INDEXED
+        gaps = [later - earlier for earlier, later in itertools.pairwise(times)]
+        assert all(990 <= gap <= 1030 for gap in gaps), "about a second apart, as generated"
+        assert fragment.con
+        dut.master.confirm(fragment)
+        assert dut.master.read(header(2, 0)).fragment.is_null
+
+        moment = 1_800_000_000_000
+        written = dut.master.request(
+            WRITE, header(50, 1, Q_COUNT_8, 1) + moment.to_bytes(6, "little")
+        ).fragment
+        assert written.is_null and not written.iin1 & IIN1_NEED_TIME
+
+        made = _toggles(dut, [1, 0])
+        fragment = dut.master.read(header(2, 3)).fragment
+        times = _relative_times(fragment, [1])
+        assert [o.index for o in fragment.of(2)] == made
+        assert all(moment <= time <= moment + 1000 for time in times), "from the written time"
+        assert fragment.con
+        dut.master.confirm(fragment)
+        assert dut.master.read(header(2, 0)).fragment.is_null
+
+    @COUNTS
+    def test_8_14_2_14_and_15_relative_time_a_limited_quantity(self, qualifier):
         dut = Dut()
         dut.master.empty_events()
-        _toggles(dut, [0, 1])
-        fragment = dut.master.read(request_header).fragment
-        assert not fragment.body
-        assert fragment.iin2 & IIN2_OBJECT_UNKNOWN
-        # The events were not consumed by the refusal.
-        assert len(dut.master.read(header(2, 0)).fragment.of(2)) == 2
+        made = _toggles(dut, [0, 1, 2, 3])
+        some = dut.master.read(header(2, 3, qualifier, 3)).fragment
+        _relative_times(some, [1])
+        assert [o.index for o in some.of(2)] == made[:3]
+        assert {o.qualifier for o in some.of(2)} <= INDEXED
+        assert some.con
+        dut.master.confirm(some)
+        rest = dut.master.read(header(2, 3, qualifier, 10)).fragment
+        _relative_times(rest, [1])
+        assert [o.index for o in rest.of(2)] == made[3:]
+        assert rest.con
+        dut.master.confirm(rest)
+        assert dut.master.read(header(2, 0)).fragment.is_null
 
-    def test_8_15_2_a_read_for_relative_time_returns_no_relative_time_objects(self):
+    def test_8_14_2_16_relative_time_over_a_long_interval(self):
+        """Events further apart than a relative time reaches each get a common time."""
         dut = Dut()
-        dut.toggle(0)
+        dut.master.empty_events()
+        first = _toggles(dut, [0, 1])
+        dut.clock.advance(70.0)
+        second = _toggles(dut, [2, 3])
         fragment = dut.master.read(header(2, 3)).fragment
-        assert not any(
-            (o.group, o.variation) in {(2, 3), (51, 1), (51, 2)} for o in fragment.objects
-        )
+        kinds = [(o.group, o.variation) for o in fragment.objects]
+        assert kinds == [(51, 1), (2, 3), (2, 3), (51, 1), (2, 3), (2, 3)]
+        times = _relative_times(fragment, [1, 1])
+        assert [o.index for o in fragment.of(2)] == first + second
+        assert 69_000 <= times[2] - times[1] <= 71_000
+        assert fragment.con
+        dut.master.confirm(fragment)
+        assert dut.master.read(header(2, 3)).fragment.is_null
+
+    def test_8_14_2_16_events_stamped_before_and_after_the_time_was_set(self):
+        """The clock's state changing breaks a run just as distance does."""
+        dut = Dut(need_time=True)
+        dut.restart()
+        dut.master.empty_events()
+        _toggles(dut, [0])
+        moment = 1_800_000_000_000
+        dut.master.request(WRITE, header(50, 1, Q_COUNT_8, 1) + moment.to_bytes(6, "little"))
+        _toggles(dut, [1])
+        fragment = dut.master.read(header(2, 3)).fragment
+        assert [(o.group, o.variation) for o in fragment.objects] == [
+            (51, 2),
+            (2, 3),
+            (51, 1),
+            (2, 3),
+        ]
+
+    def test_8_15_3_common_time_of_occurrence(self):
+        dut = Dut(need_time=True)
+        dut.restart()
+        dut.clear_restart()
+        dut.master.empty_events()
+
+        _toggles(dut, [0, 1, 2])
+        fragment = dut.master.read(header(2, 3)).fragment
+        _relative_times(fragment, [2])
+        assert fragment.con
+        dut.master.confirm(fragment)
+
+        delay = dut.master.request(DELAY_MEASURE).fragment
+        assert not delay.is_error and delay.iin1 & IIN1_NEED_TIME
+        moment = 1_800_000_000_000
+        time_write = header(50, 1, Q_COUNT_8, 1) + moment.to_bytes(6, "little")
+        written = dut.master.request(WRITE, time_write).fragment
+        assert written.is_null and not written.iin1 & IIN1_NEED_TIME
+
+        _toggles(dut, [0, 1, 2])
+        fragment = dut.master.read(header(2, 3)).fragment
+        _relative_times(fragment, [1])
+        assert fragment.con
+        dut.master.confirm(fragment)
+
+        # Asking for the time again does not make the clock unset: events
+        # stamped while it asks are still behind a synchronized common time.
+        _toggles(dut, [3, 0])
+        dut.session.need_time = True
+        assert dut.master.request(DELAY_MEASURE).fragment.iin1 & IIN1_NEED_TIME
+        unconfirmed = dut.master.read(header(2, 3)).fragment
+        _relative_times(unconfirmed, [1])
+        assert unconfirmed.con
+
+        # Not confirmed. The time is written, and the same events come again.
+        written = dut.master.request(WRITE, time_write).fragment
+        assert written.is_null and not written.iin1 & IIN1_NEED_TIME
+        again = dut.master.read(header(2, 3)).fragment
+        _relative_times(again, [1])
+        assert [o.index for o in again.of(2)] == [o.index for o in unconfirmed.of(2)]
+        assert again.con
+        dut.master.confirm(again)
+        assert dut.master.read(header(2, 3)).fragment.is_null
+
+    def test_8_15_3_a_class_poll_before_the_time_is_set_uses_relative_time(self):
+        """An absolute time would claim a clock that had been set, so none is sent."""
+        dut = Dut(need_time=True)
+        dut.restart()
+        dut.master.empty_events()
+        _toggles(dut, [0, 1])
+        fragment = dut.master.read(classes(1, 2, 3)).fragment
+        binary = [o for o in fragment.objects if o.group in (2, 51)]
+        assert [(o.group, o.variation) for o in binary[:2]] == [(51, 2), (2, 3)]
+        assert not any((o.group, o.variation) == (2, 2) for o in fragment.objects)
+        by_name = dut.master.read(header(2, 2)).fragment
+        assert {(o.group, o.variation) for o in by_name.objects} == {(51, 2), (2, 3)}
+
+    def test_8_15_3_every_fragment_carries_its_own_common_time(self):
+        dut = Dut(capacity=400, block_octets=200, max_response=300)
+        dut.master.empty_events()
+        for _ in range(60):
+            _toggles(dut, [0, 1, 2, 3])
+        fragments = dut.master.poll(header(2, 3))
+        assert len(fragments) > 2
+        for fragment in fragments:
+            _relative_times(fragment, [1])
+        assert sum(len(fragment.of(2)) for fragment in fragments) == 240
+
+
+def _relative_times(fragment, cto_variations: list[int]) -> list[int]:
+    """Check a response of relative-time events is well formed, and return their times.
+
+    Nothing but common times and relative-time events; every event after a
+    common time in the same fragment; the common times in the variations
+    given, in order. The time of each event is its common time plus its own.
+    """
+    objects = fragment.objects
+    assert objects and {(o.group, o.variation) for o in objects} <= {(51, 1), (51, 2), (2, 3)}
+    assert [o.variation for o in objects if o.group == 51] == cto_variations
+    assert objects[0].group == 51, "a common time comes before the first event"
+    times: list[int] = []
+    base = 0
+    for obtained in objects:
+        if obtained.group == 51:
+            base = obtained.value
+        else:
+            assert obtained.flags & FLAG_ONLINE
+            times.append(base + obtained.relative)
+    assert times == sorted(times)
+    return times
 
 
 class TestBinaryCounters:
