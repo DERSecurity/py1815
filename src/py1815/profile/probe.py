@@ -98,6 +98,11 @@ class Poll:
 
 def _value(group: int, variation: int, index: int, data: bytes) -> Value:
     key = (group, variation)
+    if len(data) < _SIZES[key]:
+        # Checked here, once, for every object: a slice past the end of the
+        # body is short and not an error, so the decoders below would otherwise
+        # fail inside ``struct`` with nothing to say about the response.
+        raise ProbeError("a response ends inside an object")
     if key == (21, 9):
         return Value(group, variation, index, struct.unpack_from("<I", data)[0], None)
     flags = data[0]
@@ -128,6 +133,8 @@ def parse_objects(body: bytes) -> tuple[list[Value], list[Value]]:
             raise ProbeError(f"group {group} variation {variation} is not one this probe reads")
         if qualifier in (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP):
             wide = qualifier == QualifierCode.UINT16_START_STOP
+            if offset + (4 if wide else 2) > len(body):
+                raise ProbeError("a response ends inside an object range")
             start, stop = struct.unpack_from("<HH" if wide else "<BB", body, offset)
             offset += 4 if wide else 2
             for index in range(start, stop + 1):
@@ -139,9 +146,13 @@ def parse_objects(body: bytes) -> tuple[list[Value], list[Value]]:
         ):
             wide = qualifier == QualifierCode.UINT16_COUNT_UINT16_INDEX
             width = 2 if wide else 1
+            if offset + width > len(body):
+                raise ProbeError("a response ends inside an object count")
             count = int.from_bytes(body[offset : offset + width], "little")
             offset += width
             for _ in range(count):
+                if offset + width > len(body):
+                    raise ProbeError("a response ends inside an object index")
                 index = int.from_bytes(body[offset : offset + width], "little")
                 offset += width
                 events.append(_value(group, variation, index, body[offset : offset + size]))
