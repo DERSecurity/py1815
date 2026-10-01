@@ -142,11 +142,14 @@ class TestStateCommands:
     def test_starting_needs_permission(self, simulation):
         session = simulation.outstation.session()
         _latch(session, der.BO_STOP, True)
+        _settle(simulation, 2)
         _latch(session, der.BO_PERMIT_START, False, 1)
         assert _latch(session, der.BO_START, True, 2) is CommandStatus.BLOCKED
         _latch(session, der.BO_PERMIT_START, True, 3)
         assert _latch(session, der.BO_START, True, 4) is CommandStatus.SUCCESS
-        assert simulation.der.started
+        assert simulation.der.starting and not simulation.der.started
+        _settle(simulation, 2)
+        assert simulation.der.started and not simulation.der.starting
 
     def test_opening_the_switch_disconnects(self, simulation):
         _latch(simulation.outstation.session(), der.BO_CONNECT, False)
@@ -299,6 +302,8 @@ class TestAgainstTheProfile:
             der.BO_ENABLE_CHARGE_DISCHARGE,
             der.BO_ENABLE_CONSTANT_VARS,
             der.BO_ENABLE_CONSTANT_PF,
+            der.BO_ENABLE_VOLT_WATT,
+            der.BO_ENABLE_VOLT_VAR,
         }
 
     def test_measurements_travel_in_the_units_the_tables_give(self):
