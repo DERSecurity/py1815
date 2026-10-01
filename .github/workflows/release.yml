@@ -117,7 +117,12 @@ jobs:
           path: dist/
 
   publish:
-    needs: build
+    # Also after the SBOM. A PyPI version cannot be replaced, only
+    # yanked, so publishing before the documents are known to generate
+    # risks a released version with no bill of materials and no way to
+    # add one. The SBOM job builds from source and is cheap, so proving
+    # it first costs a few minutes and removes the irreversible case.
+    needs: [build, sbom]
     runs-on: ubuntu-latest
     environment:
       name: pypi

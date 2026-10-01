@@ -40,11 +40,12 @@ from typing import Any
 # which understates what the metadata actually says. Only unambiguous
 # classifiers are mapped: anything whose SPDX equivalent depends on a version
 # or variant the classifier does not pin is deliberately left out so it falls
-# through to NOASSERTION rather than being guessed.
+# through to NOASSERTION rather than being guessed. The bare BSD classifier
+# is the one that looks safe and is not: it does not say 2-clause, 3-clause
+# or another variant, and the three differ in what they require.
 CLASSIFIER_TO_SPDX = {
     "License :: OSI Approved :: Apache Software License": "Apache-2.0",
     "License :: OSI Approved :: MIT License": "MIT",
-    "License :: OSI Approved :: BSD License": "BSD-3-Clause",
     "License :: OSI Approved :: ISC License (ISCL)": "ISC",
     "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)": "MPL-2.0",
     "License :: OSI Approved :: Python Software Foundation License": "PSF-2.0",
@@ -63,7 +64,13 @@ LICENSE_REF = re.compile(r"LicenseRef-[A-Za-z0-9.\-]+")
 
 
 def spdx_id(*parts: str) -> str:
-    """Build an SPDXID from parts, restricted to the charset SPDX permits."""
+    """Build an SPDXID from parts, restricted to the charset SPDX permits.
+
+    Callers pass the ecosystem as one of the parts. A Python distribution
+    and an npm package can share a name and a version, and an SPDXID that
+    did not distinguish them would put two different components under one
+    identifier, which makes the relationships ambiguous.
+    """
     joined = "-".join(SPDX_ID_SAFE.sub("-", p) for p in parts if p)
     return f"SPDXRef-{joined}"
 
@@ -292,7 +299,37 @@ INTERNAL_PATTERNS = [
         ),
         "private source repository",
     ),
+    # Build-host paths, in the shapes a build host actually produces. A
+    # Windows drive path was the only one matched, so every CI runner --
+    # which is where releases are built -- went unchecked.
     (re.compile(r"[A-Za-z]:[\\/]Users[\\/]", re.I), "local filesystem path"),
+    (
+        re.compile(r"(?:/home/[\w.-]+|/Users/[\w.-]+|/root)/", re.I),
+        "local filesystem path",
+    ),
+    # An scp-style remote is the same disclosure as the https URL and was
+    # not matched by it: "git@github.com:DERSecurity/..." has no "/" after
+    # the host. Allowlisted the same way, so a public repo still passes.
+    (
+        re.compile(
+            r"git@github\.com:DERSecurity/(?!(?:"
+            + "|".join(PUBLIC_DERSEC_REPOS)
+            + r")(?![A-Za-z0-9_-]))",
+            re.I,
+        ),
+        "private source repository",
+    ),
+    # Private artifact stores. These host names carry the account id and
+    # the internal bucket or registry, and an SBOM has no reason to name
+    # where the release was staged.
+    (
+        re.compile(r"[\w.-]*\.dkr\.ecr\.[\w-]+\.amazonaws\.com", re.I),
+        "private container registry host",
+    ),
+    (
+        re.compile(r"(?:s3://[\w.-]+|[\w.-]+\.s3[.\w-]*\.amazonaws\.com)", re.I),
+        "internal object store",
+    ),
 ]
 
 
@@ -325,7 +362,15 @@ def find_internal_references(path: Path) -> list[str]:
             # it in, which is what someone has to know to remove it.
             start = max(0, match.start() - 110)
             context = " ".join(text[start : match.end() + 60].split())
-            found.append(f"{path.name}: {label}: {value}\n      ...{context}...")
+            # The value is redacted and the surrounding text is not. This
+            # repository is public, so a failed job's log is world-readable,
+            # and printing the matched account id or build-host path would
+            # publish the very string the check exists to withhold. The
+            # context names the field it sits in, which is what locating it
+            # requires; the value itself is visible to whoever reruns the
+            # generator locally.
+            redacted = context.replace(value, "<redacted>")
+            found.append(f"{path.name}: {label} ({len(value)} characters)\n      ...{redacted}...")
     return found
 
 
@@ -366,8 +411,14 @@ def load_npm_lock(lock_path: Path) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for key, entry in (data.get("packages") or {}).items():
-        # "" is the project itself; dev dependencies do not ship.
-        if not key or entry.get("dev") or entry.get("optional"):
+        # "" is the project itself. Dev dependencies do not ship, so they
+        # are excluded; an optional dependency is a different thing and is
+        # not. npm installs an optional dependency whenever the platform
+        # supports it, so it is present in production on those platforms
+        # and dropping it would understate what a consumer runs. It is
+        # recorded instead, marked optional, so a reader can tell which
+        # components are platform-conditional.
+        if not key or entry.get("dev"):
             continue
         # Nested installs appear as a/node_modules/b -- the package is the
         # part after the last marker, so a hoisted and a nested copy of the
@@ -391,6 +442,13 @@ def load_npm_lock(lock_path: Path) -> list[dict[str, Any]]:
         resolved = entry.get("resolved") or ""
         out.append(
             {
+                # The lockfile path, kept because npm resolves a dependency
+                # relative to it: a package at a/node_modules/b looks for its
+                # own dependencies in a/node_modules/b/node_modules first and
+                # then walks up. Two versions of one package can therefore
+                # both be installed, at different paths, and a name alone does
+                # not say which one a given parent uses.
+                "npm_path": key,
                 "name": name,
                 "version": pkg_version,
                 "purl": npm_purl(name, pkg_version),
@@ -407,22 +465,56 @@ def load_npm_lock(lock_path: Path) -> list[dict[str, Any]]:
                 "download_url": resolved if is_public_asset_url(resolved) else "",
                 "private_source": bool(resolved) and not is_public_asset_url(resolved),
                 "ecosystem": "npm",
+                "npm_optional": bool(entry.get("optional")),
                 # The lockfile knows which packages depend on which. Keeping
                 # the edges is what makes the emitted graph a dependency graph
                 # rather than a flat list hung off the root.
                 "npm_dependencies": sorted((entry.get("dependencies") or {}).keys()),
             }
         )
-    out_by_name = {c["name"]: c for c in out}
+    by_path = {c["npm_path"]: c for c in out}
+
+    def resolve(from_path: str, dependency: str) -> dict[str, Any] | None:
+        """Find the entry a package at ``from_path`` gets for ``dependency``.
+
+        npm's own algorithm: look in the package's own node_modules, then in
+        each ancestor's, taking the first hit. Resolving by name instead
+        returns an arbitrary one of several installed versions, which is how a
+        graph ends up describing an installation that does not exist.
+        """
+        prefix = from_path
+        while True:
+            candidate = (
+                f"{prefix}/node_modules/{dependency}" if prefix else (f"node_modules/{dependency}")
+            )
+            if candidate in by_path:
+                return by_path[candidate]
+            if not prefix:
+                return None
+            # Step out of the innermost node_modules and try the next level up.
+            head, sep, _ = prefix.rpartition("/node_modules/")
+            prefix = head if sep else ""
+
     # The root entry ("" in the lockfile) names the direct dependencies. Only
     # those are direct; everything else is reached through them.
     root_entry = (data.get("packages") or {}).get("", {})
-    direct = set((root_entry.get("dependencies") or {}).keys())
+    direct_specs = (root_entry.get("dependencies") or {}).keys()
+    direct_paths = set()
+    for dependency in direct_specs:
+        resolved_entry = resolve("", dependency)
+        if resolved_entry:
+            direct_paths.add(resolved_entry["npm_path"])
+
     for component in out:
-        component["npm_direct"] = component["name"] in direct
-        component["npm_resolved_edges"] = [
-            out_by_name[d]["name"] for d in component["npm_dependencies"] if d in out_by_name
-        ]
+        component["npm_direct"] = component["npm_path"] in direct_paths
+        edges = []
+        for dependency in component["npm_dependencies"]:
+            target = resolve(component["npm_path"], dependency)
+            # Identified by name and version, because the name alone does not
+            # distinguish two installed versions of the same package.
+            if target:
+                edges.append((target["name"], target["version"]))
+        component["npm_resolved_edges"] = edges
     return out
 
 
@@ -529,12 +621,14 @@ def build_model(
         # distribution of the same name.
         ref = f"npm:{asset['name']}@{asset['version']}"
         by_ref[ref] = asset
-        extra_refs[asset["name"]] = ref
+        # Keyed by name and version: two installed versions of one package
+        # are two components, and keying by name would silently drop one.
+        extra_refs[(asset["name"], asset["version"])] = ref
         edges.setdefault(ref, [])
 
     edges.setdefault(root_ref, [])
     for asset in extra or []:
-        ref = extra_refs[asset["name"]]
+        ref = extra_refs[(asset["name"], asset["version"])]
         # A vendored file has no manifest and no edges of its own: it is
         # committed into the product, so the product depends on it directly.
         # A package from a lockfile does have edges, and only the ones the
@@ -542,8 +636,10 @@ def build_model(
         # transitive closure is direct describes a graph that does not exist.
         if asset.get("npm_direct", True) and ref not in edges[root_ref]:
             edges[root_ref].append(ref)
-        for dependency_name in asset.get("npm_resolved_edges", []):
-            target = extra_refs.get(dependency_name)
+        for edge in asset.get("npm_resolved_edges", []):
+            # A vendored asset has no edges, and a lockfile component's are
+            # (name, version) pairs.
+            target = extra_refs.get(tuple(edge))
             if target and target not in edges[ref]:
                 edges[ref].append(target)
 
@@ -632,6 +728,16 @@ def render_cyclonedx(
         if entry["digest"]:
             algo, value = entry["digest"]
             comp["hashes"] = [{"alg": DIGEST_ALGORITHMS[algo]["cyclonedx"], "content": value}]
+        # Both documents render from one model, which is only true if the
+        # normalized expression is written back here too. Without this a
+        # trove classifier stays free text in CycloneDX while SPDX carries
+        # the SPDX id, and the pair disagree about the same component.
+        if entry["license_expression"] != "NOASSERTION":
+            comp["licenses"] = [{"expression": entry["license_expression"]}]
+        elif "licenses" in comp:
+            # The model could not express it. Say nothing rather than
+            # leaving a value the companion document does not carry.
+            del comp["licenses"]
         props = comp.setdefault("properties", [])
         if entry["private_source"]:
             # States that the component came from a private channel without
@@ -640,6 +746,11 @@ def render_cyclonedx(
             props.append({"name": "dersec:distribution", "value": "private"})
         if entry["license_note"]:
             props.append({"name": "dersec:license-note", "value": entry["license_note"]})
+        if entry.get("npm_optional"):
+            # Present in production wherever the platform supports it, and
+            # absent elsewhere. A reader comparing this document against an
+            # installed tree needs to know which is which.
+            props.append({"name": "dersec:platform-conditional", "value": "true"})
 
     # Components the environment scan could not see, because they are files in
     # the repository rather than installed packages. They are appended here
@@ -657,7 +768,12 @@ def render_cyclonedx(
             "properties": [{"name": "dersec:distribution", "value": "vendored"}],
         }
         if entry["license_expression"] != "NOASSERTION":
-            component["licenses"] = [{"license": {"id": entry["license_expression"]}}]
+            # An expression, not an id. license_expression can return a
+            # choice ("MIT OR Apache-2.0") and a LicenseRef-, neither of
+            # which is a valid SPDX license id, so the id field would be
+            # schema-invalid for exactly the components whose licensing is
+            # worth reading carefully.
+            component["licenses"] = [{"expression": entry["license_expression"]}]
         if entry["digest"]:
             algo, value = entry["digest"]
             component["hashes"] = [{"alg": DIGEST_ALGORITHMS[algo]["cyclonedx"], "content": value}]
@@ -696,8 +812,8 @@ def render_spdx(
 
     root_comment = [
         "Root component. This SBOM covers the runtime dependency closure of "
-        "the application; build-time and test-only dependencies are excluded "
-        "by design."
+        "this project; build-time and test-only dependencies are excluded by "
+        "design."
     ]
     if prov.get("release_tag"):
         root_comment.append(f"Released as tag {prov['release_tag']}.")
@@ -735,7 +851,7 @@ def render_spdx(
     ref_to_id: dict[str, str] = {root["bom_ref"]: root_id}
 
     for ref, entry in sorted(model["components"].items(), key=lambda kv: kv[1]["name"].lower()):
-        pid = spdx_id("Package", entry["name"], entry["version"])
+        pid = spdx_id("Package", entry.get("ecosystem") or "pypi", entry["name"], entry["version"])
         ref_to_id[ref] = pid
         pkg: dict[str, Any] = {
             "SPDXID": pid,
@@ -797,6 +913,16 @@ def render_spdx(
                     }
                 )
 
+    if prov.get("resolution") == "build-time":
+        resolution_note = (
+            "Generated from the runtime dependency resolution this release "
+            "was built and tested against. This project declares version "
+            "ranges rather than pinning a tree, so a consumer resolving them "
+            "later may get different versions."
+        )
+    else:
+        resolution_note = "Generated from the locked runtime dependency closure."
+
     return {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
@@ -810,9 +936,9 @@ def render_spdx(
                 "Tool: generate_sbom",
             ],
             "comment": (
-                "Generated from the locked runtime dependency closure. Emitted "
-                "alongside a CycloneDX document built from the same component "
-                "model; the two are intended to agree component for component."
+                resolution_note + " Emitted alongside a CycloneDX document "
+                "built from the same component model; the two are intended to "
+                "agree component for component."
             ),
         },
         "packages": packages,
@@ -985,13 +1111,20 @@ def main() -> int:
         return 1
 
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    prov = {
+        "resolution": resolution,
+        "release_tag": args.release_tag or "",
+        "download_location": args.download_location or "",
+        "product_license": args.product_license or "",
+    }
     # A deterministic serial keyed to the document's content means rebuilding
     # the same release produces the same identifier rather than a new one.
-    # Keyed to everything the documents actually assert, not just names and
-    # versions: a change to a license, a digest or a dependency edge produces
-    # a different document, and a different document must not reuse the
-    # previous identity.
-    seed_parts = [f"{model['root']['name']}@{args.version}"]
+    # Keyed to everything the documents assert -- component names, versions,
+    # purls, licenses and digests, every dependency edge, and the provenance
+    # (release tag, download location, product license, resolution kind) --
+    # because a change to any of them is a different document, and a
+    # different document must not reuse the previous identity.
+    seed_parts = [f"{model['root']['name']}@{args.version}", json.dumps(prov, sort_keys=True)]
     for component in sorted(model["components"].values(), key=lambda c: (c["name"], c["version"])):
         digest = component.get("digest")
         seed_parts.append(
@@ -1020,12 +1153,6 @@ def main() -> int:
 
     cdx_out = args.out_dir / f"{stem}.cdx.json"
     spdx_out = args.out_dir / f"{stem}.spdx.json"
-    prov = {
-        "resolution": resolution,
-        "release_tag": args.release_tag or "",
-        "download_location": args.download_location or "",
-        "product_license": args.product_license or "",
-    }
     cdx_out.write_text(
         json.dumps(render_cyclonedx(model, cdx, serial, now, prov), indent=2, sort_keys=False)
         + "\n",

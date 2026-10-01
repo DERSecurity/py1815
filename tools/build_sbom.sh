@@ -127,17 +127,18 @@ echo "==> resolving into a throwaway environment"
 uv venv "$WORK/venv" --python "$PYTHON_VERSION" >/dev/null
 
 # A project whose runtime closure includes a first-party package resolves it
-# from the private index. The URL carries a credential, so it arrives through
-# the environment rather than as an argument: arguments appear in process
-# listings and in CI step logs, environment variables do not.
-INSTALL_ARGS=()
-if [ -n "${SBOM_EXTRA_INDEX_URL:-}" ]; then
-  INSTALL_ARGS+=(--extra-index-url "$SBOM_EXTRA_INDEX_URL")
-fi
+# from the private index. The URL carries a credential, so it reaches uv
+# through uv's own environment variable rather than as an argument:
+# arguments appear in process listings and in CI step logs.
+#
+# Set on the install command alone, not exported. An export would also put
+# the credential in the environment of the scanning tool that runs next,
+# which has no need of it -- the same disclosure one process further on.
 # --require-hashes makes the install itself verify every artifact against the
 # lockfile, so a substituted distribution fails here rather than being
 # described as trustworthy by the SBOM we are about to emit.
-uv pip install --python "$WORK/venv" --require-hashes "${INSTALL_ARGS[@]}" \
+UV_EXTRA_INDEX_URL="${SBOM_EXTRA_INDEX_URL:-}" \
+  uv pip install --python "$WORK/venv" --require-hashes \
   -r "$WORK/requirements.txt" >/dev/null
 
 echo "==> scanning environment"

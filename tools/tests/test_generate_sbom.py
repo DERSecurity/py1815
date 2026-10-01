@@ -13,6 +13,12 @@ kept as a regression:
   exempted a repository whose name merely began with an allowlisted one;
 * the document identifier ignored everything except names and versions, so
   two materially different documents could share one identity.
+
+Kept beside the tool rather than in ``tests/``. The sdist ships ``tests`` and
+does not ship ``tools``, and the release workflow runs the shipped suite from
+an extracted sdist -- so a test here that imported the generator from
+``tests/`` would fail collection for a downstream packager, and fail the
+release step that exists to catch exactly that.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-TOOLS = Path(__file__).resolve().parent.parent / "tools" / "generate_sbom.py"
+TOOLS = Path(__file__).resolve().parent.parent / "generate_sbom.py"
 
 
 def _load():
@@ -64,9 +70,16 @@ def _write_lock(tmp_path: Path, packages: dict) -> Path:
     return lock
 
 
-def test_dev_and_optional_packages_are_excluded(tmp_path):
-    """They are not in the published artifact, so including them would attach
-    advisories to components no consumer runs."""
+def test_dev_packages_are_excluded_and_optional_ones_are_not(tmp_path):
+    """A dev dependency is not in the published artifact, so including it
+    would attach advisories to code no consumer runs.
+
+    An optional dependency is a different thing, and excluding it was wrong:
+    npm installs one whenever the platform supports it, so it is present in
+    production on those platforms. Dropping it understates what a consumer
+    runs -- the worse error of the two, because a reader cannot tell the
+    component was omitted.
+    """
     lock = _write_lock(
         tmp_path,
         {
@@ -76,8 +89,12 @@ def test_dev_and_optional_packages_are_excluded(tmp_path):
             "node_modules/fsevents": {"version": "2.3.3", "optional": True},
         },
     )
-    names = {c["name"] for c in gs.load_npm_lock(lock)}
-    assert names == {"vue"}
+    by_name = {c["name"]: c for c in gs.load_npm_lock(lock)}
+    assert set(by_name) == {"vue", "fsevents"}
+    # Marked, so a reader comparing the document against an installed tree can
+    # tell which components are platform-conditional.
+    assert by_name["fsevents"]["npm_optional"] is True
+    assert by_name["vue"]["npm_optional"] is False
 
 
 def test_only_lockfile_declared_dependencies_are_direct(tmp_path):
@@ -95,7 +112,7 @@ def test_only_lockfile_declared_dependencies_are_direct(tmp_path):
     by_name = {c["name"]: c for c in gs.load_npm_lock(lock)}
     assert by_name["vue"]["npm_direct"] is True
     assert by_name["@vue/shared"]["npm_direct"] is False
-    assert by_name["vue"]["npm_resolved_edges"] == ["@vue/shared"]
+    assert by_name["vue"]["npm_resolved_edges"] == [("@vue/shared", "3.5.26")]
     # Asserted here as well as on npm_purl directly: testing the helper in
     # isolation passes while the loader still formats its own raw PURL, which
     # is the shape the defect actually had.
@@ -148,6 +165,42 @@ def test_duplicate_representations_of_one_license_collapse():
     }
     expression, _ = gs.license_expression(component)
     assert expression == "Apache-2.0"
+
+
+def test_a_generic_classifier_is_not_resolved_to_a_variant():
+    """The bare BSD trove classifier is the one that looks safe and is not.
+    It does not say 2-clause, 3-clause or another variant, and the three
+    differ in what they require, so mapping it to one of them states a
+    license term the upstream metadata never did."""
+    component = {"licenses": [{"license": {"name": "License :: OSI Approved :: BSD License"}}]}
+    expression, note = gs.license_expression(component)
+    assert expression == "NOASSERTION"
+    assert note
+
+
+def test_a_choice_renders_as_a_cyclonedx_expression_not_an_id(tmp_path):
+    """`MIT OR Apache-2.0` is a valid SPDX expression and not a valid SPDX
+    license id, so emitting it in CycloneDX's `id` field produces a document
+    that fails schema validation -- for exactly the components whose licensing
+    a reader most needs to look at."""
+    lock = _write_lock(
+        tmp_path,
+        {"": {"dependencies": {"dual": "^1"}}, "node_modules/dual": {"version": "1.0.0"}},
+    )
+    components = gs.load_npm_lock(lock)
+    components[0]["license_expression"] = "MIT OR Apache-2.0"
+    cdx = {
+        "metadata": {"component": {"bom-ref": "root", "name": "demo", "version": "1.0.0"}},
+        "components": [],
+        "dependencies": [],
+    }
+    model = gs.build_model(cdx, {}, extra=components)
+    rendered = gs.render_cyclonedx(
+        model, cdx, "0" * 32, "2026-01-01T00:00:00Z", {"product_license": ""}
+    )
+    emitted = [c for c in rendered["components"] if c["name"] == "dual"]
+    assert emitted, rendered["components"]
+    assert emitted[0]["licenses"] == [{"expression": "MIT OR Apache-2.0"}]
 
 
 def test_unrecognized_license_is_not_guessed():
@@ -214,14 +267,29 @@ def test_publication_guard(tmp_path, text, flagged):
     assert bool(gs.find_internal_references(document)) is flagged
 
 
-def test_guard_reports_enough_context_to_act_on(tmp_path):
-    """A bare value says something leaked without saying which component
-    carried it in, which is what someone has to know to remove it."""
+def test_guard_reports_context_without_republishing_the_value(tmp_path):
+    """Two requirements that pull against each other.
+
+    A bare value says something leaked without saying which component carried
+    it in, which is what someone has to know to remove it -- so the
+    surrounding text is reported. But this repository is public, and a failed
+    job's log is world-readable, so printing the matched value would publish
+    the exact string the check exists to withhold. The context is reported and
+    the value is redacted; whoever reruns the generator locally sees it.
+    """
     document = tmp_path / "doc.json"
     document.write_text('{"component": "thing", "url": "account 000000000000"}', encoding="utf-8")
     (finding,) = gs.find_internal_references(document)
-    assert "000000000000" in finding
+    assert "000000000000" not in finding, (
+        "the matched value reached the message, and a failed Actions log on a "
+        f"public repository is world-readable: {finding}"
+    )
+    assert "<redacted>" in finding
+    # Still actionable: the field it sits in, and enough about the value to
+    # recognize it locally.
     assert "component" in finding
+    assert "cloud account id" in finding
+    assert "12 characters" in finding
 
 
 # --------------------------------------------------------------------------
@@ -274,6 +342,47 @@ def test_graph_hangs_only_direct_dependencies_off_the_root(tmp_path):
         f"transitive package was attached directly: {root_edges}"
     )
     assert model["edges"]["npm:vue@3.5.26"] == ["npm:@vue/shared@3.5.26"]
+
+
+def test_two_installed_versions_of_one_package_stay_distinct(tmp_path):
+    """npm resolves a dependency relative to the depending package's path, so
+    a lockfile can hold two versions of one package and each parent gets a
+    different one. Keying by name collapses them: one version vanishes from
+    the document and both parents' edges point at whichever survived.
+    """
+    lock = _write_lock(
+        tmp_path,
+        {
+            "": {"dependencies": {"a": "^1", "b": "^1"}},
+            "node_modules/a": {"version": "1.0.0", "dependencies": {"dep": "^4"}},
+            "node_modules/b": {"version": "1.0.0", "dependencies": {"dep": "^3"}},
+            # Hoisted: what anything without a nearer copy resolves to.
+            "node_modules/dep": {"version": "4.0.0"},
+            # Nested under b, which is the copy b actually loads.
+            "node_modules/b/node_modules/dep": {"version": "3.0.0"},
+        },
+    )
+    components = gs.load_npm_lock(lock)
+    versions = sorted(c["version"] for c in components if c["name"] == "dep")
+    assert versions == ["3.0.0", "4.0.0"], (
+        f"both installed versions of dep must appear as separate components; got {versions}"
+    )
+
+    by_path = {c["npm_path"]: c for c in components}
+    assert by_path["node_modules/a"]["npm_resolved_edges"] == [("dep", "4.0.0")]
+    assert by_path["node_modules/b"]["npm_resolved_edges"] == [("dep", "3.0.0")], (
+        "b has its own nested copy, so its edge must point at that one rather "
+        "than at the hoisted version"
+    )
+
+    cdx = {
+        "metadata": {"component": {"bom-ref": "root", "name": "demo", "version": "1.0.0"}},
+        "components": [],
+        "dependencies": [],
+    }
+    model = gs.build_model(cdx, {}, extra=components)
+    assert model["edges"]["npm:a@1.0.0"] == ["npm:dep@4.0.0"]
+    assert model["edges"]["npm:b@1.0.0"] == ["npm:dep@3.0.0"]
 
 
 def test_vendored_assets_without_a_lockfile_are_direct(tmp_path):

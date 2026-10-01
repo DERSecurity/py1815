@@ -106,7 +106,10 @@ warn_return_any = true
 warn_unused_configs = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# tools/tests holds the release tooling's own tests. They live beside the
+# tool rather than in tests/ because the sdist ships tests/ and not tools/,
+# and the release workflow runs the shipped suite from an extracted sdist.
+testpaths = ["tests", "tools/tests"]
 pythonpath = ["src"]
 # Strict rather than auto: an async test without the marker is a test that never
 # ran, and silence is how that goes unnoticed.
