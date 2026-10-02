@@ -135,6 +135,7 @@ outstation.
 | **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone. |
+| **Output status** | An output's status and the input that mirrors it report the same thing: your `status=` reader when you give one, the last accepted write when you do not. |
 | **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear. Call `freeze_all()` on the period the master sets. |
 | **Time** | The session asks for the time until a master writes it, and event and freeze times follow what was written. |
 
@@ -146,6 +147,43 @@ binding.output(Kind.AO, 87, set_limit, check=lambda _value: (
     CommandStatus.LOCAL if inverter.in_local_mode else None
 ))
 ```
+
+## When the device applies something else
+
+A device may put a different value in force than the one a master wrote: it
+clamps to a limit, ramps, or refuses part of the request. The master has to see
+what was applied, not its own request echoed back. Bind the output's status to
+the device, and both the output status and the mirroring input report it:
+
+```python
+binding.output(Kind.AO, 87, inverter.set_power_limit, status=lambda: inverter.power_limit)
+```
+
+`poll()` reads that input like any other, so when the device changes the value
+with no command behind it, the master gets an event.
+
+## Reporting without commanding
+
+An outstation can be one of several interfaces onto a device, with another of
+them holding control. Build it read-only and it reports everything and
+commands nothing:
+
+```python
+outstation = DerOutstation(point_map, binding, read_only=True)
+```
+
+Every control on a bound output is refused with `NOT_AUTHORIZED`, on select,
+operate and direct operate, and your binding is never called. Pass
+`read_only_status=CommandStatus.BLOCKED_OTHER_MASTER` if that says it better
+for your device. Reads, freezes and the time write work as before.
+
+It still reports what each output stands at, from the `status=` reader, since
+that value was set by whichever interface does command. Give every output a
+status reader on a read-only outstation: without one it can only report the
+initial value you bound, or that it has nothing to report.
+
+`outstation.read_only` may be changed while the outstation runs, for a device
+whose control interface is reassigned.
 
 ## Curves
 

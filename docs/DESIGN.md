@@ -842,6 +842,38 @@ known in every one of these cases, so the indication is the parameter one and no
 *Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
 answer, and has the range read for that.
 
+**D65 -- An output's standing value is one question, and a read-only outstation refuses
+controls on a status the caller chooses.** Two things about outputs, decided together
+because they meet in a device that has more than one way in.
+
+*What an output stands at.* An output's status and the input that mirrors it are the same
+statement, so they are answered the same way: from the binding's `status` reader when it
+has one, and from the last write this outstation accepted when it has none. Before this
+the status used the reader and the mirroring input used the last write, so a device that
+applied something other than what was written (a limit, a ramp, a clamp) reported the
+applied value in one group and the request in the other. With one source, the mirror also
+raises an event when the value in force changes with no command behind it, which is how a
+master learns its setpoint was reduced after it was accepted.
+
+*Read-only.* `DerOutstation(read_only=True)` reports and does not command. A control on a
+bound output is refused per object, on select, operate and direct operate, before its
+value is examined and before the binding's `check` or `apply` is asked anything; a direct
+operate that takes no response is dropped unexecuted. The status is `NOT_AUTHORIZED` by
+default, because the truth is "not through this interface" and `NOT_SUPPORTED` would say
+the point cannot be controlled at all; a caller that knows another master holds the point
+may choose `BLOCKED_OTHER_MASTER`. A point with no binding is still `NOT_SUPPORTED`, since
+that is a different fact. Reads, freezes and the time write are unaffected: a freeze
+changes what the outstation reports and not what the device does.
+
+A read-only outstation still reports what its outputs stand at, from the status reader. It
+does not vouch for a write it accepted before it became read-only, since another interface
+may have changed the value since, so without a reader it reports the binding's initial
+value or that it has nothing to report. The role is an attribute and may change while the
+outstation runs. The device profile document for a read-only outstation lists no control
+requests and still lists output status.
+*Trade-off:* a master that commands a read-only outstation gets a refusal per point and
+not the unsupported-function indication, so it has to read a status code to learn why.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

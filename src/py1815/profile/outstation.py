@@ -159,6 +159,8 @@ class DerOutstation:
         clock_ms: Callable[[], int] = wall_clock_ms,
         level2: bool = False,
         disabled_offline: bool = True,
+        read_only: bool = False,
+        read_only_status: CommandStatus = CommandStatus.NOT_AUTHORIZED,
     ) -> None:
         """
         Args:
@@ -186,11 +188,24 @@ class DerOutstation:
                 as not in effect. Turn it off for a controlling station
                 that discards any value not flagged ONLINE, and so
                 could not check a setting before enabling its function.
+            read_only: Report and do not command (D65). Every control on a
+                bound output is refused with ``read_only_status`` and nothing
+                reaches the binding. For an outstation that is one of several
+                interfaces onto a device, when another of them holds control.
+                Settable afterwards through :attr:`read_only`.
+            read_only_status: What a refused control is answered with. The
+                default says this master may not command here. A caller that
+                knows another master holds the point may prefer
+                ``BLOCKED_OTHER_MASTER``.
         """
         if block_octets < 32:
             raise ValueError(f"block_octets is {block_octets}; too small to hold an object range")
+        if read_only_status is CommandStatus.SUCCESS:
+            raise ValueError("read_only_status is SUCCESS, which refuses nothing")
         self._map = point_map
         self._binding = binding
+        self.read_only = read_only
+        self._read_only_status = read_only_status
         self._block_octets = block_octets
         self._clock_ms = clock_ms
         self._level2 = level2
@@ -313,14 +328,36 @@ class DerOutstation:
         return gates
 
     def _mirror(self, output: Address) -> Reader:
-        def read() -> Reading:
-            if output not in self._state:
-                # Nothing has been written and no initial value was given, so
-                # there is no value to report: say so rather than report zero.
-                return Reading(0, Quality.NEVER_READ)
-            return Reading(self._state[output])
+        # The input paired with an output says what the output stands at,
+        # which is the same question its status answers. Asking it the same
+        # way is what keeps the two from disagreeing when the device applied
+        # something other than what was written (D65).
+        return lambda: self._standing(output)
 
-        return read
+    def _standing(self, address: Address) -> Reading:
+        """What an output stands at: the value in force, and how far to trust it.
+
+        The binding's status reader when it has one, since only the device
+        knows what it applied. Without one, the last write this outstation
+        accepted. A read-only outstation accepts none, and one that became
+        read-only stops vouching for a write it took earlier, because another
+        interface may have changed the value since: it reports the initial
+        value the binding gave, or that it has nothing to report.
+        """
+        output = self._binding.outputs[address]
+        if output.status is not None:
+            try:
+                result = output.status()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("profile: status of %s%d failed", address[0].value, address[1])
+                return Reading(0, Quality.COMM_LOST)
+            return result if isinstance(result, Reading) else Reading(result)
+        value = output.initial if self.read_only else self._state.get(address)
+        if value is None:
+            # Nothing has been written and no initial value was given, so
+            # there is no value to report: say so rather than report zero.
+            return Reading(0, Quality.NEVER_READ)
+        return Reading(value)
 
     def _is_served(self, point: Point) -> bool:
         if point.kind.is_output:
@@ -526,20 +563,11 @@ class DerOutstation:
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""
-        status = self._binding.outputs[point.address].status
-        if status is not None:
-            try:
-                result = status()
-            except Exception:  # pylint: disable=broad-exception-caught
-                logger.exception("profile: status of %s%d failed", point.kind.value, point.index)
-                return 0, _QUALITY_FLAGS[Quality.COMM_LOST]
-            reading = result if isinstance(result, Reading) else Reading(result)
-            return reading.value, _QUALITY_FLAGS[reading.quality]
-        value = self._state.get(point.address)
-        if value is None:
+        reading = self._standing(point.address)
+        if reading.quality is Quality.NEVER_READ:
             # Never written and given no initial value: nothing to report yet.
             return None, _QUALITY_FLAGS[Quality.NEVER_READ]
-        return value, _QUALITY_FLAGS[Quality.GOOD]
+        return reading.value, _QUALITY_FLAGS[reading.quality]
 
     def _indexed(
         self, group: int, variation: int, points: Iterable[Point], qualifier: QualifierCode
@@ -756,6 +784,11 @@ class DerOutstation:
             # No such output here. Per point rather than for the request: the
             # controls beside it may be perfectly good.
             return CommandStatus.NOT_SUPPORTED
+        if self.read_only:
+            # Before the value is looked at and before the binding is asked
+            # anything: a refusal that depended on what was requested would
+            # tell a master more about a device it may not command than "no".
+            return self._read_only_status
 
         value: float | bool
         if isinstance(control.command, ControlRelayOutputBlock):

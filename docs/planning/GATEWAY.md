@@ -111,8 +111,6 @@ closes. G7 follows the roadmap and is not gated on the rest.
 
 ## Open
 
-- **The status a read-only outstation refuses a control with** (G1). It has to tell a
-  master "not through this interface" and not "this point cannot be controlled".
 - **A second master address while one is active** (G4): refuse it, or let it displace the
   first. Displacing is friendlier to a master that restarted with a different address;
   refusing is safer when two masters are both alive.
