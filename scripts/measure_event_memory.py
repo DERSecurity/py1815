@@ -6,10 +6,18 @@ class to its capacity, and the events stay until it comes back. On a controller
 with little memory that worst case is the figure to budget for, so this script
 produces it rather than leaving it to be estimated.
 
-For each kind of event it builds an `EventBuffers`, fills all three classes to
-capacity, and reports what Python allocated for that, as bytes per event and as
-a total. `tracemalloc` counts the allocations the interpreter made, which is
-every object an event holds: the event, its point, its timestamp and its place
+For each kind of event it builds an `EventBuffers` the way the profile
+outstation builds its own, fills all three classes to capacity, and reports
+what Python allocated for that, as bytes per event and as a total.
+
+The profile outstation keeps only the latest analog event per point, so an
+analog class fills only when as many analog points change as the class holds.
+The analog run spreads its events over that many points, which is the most the
+buffers can hold of them; binary and frozen counter events are kept in full,
+so those runs spread over a few points that keep changing.
+
+`tracemalloc` counts the allocations the interpreter made, which is every
+object an event holds: the event, its point, its timestamp and its place
 in the buffer. It does not count the interpreter itself or the allocator's own
 overhead, so the process grows by somewhat more than the total printed.
 
@@ -46,8 +54,9 @@ DEFAULT_CAPACITY: int = (
     inspect.signature(DerOutstation.__init__).parameters["event_capacity"].default
 )
 
-#: Points the events are spread over. A buffer fills because a few points keep
-#: changing, not because thousands of points each change once.
+#: Points the binary and frozen counter events are spread over. Those buffers
+#: fill because a few points keep changing, not because thousands each change
+#: once.
 POINTS = 16
 
 #: Where the timestamps start, in milliseconds. Any recent time will do; what
@@ -70,8 +79,10 @@ def _binary(buffers: EventBuffers, event_class: EventClass, number: int) -> None
 
 
 def _analog(buffers: EventBuffers, event_class: EventClass, number: int) -> None:
+    # One point per event: with only the latest kept per point, fewer points
+    # than the class holds could never fill it.
     recorded = buffers.record_analog(
-        number % POINTS,
+        number,
         AnalogPoint(value=number + 0.5),
         event_class=event_class,
         timestamp_ms=START_MS + number,
@@ -100,7 +111,9 @@ def measure(fill: Fill, capacity: int) -> tuple[int, int]:
     tracemalloc.start()
     try:
         before, _ = tracemalloc.get_traced_memory()
-        buffers = EventBuffers(capacity=capacity)
+        # As the profile outstation builds them, so the analog run measures the
+        # configuration whose default capacity is being reported on.
+        buffers = EventBuffers(capacity=capacity, analog_latest_only=True)
         number = 0
         for event_class in EventClass:
             for _ in range(capacity):

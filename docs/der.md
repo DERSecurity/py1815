@@ -255,9 +255,11 @@ oldest is dropped, and the default is 2000. The buffers are empty while a
 master keeps polling and full when it has gone away, so the full figure is the
 one to budget for.
 
-Measured on CPython 3.12, 64-bit Linux, an event costs a little under 300 bytes,
-and all three classes full at the default capacity come to about 1.6 MiB. The
-figure is approximate: it counts what Python allocates for the events and not
+Measured on CPython 3.12, 64-bit Linux, a binary or frozen counter event costs a
+little under 300 bytes, and all three classes full of them at the default
+capacity come to about 1.6 MiB. An analog event costs nearer 400 bytes, because
+keeping only the latest one per point needs an index beside it, but there is at
+most one per analog point, as below. The figures are approximate: it counts what Python allocates for the events and not
 the interpreter around them, and it moves with the Python version. A 32-bit
 build needs roughly half as much, because most of an event is pointers, and the
 32-bit CI job prints its own figure on every run. To get the number for your
