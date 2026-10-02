@@ -714,3 +714,25 @@ class TestAReadByIndexIsDeclaredAndAnswered:
             response = sender.send(1, _read_header(simulation.outstation, row, qualifier))
             assert not _refused(response)
             assert response[6] == qualifier and qualifier in row.response[1]
+
+
+class TestAReadOnlyOutstationIsDocumentedAsOne:
+    """The document lists what a master may ask for, and a control is not on the list."""
+
+    def _table(self, simulation):
+        session = simulation.outstation.session()
+        return device_profile.implementation(simulation.outstation, session.facts)
+
+    def test_the_commanding_outstation_lists_controls(self, simulation):
+        assert {12, 41} <= {row.group for row in self._table(simulation).rows}
+
+    def test_the_read_only_one_lists_none_and_still_lists_output_status(self, simulation):
+        simulation.outstation.read_only = True
+        groups = {row.group for row in self._table(simulation).rows}
+        assert not groups & {12, 41}
+        assert {10, 40} <= groups
+
+    def test_the_document_says_controls_are_not_supported(self, simulation):
+        simulation.outstation.read_only = True
+        text = device_profile.render(_document(simulation))
+        assert "controlStatusCodesSupported" not in text
