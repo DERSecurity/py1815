@@ -4,9 +4,9 @@ A three-phase, storage-coupled generator of modest size, modeled just far
 enough to make every point the profile requires mean something: power that
 follows a slowly varying source, a meter that reports it, energy counters that
 accumulate it, a state of charge that moves when the storage is dispatched,
-and four DER functions a controlling station can enable and watch take effect
--- active power limit, charge/discharge, constant vars and constant power
-factor.
+and six DER functions a controlling station can enable and watch take effect
+-- active power limit, charge/discharge, constant vars, constant power
+factor, and two that follow a curve of voltage: volt-var and volt-watt.
 
 It is a stand-in, not a model of any product. What a real integration
 replaces is this module and nothing else: it binds the same points to its own
@@ -28,7 +28,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from py1815.control import CommandStatus
+from py1815.profile import curves
 from py1815.profile.binding import Binding, Reader
+from py1815.profile.curves import CurveStore
 from py1815.profile.model import Address, Kind, PointMap
 from py1815.profile.outstation import DerOutstation
 
@@ -45,8 +47,10 @@ BO_PF_ABSORB_GENERATING = 10
 BO_PF_ABSORB_CHARGING = 11
 BO_ENABLE_POWER_LIMIT = 17
 BO_ENABLE_CHARGE_DISCHARGE = 18
+BO_ENABLE_VOLT_WATT = 25
 BO_ENABLE_CONSTANT_VARS = 27
 BO_ENABLE_CONSTANT_PF = 28
+BO_ENABLE_VOLT_VAR = 29
 
 # Analog outputs: settings, then each supported function's block.
 AO_REFERENCE_VOLTAGE = 0
@@ -62,11 +66,15 @@ AO_POWER_LIMIT_FIRST, AO_POWER_LIMIT_LAST = 82, 88
 AO_POWER_LIMIT_MAXIMUM = 87
 AO_CHARGE_DISCHARGE_FIRST, AO_CHARGE_DISCHARGE_LAST = 89, 101
 AO_CHARGE_DISCHARGE_TARGET = 93
+AO_VOLT_WATT_FIRST, AO_VOLT_WATT_LAST = 168, 180
+AO_VOLT_WATT_CURVE = 173
 AO_CONSTANT_VARS_FIRST, AO_CONSTANT_VARS_LAST = 199, 205
 AO_CONSTANT_VARS_TARGET = 203
 AO_CONSTANT_PF_FIRST, AO_CONSTANT_PF_LAST = 206, 211
 AO_CONSTANT_PF_GENERATING = 210
 AO_CONSTANT_PF_CHARGING = 211
+AO_VOLT_VAR_FIRST, AO_VOLT_VAR_LAST = 212, 220
+AO_VOLT_VAR_CURVE = 217
 AO_CURVE_SELECTOR = 244
 AO_METER_THRESHOLD_FIRST = 449
 AO_COUNTER_UNITS = 600
@@ -74,15 +82,31 @@ AO_COUNTER_UNITS = 600
 # The multiplexed curve block: a selector, four fields, then X and Y for each
 # of a hundred points. Inputs and outputs are laid out alike.
 AI_CURVE_SELECTOR = 328
-CURVE_FIELDS = 4
-CURVE_POINTS = 100
+BI_CURVE_REFERENCED = 107
+CURVE_FIELDS = curves.FIELDS
+CURVE_POINTS = curves.MAX_POINTS
 #: How many curves this DER stores. The profile leaves the number to the DER.
 CURVE_COUNT = 10
+
+# Curve types and units this simulation follows, from the enumerations the
+# curve fields carry: a curve of voltage, in tenths of a percent of nominal,
+# against vars or watts in tenths of a percent of rating.
+CURVE_VOLT_VAR = 2
+CURVE_VOLT_WATT = 5
+X_PERCENT_VOLTAGE = 129
+Y_PERCENT_MAX_VARS = 2
+Y_PERCENT_AVAILABLE_VARS = 3
+Y_PERCENT_MAX_WATTS = 5
 
 # Analog inputs this simulation computes.
 AI_RESPONSE_TIME_PERCENT = 40
 AI_FREEZE_INTERVAL = 69
 AI_POWER_LIMIT_REFERENCE = 147
+AI_VOLT_WATT_VOLTAGE = 247
+AI_VOLT_WATT_OUTPUT = 249
+AI_VOLT_VAR_VOLTAGE = 295
+AI_VOLT_VAR_REFERENCE = 296
+AI_VOLT_VAR_OUTPUT = 301
 AI_METER_FIRST = 533
 
 #: Units a freeze interval may be given in, as seconds each. The calendar
@@ -93,6 +117,69 @@ _INTERVAL_SECONDS = {1: 0.001, 2: 1.0, 3: 60.0, 4: 3600.0, 5: 86400.0, 6: 604800
 #: How quickly output follows a new target: the time constant of a first-order
 #: response, in seconds.
 _RESPONSE_SECONDS = 2.0
+
+#: How long a start or a stop takes. Long enough that a controlling station
+#: reading straight after the command sees the DER on its way.
+_TRANSITION_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class Function:
+    """One DER function this simulation implements, by the points it uses."""
+
+    name: str
+    #: The binary output that enables it.
+    enable: int
+    #: The first and last of its analog output settings.
+    settings: tuple[int, int]
+    #: Analog inputs it computes, beyond the ones that read its settings back.
+    inputs: tuple[int, ...] = ()
+    #: The setting that names its curve, and the curve types it follows.
+    curve: int | None = None
+    curve_types: tuple[int, ...] = ()
+
+
+#: The functions the simulation implements. Every other function of the
+#: profile is left unbound, and so reports "not supported".
+FUNCTIONS: tuple[Function, ...] = (
+    Function(
+        "active power limit",
+        BO_ENABLE_POWER_LIMIT,
+        (AO_POWER_LIMIT_FIRST, AO_POWER_LIMIT_LAST),
+        inputs=(AI_POWER_LIMIT_REFERENCE,),
+    ),
+    Function(
+        "charge/discharge",
+        BO_ENABLE_CHARGE_DISCHARGE,
+        (AO_CHARGE_DISCHARGE_FIRST, AO_CHARGE_DISCHARGE_LAST),
+    ),
+    Function(
+        "volt-watt",
+        BO_ENABLE_VOLT_WATT,
+        (AO_VOLT_WATT_FIRST, AO_VOLT_WATT_LAST),
+        inputs=(AI_VOLT_WATT_VOLTAGE, AI_VOLT_WATT_OUTPUT),
+        curve=AO_VOLT_WATT_CURVE,
+        curve_types=(CURVE_VOLT_WATT,),
+    ),
+    Function(
+        "constant vars",
+        BO_ENABLE_CONSTANT_VARS,
+        (AO_CONSTANT_VARS_FIRST, AO_CONSTANT_VARS_LAST),
+    ),
+    Function(
+        "constant power factor",
+        BO_ENABLE_CONSTANT_PF,
+        (AO_CONSTANT_PF_FIRST, AO_CONSTANT_PF_LAST),
+    ),
+    Function(
+        "volt-var",
+        BO_ENABLE_VOLT_VAR,
+        (AO_VOLT_VAR_FIRST, AO_VOLT_VAR_LAST),
+        inputs=(AI_VOLT_VAR_VOLTAGE, AI_VOLT_VAR_REFERENCE, AI_VOLT_VAR_OUTPUT),
+        curve=AO_VOLT_VAR_CURVE,
+        curve_types=(CURVE_VOLT_VAR,),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -129,6 +216,8 @@ class ReferenceDer:
         self.settings: dict[Address, float | bool] = {}
         self.elapsed = 0.0
         self.started = True
+        #: A start or stop under way: where it is headed, and the seconds left.
+        self._transition: tuple[bool, float] | None = None
         self.watts = 0.0
         self.vars = 0.0
         self.phase_volts = self.ratings.phase_volts
@@ -137,14 +226,11 @@ class ReferenceDer:
         #: Running energy totals: watt-hours delivered and received, then
         #: var-hours delivered and received.
         self.energy = [0.0, 0.0, 0.0, 0.0]
-        self.selected_curve = 1
-        #: Each curve as its four fields and its flattened X, Y values, in the
-        #: integers a master wrote; the scaling of a curve's points depends on
-        #: the units the curve declares, so they are stored as they travel.
-        self.curves: dict[int, list[float]] = {
-            number: [0.0] * (CURVE_FIELDS + 2 * CURVE_POINTS)
-            for number in range(1, CURVE_COUNT + 1)
-        }
+        #: The curves, the window onto them, and which function names which.
+        self.curves = CurveStore(CURVE_COUNT)
+        #: How to get the curve each curve-following function names, by the
+        #: index of the setting that names it. Filled in by :meth:`bind`.
+        self._curve_of: dict[int, Callable[[], curves.Curve | None]] = {}
 
     # ------------------------------------------------------------- behavior
 
@@ -155,9 +241,65 @@ class ReferenceDer:
         return float(self.settings.get((AO, index), 0.0))
 
     @property
+    def selected_curve(self) -> int:
+        """The number of the curve the edit window is showing."""
+        return self.curves.selected
+
+    @property
+    def line_volts(self) -> float:
+        """Measured line-to-line voltage at the connection point."""
+        return self.phase_volts * math.sqrt(3)
+
+    @property
+    def nominal_volts(self) -> float:
+        """What a curve's percent voltage is a percentage of: the reference plus its offset."""
+        return self._setting(AO_REFERENCE_VOLTAGE) + self._setting(AO_REFERENCE_VOLTAGE_OFFSET)
+
+    def _along(self, setting: int, y_units: tuple[int, ...]) -> float | None:
+        """Where the measured voltage falls on a function's curve, as a fraction of rating.
+
+        None when the function names no curve, or one in units this
+        simulation does not follow, or the nominal voltage is not set.
+        """
+        named = self._curve_of.get(setting)
+        curve = named() if named is not None else None
+        nominal = self.nominal_volts
+        if curve is None or nominal <= 0:
+            return None
+        if curve.x_units != X_PERCENT_VOLTAGE or curve.y_units not in y_units:
+            return None
+        # Both axes travel in tenths of a percent.
+        value = curve.at(self.line_volts / nominal * 1000.0)
+        return None if value is None else value / 1000.0
+
+    def volt_watt_limit(self) -> float | None:
+        """The active power volt-watt allows at this voltage, or None when it sets no limit."""
+        if not self._on(BO_ENABLE_VOLT_WATT):
+            return None
+        share = self._along(AO_VOLT_WATT_CURVE, (Y_PERCENT_MAX_WATTS,))
+        return None if share is None else share * self.ratings.watts
+
+    def volt_var_target(self) -> float | None:
+        """The reactive power volt-var calls for at this voltage, or None when it calls for none."""
+        if not self._on(BO_ENABLE_VOLT_VAR):
+            return None
+        share = self._along(AO_VOLT_VAR_CURVE, (Y_PERCENT_MAX_VARS, Y_PERCENT_AVAILABLE_VARS))
+        return None if share is None else share * self.ratings.vars
+
+    @property
     def connected(self) -> bool:
         """Whether the connect switch is closed."""
         return self._on(BO_CONNECT)
+
+    @property
+    def starting(self) -> bool:
+        """Whether a start has been commanded and is not yet complete."""
+        return self._transition is not None and self._transition[0]
+
+    @property
+    def stopping(self) -> bool:
+        """Whether a stop has been commanded and is not yet complete."""
+        return self._transition is not None and not self._transition[0]
 
     @property
     def energized(self) -> bool:
@@ -182,6 +324,9 @@ class ReferenceDer:
                 watts = 0.0
         if self._on(BO_ENABLE_POWER_LIMIT):
             watts = min(watts, self._setting(AO_POWER_LIMIT_MAXIMUM) / 100.0 * ratings.watts)
+        limit = self.volt_watt_limit()
+        if limit is not None:
+            watts = min(watts, limit)
         watts = max(-ratings.watts, min(ratings.watts, watts))
 
         reactive = 0.0
@@ -195,6 +340,9 @@ class ReferenceDer:
             reactive = abs(watts) * math.tan(math.acos(factor)) * (-1.0 if absorbing else 1.0)
         elif self._on(BO_ENABLE_CONSTANT_VARS):
             reactive = self._setting(AO_CONSTANT_VARS_TARGET) / 100.0 * ratings.vars
+        else:
+            # Volt-var gives way to either fixed reactive function.
+            reactive = self.volt_var_target() or 0.0
         reactive = max(-ratings.vars, min(ratings.vars, reactive))
         # Active power has priority: reactive gives way at the apparent limit.
         headroom = math.sqrt(max(0.0, ratings.volt_amperes**2 - watts**2))
@@ -205,6 +353,12 @@ class ReferenceDer:
         if seconds <= 0:
             return
         self.elapsed += seconds
+        if self._transition is not None:
+            target, remaining = self._transition
+            if remaining <= seconds:
+                self.started, self._transition = target, None
+            else:
+                self._transition = (target, remaining - seconds)
         target_watts, target_vars = self._targets()
         share = 1.0 - math.exp(-seconds / _RESPONSE_SECONDS)
         self.watts += (target_watts - self.watts) * share
@@ -301,7 +455,8 @@ class ReferenceDer:
             return None
         if not self._on(BO_PERMIT_START):
             return CommandStatus.BLOCKED
-        self.started = True
+        if not self.started or self.stopping:
+            self._transition = (True, _TRANSITION_SECONDS)
         return None
 
     def _stop(self, value: float) -> CommandStatus | None:
@@ -309,7 +464,8 @@ class ReferenceDer:
             return None
         if not self._on(BO_PERMIT_STOP):
             return CommandStatus.BLOCKED
-        self.started = False
+        if self.started or self.starting:
+            self._transition = (False, _TRANSITION_SECONDS)
         return None
 
     def _bind_state(self, binding: Binding) -> None:
@@ -341,8 +497,8 @@ class ReferenceDer:
             9: lambda: False,
             # State.
             10: lambda: False,
-            12: lambda: False,
-            13: lambda: False,
+            12: lambda: self.starting,
+            13: lambda: self.stopping,
             14: lambda: self.started,
             15: lambda: not self.started,
             18: idle,
@@ -354,8 +510,6 @@ class ReferenceDer:
             24: lambda: False,
             # Storage capacity is stated in watt-hours.
             27: lambda: True,
-            # Whether the selected curve is in use by a function: none here is.
-            107: lambda: False,
         }
         # The disconnect protections: none blocked, started or operated.
         states.update({index: (lambda: False) for index in range(52, 64)})
@@ -429,56 +583,55 @@ class ReferenceDer:
         self._output(binding, BO, BO_ENABLE_CHARGE_DISCHARGE, False)
         self._output(binding, BO, BO_ENABLE_CONSTANT_VARS, False)
         self._output(binding, BO, BO_ENABLE_CONSTANT_PF, False)
+        self._output(binding, BO, BO_ENABLE_VOLT_WATT, False)
+        self._output(binding, BO, BO_ENABLE_VOLT_VAR, False)
 
         defaults = {
             AO_POWER_LIMIT_MAXIMUM: 100.0,
             AO_CONSTANT_PF_GENERATING: 1.0,
             AO_CONSTANT_PF_CHARGING: 1.0,
         }
-        for first, last in (
-            (AO_POWER_LIMIT_FIRST, AO_POWER_LIMIT_LAST),
-            (AO_CHARGE_DISCHARGE_FIRST, AO_CHARGE_DISCHARGE_LAST),
-            (AO_CONSTANT_VARS_FIRST, AO_CONSTANT_VARS_LAST),
-            (AO_CONSTANT_PF_FIRST, AO_CONSTANT_PF_LAST),
-        ):
+        for function in FUNCTIONS:
+            first, last = function.settings
             for index in range(first, last + 1):
-                self._output(binding, AO, index, defaults.get(index, 0.0))
+                if index != function.curve:
+                    self._output(binding, AO, index, defaults.get(index, 0.0))
         binding.read(AI, AI_POWER_LIMIT_REFERENCE, lambda: self.watts)
 
+        # The two functions that follow a curve report the voltage they act
+        # on and what they are asking for; with nothing asked, that is what
+        # the DER is doing anyway.
+        binding.read(AI, AI_VOLT_WATT_VOLTAGE, lambda: self.line_volts, deadband=10)
+        binding.read(AI, AI_VOLT_VAR_VOLTAGE, lambda: self.line_volts, deadband=10)
+        binding.read(AI, AI_VOLT_VAR_REFERENCE, lambda: self.nominal_volts)
+
+        def volt_watt_output() -> float:
+            limit = self.volt_watt_limit()
+            return self.ratings.watts if limit is None else limit
+
+        binding.read(AI, AI_VOLT_WATT_OUTPUT, volt_watt_output)
+        binding.read(AI, AI_VOLT_VAR_OUTPUT, lambda: self.volt_var_target() or 0.0)
+
     def _bind_curves(self, binding: Binding) -> None:
-        """The curve block: one window onto whichever curve is selected."""
-
-        def select(value: float) -> CommandStatus | None:
-            number = round(value)
-            if number not in self.curves:
-                return CommandStatus.OUT_OF_RANGE
-            self.selected_curve = number
-            return None
-
-        binding.output(
-            AO,
-            AO_CURVE_SELECTOR,
-            select,
-            check=lambda value: (
-                self._blocked(value)
-                or (None if round(value) in self.curves else CommandStatus.OUT_OF_RANGE)
-            ),
-            status=lambda: self.selected_curve,
+        """The curve block, and the functions that name a curve from it."""
+        self.curves.bind(
+            binding,
+            output=AO_CURVE_SELECTOR,
+            readback=AI_CURVE_SELECTOR,
+            referenced=BI_CURVE_REFERENCED,
+            check=self._blocked,
         )
-        binding.read(AI, AI_CURVE_SELECTOR, lambda: self.selected_curve)
-
-        def field(position: int) -> tuple[Callable[[float], None], Reader]:
-            def write(value: float) -> None:
-                self.curves[self.selected_curve][position] = float(value)
-
-            return write, lambda: self.curves[self.selected_curve][position]
-
-        for position in range(CURVE_FIELDS + 2 * CURVE_POINTS):
-            write, read = field(position)
-            binding.output(
-                AO, AO_CURVE_SELECTOR + 1 + position, write, check=self._blocked, status=read
+        for function in FUNCTIONS:
+            if function.curve is None:
+                continue
+            enable = function.enable
+            self._curve_of[function.curve] = self.curves.reference(
+                binding,
+                function.curve,
+                types=function.curve_types,
+                enabled=lambda enable=enable: self._on(enable),  # type: ignore[misc]
+                check=self._blocked,
             )
-            binding.read(AI, AI_CURVE_SELECTOR + 1 + position, read)
 
     def _bind_nameplate(self, binding: Binding, point_map: PointMap) -> None:
         ratings = self.ratings
@@ -569,7 +722,8 @@ class ReferenceDer:
             (lambda: self.phase_volts, 10),
             (lambda: 0.0, None),
             (lambda: self.phase_volts, 10),
-            (lambda: -120.0, None),
+            # Angles are reported from zero to a full turn: phase B lags A by a third.
+            (lambda: 240.0, None),
             (lambda: self.phase_volts, 10),
             (lambda: 120.0, None),
             (lambda: self.phase_volts * math.sqrt(3), 10),

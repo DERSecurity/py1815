@@ -18,6 +18,10 @@ reference.
 
 ::: py1815.profile.outstation
 
+## Curves
+
+::: py1815.profile.curves
+
 ## Device Profile
 
 ::: py1815.profile.device_profile

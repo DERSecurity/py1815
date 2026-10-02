@@ -99,10 +99,11 @@ certification body:
 | Event classes, class 0 membership and reporting modes (5.3, 5.6) | Implemented as the profile selects them |
 | Counter freezing (5.6.3): periodic from startup, period set by the master, never cleared, logged as timestamped events | Implemented |
 | Every point the tables mark mandatory | Served by the simulated DER |
-| DER functions (clause 6) | Active power limit, charge/discharge, constant vars and constant power factor act on the simulation. Every other function reports "not supported" through its supports point, as 6.1.1 requires of a function that is not implemented |
-| Curves (6.1.3) | The multiplexed curve block stores and reads back ten curves; no curve-based function uses them yet |
+| DER functions (clause 6) | Active power limit, charge/discharge, constant vars, constant power factor, volt-var and volt-watt act on the simulation. Every other function reports "not supported" through its supports point, as 6.1.1 requires of a function that is not implemented. A disabled function's inputs are sent without the ONLINE flag |
+| Curves (6.1.3) | Ten curves behind the multiplexed block, with the selector, referenced-indicator, locking and curve-type rules. Volt-var and volt-watt follow theirs; hysteresis is not followed |
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
+| DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
 | Unsolicited responses, floating-point variations, device attributes (all optional in the profile), secure authentication | Not implemented |
 
 `py1815-der profile` writes the outstation's DNP3 Device Profile document (schema version

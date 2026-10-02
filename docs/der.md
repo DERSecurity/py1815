@@ -17,9 +17,9 @@ py1815-der run
 
 and, from a second terminal, `py1815-der poll`. That is the profile's point
 map served over a simulated DER: a three-phase, storage-coupled generator
-with a system meter, four energy counters, and four functions a master can
+with a system meter, four energy counters, and six functions a master can
 enable (active power limit, charge/discharge, constant vars, constant power
-factor). The repository's `Dockerfile` runs the same thing in a container;
+factor, volt-var and volt-watt). The repository's `Dockerfile` runs the same thing in a container;
 the README has the commands.
 
 `py1815-der points` lists every point it serves. `py1815-der run --help` has
@@ -131,6 +131,7 @@ outstation.
 | **Scaling** | A value goes on the wire as `(value - offset) / multiplier`, rounded, from the tables. A setpoint comes off it the other way. |
 | **Range** | An input outside the tables' range is reported with `OVER_RANGE`. A setpoint outside it is refused with `OUT_OF_RANGE`, not clamped. |
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
+| **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. `disabled_offline=False` turns this off. |
 | **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone. |
@@ -145,6 +146,35 @@ binding.output(Kind.AO, 87, set_limit, check=lambda _value: (
     CommandStatus.LOCAL if inverter.in_local_mode else None
 ))
 ```
+
+## Curves
+
+Functions that follow a curve share one block of points and a selector that says which
+curve the block is showing. `CurveStore` is the state behind that block, with the rules
+clause 6.1.3 attaches to it:
+
+```python
+from py1815.profile.curves import CurveStore
+
+curves = CurveStore(count=10)
+# The selector, and the fields and points that follow it; the inputs are laid out alike.
+curves.bind(binding, output=244, readback=328, referenced=107)
+
+# A function names its curve through one setting, and follows curves of some types.
+volt_var = curves.reference(binding, 217, types=[2], enabled=lambda: inverter.volt_var_on)
+
+curve = volt_var()            # None while the function names no curve
+if curve is not None:
+    target = curve.at(measured)   # in the units the curve's points were written in
+```
+
+A selector naming a curve that does not exist is refused. A curve named by an enabled
+function cannot be edited until the function is disabled or pointed at another curve. A
+function cannot be pointed at a curve of a type it does not follow. The points are kept
+as the integers a master wrote, since their scaling depends on the units the curve
+declares.
+
+The simulated DER uses a store for volt-var and volt-watt.
 
 ## The Device Profile document
 
@@ -214,10 +244,9 @@ the configuration the conformance tests run against; see
 
 ## What is not there yet
 
-- **Curves and schedules as objects.** The multiplexed curve and schedule
-  blocks are ordinary points to the builder. The simulated DER shows one way
-  to hold a curve store behind them (`py1815.profile.der`); a builder-owned
-  edit buffer that hands a function its curve as a list of pairs is planned.
+- **Schedules as objects.** The schedule blocks are ordinary points to the
+  builder, and nothing runs a schedule. Curves have a store (see above);
+  hysteresis, where a curve doubles back, is not followed.
 - **Floating-point variations.** Inputs are served as integers, scaled by the
   tables, which is the profile's baseline. A floating-point setpoint is
   accepted and taken as engineering units.
