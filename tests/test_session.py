@@ -61,9 +61,11 @@ def _user_data(fragment: bytes, *, confirmed: bool = False, source: int = MASTER
     return link.build(control, destination=OUTSTATION, source=source, payload=b"\xc0" + fragment)
 
 
-def _link_only(function: link.PrimaryFunction, *, destination: int = OUTSTATION) -> bytes:
+def _link_only(
+    function: link.PrimaryFunction, *, destination: int = OUTSTATION, source: int = MASTER
+) -> bytes:
     control = link.control_byte(from_master=True, primary=True, function=function)
-    return link.build(control, destination=destination, source=MASTER)
+    return link.build(control, destination=destination, source=source)
 
 
 def _fragments(reply: bytes) -> list[bytes]:
@@ -177,6 +179,86 @@ class TestAddressing:
         )
 
         assert session.receive(link.build(control, OUTSTATION, MASTER)) == b""
+
+
+class TestAMasterNotKnownInAdvance:
+    """``master_address=None``: whoever speaks first on a connection is the master."""
+
+    def _session(self) -> Session:
+        return Session(Recorder(), outstation_address=OUTSTATION, master_address=None)
+
+    def test_the_first_master_to_speak_is_answered_at_its_own_address(self):
+        session = self._session()
+        (frame,) = _frames(session.receive(_user_data(CLASS_0_READ, source=99)))
+        assert (frame.destination, frame.source) == (99, OUTSTATION)
+
+    def test_a_link_request_is_answered_at_the_asker(self):
+        session = self._session()
+        ask = _link_only(link.PrimaryFunction.REQUEST_LINK_STATUS, source=4000)
+        (frame,) = _frames(session.receive(ask))
+        assert frame.destination == 4000
+
+    def test_a_second_address_on_the_same_connection_is_dropped(self):
+        """One association has one set of sequence numbers. Two masters would share them."""
+        session = self._session()
+        assert session.receive(_user_data(CLASS_0_READ, source=99))
+        assert session.receive(_user_data(CLASS_0_READ, source=7)) == b""
+        assert session.receive(_user_data(CLASS_0_READ, source=99)), "the first is still served"
+
+    def test_a_new_connection_may_bring_a_different_master(self):
+        """A master that restarted under another address reconnects and is served."""
+        session = self._session()
+        session.receive(_user_data(CLASS_0_READ, source=99))
+        session.connection_reset()
+        (frame,) = _frames(session.receive(_user_data(CLASS_0_READ, source=7)))
+        assert frame.destination == 7
+        assert session.receive(_user_data(CLASS_0_READ, source=99)) == b""
+
+    def test_the_session_says_who_it_is_talking_to(self):
+        session = self._session()
+        assert session.master_address is None
+        session.receive(_user_data(CLASS_0_READ, source=99))
+        assert session.master_address == 99
+        session.connection_reset()
+        assert session.master_address is None
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(OUTSTATION, id="the outstation's own address"),
+            pytest.param(link.MAX_ADDRESS + 1, id="a reserved address"),
+            pytest.param(int(link.Broadcast.NO_CONFIRM), id="a broadcast address"),
+        ],
+    )
+    def test_an_address_no_master_can_have_is_not_taken_as_one(self, source):
+        session = self._session()
+        assert session.receive(_user_data(CLASS_0_READ, source=source)) == b""
+        assert session.master_address is None
+        assert session.receive(_user_data(CLASS_0_READ, source=99)), "and does not block the next"
+
+    def test_a_broadcast_does_not_decide_who_the_master_is(self):
+        session = self._session()
+        control = link.control_byte(
+            from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+        )
+        heard = link.build(control, link.Broadcast.NO_CONFIRM, 55, payload=b"\xc0" + CLASS_0_READ)
+        assert session.receive(heard) == b""
+        assert session.master_address is None
+        (frame,) = _frames(session.receive(_user_data(CLASS_0_READ, source=99)))
+        assert frame.destination == 99
+        assert _fragments(session.receive(_user_data(CLASS_0_READ, source=99)))
+
+    def test_the_facts_name_no_expected_address(self):
+        session = self._session()
+        assert session.facts.master_address is None
+        session.receive(_user_data(CLASS_0_READ, source=99))
+        assert session.facts.master_address is None, "configuration, not who happens to be there"
+
+    def test_a_configured_master_reports_itself_throughout(self):
+        session, _ = _session()
+        assert session.master_address == MASTER
+        session.connection_reset()
+        assert session.master_address == MASTER
 
 
 class TestReads:
