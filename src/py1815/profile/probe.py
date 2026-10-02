@@ -35,6 +35,7 @@ _SIZES = {
     (1, 2): 1,
     (2, 1): 1,
     (2, 2): 7,
+    (2, 3): 3,
     (10, 2): 1,
     (20, 1): 5,
     (21, 1): 5,
@@ -50,6 +51,10 @@ _SIZES = {
     (40, 1): 5,
     (40, 2): 3,
 }
+
+#: The common time of occurrence that precedes binary events with relative time.
+_COMMON_TIME = 51
+_TIME_SIZE = 6
 
 _SIGNED_32 = {(30, 1), (32, 1), (32, 3), (40, 1)}
 _SIGNED_16 = {(30, 2), (32, 2), (32, 4), (40, 2)}
@@ -128,6 +133,14 @@ def parse_objects(body: bytes) -> tuple[list[Value], list[Value]]:
             raise ProbeError("a response ends inside an object header")
         group, variation, qualifier = body[offset : offset + 3]
         offset += 3
+        if group == _COMMON_TIME and qualifier == QualifierCode.UINT8_COUNT:
+            # The time a run of relative-time events counts from. Read past:
+            # this probe reports what changed and not when.
+            count = body[offset] if offset < len(body) else 0
+            offset += 1 + count * _TIME_SIZE
+            if offset > len(body):
+                raise ProbeError("a response ends inside a common time of occurrence")
+            continue
         size = _SIZES.get((group, variation))
         if size is None:
             raise ProbeError(f"group {group} variation {variation} is not one this probe reads")

@@ -57,6 +57,7 @@ _INDEXED = [0x17, 0x28]
 
 READ, WRITE, SELECT, OPERATE, DIRECT, DIRECT_NR = 1, 2, 3, 4, 5, 6
 FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR = 7, 8, 9, 10
+RECORD_CURRENT_TIME = 24
 RESPONSE = 129
 
 #: The schema spells variation numbers out.
@@ -180,7 +181,11 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         events(
             2,
             "Binary Input Event",
-            {1: "Binary Input Event - without time", 2: "Binary Input Event - with absolute time"},
+            {
+                1: "Binary Input Event - without time",
+                2: "Binary Input Event - with absolute time",
+                3: "Binary Input Event - with relative time",
+            },
         )
     if served[Kind.BO]:
         static(10, "Binary Output", {2: "Binary Output - output status with flags"})
@@ -260,6 +265,33 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
             )
     if facts.time_write:
         rows.append(Row(50, 1, "Time and Date - absolute time", request=(WRITE, (0x07,))))
+        rows.append(
+            Row(
+                50,
+                3,
+                "Time and Date - absolute time at last recorded time",
+                request=(WRITE, (0x07,)),
+            )
+        )
+    if facts.events and served[Kind.BI]:
+        # What a binary event with relative time counts from, and whether the
+        # clock that gave it had been set.
+        rows.append(
+            Row(
+                51,
+                1,
+                "Time and Date CTO - absolute time, synchronized",
+                response=(RESPONSE, (0x07,)),
+            )
+        )
+        rows.append(
+            Row(
+                51,
+                2,
+                "Time and Date CTO - absolute time, unsynchronized",
+                response=(RESPONSE, (0x07,)),
+            )
+        )
     rows.append(Row(52, 2, "Time Delay - fine", response=(RESPONSE, (0x07,))))
     rows.append(Row(60, 1, "Class Objects - class 0 data", request=(READ, tuple(_ALL))))
     if facts.events:
@@ -274,9 +306,19 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
             )
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, disable unsolicited (which
-    # is agreed to because none are sent), and delay measurement.
-    codes = (0, 13, 21, 23) if facts.cold_restart else (0, 21, 23)
-    return Implementation(rows=tuple(rows), function_codes=codes)
+    # is agreed to because none are sent), delay measurement, and the two
+    # that depend on how the session was built.
+    codes = [0, 21, 23]
+    if facts.cold_restart:
+        codes.append(13)
+    if facts.time_write:
+        codes.append(RECORD_CURRENT_TIME)
+    # What configuration has turned off is not something the device answers.
+    off = facts.disabled_functions
+    return Implementation(
+        rows=tuple(r for r in rows if r.request is None or r.request[0] not in off),
+        function_codes=tuple(sorted(code for code in codes if code not in off)),
+    )
 
 
 def _tag(name: str) -> str:
@@ -394,7 +436,7 @@ def _network(identity: Identity, facts: SessionFacts) -> Items:
         _both("multipleMasterConnections", ["notSupported"]),
         _both(
             "timeSynchronization",
-            ["dnpWriteTimeProcedure"] if facts.time_write else ["notSupported"],
+            ["dnpLANProcedure", "dnpWriteTimeProcedure"] if facts.time_write else ["notSupported"],
         ),
     ]
 
@@ -857,12 +899,14 @@ def _points(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
 
 
 #: The command statuses an outstation built here can answer with on its own
-#: account: the session's select checks, and the builder's refusals. A binding
+#: account: the session's select checks and its refusal of a request that carries a
+#: status of its own, and the builder's refusals. A binding
 #: may return any other status the standard defines, and that is the binding's
 #: to state.
 _OWN_STATUSES = (
     CommandStatus.TIMEOUT,
     CommandStatus.NO_SELECT,
+    CommandStatus.FORMAT_ERROR,
     CommandStatus.NOT_SUPPORTED,
     CommandStatus.OUT_OF_RANGE,
 )

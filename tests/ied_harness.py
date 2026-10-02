@@ -37,7 +37,7 @@ MASTER = 1
 # Function codes, by the names the procedures use.
 CONFIRM, READ, WRITE, SELECT, OPERATE, DIRECT_OPERATE, DIRECT_OPERATE_NR = 0, 1, 2, 3, 4, 5, 6
 FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR = 7, 8, 9, 10
-COLD_RESTART, ASSIGN_CLASS, DELAY_MEASURE = 13, 22, 23
+COLD_RESTART, ASSIGN_CLASS, DELAY_MEASURE, RECORD_CURRENT_TIME = 13, 22, 23, 24
 RESPONSE = 0x81
 
 # Qualifier codes.
@@ -157,6 +157,12 @@ class Obj:
         if (self.group, self.variation) in {(2, 2), (21, 5), (23, 5), (32, 3), (32, 4)}:
             return int.from_bytes(self.raw[-6:], "little")
         return None
+
+    @property
+    def relative(self) -> int:
+        """The milliseconds a relative-time event is after its common time."""
+        assert (self.group, self.variation) == (2, 3)
+        return int.from_bytes(self.raw[1:3], "little")
 
 
 def parse_objects(body: bytes) -> list[Obj]:

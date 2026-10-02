@@ -104,6 +104,7 @@ certification body:
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
 | DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
+| Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is catalogued as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, and disabling function codes |
 | Unsolicited responses, floating-point variations, device attributes (all optional in the profile), secure authentication | Not implemented |
 
 `py1815-der profile` writes the outstation's DNP3 Device Profile document (schema version

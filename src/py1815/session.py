@@ -23,6 +23,15 @@ for a parse error either. A refusal contract written only in terms of returned
 statuses would leave the functions that return nothing as the ones an
 implementation executes by omission.
 
+Three more silences follow from what a request is, not from Table 4-2 (D59 and
+D62 in the design notes). A fragment that is not a whole request is discarded:
+too short to hold an application header, not both first and final, or
+carrying the unsolicited bit when it is not a confirmation. A link frame whose
+length contradicts its function is dropped before it reaches the application
+layer. And a function the caller disabled is dropped unexecuted when it is one
+that never takes a response, since refusing it out loud would answer a master
+that asked for no answer. Everything else that is refused gets a response.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -32,7 +41,7 @@ import logging
 import struct
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
@@ -40,10 +49,13 @@ from py1815 import control as control_objects
 from py1815 import link
 from py1815.application import (
     CON_MASK,
+    FIN_MASK,
+    FIR_MASK,
     IIN,
     REQUEST_HEADER_SIZE,
     RESPONSE_HEADER_SIZE,
     SEQUENCE_MODULUS,
+    UNS_MASK,
     AppControl,
     FunctionCode,
     IIN2Bit,
@@ -79,11 +91,14 @@ from py1815.objects import (
     GROUP_BINARY_INPUT_EVENT,
     GROUP_COUNTER_EVENT,
     GROUP_FROZEN_COUNTER_EVENT,
+    MAX_RELATIVE_MS,
     TIME_SIZE,
     AnalogEventVariation,
     BinaryEventVariation,
+    common_time,
     encode_analog_event,
     encode_binary_event,
+    encode_binary_event_relative,
     encode_counter,
     encode_frozen_counter_event,
 )
@@ -107,6 +122,8 @@ RESTART_INDEX = 7
 #: Group 50 variation 1: the absolute time a master writes to set the clock.
 TIME_GROUP = 50
 TIME_VARIATION = 1
+#: The time a master says its request to record the current time was sent.
+LAST_RECORDED_TIME_VARIATION = 3
 
 #: Group 52 variation 2: the fine time delay a delay measurement and a cold
 #: restart are answered with, in milliseconds.
@@ -175,6 +192,11 @@ _SUPPORTED_FUNCTIONS = frozenset(
 #: than perform one, and no profile this library serves asks for them.
 _FREEZE_FUNCTIONS = frozenset({FunctionCode.IMMED_FREEZE, FunctionCode.FREEZE_CLEAR})
 _FREEZE_NR_FUNCTIONS = frozenset({FunctionCode.IMMED_FREEZE_NR, FunctionCode.FREEZE_CLEAR_NR})
+
+#: Every function that is never answered, whatever comes of it.
+_SILENT_FUNCTIONS = (
+    _NO_RESPONSE_FUNCTIONS | _FREEZE_NR_FUNCTIONS | frozenset({FunctionCode.DIRECT_OPERATE_NR})
+)
 _CLEARING_FREEZES = frozenset({FunctionCode.FREEZE_CLEAR, FunctionCode.FREEZE_CLEAR_NR})
 
 #: How long a fragment that asked for confirmation waits for it. A
@@ -187,7 +209,7 @@ DEFAULT_CONFIRM_TIMEOUT = 10.0
 #: this session's default. Group 22, counter change events, is never
 #: buffered, so its entries are variations that are answered with nothing.
 _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
-    GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2}),
+    GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2, 3}),
     GROUP_ANALOG_INPUT_EVENT: frozenset({0, 1, 2, 3, 4}),
     GROUP_FROZEN_COUNTER_EVENT: frozenset({0, 1, 5}),
     GROUP_COUNTER_EVENT: frozenset({0, 1, 2}),
@@ -259,6 +281,7 @@ _MIN_EVENT_OCTETS = 8
 _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_BINARY_INPUT_EVENT, 1): 1,
     (GROUP_BINARY_INPUT_EVENT, 2): 1 + TIME_SIZE,
+    (GROUP_BINARY_INPUT_EVENT, 3): 3,
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
     **{
@@ -296,6 +319,38 @@ _CLASS_QUALIFIERS = frozenset(
 
 class UnknownObject(Exception):
     """Raised by a read provider for a group or range it does not serve."""
+
+
+@dataclass
+class _Block:
+    """One run of events that share an object header."""
+
+    group: int
+    variation: int
+    members: list[tuple[Event, int, bytes]]
+    #: Octets that have to come before the block in the same fragment: the
+    #: common time of occurrence that relative times count from.
+    prefix: bytes = b""
+    #: The time that common time carries, for relative-time blocks.
+    base: int | None = None
+    #: Whether the clock behind the block's times had been set.
+    synchronized: bool = True
+
+
+def _well_formed(fragment: bytes) -> bool:
+    """Whether a fragment could be a request at all.
+
+    It has to hold an application header. A request fits one fragment, so it
+    is both the first and the last of its message. And the unsolicited bit
+    belongs to the confirmation of an unsolicited response and to nothing
+    else a master sends.
+    """
+    if len(fragment) < REQUEST_HEADER_SIZE:
+        return False
+    control, function = fragment[0], fragment[1]
+    if control & (FIR_MASK | FIN_MASK) != FIR_MASK | FIN_MASK:
+        return False
+    return not (control & UNS_MASK and function != FunctionCode.CONFIRM)
 
 
 class ParameterError(Exception):
@@ -398,6 +453,8 @@ class SessionFacts:
     cold_restart: bool = False
     #: Whether a control sent to a broadcast address is operated.
     broadcast_controls: bool = False
+    #: Function codes turned off by configuration, and refused as unsupported.
+    disabled_functions: frozenset[int] = frozenset()
 
 
 class FreezeProvider(Protocol):
@@ -589,6 +646,7 @@ class Session:
         confirm_timeout: float | None = DEFAULT_CONFIRM_TIMEOUT,
         restart_handler: Callable[[], int] | None = None,
         broadcast_controls: bool = False,
+        disabled_functions: Iterable[int] = (),
     ) -> None:
         """
         Args:
@@ -669,6 +727,14 @@ class Session:
                 answered by nobody, so nothing reports how the control went.
                 Freezes and writes sent to a broadcast address are always
                 honored.
+            disabled_functions: Function codes this outstation is
+                configured not to accept, though it implements them. Each
+                is refused exactly as a function it never implemented:
+                with the unsupported indication, or with silence for a
+                function that takes no response or arrives as a
+                broadcast. An outstation with no use for a function is
+                safer not accepting it. Confirm cannot be disabled; a
+                response that asks for confirmation would never be done.
         """
         self._provider = provider
         self._controls = control_provider
@@ -678,6 +744,23 @@ class Session:
         self._select: _ArmedSelect | None = None
         self._outstanding: _Outstanding | None = None
         self._conversation: _Conversation | None = None
+        for name, address in (
+            ("outstation_address", outstation_address),
+            ("master_address", master_address),
+        ):
+            if not 0 <= address <= link.MAX_ADDRESS:
+                # The addresses above this are the protocol's own: the
+                # broadcast addresses, the self-address and a reserved
+                # range. A device assigned one would answer, or be
+                # answered, as every device at once.
+                raise ValueError(
+                    f"{name} is {address}; a device address is 0 to {link.MAX_ADDRESS}"
+                )
+        if outstation_address == master_address:
+            raise ValueError(
+                f"outstation_address and master_address are both {master_address}; "
+                "the two ends of an association have different addresses"
+            )
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._frames = link.FrameReader()
@@ -699,12 +782,28 @@ class Session:
         self._restart = True
         self._freezer = freeze_provider
         self._time_sink = time_sink
+        if need_time and time_sink is None:
+            # An outstation that asks for the time has to be able to take
+            # it. One that could not would ask in every response, forever.
+            raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = need_time
         self._analog_event_variation = AnalogEventVariation(analog_event_variation)
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
         self._broadcast_controls = broadcast_controls
+        self._disabled = frozenset(int(function) for function in disabled_functions)
+        if FunctionCode.CONFIRM in self._disabled:
+            raise ValueError("the confirm function cannot be disabled")
+        #: When a request to record the current time arrived, by this
+        #: session's clock, until the write that uses it.
+        self._recorded_at: float | None = None
         self._need_time_at_start = need_time
+        if need_time and events is not None:
+            # A session that asks for the time has a clock nobody has set. One
+            # that does not ask says nothing about the clock, so the buffers
+            # keep whatever the caller told them: a clock waiting on its first
+            # network sync is unset whether or not a master is asked.
+            events.synchronized = False
         #: The data link's secondary station state: whether the master has
         #: reset the link, and the frame count bit the next confirmed frame
         #: has to carry.
@@ -737,6 +836,9 @@ class Session:
         self._restart = True
         self._need_time = self._need_time_at_start
         self._broadcast = None
+        self._recorded_at = None
+        if self._need_time and self._events is not None:
+            self._events.synchronized = False
 
     @property
     def facts(self) -> SessionFacts:
@@ -761,6 +863,7 @@ class Session:
             confirm_timeout=self._confirm_timeout,
             cold_restart=self._restart_handler is not None,
             broadcast_controls=self._broadcast_controls,
+            disabled_functions=self._disabled,
         )
 
     @property
@@ -770,6 +873,8 @@ class Session:
 
     @need_time.setter
     def need_time(self, wanted: bool) -> None:
+        if wanted and self._time_sink is None:
+            raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = bool(wanted)
 
     def connection_reset(self) -> None:
@@ -826,6 +931,21 @@ class Session:
         if frame.fcv != counted:
             logger.warning(
                 "dnp3: dropping link function %d: frame count valid bit is %s", function, frame.fcv
+            )
+            return b""
+
+        carries_data = function in (
+            link.PrimaryFunction.CONFIRMED_USER_DATA,
+            link.PrimaryFunction.UNCONFIRMED_USER_DATA,
+        )
+        if bool(frame.payload) != carries_data:
+            # User data with nothing in it, or a link function with data
+            # behind it: the length and the function disagree, and a frame
+            # that contradicts itself is not acted on.
+            logger.warning(
+                "dnp3: dropping link function %d carrying %d octet(s)",
+                function,
+                len(frame.payload),
             )
             return b""
 
@@ -909,7 +1029,12 @@ class Session:
         if len(fragment) < REQUEST_HEADER_SIZE:
             return
         function = fragment[1]
-        if function in _FREEZE_FUNCTIONS | _FREEZE_NR_FUNCTIONS:
+        if function in self._disabled:
+            logger.info("dnp3: broadcast function 0x%02X not acted on: disabled", function)
+        elif function == FunctionCode.RECORD_CURRENT_TIME:
+            if self._time_sink is not None and len(fragment) == REQUEST_HEADER_SIZE:
+                self._recorded_at = self._clock()
+        elif function in _FREEZE_FUNCTIONS | _FREEZE_NR_FUNCTIONS:
             if self._freezer is not None:
                 self._freeze_unacknowledged(fragment)
         elif function in (FunctionCode.DIRECT_OPERATE, FunctionCode.DIRECT_OPERATE_NR):
@@ -1028,6 +1153,18 @@ class Session:
         #: When this request reached the application layer, which is where a
         #: delay measurement counts from.
         started = self._clock()
+        if not _well_formed(fragment):
+            # Too short to hold an application header, or marked as part
+            # of a longer message, or as an unsolicited exchange this
+            # outstation never began. A request is one whole fragment, so
+            # none of these is a request, and what is not a request is not
+            # answered. It still ends a select, like anything else a
+            # master sends in place of the operate.
+            logger.warning(
+                "dnp3: dropping a fragment that is not a request: %s", fragment[:2].hex()
+            )
+            self._select = None
+            return b""
         if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
             # Anything the master sends other than the operate that spends a
             # select ends the exchange that select belongs to (D12). Sited here,
@@ -1044,6 +1181,11 @@ class Session:
             # An unreadable fragment claiming to be an OPERATE keeps it, which
             # is the corrupted-retransmission case worth keeping it for.
             self._select = None
+
+        if fragment[1] in self._disabled and fragment[1] in _SILENT_FUNCTIONS:
+            logger.info("dnp3: dropping function 0x%02X: disabled by configuration", fragment[1])
+            self._abandon()
+            return b""
 
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] == FunctionCode.DIRECT_OPERATE_NR:
             # Table 4-2: "same as function code 5 but outstation shall not send
@@ -1165,6 +1307,15 @@ class Session:
         # They call `_abandon` above instead.
         self._abandon()
 
+        if request.function in self._disabled:
+            logger.info(
+                "dnp3: refusing function 0x%02X: disabled by configuration", request.function
+            )
+            return null_response(
+                sequence=sequence,
+                iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
+            )
+
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             # Answered as an unknown object, not an unsupported function.
@@ -1181,6 +1332,7 @@ class Session:
             known not in _SUPPORTED_FUNCTIONS
             and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
             and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
+            and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
         ):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
@@ -1209,6 +1361,18 @@ class Session:
 
         if known is FunctionCode.DELAY_MEASURE:
             return self._delay_measure(request, started)
+
+        if known is FunctionCode.RECORD_CURRENT_TIME:
+            if request.body:
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+                )
+            # The first half of time synchronization over a network: note
+            # when this arrived. The master then writes when it sent it,
+            # and the difference is how long ago that was. A second
+            # request before the write replaces the first.
+            self._recorded_at = started
+            return null_response(sequence=sequence, iin=self._indications())
 
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
@@ -1512,6 +1676,12 @@ class Session:
 
     def _handle_read(self, request: Request, fragment: bytes) -> bytes:
         sequence = request.control.sequence
+        if not request.headers:
+            # A read names what it reads. One naming nothing is malformed,
+            # and an empty answer would say it had been carried out.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
         event_headers, static_headers = self._split_read(request.headers)
 
         unusable = [h for h in event_headers if h.qualifier not in _CLASS_QUALIFIERS]
@@ -1985,7 +2155,8 @@ class Session:
                     counts[index] = limit - taken
             return body, sent, complete
 
-        for group, variation, members in self._event_blocks(chosen, headers):
+        for block in self._event_blocks(chosen, headers):
+            group, variation, members = block.group, block.variation, block.members
             # Split at the largest count a header can carry. A buffer wide
             # enough to hold more than this of one type in a row is legal --
             # capacity has no upper bound -- and encoding it as one block
@@ -1993,8 +2164,14 @@ class Session:
             for start in range(0, len(members), _MAX_BLOCK_EVENTS):
                 chunk = members[start : start + _MAX_BLOCK_EVENTS]
                 items = [(event.index, encoded) for event, _, encoded in chunk]
-                fitted, block = _fitting(group, variation, items, budget - len(body))
-                body += block
+                # What must precede the block goes with it or not at all: a
+                # common time with no events behind it says nothing, and
+                # relative times with no common time before them in the same
+                # fragment cannot be read.
+                room_left = budget - len(body) - len(block.prefix)
+                fitted, octets = _fitting(group, variation, items, room_left)
+                if fitted:
+                    body += block.prefix + octets
                 for event, index, _ in chunk[:fitted]:
                     sent.append(event)
                     used[index] += 1
@@ -2018,6 +2195,9 @@ class Session:
             _MIN_EVENT_OCTETS,
             1 + _EVENT_SIZES[(GROUP_ANALOG_INPUT_EVENT, int(self._analog_event_variation))],
         )
+        if self._events is not None and self._events.holds_unsynchronized:
+            # Those travel with relative time, which is smaller than the default.
+            defaults = min(defaults, 1 + _EVENT_SIZES[(GROUP_BINARY_INPUT_EVENT, 3)])
         smallest = defaults
         for header in headers:
             if header.event_class is None and header.variation:
@@ -2028,7 +2208,7 @@ class Session:
 
     def _event_blocks(
         self, chosen: Sequence[tuple[Event, int]], headers: Sequence[ObjectHeader]
-    ) -> list[tuple[int, int, list[tuple[Event, int, bytes]]]]:
+    ) -> list[_Block]:
         """Events grouped into the blocks they travel in, in the order given.
 
         Consecutive events of one group and variation share a block. A run of
@@ -2038,11 +2218,24 @@ class Session:
 
         The variation is the one the selecting header named, or the session's
         default where it named none: a class header, or variation 0.
+
+        **A binary event stamped before the clock was set travels with
+        relative time.** An absolute time is a claim that the clock was right,
+        so such an event is sent as an offset from a common time of occurrence
+        marked unsynchronized, whatever timed variation was asked for. A
+        master that names the relative variation gets it for every event,
+        behind a common time that says which kind of clock stamped them. A
+        relative time is sixteen bits, so a run is broken, and given a new
+        common time, when an event falls outside that reach or the clock's
+        state changes.
         """
-        blocks: list[tuple[int, int, list[tuple[Event, int, bytes]]]] = []
+        blocks: list[_Block] = []
         for event, index in chosen:
             header = headers[index]
             named = header.variation if header.event_class is None else 0
+            prefix = b""
+            base: int | None = None
+            synchronized = True
             if isinstance(event, AnalogEvent):
                 group = GROUP_ANALOG_INPUT_EVENT
                 analog = AnalogEventVariation(named) if named else self._analog_event_variation
@@ -2063,16 +2256,44 @@ class Session:
             else:
                 group = GROUP_BINARY_INPUT_EVENT
                 variation = named or int(_BINARY_EVENT_VARIATION)
-                timed = variation == BinaryEventVariation.WITH_TIME
-                encoded = encode_binary_event(
-                    event.point,
-                    with_time=timed,
-                    timestamp_ms=event.timestamp_ms if timed else None,
-                )
-            if blocks and blocks[-1][0] == group and blocks[-1][1] == variation:
-                blocks[-1][2].append((event, index, encoded))
+                synchronized = event.synchronized
+                if variation == BinaryEventVariation.WITH_TIME and not synchronized:
+                    variation = int(BinaryEventVariation.RELATIVE_TIME)
+                if variation == BinaryEventVariation.RELATIVE_TIME:
+                    last = blocks[-1] if blocks else None
+                    if (
+                        last is not None
+                        and last.group == group
+                        and last.variation == variation
+                        and last.synchronized == synchronized
+                        and last.base is not None
+                        and 0 <= event.timestamp_ms - last.base <= MAX_RELATIVE_MS
+                    ):
+                        base = last.base
+                    else:
+                        base = event.timestamp_ms
+                        prefix = common_time(base, synchronized=synchronized)
+                    encoded = encode_binary_event_relative(event.point, event.timestamp_ms - base)
+                else:
+                    timed = variation == BinaryEventVariation.WITH_TIME
+                    encoded = encode_binary_event(
+                        event.point,
+                        with_time=timed,
+                        timestamp_ms=event.timestamp_ms if timed else None,
+                    )
+            last = blocks[-1] if blocks else None
+            if (
+                last is not None
+                and last.group == group
+                and last.variation == variation
+                and not prefix
+                and last.synchronized == synchronized
+            ):
+                last.members.append((event, index, encoded))
             else:
-                blocks.append((group, variation, [(event, index, encoded)]))
+                blocks.append(
+                    _Block(group, variation, [(event, index, encoded)], prefix, base, synchronized)
+                )
         return blocks
 
     def _handle_write(self, request: Request) -> bytes:
@@ -2096,23 +2317,47 @@ class Session:
             # Handed over before the indication clears, so a sink that raises
             # leaves this outstation still asking for the time it did not get.
             self._time_sink(int.from_bytes(request.body, "little"))
-            self._need_time = False
+            self._time_was_set()
             logger.info("dnp3: time written by master")
             return null_response(sequence=sequence, iin=self._indications())
 
-        return null_response(
-            sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN))
-        )
+        if self._time_sink is not None and self._is_time_write(
+            request, LAST_RECORDED_TIME_VARIATION
+        ):
+            if len(request.body) != TIME_SIZE or self._recorded_at is None:
+                # The time written is when a request to record the time
+                # was sent. With no such request received there is nothing
+                # to measure from, and the clock is left alone.
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+                )
+            elapsed_ms = max(0, round((self._clock() - self._recorded_at) * 1000))
+            self._time_sink(int.from_bytes(request.body, "little") + elapsed_ms)
+            self._recorded_at = None
+            self._time_was_set()
+            logger.info("dnp3: time written by master, %d ms after it was recorded", elapsed_ms)
+            return null_response(sequence=sequence, iin=self._indications())
+
+        # A write naming nothing is malformed; one naming an object this
+        # outstation does not take a write of is an unknown object.
+        bit = IIN2Bit.OBJECT_UNKNOWN if request.headers else IIN2Bit.PARAM_ERROR
+        return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
+
+    def _time_was_set(self) -> None:
+        """A master has written the time: stop asking, and trust the clock from here."""
+        self._need_time = False
+        if self._events is not None:
+            self._events.synchronized = True
 
     @staticmethod
-    def _is_time_write(request: Request) -> bool:
-        """Whether this is the one absolute time a master sets the clock with."""
+    def _is_time_write(request: Request, variation: int = TIME_VARIATION) -> bool:
+        """Whether this writes one time object: the time now, or the last recorded time."""
         if not request.headers:
             return False
         header = request.headers[0]
         return (
             header.group == TIME_GROUP
-            and header.variation == TIME_VARIATION
+            and header.variation == variation
             and header.qualifier is QualifierCode.UINT8_COUNT
             and header.count == 1
         )
@@ -2234,41 +2479,3 @@ def _fitting(
         else:
             high = middle - 1
     return best, encoded
-
-
-def _encoded(
-    events: Sequence[Event],
-    analog_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
-) -> list[tuple[int, int, list[tuple[int, bytes]]]]:
-    """Events grouped into the blocks they travel in, in the order they happened.
-
-    Consecutive events of one kind share a block. The order is the buffer's --
-    which is the order the points changed -- so a run of analog events
-    interrupted by a binary one becomes three blocks rather than two, because
-    reordering them into two would tell the master a different story about when
-    things happened.
-    """
-    blocks: list[tuple[int, int, list[tuple[int, bytes]]]] = []
-    for event in events:
-        if isinstance(event, AnalogEvent):
-            group, variation = GROUP_ANALOG_INPUT_EVENT, int(analog_variation)
-            encoded = encode_analog_event(
-                event.point,
-                variation=analog_variation,
-                timestamp_ms=(
-                    event.timestamp_ms if analog_variation in _TIMED_ANALOG_EVENTS else None
-                ),
-            )
-        elif isinstance(event, FrozenCounterEvent):
-            group, variation = GROUP_FROZEN_COUNTER_EVENT, FROZEN_COUNTER_EVENT_VARIATION
-            encoded = encode_frozen_counter_event(event.point, timestamp_ms=event.timestamp_ms)
-        else:
-            group, variation = GROUP_BINARY_INPUT_EVENT, int(_BINARY_EVENT_VARIATION)
-            encoded = encode_binary_event(
-                event.point, with_time=True, timestamp_ms=event.timestamp_ms
-            )
-        if blocks and blocks[-1][0] == group and blocks[-1][1] == variation:
-            blocks[-1][2].append((event.index, encoded))
-        else:
-            blocks.append((group, variation, [(event.index, encoded)]))
-    return blocks

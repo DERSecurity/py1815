@@ -79,6 +79,9 @@ class Reassembler:
         self._max_fragment = max_fragment
         self._buffer = bytearray()
         self._expected: int | None = None
+        #: The segment accepted last, for telling a repeat of it from a
+        #: different segment under the same sequence number.
+        self._previous: bytes | None = None
 
     @property
     def in_progress(self) -> bool:
@@ -92,9 +95,15 @@ class Reassembler:
         """
         self._buffer = bytearray()
         self._expected = None
+        self._previous = None
 
     def add(self, tpdu: bytes) -> bytes | None:
-        """Accept one segment, returning the fragment it completed, if any."""
+        """Accept one segment, returning the fragment it completed, if any.
+
+        A fragment with nothing in it is not returned: a series that
+        carried no application data has nothing to hand to the
+        application layer.
+        """
         # Reset before refusing, not after. These two checks fire before any
         # state is touched, and leaving a partial series in place let the next
         # segment carrying the expected sequence append to data from before the
@@ -122,6 +131,15 @@ class Reassembler:
             if self._expected is None:
                 self.reset()
                 raise TransportError("segment continues a series that was never started")
+            if self._previous is not None and sequence == self._previous[0] & SEQ_MASK:
+                # The sequence number of the segment just accepted. Sent
+                # again octet for octet, it is a link-layer repeat and is
+                # dropped on its own; anything else under that number means
+                # the series cannot be trusted.
+                if tpdu == self._previous:
+                    return None
+                self.reset()
+                raise TransportError(f"segment {sequence} arrived twice with different contents")
             if sequence != self._expected:
                 expected = self._expected
                 self.reset()
@@ -135,7 +153,8 @@ class Reassembler:
         if final:
             fragment = bytes(self._buffer)
             self.reset()
-            return fragment
+            return fragment or None
 
         self._expected = (sequence + 1) % SEQUENCE_MODULUS
+        self._previous = bytes(tpdu)
         return None
