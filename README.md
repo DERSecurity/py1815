@@ -74,7 +74,8 @@ docker exec der py1815-der poll     # Docker
 ```
 
 Any DNP3 master can connect in place of `poll`. The outstation's link address is 1024 and it
-expects master address 1 (`--outstation-address`, `--master-address`). The native command listens
+expects master address 1 (`--outstation-address`, `--master-address`), or serves whichever
+master address speaks first with `--any-master`. The native command listens
 on loopback only, because this entry point serves plaintext with no peer allow-list; pass
 `--bind 0.0.0.0:20000` to reach it from another host. `py1815-der points` lists every point
 served, and `py1815-der run --help` the rest of the options. The Docker command above publishes
