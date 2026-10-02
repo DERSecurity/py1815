@@ -417,6 +417,43 @@ class TestTheEchoMirrorsTheRequest:
         assert body[second] == 41 and body[second + 1] == 2
 
 
+class TestTheEchoKeepsTheRequestsQualifier:
+    """An echo is the request with statuses filled in, qualifier included."""
+
+    WIDE = bytes([12, 1, QualifierCode.UINT16_COUNT_UINT16_INDEX, 1, 0, 5, 0])
+
+    def test_sixteen_bit_indices_are_echoed_as_sixteen_bit(self):
+        """Not narrowed because the index happens to fit an octet."""
+        session, commands = _session()
+        request = bytes([0xC0, FunctionCode.DIRECT_OPERATE]) + self.WIDE
+        response = session._handle_fragment(request + bytes.fromhex(LATCH_ON))
+        assert response[4:] == self.WIDE + bytes.fromhex(LATCH_ON)
+        assert commands.operated[0][0].index == 5
+
+    def test_eight_bit_indices_are_echoed_as_eight_bit(self):
+        """The control: the qualifier follows the request in both directions."""
+        session, _ = _session()
+        response = session._handle_fragment(
+            _request(FunctionCode.DIRECT_OPERATE, (12, 1, 5, LATCH_ON))
+        )
+        assert response[4:8] == bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1])
+
+    def test_a_select_and_its_operate_are_both_echoed_wide(self):
+        session, _ = _session()
+        body = self.WIDE + bytes.fromhex(LATCH_ON)
+        selected = session._handle_fragment(bytes([0xC0, FunctionCode.SELECT]) + body)
+        operated = session._handle_fragment(bytes([0xC1, FunctionCode.OPERATE]) + body)
+        assert selected[4:] == body and operated[4:] == body
+
+    def test_each_header_keeps_its_own(self):
+        session, _ = _session()
+        narrow = bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1, 2])
+        crob = bytes.fromhex(LATCH_ON)
+        request = bytes([0xC0, FunctionCode.DIRECT_OPERATE]) + narrow + crob + self.WIDE + crob
+        response = session._handle_fragment(request)
+        assert response[4:] == narrow + crob + self.WIDE + crob
+
+
 def _two_headers(function: FunctionCode, sequence: int = 0) -> bytes:
     """One request, two headers, both naming group 12 variation 1."""
     header = bytes([12, 1, QualifierCode.UINT8_COUNT_UINT8_INDEX, 1])

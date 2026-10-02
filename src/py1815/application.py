@@ -378,6 +378,23 @@ def parse_request(fragment: bytes) -> Request:
     )
 
 
+def parse_header_list(data: bytes) -> tuple[ObjectHeader, ...]:
+    """Object headers that follow one another with no object data between them.
+
+    For a function ``parse_request`` hands back unparsed, once the caller has
+    decided it will answer it. A freeze names the counters it applies to the
+    way a read names what it wants, so the same walk reads both; the session
+    asks for it only when something is there to freeze, which keeps a refused
+    freeze answered as an unsupported function rather than as a parse error.
+    """
+    headers: list[ObjectHeader] = []
+    offset = 0
+    while offset < len(data):
+        header, offset = _parse_header(data, offset, indices_follow=True)
+        headers.append(header)
+    return tuple(headers)
+
+
 @dataclass(frozen=True)
 class ObjectBlock:
     """One object header and the indexed objects that followed it."""

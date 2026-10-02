@@ -29,6 +29,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import logging
+import struct
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
@@ -52,6 +53,7 @@ from py1815.application import (
     RequestError,
     build_response,
     null_response,
+    parse_header_list,
     parse_object_blocks,
     parse_request,
 )
@@ -61,14 +63,27 @@ from py1815.control import (
     ControlError,
     ControlRelayOutputBlock,
 )
-from py1815.events import AnalogEvent, Event, EventBuffers, EventClass
+from py1815.events import (
+    AnalogEvent,
+    BinaryEvent,
+    Event,
+    EventBuffers,
+    EventClass,
+    FrozenCounterEvent,
+)
 from py1815.objects import (
+    ANALOG_EVENT_SIZES,
+    FROZEN_COUNTER_EVENT_VARIATION,
     GROUP_ANALOG_INPUT_EVENT,
     GROUP_BINARY_INPUT_EVENT,
+    GROUP_COUNTER_EVENT,
+    GROUP_FROZEN_COUNTER_EVENT,
+    TIME_SIZE,
     AnalogEventVariation,
     BinaryEventVariation,
     encode_analog_event,
     encode_binary_event,
+    encode_frozen_counter_event,
 )
 
 # Controls echo in the same shape events do -- a count with an index in front of
@@ -86,6 +101,15 @@ logger = logging.getLogger(__name__)
 RESTART_GROUP = 80
 RESTART_VARIATION = 1
 RESTART_INDEX = 7
+
+#: Group 50 variation 1: the absolute time a master writes to set the clock.
+TIME_GROUP = 50
+TIME_VARIATION = 1
+
+#: Group 52 variation 2: the fine time delay a delay measurement is answered
+#: with, in milliseconds.
+TIME_DELAY_GROUP = 52
+TIME_DELAY_FINE_VARIATION = 2
 
 #: Controls that carry objects and are answered.
 #:
@@ -136,9 +160,20 @@ _SUPPORTED_FUNCTIONS = frozenset(
         FunctionCode.READ,
         FunctionCode.WRITE,
         FunctionCode.DISABLE_UNSOLICITED,
+        FunctionCode.DELAY_MEASURE,
     }
     | _CONTROL_FUNCTIONS
 )
+
+#: The freezes, answered and not. Supported only by an outstation that was
+#: given something to freeze (D45): without one there are no counters, and
+#: accepting a freeze of nothing would tell a master its log had begun.
+#:
+#: The two freeze-at-time functions are absent. They schedule a freeze rather
+#: than perform one, and no profile this library serves asks for them.
+_FREEZE_FUNCTIONS = frozenset({FunctionCode.IMMED_FREEZE, FunctionCode.FREEZE_CLEAR})
+_FREEZE_NR_FUNCTIONS = frozenset({FunctionCode.IMMED_FREEZE_NR, FunctionCode.FREEZE_CLEAR_NR})
+_CLEARING_FREEZES = frozenset({FunctionCode.FREEZE_CLEAR, FunctionCode.FREEZE_CLEAR_NR})
 
 #: How long a select stays armed. Ten seconds is opendnp3's default and the
 #: middle of what implementations use; the standard leaves it to the outstation.
@@ -161,6 +196,21 @@ _CLASS_BITS = {
 #: sequence a master reads events to obtain, is most of what it wanted.
 _ANALOG_EVENT_VARIATION = AnalogEventVariation.INT32_WITH_TIME
 _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
+
+_TIMED_ANALOG_EVENTS = frozenset(
+    {AnalogEventVariation.INT32_WITH_TIME, AnalogEventVariation.INT16_WITH_TIME}
+)
+
+#: The event groups a master may read by name instead of by class, and the
+#: kind of event each one selects (D46). Group 22 is the counter change event,
+#: which this outstation never buffers: reading it is answered, with nothing,
+#: because an empty answer is what a group with no events in it holds.
+_EVENT_GROUPS: dict[int, type | None] = {
+    GROUP_BINARY_INPUT_EVENT: BinaryEvent,
+    GROUP_ANALOG_INPUT_EVENT: AnalogEvent,
+    GROUP_FROZEN_COUNTER_EVENT: FrozenCounterEvent,
+    GROUP_COUNTER_EVENT: None,
+}
 
 #: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
 #: the class holds; the count qualifiers ask for at most that many, which is how
@@ -235,6 +285,10 @@ class Control:
     #: a select carrying one could never be operated.
     raw: bytes
     command: ControlRelayOutputBlock | AnalogOutput
+    #: The qualifier of the header this arrived under, which the echo has to
+    #: reproduce (D14). None, for a control built by hand, leaves the echo to
+    #: choose the narrowest that fits.
+    qualifier: QualifierCode | None = None
 
 
 class ControlProvider(Protocol):
@@ -257,6 +311,20 @@ class ControlProvider(Protocol):
         ...
 
     def operate(self, controls: Sequence[Control]) -> Sequence[CommandStatus]: ...
+
+
+class FreezeProvider(Protocol):
+    """What can be frozen. Counters, in every profile this library serves.
+
+    Synchronous, like the other providers and for the same reason. The session
+    passes the object headers the master named and whether it asked for the
+    counters to be cleared afterwards; what a header selects, and whether a
+    clear is honored, are the caller's to decide (D45).
+    """
+
+    def freeze(self, headers: Sequence[ObjectHeader], *, clear: bool) -> None:
+        """Freeze what *headers* name, or raise :class:`UnknownObject`."""
+        ...
 
 
 @dataclass
@@ -422,6 +490,10 @@ class Session:
         max_response: int = 2048,
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
+        freeze_provider: FreezeProvider | None = None,
+        time_sink: Callable[[int], None] | None = None,
+        need_time: bool = False,
+        analog_event_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
     ) -> None:
         """
         Args:
@@ -471,6 +543,23 @@ class Session:
                 follows it.
             clock: Monotonic source for that timeout. Injectable so expiry can
                 be tested without waiting for it.
+            freeze_provider: Freezes counters. Without one the freeze functions
+                are refused as unsupported, which for an outstation holding no
+                counters is the truthful answer (D45).
+            time_sink: Receives the time a master writes, in milliseconds since
+                the Unix epoch, UTC. Without one a time write is refused as an
+                unknown object. What the caller does with the time is its own:
+                a device whose clock is disciplined elsewhere may record the
+                write and apply nothing (D44).
+            need_time: Whether to ask the master for the time from the first
+                response, through the indication bit that says so. Cleared by
+                an accepted time write; settable again through the property of
+                the same name when the caller's clock has drifted.
+            analog_event_variation: The variation analog input events are
+                reported in. Timed by default, because the timestamp is most
+                of what a master reads events for; a profile that fixes
+                another -- IEEE 1815.2 selects the 32-bit variation without
+                time -- names it here.
         """
         self._provider = provider
         self._controls = control_provider
@@ -498,10 +587,31 @@ class Session:
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
+        self._freezer = freeze_provider
+        self._time_sink = time_sink
+        self._need_time = need_time
+        self._analog_event_variation = AnalogEventVariation(analog_event_variation)
+        #: The fewest octets any event this session reports can occupy with its
+        #: index: the bound `_event_body` divides a budget by. An untimed
+        #: analog variation is smaller than the timed binary event the module
+        #: constant describes, and a bound that is too large would leave behind
+        #: events that fit.
+        self._min_event_octets = min(
+            _MIN_EVENT_OCTETS, 1 + ANALOG_EVENT_SIZES[self._analog_event_variation]
+        )
 
     @property
     def restart_indication(self) -> bool:
         return self._restart
+
+    @property
+    def need_time(self) -> bool:
+        """Whether responses are asking the master to write the time."""
+        return self._need_time
+
+    @need_time.setter
+    def need_time(self, wanted: bool) -> None:
+        self._need_time = bool(wanted)
 
     def connection_reset(self) -> None:
         """Forget what a dead connection left behind, and nothing more.
@@ -609,8 +719,10 @@ class Session:
         return bytes(out)
 
     def _indications(self, extra: IIN | None = None) -> IIN:
-        iin = IIN(first=IINBit.DEVICE_RESTART) if self._restart else IIN()
-        iin = iin | self._event_indications()
+        first = int(IINBit.DEVICE_RESTART) if self._restart else 0
+        if self._need_time:
+            first |= IINBit.NEED_TIME
+        iin = IIN(first=first) | self._event_indications()
         return iin | extra if extra else iin
 
     def _event_indications(self) -> IIN:
@@ -631,6 +743,9 @@ class Session:
         return IIN(first=first, second=second)
 
     def _handle_fragment(self, fragment: bytes) -> bytes:
+        #: When this request reached the application layer, which is where a
+        #: delay measurement counts from.
+        started = self._clock()
         if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
             # Anything the master sends other than the operate that spends a
             # select ends the exchange that select belongs to (D12). Sited here,
@@ -659,6 +774,17 @@ class Session:
             # is not listening for a parse error either.
             self._abandon()
             self._operate_unacknowledged(fragment)
+            return b""
+
+        if (
+            len(fragment) >= REQUEST_HEADER_SIZE
+            and fragment[1] in _FREEZE_NR_FUNCTIONS
+            and self._freezer is not None
+        ):
+            # The same carve-out, for the same reason: "same as function code
+            # 7" is a freeze that happens and is not reported.
+            self._abandon()
+            self._freeze_unacknowledged(fragment)
             return b""
 
         if len(fragment) >= REQUEST_HEADER_SIZE and fragment[1] in _NO_RESPONSE_FUNCTIONS:
@@ -756,7 +882,9 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
             )
 
-        if known not in _SUPPORTED_FUNCTIONS:
+        if known not in _SUPPORTED_FUNCTIONS and not (
+            known in _FREEZE_FUNCTIONS and self._freezer is not None
+        ):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
             # does not implement, and an unrecognized code is one the standard
@@ -775,6 +903,12 @@ class Session:
 
         if known is FunctionCode.DISABLE_UNSOLICITED:
             return self._disable_unsolicited(request)
+
+        if known in _FREEZE_FUNCTIONS:
+            return self._handle_freeze(request, known)
+
+        if known is FunctionCode.DELAY_MEASURE:
+            return self._delay_measure(request, started)
 
         if known is FunctionCode.WRITE:
             return self._handle_write(request)
@@ -807,6 +941,82 @@ class Session:
             len(request.headers),
         )
         return null_response(sequence=request.control.sequence, iin=self._indications())
+
+    def _handle_freeze(self, request: Request, known: FunctionCode) -> bytes:
+        """Freeze what the request names, and say only whether it could (D45).
+
+        A freeze has no objects to return: the frozen values are read
+        afterwards, as static frozen counters or as the events the freeze
+        buffered. So the answer is a null response, and the indications are the
+        whole of it.
+        """
+        assert self._freezer is not None
+        sequence = request.control.sequence
+        try:
+            headers = parse_header_list(request.body)
+        except RequestError as exc:
+            logger.warning("dnp3: malformed %s: %s", known.name, exc)
+            return null_response(sequence=sequence, iin=self._indications(IIN(second=exc.bit)))
+        if not headers:
+            # A freeze that names nothing freezes nothing, and agreeing to it
+            # would leave a master believing a log entry exists.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        try:
+            self._freezer.freeze(headers, clear=known in _CLEARING_FREEZES)
+        except UnknownObject as exc:
+            logger.info("dnp3: %s refused: %s", known.name, exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN))
+            )
+        logger.info("dnp3: %s executed (%d header(s))", known.name, len(headers))
+        return null_response(sequence=sequence, iin=self._indications())
+
+    def _freeze_unacknowledged(self, fragment: bytes) -> None:
+        """Execute a freeze that asks for no response, and tell nobody."""
+        assert self._freezer is not None
+        known = FunctionCode(fragment[1])
+        try:
+            headers = parse_header_list(fragment[REQUEST_HEADER_SIZE:])
+        except RequestError as exc:
+            logger.warning("dnp3: unreadable %s dropped: %s", known.name, exc)
+            return
+        if not headers:
+            logger.warning("dnp3: %s naming nothing dropped", known.name)
+            return
+        try:
+            self._freezer.freeze(headers, clear=known in _CLEARING_FREEZES)
+        except UnknownObject as exc:
+            logger.info("dnp3: %s dropped: %s", known.name, exc)
+            return
+        logger.info("dnp3: %s executed (%d header(s))", known.name, len(headers))
+
+    def _delay_measure(self, request: Request, started: float) -> bytes:
+        """Report how long this outstation held the request (D44).
+
+        A master measures the round trip, subtracts this, and halves what is
+        left to learn the one-way delay it should add to the time it writes
+        next. The figure is the time between the request reaching the
+        application layer and this response being built, which over TCP is
+        close to nothing; reporting it honestly is what keeps the master's
+        arithmetic right on a link where it is not.
+        """
+        sequence = request.control.sequence
+        if request.body:
+            # A delay measurement is a function code and nothing else.
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        held_ms = min(0xFFFF, max(0, round((self._clock() - started) * 1000)))
+        body = bytes(
+            [TIME_DELAY_GROUP, TIME_DELAY_FINE_VARIATION, QualifierCode.UINT8_COUNT, 1]
+        ) + struct.pack("<H", held_ms)
+        return build_response(
+            control=AppControl(fir=True, fin=True, con=False, sequence=sequence),
+            iin=self._indications(),
+            body=body,
+        )
 
     def _operate_unacknowledged(self, fragment: bytes) -> None:
         """Execute a DIRECT_OPERATE_NR and tell nobody, including on failure."""
@@ -936,6 +1146,7 @@ class Session:
                         command=control_objects.decode_control(
                             block.header.group, block.header.variation, data
                         ),
+                        qualifier=block.header.qualifier,
                     )
                 )
         if not controls:
@@ -1279,9 +1490,37 @@ class Session:
         """
         if self._events is None:
             return [], list(headers)
-        events = [h for h in headers if h.event_class in _EVENT_CLASSES]
-        static = [h for h in headers if h.event_class not in _EVENT_CLASSES]
+        events = [h for h in headers if self._reads_events(h)]
+        static = [h for h in headers if not self._reads_events(h)]
         return events, static
+
+    def _reads_events(self, header: ObjectHeader) -> bool:
+        """Whether a read header is answered from the buffers (D46).
+
+        A class header is. So is an event group named directly, in the
+        variation this session reports or in variation 0, which asks for
+        whichever that is. Any other variation of an event group is left to
+        the provider, which does not serve it, so the master hears that the
+        object is unknown rather than receiving a variation it did not name.
+        """
+        if header.event_class in _EVENT_CLASSES:
+            return True
+        if header.event_class is not None or header.group not in _EVENT_GROUPS:
+            return False
+        served = {
+            GROUP_BINARY_INPUT_EVENT: int(_BINARY_EVENT_VARIATION),
+            GROUP_ANALOG_INPUT_EVENT: int(self._analog_event_variation),
+            GROUP_FROZEN_COUNTER_EVENT: FROZEN_COUNTER_EVENT_VARIATION,
+        }
+        return header.variation in (0, served.get(header.group, 0))
+
+    def _held(self, header: ObjectHeader, limit: int) -> list[Event]:
+        """The oldest events a header selects, without removing them."""
+        assert self._events is not None
+        if header.event_class is not None:
+            return self._events.peek(EventClass(header.event_class), limit=limit)
+        kind = _EVENT_GROUPS[header.group]
+        return [] if kind is None else self._events.peek_kind(kind, limit=limit)
 
     def _event_body(
         self, headers: Sequence[ObjectHeader], counts: list[int | None], budget: int
@@ -1330,18 +1569,12 @@ class Session:
         #: Whether the budget, rather than the master's own count, is what
         #: stopped this short. It is what decides `FIN`.
         truncated = False
-        #: How many of each class have gone into this response already. Only
-        #: needed because it is what the deduplication below will discard, so
-        #: the buffer has to be asked for that many more than could fit.
-        taken: dict[int, int] = {}
         sent: list[Event] = []
 
         # Header order rather than class order: a master that asked for class 3
         # before class 1 gets them back that way, and the count on each header
         # belongs to that header rather than to the class.
         for index, header in enumerate(headers):
-            if header.event_class is None:
-                continue
             limit = counts[index]
             if limit is not None and limit <= 0:
                 # Already answered in full by an earlier fragment. Skipped to
@@ -1364,12 +1597,15 @@ class Session:
             # Plus what deduplication is about to remove. A class named twice
             # has its earlier events at the front of the buffer -- every
             # selection takes from the front -- so asking for that many more is
-            # what keeps the second header from coming back short.
-            room = max(0, (budget - len(body)) // _MIN_EVENT_OCTETS)
-            already = taken.get(header.event_class, 0)
+            # what keeps the second header from coming back short. Everything
+            # already in the response is counted, not only what this header's
+            # class contributed: a class and an event group select overlapping
+            # events, and either may have placed what the other would repeat.
+            room = max(0, (budget - len(body)) // self._min_event_octets)
+            already = len(emitted)
             # One past what could fit, so that "there is more behind this" is a
             # fact rather than an inference from having filled the room exactly.
-            held = self._events.peek(EventClass(header.event_class), limit=already + room + 1)
+            held = self._held(header, already + room + 1)
 
             selected = [event for event in held if id(event) not in emitted]
             if len(selected) > room:
@@ -1381,7 +1617,6 @@ class Session:
                 # master paces a buffer it does not want in one fragment.
                 selected = selected[:limit]
             emitted.update(id(event) for event in selected)
-            taken[header.event_class] = already + len(selected)
             #: What this header had sent before this fragment touched it, so the
             #: count can be decremented by what went out rather than by what was
             #: selected -- the encoder may take fewer than the budget allowed.
@@ -1391,7 +1626,7 @@ class Session:
             # `_encoded` partitions it into consecutive runs and a run cut short
             # by the budget has to record the events it actually carried.
             cursor = 0
-            for group, variation, items in _encoded(selected):
+            for group, variation, items in _encoded(selected, self._analog_event_variation):
                 # Split at the largest count a header can carry. A buffer wide
                 # enough to hold more than this of one type in a row is legal --
                 # capacity has no upper bound -- and encoding it as one block
@@ -1426,8 +1661,33 @@ class Session:
             logger.info("dnp3: restart indication cleared by master")
             return null_response(sequence=sequence, iin=self._indications())
 
+        if self._time_sink is not None and self._is_time_write(request):
+            if len(request.body) != TIME_SIZE:
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+                )
+            # Handed over before the indication clears, so a sink that raises
+            # leaves this outstation still asking for the time it did not get.
+            self._time_sink(int.from_bytes(request.body, "little"))
+            self._need_time = False
+            logger.info("dnp3: time written by master")
+            return null_response(sequence=sequence, iin=self._indications())
+
         return null_response(
             sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN))
+        )
+
+    @staticmethod
+    def _is_time_write(request: Request) -> bool:
+        """Whether this is the one absolute time a master sets the clock with."""
+        if not request.headers:
+            return False
+        header = request.headers[0]
+        return (
+            header.group == TIME_GROUP
+            and header.variation == TIME_VARIATION
+            and header.qualifier is QualifierCode.UINT8_COUNT
+            and header.count == 1
         )
 
     @staticmethod
@@ -1482,20 +1742,27 @@ def _echo(controls: Sequence[Control], statuses: Sequence[CommandStatus]) -> byt
     variation instead would merge two headers that named the same group into
     one block carrying twice the count -- a tidier response than the request,
     and not the request. A master that sent two headers is answered with two.
+
+    The qualifier is kept for the same reason. A master that sent sixteen-bit
+    indices is answered with sixteen-bit indices however small they are: one
+    widely deployed master stack sends every control that way and rejects an
+    echo narrowed to eight as a response it does not recognize.
     """
     body = b""
     run: list[tuple[int, bytes]] = []
     block = group = variation = -1
+    qualifier: QualifierCode | None = None
 
     for item, status in zip(controls, statuses, strict=True):
         if item.block != block:
             if run:
-                body += indexed_block(group, variation, run)
+                body += indexed_block(group, variation, run, qualifier=qualifier)
             block, group, variation, run = item.block, item.group, item.variation, []
+            qualifier = item.qualifier
         run.append((item.index, control_objects.encode_control(item.command.with_status(status))))
 
     if run:
-        body += indexed_block(group, variation, run)
+        body += indexed_block(group, variation, run, qualifier=qualifier)
     return body
 
 
@@ -1527,7 +1794,10 @@ def _fitting(
     return best, encoded
 
 
-def _encoded(events: Sequence[Event]) -> list[tuple[int, int, list[tuple[int, bytes]]]]:
+def _encoded(
+    events: Sequence[Event],
+    analog_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
+) -> list[tuple[int, int, list[tuple[int, bytes]]]]:
     """Events grouped into the blocks they travel in, in the order they happened.
 
     Consecutive events of one kind share a block. The order is the buffer's --
@@ -1539,12 +1809,17 @@ def _encoded(events: Sequence[Event]) -> list[tuple[int, int, list[tuple[int, by
     blocks: list[tuple[int, int, list[tuple[int, bytes]]]] = []
     for event in events:
         if isinstance(event, AnalogEvent):
-            group, variation = GROUP_ANALOG_INPUT_EVENT, int(_ANALOG_EVENT_VARIATION)
+            group, variation = GROUP_ANALOG_INPUT_EVENT, int(analog_variation)
             encoded = encode_analog_event(
                 event.point,
-                variation=_ANALOG_EVENT_VARIATION,
-                timestamp_ms=event.timestamp_ms,
+                variation=analog_variation,
+                timestamp_ms=(
+                    event.timestamp_ms if analog_variation in _TIMED_ANALOG_EVENTS else None
+                ),
             )
+        elif isinstance(event, FrozenCounterEvent):
+            group, variation = GROUP_FROZEN_COUNTER_EVENT, FROZEN_COUNTER_EVENT_VARIATION
+            encoded = encode_frozen_counter_event(event.point, timestamp_ms=event.timestamp_ms)
         else:
             group, variation = GROUP_BINARY_INPUT_EVENT, int(_BINARY_EVENT_VARIATION)
             encoded = encode_binary_event(

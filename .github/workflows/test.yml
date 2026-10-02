@@ -25,3 +25,33 @@ jobs:
       # than at release, when whoever is cutting it has the least context.
       - run: python scripts/build_changelog.py --check
       - run: pytest -q
+
+  image:
+    # The Dockerfile is what the README tells people to build, so it is built
+    # here rather than discovered broken by the first person to follow it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t py1815-der .
+      - name: The command runs
+        run: docker run --rm py1815-der --help
+      - name: Without the tables it says how to get them
+        # Not fetched here: CI has no business downloading IEEE's workbook on
+        # every push, and the refusal is the behavior a new user meets first.
+        run: |
+          if docker run --rm py1815-der run 2> message; then
+            echo "the outstation started with no tables to serve"; exit 1
+          fi
+          grep -q "py1815-der tables fetch" message
+      - name: The image carries no point tables
+        # They may not be redistributed, and an image is a thing people push.
+        # `.dockerignore` is what keeps a copy in a checkout out of the build;
+        # this is the check that it did.
+        #
+        # `find` exits non-zero over the directories an unprivileged user may
+        # not read, which says nothing about what it found. So its status is
+        # not the test; what it printed is.
+        run: |
+          found=$(docker run --rm --entrypoint sh py1815-der -c \
+            'find / -xdev \( -name "*.xlsx" -o -name "ieee-1815-2-*.json" \) 2>/dev/null || true')
+          test -z "$found" || { echo "the image carries: $found"; exit 1; }

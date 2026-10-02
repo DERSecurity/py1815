@@ -111,6 +111,23 @@ python scripts/extract_conformance.py --pdf "IEEE 1815-2012.pdf" --check
 `conformance/README.md` covers what that file holds and what it deliberately
 does not.
 
+## The DER profile is tested against tables invented for the purpose
+
+The IEEE 1815.2 point tables may not be redistributed, so the repository has none and CI
+has none. The profile machinery is therefore tested against synthetic tables of the same
+shape, built in `tests/profile_fixtures.py`: a small one with every kind of point and one
+repeating block, and one generated from the simulated DER's own binding so the simulation,
+the builder, the session, the listener and the probe run together over TCP.
+
+Tests that need the real tables are marked to skip when
+`conformance/ieee-1815-2-2025.json` is absent, which is its state in CI and on a fresh
+checkout. They run on any machine that has regenerated it (see
+[`conformance/README.md`](https://github.com/DERSecurity/py1815/blob/main/conformance/README.md)),
+and they are the ones that check the profile itself: that every mandatory point is served,
+that only the implemented functions report as supported, and that the advertised block
+starts agree with where the blocks resolve. A change to `py1815.profile` should be run
+there before it is merged.
+
 ## Running them
 
 ```bash

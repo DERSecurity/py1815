@@ -134,8 +134,11 @@ provider as an index, a decoded object and the function that carried it.
 **D14 -- A complete control is answered per object, echoed in request order.** A request naming
 four points where one is unsupported returns four objects with three successes and one
 `NOT_SUPPORTED`, not a single refusal for the fragment. The echo is of the request rather than a
-tidier version of it: the objects come back as they arrived, and two headers naming the same group
-are answered with two headers.
+tidier version of it: the objects come back as they arrived, two headers naming the same group
+are answered with two headers, and each header keeps the qualifier it arrived under. A request
+sent with sixteen-bit indices is echoed with sixteen-bit indices however small they are; an
+echo narrowed to eight is one a master comparing it against its request rejects, having
+executed the control.
 
 That last part is why the decoders keep raw octets rather than rebuilding from parsed fields.
 `struct` does not round-trip every bit pattern a float variation can carry -- unpacking the
@@ -576,6 +579,57 @@ A block is still not split. The unit is the object block the provider hands over
 larger than a fragment is refused as **D31** refuses a body -- this moves the boundary from the
 whole body to one block of it, and does not remove it.
 
+**D36 to D43** are the DER profile's: what ships (the machinery, and of the data only what
+its publisher permits), indices resolved once at load, points bound by callables, integer
+variations as the baseline, support derived from binding, unbound optional points absent.
+They are argued in [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md), which also records
+which of them are built.
+
+**D44 -- A master's time write goes to the caller, and the session only keeps the
+indication.** `Session` takes a `time_sink` and a `need_time` flag. A write of group 50
+variation 1 hands the sink the time in milliseconds, UTC, and clears `IIN1.4`; without a
+sink the write is refused as an unknown object, as every other write still is. What the time
+means is not the session's to decide: an outstation whose clock is disciplined elsewhere may
+record the write and apply nothing, and one with no clock of its own may keep an offset. The
+indication is the protocol's and so it lives here; the clock is the device's and does not.
+`DELAY_MEASURE` is answered with the time the request was held, which over TCP is close to
+nothing and is reported honestly anyway, because the master's arithmetic depends on it.
+*Trade-off:* the session cannot say whether the time was applied, against a library that
+never sets a clock it does not own.
+
+**D45 -- Freezing is the caller's, through a `FreezeProvider`, and absent one the freeze
+functions stay refused.** Under **D6** this library does not know which counters exist, so a
+freeze is passed on as the object headers the master named and whether it asked for a clear.
+An outstation given no provider has no counters, and accepting a freeze of nothing would
+tell a master a log entry exists. The two no-response freezes execute and say nothing, the
+same carve-out **D9** makes for `DIRECT_OPERATE_NR`; without a provider they are dropped as
+before. A frozen counter event is always recorded, never compared with the previous freeze:
+it is an entry in a log, and two freezes of a counter that did not move are two entries.
+The freeze-at-time functions remain refused. *Trade-off:* whether a clear is honored is the
+provider's decision and invisible at this layer, against a session that would otherwise have
+to own the counters.
+
+**D46 -- An event group read by name is answered from the buffers.** A master may read
+binary input events, analog input events or frozen counter events by their own group rather
+than by class, and the IEEE 1815.2 implementation table requires an outstation to parse
+that. Such a header selects events of its kind across every class, class 1 first, and is
+confirmed and retired exactly as a class read is. It is answered in variation 0 or in the
+variation this session reports; another variation is left to the provider, so the master
+hears that the object is unknown rather than receiving a variation it did not name. Counter
+change events are never buffered, and reading that group is answered with nothing. Without
+buffers nothing changes: the header reaches the provider as it always did.
+*Trade-off:* a read crossing classes has no order to offer but the classes' own.
+
+**D47 -- The analog event variation and reporting mode are the caller's to choose.** The
+default stays timed, and stays every change, for the reasons **D17** gives. IEEE 1815.2
+selects otherwise for analog inputs: the 32-bit variation without time, which a Level 2
+master is certain to parse, and only the most recent event per point. So `Session` takes
+`analog_event_variation` and `EventBuffers` takes `analog_latest_only`, and the bound on
+how many events could fit a fragment follows the variation rather than assuming the timed
+size. Binary and frozen counter events are never collapsed, because for those the sequence
+is the information. *Trade-off:* two ways to report an analog change, against a profile
+whose masters are promised one of them.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -639,9 +693,12 @@ this level needs a peer that exposes quality rather than a change to the harness
 - Unsolicited responses: outstation-initiated traffic with its own retry timer, and
   `ENABLE_UNSOLICITED` becoming something this outstation can agree to. Still refused today,
   which is the honest answer while nothing is sent.
-- The point-map loader and a published table for the predecessor DER profile. Planned in
-  [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md), which settles what ships (the machinery)
-  and what does not (any table but a synthetic one).
+- ~~The point-map loader and an IEEE 1815.2 outstation built from it, with D36 through D47.~~
+  Landed as `py1815.profile`: the loader, the builder, a simulated DER and the `py1815-der`
+  command. Time synchronization, counters with freezes, and event groups read by name came
+  with it, because the profile's implementation table requires them. Still planned in
+  [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md): curves and schedules as objects, the
+  fleet layout, floating-point variations, and a published table for the predecessor profile.
 - Conformance testing.
 
 ## Open

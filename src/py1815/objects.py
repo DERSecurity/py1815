@@ -1,4 +1,4 @@
-"""Data objects: binary and analog inputs, static and event, with their flags.
+"""Data objects: binary inputs, analog inputs and counters, with their flags.
 
 Encoding only. Static objects answer a class 0 read and travel in a contiguous
 range; event objects answer a class 1, 2 or 3 read and travel with an index in
@@ -29,6 +29,10 @@ from py1815.application import QualifierCode, object_header
 
 GROUP_BINARY_INPUT = 1
 GROUP_BINARY_INPUT_EVENT = 2
+GROUP_COUNTER = 20
+GROUP_FROZEN_COUNTER = 21
+GROUP_COUNTER_EVENT = 22
+GROUP_FROZEN_COUNTER_EVENT = 23
 GROUP_ANALOG_INPUT = 30
 GROUP_ANALOG_INPUT_EVENT = 32
 
@@ -348,7 +352,13 @@ def encode_binary_event(
     return encoded + encode_time(timestamp_ms)
 
 
-def event_block(group: int, variation: int, items: Sequence[tuple[int, bytes]]) -> bytes:
+def event_block(
+    group: int,
+    variation: int,
+    items: Sequence[tuple[int, bytes]],
+    *,
+    qualifier: QualifierCode | None = None,
+) -> bytes:
     """An object header and its events, each prefixed by its own index.
 
     Events are not a range. They are whichever points changed, in the order they
@@ -359,6 +369,12 @@ def event_block(group: int, variation: int, items: Sequence[tuple[int, bytes]]) 
     The narrower qualifier is used when every index and the count fit an octet,
     for the same reason the static encoder prefers a narrow range: it is two
     octets cheaper per header and most fleets fit it.
+
+    ``qualifier`` overrides that choice, for a block that answers one a master
+    sent. An echo is the request with its statuses filled in, and a master
+    checking it against what it sent compares the qualifier too; narrowing a
+    sixteen-bit request to eight because its indices happened to be small is
+    an echo of a request nobody made.
     """
     if not items:
         raise ValueError("an event block carries at least one event")
@@ -373,7 +389,17 @@ def event_block(group: int, variation: int, items: Sequence[tuple[int, bytes]]) 
     if widest > 0xFFFF:
         raise ValueError(f"index {widest} does not fit a 16-bit index")
 
-    if count <= 0xFF and widest <= 0xFF:
+    narrow = count <= 0xFF and widest <= 0xFF
+    if qualifier is QualifierCode.UINT8_COUNT_UINT8_INDEX and not narrow:
+        raise ValueError("the block does not fit an eight-bit count and index")
+    if qualifier not in (
+        None,
+        QualifierCode.UINT8_COUNT_UINT8_INDEX,
+        QualifierCode.UINT16_COUNT_UINT16_INDEX,
+    ):
+        raise ValueError(f"qualifier 0x{int(qualifier):02X} prefixes no index")
+
+    if narrow and qualifier is not QualifierCode.UINT16_COUNT_UINT16_INDEX:
         header = bytes([group, variation, QualifierCode.UINT8_COUNT_UINT8_INDEX, count])
         prefix = 1
     else:
@@ -399,3 +425,133 @@ _EVENT_TO_STATIC = {
 _TIMED_ANALOG_EVENTS = frozenset(
     {AnalogEventVariation.INT32_WITH_TIME, AnalogEventVariation.INT16_WITH_TIME}
 )
+
+
+class CounterQuality(IntEnum):
+    """Flag octet bits for a counter, static or frozen.
+
+    The low bits mean what they mean on every other point. ``ROLLOVER`` is
+    defined by the standard and deprecated by it in the same breath: a master
+    is told to detect a wrap from the values, so it is named here and never set.
+    """
+
+    ONLINE = 0x01
+    RESTART = 0x02
+    COMM_LOST = 0x04
+    REMOTE_FORCED = 0x08
+    LOCAL_FORCED = 0x10
+    ROLLOVER = 0x20
+    DISCONTINUITY = 0x40
+
+
+class FrozenCounterVariation(IntEnum):
+    """The static frozen counter variations this outstation writes.
+
+    Thirty-two bits only. A counter that accumulates energy passes sixteen bits
+    in an afternoon, and offering the narrow variations would be offering a
+    value that is wrong more often than it is right.
+    """
+
+    INT32_WITH_FLAG = 1
+    INT32_WITH_FLAG_AND_TIME = 5
+    INT32 = 9
+
+
+#: Group 20 variation 1, the static counter: a flag octet and 32 bits.
+COUNTER_VARIATION = 1
+#: Group 23 variation 5, the frozen counter event: flag, 32 bits, time.
+FROZEN_COUNTER_EVENT_VARIATION = 5
+
+#: Where a 32-bit counter wraps. A counter is a running total, so a value past
+#: this is reported modulo it rather than clamped: a pinned counter reads as
+#: one that stopped counting, and a wrapped one is what the master expects.
+COUNTER_MODULUS = 2**32
+
+
+@dataclass(frozen=True)
+class CounterPoint:
+    """One counter as it should appear on the wire."""
+
+    value: int
+    flags: int = CounterQuality.ONLINE
+
+
+def _counter_value(point: CounterPoint) -> bytes:
+    if point.value < 0:
+        raise ValueError(f"a counter cannot hold {point.value}; it only counts up")
+    return struct.pack("<I", int(point.value) % COUNTER_MODULUS)
+
+
+def encode_counter(point: CounterPoint) -> bytes:
+    """Group 20 variation 1: one flag octet, then the 32-bit count."""
+    return bytes([point.flags & 0xFF]) + _counter_value(point)
+
+
+def counter_range(start: int, points: Sequence[CounterPoint]) -> bytes:
+    """An object header and its counters, covering a contiguous index range."""
+    if not points:
+        raise ValueError("an object range carries at least one point")
+    header = object_header(
+        GROUP_COUNTER, COUNTER_VARIATION, start=start, stop=start + len(points) - 1
+    )
+    return header + b"".join(encode_counter(point) for point in points)
+
+
+def encode_frozen_counter(
+    point: CounterPoint,
+    *,
+    variation: FrozenCounterVariation = FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME,
+    timestamp_ms: int | None = None,
+) -> bytes:
+    """One static frozen counter, group 21.
+
+    The timestamp is the moment of the freeze, not of the read. It is demanded
+    by the timed variation and refused by the others, for the reason
+    ``encode_analog_event`` gives: a caller that believes it sent a time and a
+    master that received none disagree in a way neither can see.
+    """
+    variation = FrozenCounterVariation(variation)
+    timed = variation is FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME
+    if timed and timestamp_ms is None:
+        raise ValueError(f"{variation.name} carries a timestamp and none was given")
+    if not timed and timestamp_ms is not None:
+        raise ValueError(f"{variation.name} carries no timestamp and one was given")
+    value = _counter_value(point)
+    if variation is FrozenCounterVariation.INT32:
+        return value
+    encoded = bytes([point.flags & 0xFF]) + value
+    return encoded + encode_time(timestamp_ms) if timed and timestamp_ms is not None else encoded
+
+
+def frozen_counter_range(
+    start: int,
+    points: Sequence[tuple[CounterPoint, int | None]],
+    *,
+    variation: FrozenCounterVariation = FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME,
+) -> bytes:
+    """An object header and its frozen counters, each with its freeze time."""
+    if not points:
+        raise ValueError("an object range carries at least one point")
+    variation = FrozenCounterVariation(variation)
+    timed = variation is FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME
+    header = object_header(
+        GROUP_FROZEN_COUNTER, int(variation), start=start, stop=start + len(points) - 1
+    )
+    return header + b"".join(
+        encode_frozen_counter(point, variation=variation, timestamp_ms=frozen_at if timed else None)
+        for point, frozen_at in points
+    )
+
+
+def encode_frozen_counter_event(point: CounterPoint, *, timestamp_ms: int) -> bytes:
+    """Group 23 variation 5: flag, 32-bit count and the time of the freeze."""
+    return bytes([point.flags & 0xFF]) + _counter_value(point) + encode_time(timestamp_ms)
+
+
+#: Octets one analog event occupies in each variation, without its index.
+ANALOG_EVENT_SIZES = {
+    AnalogEventVariation.INT32: 5,
+    AnalogEventVariation.INT16: 3,
+    AnalogEventVariation.INT32_WITH_TIME: 5 + TIME_SIZE,
+    AnalogEventVariation.INT16_WITH_TIME: 3 + TIME_SIZE,
+}

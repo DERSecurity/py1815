@@ -24,6 +24,11 @@ classifiers = [
 # accident: the library runs where no compiler does. See docs/DESIGN.md, D1.
 dependencies = []
 
+[project.scripts]
+# The IEEE 1815.2 DER outstation: fetch the profile's point tables, serve a
+# simulated DER, poll a running outstation. See `py1815.profile.cli`.
+py1815-der = "py1815.profile.cli:main"
+
 [project.optional-dependencies]
 # Building the documentation site. mkdocstrings reads the package's own
 # docstrings, so the docs build also proves the public API imports.
@@ -101,6 +106,9 @@ exclude = [
     # library; a test whose subject was left out is one that cannot pass, and a
     # downstream packager running the shipped suite would report it as a bug.
     "tests/test_interop_fixture.py",
+    # The same, for the changelog assembler under `scripts/`, which is release
+    # tooling and is not shipped either.
+    "tests/test_changelog_fragments.py",
 ]
 
 [tool.ruff]
