@@ -183,7 +183,10 @@ Two rules, both learned the hard way:
   value.
 - **Interoperability is tested against other implementations**, not against a peer written from
   the same understanding of the specification, which would share its misreadings. CI reads this
-  outstation with a master built on a separately developed stack; see `interop/`.
+  outstation with two masters built on separately developed stacks: [opendnp3](https://github.com/dnp3/opendnp3), in
+  C++, through its Python bindings, and the [`dnp3`](https://github.com/stepfunc/dnp3) crate by
+  [Step Function I/O](https://stepfunc.io), in Rust. Wireshark's and Suricata's dissectors read
+  a capture of the same traffic. See `interop/` and [Acknowledgments](#acknowledgments).
 
 ## Project Satori
 
@@ -207,6 +210,25 @@ and not others, so Satori covers both:
 | Satori Scout | Phone app that finds DER on a network: a SunSpec Modbus sweep of the local subnet, and IEEE 2030.5 discovery over mDNS. A reference implementation rather than an open-source component |
 
 Project website: <https://open-satori.org>
+
+## Acknowledgments
+
+What this library can say about interoperating rests on implementations other people wrote.
+
+- **[`dnp3`](https://github.com/stepfunc/dnp3) by Step Function I/O** is the Rust master in the interoperability suite.
+  It is the peer that checks the quality flags and that a refused control arrives as a refusal,
+  which the other master cannot do, so it carries a real share of the verification. It is used
+  under Step Function I/O's public [license](https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt), which is not an open-source license.
+  Step Function I/O has said that reading this outstation with it in this repository's public CI
+  is in line with that license ([#48](https://github.com/DERSecurity/py1815/issues/48)). That statement is about this repository: anyone
+  running the job from a fork, or using the crate anywhere else, should read the license for
+  their own use. Commercial licensing is at <https://stepfunc.io/contact>.
+- **[opendnp3](https://github.com/dnp3/opendnp3)** is the C++ master in the suite, driven through the
+  [`dnp3-python`](https://pypi.org/project/dnp3-python/) bindings. It is also where two of this library's choices come
+  from: the ten-second default for how long a select stays armed, and the name `TOO_MANY_OPS`
+  for control status 8, which is the spelling that interoperates.
+- **Wireshark** and **Suricata** supply the two independent dissectors that read a capture of
+  everything the suite puts on the wire.
 
 ## License
 

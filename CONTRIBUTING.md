@@ -71,8 +71,9 @@ both halves share. The `interop` workflow is the part that does not, and it
 gates every pull request.
 
 Four implementations across three jobs, chosen so no two are the same codebase
-in different clothes: a C++ master through its Python bindings, a Rust master by
-different authors, and Wireshark and Suricata reading a capture of the whole
+in different clothes: [opendnp3](https://github.com/dnp3/opendnp3), a C++ master, through its Python
+bindings; the [`dnp3`](https://github.com/stepfunc/dnp3) crate by Step Function I/O, a Rust master by
+different authors; and Wireshark and Suricata reading a capture of the whole
 function code sweep. The masters answer "does it say the right thing"; the
 dissectors answer "is what it put on the wire really DNP3".
 
