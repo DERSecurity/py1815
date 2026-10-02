@@ -53,7 +53,11 @@ def _user_data(fragment: bytes, *, confirmed: bool = False, source: int = MASTER
         if confirmed
         else link.PrimaryFunction.UNCONFIRMED_USER_DATA
     )
-    control = link.control_byte(from_master=True, primary=True, function=function)
+    # Confirmed data counts frames: the count is valid, and the first frame
+    # after a link reset carries it set.
+    control = link.control_byte(
+        from_master=True, primary=True, function=function, fcb=confirmed, fcv=confirmed
+    )
     return link.build(control, destination=OUTSTATION, source=source, payload=b"\xc0" + fragment)
 
 
@@ -89,10 +93,20 @@ class TestLinkLayer:
 
         assert frames[0].function == link.SecondaryFunction.ACK
 
-    def test_a_test_link_request_is_acknowledged(self):
+    def test_a_test_link_request_is_acknowledged_once_the_link_is_reset(self):
         session, _ = _session()
+        counted = link.control_byte(
+            from_master=True,
+            primary=True,
+            function=link.PrimaryFunction.TEST_LINK_STATES,
+            fcb=True,
+            fcv=True,
+        )
+        test_link = link.build(counted, destination=OUTSTATION, source=MASTER)
 
-        frames = _frames(session.receive(_link_only(link.PrimaryFunction.TEST_LINK_STATES)))
+        assert session.receive(test_link) == b"", "there is no frame count before a reset"
+        session.receive(_link_only(link.PrimaryFunction.RESET_LINK_STATES))
+        frames = _frames(session.receive(test_link))
 
         assert frames[0].function == link.SecondaryFunction.ACK
 
@@ -106,6 +120,7 @@ class TestLinkLayer:
 
     def test_confirmed_user_data_is_acknowledged_and_answered(self):
         session, _ = _session()
+        session.receive(_link_only(link.PrimaryFunction.RESET_LINK_STATES))
 
         frames = _frames(session.receive(_user_data(CLASS_0_READ, confirmed=True)))
 
@@ -138,7 +153,7 @@ class TestAddressing:
 
         assert session.receive(_user_data(CLASS_0_READ, source=99)) == b""
 
-    def test_a_broadcast_frame_is_accepted(self):
+    def test_a_broadcast_frame_is_heard_and_not_answered(self):
         session, _ = _session()
         control = link.control_byte(
             from_master=True,
@@ -149,7 +164,9 @@ class TestAddressing:
             control, link.Broadcast.NO_CONFIRM, MASTER, payload=b"\xc0" + CLASS_0_READ
         )
 
-        assert _fragments(session.receive(frame))
+        assert session.receive(frame) == b"", "nobody answers a broadcast"
+        (response,) = _fragments(session.receive(_user_data(CLASS_0_READ)))
+        assert response[2] & 0x01, "the next response says one was received"
 
     def test_a_secondary_frame_is_ignored(self):
         """An outstation sends unconfirmed data, so nothing is outstanding for a
@@ -217,7 +234,9 @@ class TestRefusals:
         fragment = _fragments(session.receive(_user_data(bytes([0xC0, function]))))[0]
 
         assert fragment[1] == FunctionCode.RESPONSE
-        assert fragment[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        # As an unknown object: the function is one every outstation knows,
+        # and what this one lacks is any output for it to act on.
+        assert fragment[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_direct_operate_no_ack_is_dropped_rather_than_executed(self):
         """It asks for no response, so it cannot be refused in band. What must

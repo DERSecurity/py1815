@@ -108,12 +108,18 @@ class TestReadingOneKindAcrossClasses:
         buffers.record_frozen_counter(4, CounterPoint(1), event_class=EventClass.CLASS_3)
         return buffers
 
-    def test_only_that_kind_comes_back_in_class_order(self):
+    def test_only_that_kind_comes_back_oldest_first(self):
+        """Whichever class each is in: index 1 was recorded before index 3."""
         analog = self._mixed().peek_kind(AnalogEvent)
-        assert [event.index for event in analog] == [3, 1]
+        assert [event.index for event in analog] == [1, 3]
 
     def test_a_limit_is_an_upper_bound(self):
         assert len(self._mixed().peek_kind(AnalogEvent, limit=1)) == 1
+
+    def test_a_limit_takes_the_oldest_and_not_the_highest_class(self):
+        """The class 3 event came first, so it is the one a limit of one keeps."""
+        (oldest,) = self._mixed().peek_kind(AnalogEvent, limit=1)
+        assert oldest.index == 1
 
     def test_nothing_is_removed(self):
         buffers = self._mixed()

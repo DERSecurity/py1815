@@ -150,6 +150,21 @@ def _split_bind(bind: str) -> tuple[str, int]:
     return host or "0.0.0.0", int(port)
 
 
+class _BroadcastDatagrams(asyncio.DatagramProtocol):
+    """Hands datagrams to the session, which acts only on broadcasts."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def datagram_received(self, data: bytes, addr: object) -> None:
+        try:
+            self._session.receive_broadcast(data)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Nothing is owed to the sender of a datagram, and one that
+            # cannot be handled must not take the listener down with it.
+            logger.exception("dnp3: a broadcast datagram from %s could not be handled", addr)
+
+
 class OutstationServer:
     """Serves one master association over TCP, optionally with TLS."""
 
@@ -161,6 +176,7 @@ class OutstationServer:
         ssl_context: ssl.SSLContext | None = None,
         authorized_peers: frozenset[str] | None = None,
         idle_timeout: float = IDLE_TIMEOUT,
+        broadcast_datagrams: bool = False,
     ) -> None:
         """
         Args:
@@ -172,6 +188,15 @@ class OutstationServer:
             authorized_peers: Certificate names or ``sha256:`` fingerprints
                 permitted to connect. Required whenever ``ssl_context`` is given.
             idle_timeout: Seconds of silence before a connection is closed.
+            broadcast_datagrams: Also listen for datagrams on the same
+                port, and act on those addressed to a DNP3 broadcast
+                address. A master reaching many outstations at once sends
+                a broadcast this way, since a stream reaches one. Off by
+                default, and refused with TLS: a datagram carries no
+                certificate, so anyone who can reach the port can send
+                one, and what a broadcast may do (freeze counters, set
+                the time, and operate controls if the session allows it)
+                is done on that say-so.
 
         Raises:
             ValueError: If TLS is configured without an allow-list, or with a
@@ -210,6 +235,13 @@ class OutstationServer:
         self._ssl = ssl_context
         self._allowed = frozenset(authorized_peers or ())
         self._idle_timeout = idle_timeout
+        if broadcast_datagrams and ssl_context is not None:
+            raise ValueError(
+                "broadcast_datagrams cannot be combined with TLS: a datagram is "
+                "unauthenticated, and would bypass the peer allow-list"
+            )
+        self._broadcast_datagrams = broadcast_datagrams
+        self._datagrams: asyncio.DatagramTransport | None = None
         self._server: asyncio.Server | None = None
         self._active: asyncio.StreamWriter | None = None
         self._active_task: asyncio.Task[None] | None = None
@@ -247,6 +279,12 @@ class OutstationServer:
             self.port,
             "TLS" if self._ssl else "plaintext",
         )
+        if self._broadcast_datagrams:
+            loop = asyncio.get_running_loop()
+            self._datagrams, _ = await loop.create_datagram_endpoint(
+                lambda: _BroadcastDatagrams(self._session),
+                local_addr=(self._host, self.port),
+            )
 
     async def stop(self) -> None:
         """Stop accepting, then end the connection in progress.
@@ -255,6 +293,9 @@ class OutstationServer:
         leaves an established one being served. Under the admission lock, so a
         connection that was mid-handshake cannot install itself afterwards.
         """
+        if self._datagrams is not None:
+            self._datagrams.close()
+            self._datagrams = None
         async with self._admission:
             server, self._server = self._server, None
             if server is not None:

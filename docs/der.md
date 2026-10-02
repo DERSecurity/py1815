@@ -195,6 +195,23 @@ A profile generated from the IEEE 1815.2 tables carries that standard's point
 names. Publishing one for your own device is what the document is for;
 the tables themselves stay where they were.
 
+## Answering as Subset Level 2 only
+
+IEEE 1815.2 asks for more than DNP3 Subset Level 2 in places: 32-bit setpoints,
+frozen counter events, counters that a freeze never clears. A master that implements
+the subset and no more can be served by building the outstation with `level2=True`:
+
+```python
+outstation = DerOutstation(profile, binding, level2=True)
+```
+
+A read that names no variation is then answered in the variations Level 2 requires a
+master to parse, frozen counter events are not reported, and a freeze-and-clear
+clears. An unflagged variation is replaced by its flagged one for any point whose
+quality is not normal, so an offline point is never read as a plain number. This is
+the configuration the conformance tests run against; see
+[Testing](testing.md#the-certification-procedures-are-carried-out-section-by-section).
+
 ## What is not there yet
 
 - **Curves and schedules as objects.** The multiplexed curve and schedule

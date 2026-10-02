@@ -425,14 +425,14 @@ class TestTheBudgetBoundsTheWorkAndNotJustTheOctets:
 
         body = _session(self._buffers())._handle_fragment(capped)[4:]
 
-        assert body[3] == 100, "the counted header"
-        second = 4 + 100 * 12
-        assert body[second] == 32, "a second block follows it"
-        # 840 octets left, four of them the header, twelve an event: 69. Short
-        # of that means the buffer was asked for the room and not for the
-        # hundred deduplication was about to take out of it.
-        assert body[second + 3] == 69
-        assert body[second + 4] == 100, "carrying on where the first left off"
+        # One block, since both headers select analog events that happened
+        # one after another. 2,044 octets, four of them the header, twelve an
+        # event: 170. Short of that means the buffer was asked for the room
+        # and not for the hundred deduplication was about to take out of it.
+        assert body[3] == 170
+        assert len(body) == 4 + 170 * 12
+        assert body[4] == 0
+        assert body[4 + 169 * 12] == 169, "carrying on where the first header left off"
 
 
 class TestACeilingLargerThanAnyFragment:

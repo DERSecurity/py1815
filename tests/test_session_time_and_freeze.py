@@ -268,7 +268,7 @@ class TestReadingAnEventGroupByName:
 
     def test_naming_a_variation_not_served_is_an_unknown_object(self):
         """Not answered in another variation: the master named the one it wanted."""
-        response = self._read(Session(Reader(), events=_buffers()), 32, 1)
+        response = self._read(Session(Reader(), events=_buffers()), 32, 7)
         assert _iin(response)[1] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_a_count_qualifier_limits_the_answer(self):

@@ -153,8 +153,11 @@ association down on its way to being refused. See [D8](DESIGN.md).
 
 ## What it refuses
 
-A control function gets a response carrying `FUNC_NOT_SUPPORTED` rather than
-silence, because a master that times out learns nothing and retries.
+A function this outstation does not implement gets a response carrying
+`FUNC_NOT_SUPPORTED` rather than silence, because a master that times out learns
+nothing and retries. A control sent to an outstation with no outputs is answered
+with `OBJECT_UNKNOWN`: the function is one it knows, and what is missing is
+anything for it to act on.
 
 The exceptions are the five function codes the standard defines as taking no
 reply, which are dropped and logged rather than answered. See

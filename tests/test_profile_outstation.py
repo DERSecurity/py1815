@@ -155,9 +155,22 @@ class TestReadingByGroup:
         response = _read(outstation.session(), bytes([30, 1, 0x00, 1, 2]))
         assert set(_values(response)) == {(30, 1), (30, 2)}
 
-    def test_a_range_holding_nothing_is_an_unknown_object(self):
+    def test_a_range_holding_nothing_is_a_parameter_error(self):
+        """The object is known; it is the range that names nothing."""
         outstation, _ = _built()
         response = _read(outstation.session(), bytes([30, 1, 0x00, 200, 210]))
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert not response[3] & IIN2Bit.OBJECT_UNKNOWN
+
+    def test_a_range_running_past_the_last_point_is_a_parameter_error(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([20, 0, 0x00, 5, 6]))
+        assert response[3] & IIN2Bit.PARAM_ERROR
+
+    def test_a_range_over_a_kind_with_no_points_is_an_unknown_object(self):
+        point_map = load.resolve(small(), units(0))
+        session = DerOutstation(point_map, Binding(), strict=False).session()
+        response = _read(session, bytes([20, 0, 0x00, 0, 0]))
         assert response[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_a_range_across_a_gap_returns_what_exists(self):
@@ -573,7 +586,7 @@ class TestTheSessionItWires:
         response = session._handle_fragment(
             _control(FunctionCode.DIRECT_OPERATE, _analog_command(0, 1), 0)
         )
-        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
 
     def test_an_output_status_can_be_a_window_onto_something_else(self):
         point_map = load.resolve(small(), units(0))
