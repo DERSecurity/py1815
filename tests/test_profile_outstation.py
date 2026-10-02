@@ -8,6 +8,7 @@ layouts out of the tests.
 
 from __future__ import annotations
 
+import dataclasses
 import struct
 
 import pytest
@@ -484,6 +485,55 @@ class TestWhatAnEventPolicyIsRefusedFor:
     def test_a_point_the_map_does_not_hold(self):
         with pytest.raises(MapError, match="AI4040"):
             _with_policy({"points": {"AI4040": {"class": 1}}})
+
+    @pytest.mark.parametrize("event_class", [1.0, 2.0, 3.0])
+    def test_a_class_that_is_a_float_even_a_whole_one(self, event_class):
+        """``1.0 == 1``, and a float in force would break event_class()'s contract."""
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            _with_policy({"points": {"AI2": {"class": event_class}}})
+
+    @pytest.mark.parametrize("section", ["defaults", "points"])
+    def test_a_section_that_is_present_and_null(self, section):
+        """An empty value where a mapping belongs is a mistake, not an omission."""
+        with pytest.raises(ValueError, match=section):
+            _with_policy({section: None})
+
+    def test_a_section_left_out_is_no_rules(self):
+        """The control for the test above: leaving a section out is allowed."""
+        outstation = _with_policy({"points": {"AI2": {"class": 1}}})
+        assert outstation.event_class(AI, 2) == 1
+
+    def _counter_left_out_of_class_0(self):
+        """The small map with its first counter left out of class 0 by hand.
+
+        The loader never does this to a counter, so the map is built here: the
+        point is what the builder does if a map arrives that way.
+        """
+        base = load.resolve(small(), units(0))
+        points = dict(base.points)
+        points[(CTR, 0)] = dataclasses.replace(points[(CTR, 0)], event_class=None)
+        return dataclasses.replace(base, points=points)
+
+    def test_events_for_a_counter_left_out_of_class_0(self):
+        point_map = self._counter_left_out_of_class_0()
+        with pytest.raises(MapError, match="class 0"):
+            DerOutstation(
+                point_map,
+                Device().binding(),
+                strict=False,
+                event_policy={"points": {"CTR0": {"class": 1}}},
+            )
+
+    def test_and_a_counter_default_leaves_such_a_counter_alone(self):
+        point_map = self._counter_left_out_of_class_0()
+        outstation = DerOutstation(
+            point_map,
+            Device().binding(),
+            strict=False,
+            event_policy={"defaults": {"CTR": {"class": 1}}},
+        )
+        assert outstation.event_class(CTR, 0) == 0
+        assert outstation.event_class(CTR, 1) == 1, "the counter beside it still follows"
 
     @pytest.mark.parametrize("event_class", [0, 4, -1, "2", 2.5, True])
     def test_a_class_outside_one_to_three(self, event_class):

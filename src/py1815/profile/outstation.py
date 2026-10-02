@@ -914,9 +914,10 @@ def _class_in_force(point: Point, default: EventRule | None, own: EventRule | No
                 f"the event policy gives {_name(point.address)} events, "
                 "and the counter has no frozen counter to log them"
             )
-        if tabled is None:
+        if tabled is None or not point.in_class_0:
             # An event reports a change to a value the master first learned
-            # from class 0, and this point is not in class 0.
+            # from class 0, and this point is not in class 0. For a counter the
+            # class comes from its frozen twin, so membership is asked directly.
             raise MapError(
                 f"the event policy gives {_name(point.address)} events, "
                 "and the point is left out of class 0"
@@ -929,7 +930,7 @@ def _class_in_force(point: Point, default: EventRule | None, own: EventRule | No
                 "and nothing gives the point a class"
             )
         return chosen
-    if tabled is None or tabled not in (1, 2, 3):
+    if tabled is None or tabled not in (1, 2, 3) or not point.in_class_0:
         return 0
     if default is None:
         return tabled

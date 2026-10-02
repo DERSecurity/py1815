@@ -53,7 +53,11 @@ class EventRule:
 
     def __post_init__(self) -> None:
         chosen = self.event_class
-        if chosen is not None and (isinstance(chosen, bool) or chosen not in (1, 2, 3)):
+        # An int and not a bool: ``1.0 == 1`` and ``True == 1``, and either in
+        # force would hand back something that is not the class it claims.
+        if chosen is not None and (
+            not isinstance(chosen, int) or isinstance(chosen, bool) or chosen not in (1, 2, 3)
+        ):
             raise ValueError(f"an event class is 1, 2 or 3, not {chosen!r}")
         if self.events is not None and not isinstance(self.events, bool):
             raise ValueError(f"events is true or false, not {self.events!r}")
@@ -166,9 +170,12 @@ def _check(kind: object, rule: object, name: str) -> None:
 
 
 def _section(data: Mapping[str, Any], key: str) -> Mapping[Any, Any]:
-    section = data.get(key)
-    if section is None:
+    # A section left out is no rules. One that is present and empty-valued is
+    # a mistake in the file, and treating it as left out would quietly drop
+    # every rule the author meant it to hold.
+    if key not in data:
         return {}
+    section = data[key]
     if not isinstance(section, Mapping):
         raise ValueError(f"{key} is a mapping, not {section!r}")
     return section
