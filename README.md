@@ -104,6 +104,10 @@ certification body:
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | Unsolicited responses, floating-point variations, device attributes (all optional in the profile), secure authentication | Not implemented |
 
+`py1815-der profile` writes the outstation's DNP3 Device Profile document (schema version
+2.12.00), generated from the running configuration: its point lists, limits and
+implementation table. See [Serving a DER](https://dersecurity.github.io/py1815/der/).
+
 To put a real device behind the same outstation, bind its values to the profile's points instead
 of the simulation's: see [Serving a DER](https://dersecurity.github.io/py1815/der/).
 

@@ -225,6 +225,7 @@ def _point(
         minimum=row.get("minimum"),
         maximum=row.get("maximum"),
         units=row.get("units"),
+        states=_states(row),
         associated=_reference(row.get("associated"), blocks, unit),
         block=row.get("block"),
         unit=unit,
@@ -232,6 +233,14 @@ def _point(
         frozen=bool(row.get("frozen")),
         frozen_event_class=row.get("frozen_event_class"),
     )
+
+
+def _states(row: dict[str, Any]) -> tuple[str, str] | None:
+    """A binary row's two state names, where the tables give both."""
+    states = row.get("states")
+    if not states or len(states) != 2 or not all(states):
+        return None
+    return (str(states[0]), str(states[1]))
 
 
 def _event_class(row: dict[str, Any], advertised: bool) -> int | None:

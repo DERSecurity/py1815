@@ -90,6 +90,9 @@ class Point:
     minimum: float | None = None
     maximum: float | None = None
     units: str | None = None
+    #: For a binary point, what the tables call its two states: the name of
+    #: the state when the value is 0, then when it is 1.
+    states: tuple[str, str] | None = None
     #: The point this one is paired with: an output's status input, or an
     #: input's commanding output.
     associated: Address | None = None

@@ -313,6 +313,38 @@ class ControlProvider(Protocol):
     def operate(self, controls: Sequence[Control]) -> Sequence[CommandStatus]: ...
 
 
+@dataclass(frozen=True)
+class SessionFacts:
+    """What a session is configured to do, for something that has to describe it.
+
+    A device profile document states an outstation's limits and options. Read
+    from the session itself, those statements cannot drift from the session
+    that is actually serving; kept beside it in a second place, they would.
+    """
+
+    outstation_address: int
+    master_address: int
+    #: The largest request fragment that will be reassembled, in octets.
+    max_request: int
+    #: The largest response fragment that will be sent, in octets.
+    max_response: int
+    #: Seconds a select stays armed for its operate.
+    select_timeout: float
+    #: The most fragments one response may run to while it carries events.
+    max_event_fragments: int
+    controls: bool
+    freezes: bool
+    time_write: bool
+    asks_for_time: bool
+    #: Whether classes 1 to 3 are answered from event buffers.
+    events: bool
+    #: Events each class holds, when there are buffers.
+    event_capacity: int | None
+    analog_latest_only: bool
+    binary_event_variation: int
+    analog_event_variation: int
+
+
 class FreezeProvider(Protocol):
     """What can be frozen. Counters, in every profile this library serves.
 
@@ -573,6 +605,7 @@ class Session:
         self._master_address = master_address
         self._frames = link.FrameReader()
         self._reassembler = Reassembler(max_fragment=max_fragment)
+        self._max_fragment = max_fragment
         if max_response < RESPONSE_HEADER_SIZE:
             # A response is four octets before it carries anything, so a smaller
             # ceiling is one nothing can honour -- every answer this outstation
@@ -603,6 +636,28 @@ class Session:
     @property
     def restart_indication(self) -> bool:
         return self._restart
+
+    @property
+    def facts(self) -> SessionFacts:
+        """This session's configuration, as it stands now."""
+        events = self._events
+        return SessionFacts(
+            outstation_address=self._outstation_address,
+            master_address=self._master_address,
+            max_request=self._max_fragment,
+            max_response=self._max_response,
+            select_timeout=self._select_timeout,
+            max_event_fragments=_MAX_FRAGMENTS,
+            controls=self._controls is not None,
+            freezes=self._freezer is not None,
+            time_write=self._time_sink is not None,
+            asks_for_time=self._need_time,
+            events=events is not None,
+            event_capacity=None if events is None else events.capacity,
+            analog_latest_only=events is not None and events.analog_latest_only,
+            binary_event_variation=int(_BINARY_EVENT_VARIATION),
+            analog_event_variation=int(self._analog_event_variation),
+        )
 
     @property
     def need_time(self) -> bool:

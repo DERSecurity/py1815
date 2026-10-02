@@ -3,6 +3,7 @@
     py1815-der tables fetch      download the IEEE point tables and read them
     py1815-der run               serve a simulated DER as an IEEE 1815.2 outstation
     py1815-der poll              ask a running outstation for everything, once
+    py1815-der profile           write the outstation's DNP3 Device Profile document
 
 The tables are IEEE's and are not part of this package (D36). ``tables fetch``
 downloads them from IEEE to the machine it runs on and reads them into the
@@ -29,7 +30,8 @@ import urllib.request
 import zipfile
 from collections.abc import Sequence
 
-from py1815.profile import der, extract, load, probe
+from py1815.control import CommandStatus
+from py1815.profile import der, device_profile, extract, load, probe
 from py1815.profile.model import Composition, Kind, MapError, PointMap
 from py1815.server import DEFAULT_PORT, OutstationServer
 
@@ -246,6 +248,59 @@ def _poll(args: argparse.Namespace) -> int:
     return 0
 
 
+def _validate(document: str, schema: pathlib.Path) -> int:
+    """Check a generated profile against the caller's copy of the schema."""
+    try:
+        import xmlschema  # pylint: disable=import-outside-toplevel
+    except ModuleNotFoundError:
+        print("validating needs the xmlschema package: pip install xmlschema", file=sys.stderr)
+        return 2
+    if not schema.is_file():
+        print(f"no such schema: {schema}", file=sys.stderr)
+        return 2
+    errors = list(xmlschema.XMLSchema(str(schema)).iter_errors(document))
+    for error in errors[:20]:
+        print(f"{error.path}: {error.reason}", file=sys.stderr)
+    if errors:
+        print(f"{len(errors)} error(s) against {schema.name}", file=sys.stderr)
+        return 1
+    print(f"valid against {schema.name}", file=sys.stderr)
+    return 0
+
+
+def _profile(args: argparse.Namespace) -> int:
+    point_map = _load(args)
+    if point_map is None:
+        return 1
+    outstation = der.build(point_map, seed=args.seed).outstation
+    session = outstation.session(
+        outstation_address=args.outstation_address, master_address=args.master_address
+    )
+    host, _, port = args.bind.rpartition(":")
+    identity = device_profile.Identity(
+        vendor=args.vendor,
+        device=args.device,
+        hardware_version=args.hardware_version,
+        software_version=args.software_version,
+        author=args.author,
+        host=host or None,
+        port=int(port) if port.isdigit() else None,
+    )
+    # The simulated DER's bindings refuse while locked out, without permission
+    # to start, and for a unit it does not count in.
+    statuses = (CommandStatus.BLOCKED, CommandStatus.NOT_SUPPORTED, CommandStatus.OUT_OF_RANGE)
+    document = device_profile.render(
+        device_profile.build(outstation, session, identity, statuses=statuses)
+    )
+    if args.out is None:
+        sys.stdout.write(document)
+    else:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(document, encoding="utf-8")
+        print(f"wrote {args.out}", file=sys.stderr)
+    return _validate(document, args.validate) if args.validate is not None else 0
+
+
 def _count(text: str) -> int:
     """An equipment count from the command line: a whole number, not below zero."""
     try:
@@ -329,6 +384,29 @@ def _parser() -> argparse.ArgumentParser:
     points = commands.add_parser("points", help="list the points the simulated DER serves")
     _add_map_options(points)
     points.set_defaults(handler=_points)
+
+    profile = commands.add_parser(
+        "profile", help="write the DNP3 Device Profile document for the simulated DER"
+    )
+    _add_map_options(profile)
+    _add_link_options(profile)
+    profile.add_argument(
+        "--bind", default=f"127.0.0.1:{DEFAULT_PORT}", help="host:port it listens on"
+    )
+    profile.add_argument("--out", type=pathlib.Path, default=None, help="write here, not to stdout")
+    profile.add_argument("--vendor", default="Not stated")
+    profile.add_argument("--device", default="py1815 simulated DER outstation")
+    profile.add_argument("--hardware-version", default="Not applicable (software)")
+    profile.add_argument("--software-version", default="", help="default: this library's version")
+    profile.add_argument("--author", default="py1815")
+    profile.add_argument(
+        "--validate",
+        type=pathlib.Path,
+        default=None,
+        metavar="XSD",
+        help=f"check the result against your copy of {device_profile.SCHEMA_FILE}",
+    )
+    profile.set_defaults(handler=_profile)
 
     poll = commands.add_parser("poll", help="run one integrity poll against an outstation")
     poll.add_argument("--host", default="127.0.0.1")

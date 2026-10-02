@@ -36,6 +36,7 @@ one will silently reject documents written against the other.
 | Schema | `schemaVersion` | Target namespace |
 |---|---|---|
 | `DNP3DeviceProfileJan2010.xsd` | `2.07.00` | `http://www.dnp3.org/DNP3/DeviceProfile/Jan2010` |
+| `DNP3DeviceProfileApril2016.xsd` | `2.11.00` | `http://www.dnp3.org/DNP3/DeviceProfile/April2016` |
 | `DNP3DeviceProfile021200.xsd` | `2.12.00` | `http://www.dnp.org/DNP3/DeviceProfile` |
 
 Instance documents in the wild still carry the 2010 namespace. The device profile
@@ -69,6 +70,24 @@ repository, which is public and Apache-2.0. The note in IEEE Std 1815-2012 that
 these files "should be distributed with the DNP3 XML instance file for a device"
 describes how a vendor ships a profile for its own product. It is not a copyright
 license, and it is not a basis for republishing the artifacts here.
+
+Version 2.12.00 is 2.11.00 with the secure authentication configuration
+extended and the namespace changed; nothing was removed. The example profiles
+and the blank template in the package are 2.11.00 documents, so they validate
+against the April 2016 schema and not against the later one.
+
+## Generating one
+
+`py1815` writes version 2.12.00:
+
+```bash
+py1815-der profile --out device-profile.xml --validate schema/DNP3DeviceProfile021200.xsd
+```
+
+The generator is `py1815.profile.device_profile`. It needs neither the schema
+nor the stylesheet to write the document; `--validate` checks the result
+against the copy placed here, and the tests in
+`tests/test_profile_device_profile.py` that do the same skip when it is absent.
 
 ## Rendering an instance document
 

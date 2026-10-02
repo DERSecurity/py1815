@@ -44,7 +44,16 @@ docs = [
     # keyword-only, so the wrapped form is the readable one.
     "ruff>=0.6",
 ]
-dev = ["py1815[docs]", "pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=1.11"]
+# xmlschema is for the tests that validate a generated Device Profile against
+# the DNP Users Group schema, which run only where a checkout has a copy of it.
+dev = [
+    "py1815[docs]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "xmlschema>=3.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/py1815"]

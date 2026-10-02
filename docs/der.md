@@ -146,6 +146,55 @@ binding.output(Kind.AO, 87, set_limit, check=lambda _value: (
 ))
 ```
 
+## The Device Profile document
+
+IEEE 1815 has every device publish a Device Profile: what it implements and
+how it is configured, in an XML form the DNP Users Group maintains a schema
+for. An outstation built here writes its own:
+
+```
+py1815-der profile --vendor "Example Co" --out device-profile.xml
+```
+
+or, for your own outstation and session:
+
+```python
+from py1815.profile import device_profile
+
+session = outstation.session()
+identity = device_profile.Identity(vendor="Example Co", device="EX-100", port=20000)
+document = device_profile.render(device_profile.build(outstation, session, identity))
+```
+
+The document is schema version 2.12.00 and is read from the objects it
+describes. The point lists are what the outstation serves, with each point's
+class, class 0 membership, range, scaling and units. The addresses, fragment
+sizes, select timeout and event buffer size are the session's. The
+implementation table lists the objects, function codes and qualifiers that
+session answers, so a monitor lists no controls and an outstation with no
+counters lists no freezes. The test suite sends the session every request the
+table lists, and a sample of what it leaves out, and checks they agree.
+
+It leaves out what only a measurement or a test laboratory can supply: clock
+drift, response time, timestamp error, and a conformance test result. The
+schema makes those optional, and an absent element reads as "not stated".
+Pass `statuses=` to `build` to list the command statuses your own bindings
+can return; the ones the session and builder answer with are listed already.
+
+The schema and its rendering stylesheet are the Users Group's, available to
+members, and are not carried by this library. With your own copies beside the
+file:
+
+```
+pip install xmlschema
+py1815-der profile --out device-profile.xml --validate DNP3DeviceProfile021200.xsd
+xsltproc DNP3DeviceProfile021200.xslt device-profile.xml > device-profile.html
+```
+
+A profile generated from the IEEE 1815.2 tables carries that standard's point
+names. Publishing one for your own device is what the document is for;
+the tables themselves stay where they were.
+
 ## What is not there yet
 
 - **Curves and schedules as objects.** The multiplexed curve and schedule
@@ -156,8 +205,8 @@ binding.output(Kind.AO, 87, set_limit, check=lambda _value: (
   tables, which is the profile's baseline. A floating-point setpoint is
   accepted and taken as engineering units.
 - **Unsolicited responses.** Events are reported when polled.
-- **A device profile document.** The base standard has every outstation
-  publish one; generating it from a resolved map is planned.
+- **Measured figures in the Device Profile.** Clock drift, response time and
+  timestamp error are left unstated until someone measures them.
 
 ## Reference
 

@@ -18,6 +18,10 @@ reference.
 
 ::: py1815.profile.outstation
 
+## Device Profile
+
+::: py1815.profile.device_profile
+
 ## Simulated DER
 
 ::: py1815.profile.der
