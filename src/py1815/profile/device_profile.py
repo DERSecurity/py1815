@@ -57,8 +57,10 @@ _INDEXED = [0x17, 0x28]
 
 READ, WRITE, SELECT, OPERATE, DIRECT, DIRECT_NR = 1, 2, 3, 4, 5, 6
 FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR = 7, 8, 9, 10
+ENABLE_UNSOLICITED, DISABLE_UNSOLICITED = 20, 21
 RECORD_CURRENT_TIME = 24
 RESPONSE = 129
+UNSOLICITED_RESPONSE = 130
 
 #: The schema spells variation numbers out.
 _NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 9: "nine"}
@@ -304,11 +306,57 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     request=(READ, tuple(_ALL + _COUNT)),
                 )
             )
+    if facts.unsolicited and facts.events:
+        # What an unsolicited response carries: events, in the variations a
+        # class poll is answered in, since it is built the same way. Binary
+        # events stamped before the clock was set travel with relative time
+        # behind a common time, as they do when polled.
+        unsolicited = (UNSOLICITED_RESPONSE, tuple(_INDEXED))
+        if served[Kind.BI]:
+            rows.append(Row(2, 2, "Binary Input Event - with absolute time", response=unsolicited))
+            rows.append(Row(2, 3, "Binary Input Event - with relative time", response=unsolicited))
+            for variation, clock in ((1, "synchronized"), (2, "unsynchronized")):
+                rows.append(
+                    Row(
+                        51,
+                        variation,
+                        f"Time and Date CTO - absolute time, {clock}",
+                        response=(UNSOLICITED_RESPONSE, (0x07,)),
+                    )
+                )
+        if served[Kind.CTR] and not outstation.level2:
+            rows.append(
+                Row(23, 5, "Frozen Counter Event - 32-bit with flag and time", response=unsolicited)
+            )
+        if served[Kind.AI]:
+            rows.append(
+                Row(
+                    32,
+                    facts.analog_event_variation,
+                    "Analog Input Event - as configured",
+                    response=unsolicited,
+                )
+            )
+    if facts.unsolicited:
+        # Enabled and disabled by class. Listed only for a session that has
+        # unsolicited responses on: with them off the enable request is
+        # refused and nothing is sent.
+        for variation in (2, 3, 4):
+            for function in (ENABLE_UNSOLICITED, DISABLE_UNSOLICITED):
+                rows.append(
+                    Row(
+                        60,
+                        variation,
+                        f"Class Objects - class {variation - 1} data",
+                        request=(function, tuple(_ALL)),
+                    )
+                )
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
-    # Function codes that carry no object: confirm, disable unsolicited (which
-    # is agreed to because none are sent), delay measurement, and the two
-    # that depend on how the session was built.
-    codes = [0, 21, 23]
+    # Function codes that carry no object: confirm, delay measurement, and the
+    # two that depend on how the session was built. Disable unsolicited is
+    # among them only for a session that sends none, which agrees to it
+    # whatever it names; one that sends them takes it by class, above.
+    codes = [0, 23] if facts.unsolicited else [0, 21, 23]
     if facts.cold_restart:
         codes.append(13)
     if facts.time_write:
@@ -369,7 +417,17 @@ def _value(name: str, value: Any) -> tuple[str, list[Any]]:
     return _setting(name, current=[("value", value)])
 
 
-def _device(identity: Identity) -> Items:
+def _device(identity: Identity, facts: SessionFacts) -> Items:
+    additions = [
+        "Analog output commands in 32-bit (g41v1) and floating point (g41v3, g41v4)",
+        "Frozen counters with time (g21v5) and frozen counter events (g23v5)",
+        "Immediate freeze and freeze-and-clear, with and without acknowledgment",
+        "Event objects read by group as well as by class",
+        "Responses of several fragments, each confirmed",
+    ]
+    if facts.unsolicited:
+        # Optional at this level, and listed only where it is switched on.
+        additions.append("Unsolicited responses, enabled and disabled by class")
     return [
         _both("deviceFunction", ["outstation"]),
         _value("vendorName", identity.vendor),
@@ -383,16 +441,7 @@ def _device(identity: Identity) -> Items:
         _both("supportedFunctionBlocks", []),
         _both(
             "notableAdditions",
-            [
-                ("notableAddition", text)
-                for text in (
-                    "Analog output commands in 32-bit (g41v1) and floating point (g41v3, g41v4)",
-                    "Frozen counters with time (g21v5) and frozen counter events (g23v5)",
-                    "Immediate freeze and freeze-and-clear, with and without acknowledgment",
-                    "Event objects read by group as well as by class",
-                    "Responses of several fragments, each confirmed",
-                )
-            ],
+            [("notableAddition", text) for text in additions],
         ),
         _both(
             "configurationMethods",
@@ -566,8 +615,45 @@ def _outstation(facts: SessionFacts) -> Items:
     ]
 
 
-def _unsolicited() -> Items:
-    return [_setting("supportsUnsolicitedReporting", [("supported", ["no"])], ["off"])]
+def _unsolicited(facts: SessionFacts) -> Items:
+    """Whether the outstation reports unasked, and how it is set to.
+
+    Supported, and configurable, is true of every session: the capability is
+    the library's. Whether it is on is this session's. The settings that only
+    mean something when it is on are stated only then: where the responses
+    go, how long one waits to be confirmed, and how often it is sent again.
+    """
+    supports = _setting(
+        "supportsUnsolicitedReporting",
+        [("supported", ["yes"]), "configurable"],
+        ["on" if facts.unsolicited else "off"],
+    )
+    if not facts.unsolicited:
+        return [supports]
+    configurable = [("configurableOther", [("description", "Set when the session is constructed")])]
+    retries = facts.unsolicited_retries
+    if retries is None:
+        current: Items = ["infinite"]
+    elif retries == 0:
+        current = ["none"]
+    else:
+        current = [("value", retries)]
+    return [
+        supports,
+        _setting(
+            "masterDataLinkAddress",
+            [("range", [("minimum", 0), ("maximum", 65519)])],
+            [("value", facts.master_address)],
+        ),
+        _setting(
+            "unsolicitedResponseConfirmationTimeout",
+            configurable,
+            [("value", round(facts.unsolicited_confirm_timeout * 1000))],
+        ),
+        # A number of retries or none at all is the caller's to choose, and
+        # no limit is one of the choices, as the standard requires it to be.
+        _setting("maxUnsolicitedRetries", [*configurable, "infinite"], current),
+    ]
 
 
 def _performance(facts: SessionFacts) -> Items:
@@ -976,12 +1062,12 @@ def build(
             (
                 "configuration",
                 [
-                    ("deviceConfig", _device(identity)),
+                    ("deviceConfig", _device(identity, facts)),
                     ("networkConfig", _network(identity, facts)),
                     ("linkConfig", _link(facts)),
                     ("applConfig", _application(facts, codes)),
                     ("outstationConfig", _outstation(facts)),
-                    ("unsolicitedConfig", _unsolicited()),
+                    ("unsolicitedConfig", _unsolicited(facts)),
                     ("outstationPerformance", _performance(facts)),
                 ],
             ),

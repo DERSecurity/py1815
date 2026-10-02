@@ -19,6 +19,7 @@ from xml.etree import ElementTree
 import pytest
 from profile_fixtures import REAL_TABLES, for_reference_der, small, units
 
+from py1815 import link
 from py1815.application import FunctionCode, IIN2Bit
 from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType, encode_crob
 from py1815.objects import AnalogEventVariation
@@ -29,6 +30,7 @@ from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.probe import parse_objects
 from py1815.session import Session
+from py1815.transport import Reassembler
 
 SCHEMA = pathlib.Path(__file__).resolve().parent.parent / "schema" / device_profile.SCHEMA_FILE
 NS = {"d": NAMESPACE}
@@ -297,6 +299,80 @@ def _monitor() -> tuple[DerOutstation, Binding]:
     binding.read(Kind.BI, 0, lambda: False)
     binding.read(Kind.AI, 1, lambda: 5.0)
     return DerOutstation(load.resolve(small(), units(0)), binding, strict=False), binding
+
+
+class TestTheUnsolicitedRowsAreWhatTheSessionDoes:
+    """With unsolicited responses on, the table lists enabling and disabling by
+    class and the objects an unsolicited response carries. Each is sent to the
+    session, or drawn from it, and checked."""
+
+    def _on(self, simulation):
+        session = simulation.outstation.session(unsolicited=True)
+        return session, device_profile.implementation(simulation.outstation, session.facts)
+
+    def test_each_listed_enable_and_disable_is_accepted(self, simulation):
+        session, table = self._on(simulation)
+        sender = Sender(session)
+        rows = [
+            r
+            for r in table.rows
+            if r.request
+            and r.request[0]
+            in (device_profile.ENABLE_UNSOLICITED, device_profile.DISABLE_UNSOLICITED)
+        ]
+        assert len(rows) == 6
+        for row in rows:
+            for qualifier in row.request[1]:
+                response = sender.send(row.request[0], bytes([row.group, row.variation, qualifier]))
+                assert response[1] == FunctionCode.RESPONSE
+                assert not _refused(response), (row, hex(qualifier))
+
+    def test_disable_is_listed_by_class_and_not_as_a_bare_function(self, simulation):
+        _, table = self._on(simulation)
+        assert table.function_codes == (0, 23, 24)
+
+    def test_off_they_are_not_listed_and_enable_is_refused(self, simulation):
+        session = simulation.outstation.session()
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        functions = {r.request[0] for r in table.rows if r.request}
+        assert device_profile.ENABLE_UNSOLICITED not in functions
+        assert not any(r.response and r.response[0] == 130 for r in table.rows)
+        refused = Sender(session).send(FunctionCode.ENABLE_UNSOLICITED, bytes([60, 2, 6]))
+        assert refused[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+
+    def test_an_unsolicited_response_carries_only_listed_objects(self, simulation):
+        clock = [1000.0]
+        session = simulation.outstation.session(
+            unsolicited=True, max_response=8192, clock=lambda: clock[0]
+        )
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        listed = {
+            (r.group, r.variation)
+            for r in table.rows
+            if r.response and r.response[0] == device_profile.UNSOLICITED_RESPONSE
+        }
+        sender = Sender(session)
+        null = _unsolicited_fragments(session.initiate())[0]
+        session._handle_fragment(bytes([0xD0 | (null[0] & 0x0F), 0]))
+        sender.send(FunctionCode.ENABLE_UNSOLICITED, bytes([60, 2, 6, 60, 3, 6, 60, 4, 6]))
+
+        (fragment,) = _unsolicited_fragments(session.initiate())
+
+        assert fragment[1] == 130
+        static, events = parse_objects(fragment[4:])
+        assert not static, "events only"
+        seen = {(value.group, value.variation) for value in events}
+        assert seen and seen <= listed, seen - listed
+
+
+def _unsolicited_fragments(octets: bytes) -> list[bytes]:
+    """The application fragments in what `initiate` returned for the wire."""
+    found, reassembler = [], Reassembler()
+    for frame in link.FrameReader().feed(octets):
+        whole = reassembler.add(frame.payload)
+        if whole is not None:
+            found.append(whole)
+    return found
 
 
 class TestTheTableFollowsTheConfiguration:
@@ -570,13 +646,58 @@ class TestWhatIsNotClaimed:
         ):
             assert root.find(f".//d:{name}", NS) is None, name
 
-    def test_unsolicited_reporting_is_stated_as_not_supported(self, simulation):
+    def test_unsolicited_reporting_is_stated_as_supported_and_off_by_default(self, simulation):
+        """Supported, since the library can; off, since the session was not asked to."""
         root = _document(simulation)
         base = (
             "d:referenceDevice/d:configuration/d:unsolicitedConfig/d:supportsUnsolicitedReporting/"
         )
-        assert root.find(base + "d:capabilities/d:supported/d:no", NS) is not None
+        assert root.find(base + "d:capabilities/d:supported/d:yes", NS) is not None
+        assert root.find(base + "d:capabilities/d:configurable", NS) is not None
         assert root.find(base + "d:currentValue/d:off", NS) is not None
+        assert root.find(base + "d:currentValue/d:on", NS) is None
+        settings = root.find("d:referenceDevice/d:configuration/d:unsolicitedConfig", NS)
+        assert len(settings) == 1, "nothing else is stated about a feature switched off"
+
+    def test_unsolicited_reporting_switched_on_is_stated_with_its_settings(self, simulation):
+        root = _document(
+            simulation,
+            unsolicited=True,
+            master_address=7,
+            unsolicited_confirm_timeout=2.5,
+            unsolicited_retries=4,
+        )
+        base = "d:referenceDevice/d:configuration/d:unsolicitedConfig/"
+        assert (
+            root.find(base + "d:supportsUnsolicitedReporting/d:currentValue/d:on", NS) is not None
+        )
+        assert _text(root, base + "d:masterDataLinkAddress/d:currentValue/d:value") == "7"
+        timeout = "d:unsolicitedResponseConfirmationTimeout/d:currentValue/d:value"
+        assert _text(root, base + timeout) == "2500"
+        assert _text(root, base + "d:maxUnsolicitedRetries/d:currentValue/d:value") == "4"
+        retries = base + "d:maxUnsolicitedRetries/d:capabilities/d:infinite"
+        assert root.find(retries, NS) is not None, "no limit is one of the choices"
+
+    @pytest.mark.parametrize(("retries", "element"), [(None, "infinite"), (0, "none")])
+    def test_no_limit_and_no_retries_are_stated_by_name(self, simulation, retries, element):
+        root = _document(simulation, unsolicited=True, unsolicited_retries=retries)
+        path = (
+            "d:referenceDevice/d:configuration/d:unsolicitedConfig/d:maxUnsolicitedRetries/"
+            f"d:currentValue/d:{element}"
+        )
+        assert root.find(path, NS) is not None
+
+    def test_unsolicited_responses_are_a_notable_addition_only_when_on(self, simulation):
+        path = (
+            "d:referenceDevice/d:configuration/d:deviceConfig/d:notableAdditions/"
+            "d:currentValue/d:notableAddition"
+        )
+
+        def additions(**options) -> list[str]:
+            return [e.text or "" for e in _document(simulation, **options).findall(path, NS)]
+
+        assert not any("nsolicited" in text for text in additions())
+        assert any("nsolicited" in text for text in additions(unsolicited=True))
 
     def test_the_level_claimed_is_two(self, simulation):
         level = _document(simulation).find(
@@ -631,6 +752,11 @@ class TestAgainstTheSchema:
     def test_the_simulated_der_validates(self, simulation):
         assert _validate(_document(simulation)) == []
 
+    @pytest.mark.parametrize("retries", [None, 0, 3])
+    def test_it_validates_with_unsolicited_responses_on(self, simulation, retries):
+        root = _document(simulation, unsolicited=True, unsolicited_retries=retries)
+        assert _validate(root) == []
+
     def test_a_monitor_validates(self):
         outstation, _ = _monitor()
         assert _validate(device_profile.build(outstation, outstation.session())) == []
@@ -664,6 +790,20 @@ class TestTheCommand:
         output = capsys.readouterr().out
         assert output.startswith("<?xml")
         assert "<value>Example Co</value>" in output
+
+    def test_it_describes_unsolicited_responses_as_the_run_command_would_serve_them(
+        self, tables, capsys
+    ):
+        assert cli.main(["profile"]) == 0
+        off = ElementTree.fromstring(capsys.readouterr().out.split("?>", 2)[2])
+        assert cli.main(["profile", "--unsolicited"]) == 0
+        on = ElementTree.fromstring(capsys.readouterr().out.split("?>", 2)[2])
+        current = (
+            "d:referenceDevice/d:configuration/d:unsolicitedConfig/"
+            "d:supportsUnsolicitedReporting/d:currentValue/d:{}"
+        )
+        assert off.find(current.format("off"), NS) is not None
+        assert on.find(current.format("on"), NS) is not None
 
     def test_or_to_a_file_with_the_listener_it_was_told(self, tables, tmp_path, capsys):
         out = tmp_path / "made" / "profile.xml"
