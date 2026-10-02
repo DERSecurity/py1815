@@ -759,6 +759,65 @@ for a controlling station that discards any value not flagged ONLINE and so coul
 verify a setting before enabling the function it belongs to.
 *Trade-off:* conformance by default, against masters that read the flag as "bad data".
 
+**D58 -- Reassembly follows the updated reception table.** The DNP Users Group replaced the
+transport function's reception state table after the standard was published (TB2013-003).
+Two of its rows were not what this library did. A segment that repeats the one before it,
+octet for octet, is a link-layer repeat: it is dropped and the series continues, where it
+used to abandon the series. And a series that ends having carried no application data
+hands nothing to the application layer, where it used to hand up an empty fragment. A
+segment that repeats the previous sequence number with different contents still abandons
+the series, as does everything else that broke it before.
+
+**D59 -- What is not a request is not answered.** A request is one whole fragment: it
+holds an application header, it is both first and final, and it does not carry the
+unsolicited bit unless it is a confirmation. A fragment failing any of those is discarded
+without a response, and still ends an armed select. Before this a fragment too short to
+hold a header was answered with a parameter error on a sequence number read from an octet
+that might not be one, and a fragment marked as the middle of a longer message was
+processed as though it were whole. The same reasoning is applied one layer down: a link
+frame whose length contradicts its function (user data with none, or a reset with data
+behind it) is dropped. Inside a well-formed request the rule is still **D9**: a read or a
+write that names no object is refused out loud, with the parameter error indication.
+An outstation or master address in the range the protocol reserves, or the same address
+for both, is refused when the session is built.
+*Trade-off:* a master sending something badly broken gets silence and a timeout, against
+an outstation that answers noise.
+
+**D60 -- An event stamped before the clock was set is sent with relative time.** A binary
+event with absolute time is a statement that the clock was right (TB2017-003). A session
+that asks its master for the time has a clock nobody has set, so binary events recorded
+until the time is written are marked, and are sent as offsets from a common time of
+occurrence whose variation says the clock was not synchronized. Once the time is written,
+events are stamped by a set clock and travel with absolute time as before. Asking for the
+time again later does not unset the clock; a restart does. A master may also read the
+relative-time variation by name, which the Level 2 subset requires an outstation to
+answer, and then every event is sent that way behind a common time saying which kind of
+clock stamped it. A relative time is sixteen bits, so a run of events gets a new common
+time whenever one falls outside that reach, the clock's state changes, or a new fragment
+begins. `EventBuffers.synchronized` is the state, and a caller recording its own events
+can say so per event. Only a session that asks for the time clears it; one that does not
+leaves it as the caller set it, since a clock can be unset for reasons of its own, such as
+a network time source that has not yet answered.
+*Trade-off:* a master that cannot parse the common time object cannot read events from an
+outstation whose time it has not yet written; a Level 2 master is required to.
+
+**D61 -- Time is set by either procedure, and only an outstation that can take it asks.**
+Beside the write of the absolute time (**D44**), the session answers the procedure meant
+for networks: a request to record the current time, then a write of when that request was
+sent, to which the outstation adds the time that has passed since it arrived. The request
+may be a broadcast. A write of the recorded time with no request before it is a parameter
+error, and a recorded time is used once. `need_time=True` without a `time_sink` is refused
+when the session is built: an outstation that asks for the time and cannot take it would
+ask in every response for as long as it ran.
+
+**D62 -- A function code can be turned off by configuration.** `Session` takes
+`disabled_functions`. Each is then refused exactly as a function this library never
+implemented: with the unsupported indication, or with silence where the function takes no
+response or arrives as a broadcast, and in neither case acted on. The device profile
+leaves out what is disabled. An outstation with no use for cold restart, or whose clock is
+set some other way, is safer not accepting the function than accepting and ignoring it.
+Confirm cannot be disabled.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -818,6 +877,12 @@ out against the simulated DER, each test named for the procedure it performs, wi
 point pairings read from the tables and not written into the tests. Where the standard
 has since changed what the procedure expects, the suite follows the standard and
 `tests/test_epri_coverage.py` lists each such departure with its reason.
+
+**The corrections published since the standard.** The Users Group's technical bulletins
+and application notes change or clarify what the base standard says.
+`tests/test_technical_bulletins.py` checks what each asks of an outstation, named for
+the document, and `tests/test_bulletin_coverage.py` lists every one as acted on or as
+asking nothing of this outstation, with the reason.
 
 ## Roadmap
 

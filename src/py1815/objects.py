@@ -98,6 +98,18 @@ class AnalogEventVariation(IntEnum):
 class BinaryEventVariation(IntEnum):
     WITHOUT_TIME = 1
     WITH_TIME = 2
+    #: Milliseconds after the common time of occurrence that precedes it.
+    RELATIVE_TIME = 3
+
+
+#: The common time of occurrence: the time a run of relative-time events
+#: counts from. Its variation says whether the clock that gave the time
+#: had been set.
+GROUP_COMMON_TIME = 51
+COMMON_TIME_SYNCHRONIZED = 1
+COMMON_TIME_UNSYNCHRONIZED = 2
+#: The furthest a relative time can be from its common time.
+MAX_RELATIVE_MS = 0xFFFF
 
 
 #: DNP3 absolute time: milliseconds since the Unix epoch, UTC, in six octets.
@@ -352,6 +364,22 @@ def encode_binary_event(
     return encoded + encode_time(timestamp_ms)
 
 
+def encode_binary_event_relative(point: BinaryPoint, relative_ms: int) -> bytes:
+    """One binary input event with its time as an offset from a common time."""
+    if not 0 <= relative_ms <= MAX_RELATIVE_MS:
+        raise ValueError(
+            f"relative time is {relative_ms} ms, outside 0..{MAX_RELATIVE_MS}; "
+            "an event further off needs a common time of its own"
+        )
+    return encode_binary(point) + struct.pack("<H", relative_ms)
+
+
+def common_time(timestamp_ms: int, *, synchronized: bool) -> bytes:
+    """A common time of occurrence object, header and all."""
+    variation = COMMON_TIME_SYNCHRONIZED if synchronized else COMMON_TIME_UNSYNCHRONIZED
+    return bytes([GROUP_COMMON_TIME, variation, 0x07, 1]) + encode_time(timestamp_ms)
+
+
 def event_block(
     group: int,
     variation: int,
@@ -392,8 +420,7 @@ def event_block(
     narrow = count <= 0xFF and widest <= 0xFF
     if qualifier is QualifierCode.UINT8_COUNT_UINT8_INDEX and not narrow:
         raise ValueError("the block does not fit an eight-bit count and index")
-    if qualifier not in (
-        None,
+    if qualifier is not None and qualifier not in (
         QualifierCode.UINT8_COUNT_UINT8_INDEX,
         QualifierCode.UINT16_COUNT_UINT16_INDEX,
     ):

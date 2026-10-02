@@ -193,3 +193,43 @@ class TestPriming:
         """The control: without priming, the first reading is an event."""
         buffers = EventBuffers()
         assert buffers.record_analog(1, AnalogPoint(5.0), event_class=EventClass.CLASS_2)
+
+
+class TestEventsStampedBeforeTheClockWasSet:
+    def test_they_are_marked_by_what_the_buffers_were_last_told(self):
+        buffers = EventBuffers()
+        first = buffers.record_binary(1, BinaryPoint(True), event_class=EventClass.CLASS_1)
+        buffers.synchronized = False
+        second = buffers.record_binary(1, BinaryPoint(False), event_class=EventClass.CLASS_1)
+        assert first.synchronized and not second.synchronized
+
+    def test_a_caller_may_say_for_one_event(self):
+        buffers = EventBuffers()
+        event = buffers.record_binary(
+            1, BinaryPoint(True), event_class=EventClass.CLASS_1, synchronized=False
+        )
+        assert not event.synchronized
+        assert buffers.synchronized, "and the buffers are left as they were"
+
+    def test_the_buffers_know_whether_they_hold_any(self):
+        buffers = EventBuffers()
+        assert not buffers.holds_unsynchronized
+        event = buffers.record_binary(
+            1, BinaryPoint(True), event_class=EventClass.CLASS_1, synchronized=False
+        )
+        assert buffers.holds_unsynchronized
+        buffers.drop([event])
+        assert not buffers.holds_unsynchronized
+
+    def test_one_that_is_evicted_is_no_longer_held(self):
+        buffers = EventBuffers(capacity=1)
+        buffers.record_binary(
+            1, BinaryPoint(True), event_class=EventClass.CLASS_1, synchronized=False
+        )
+        buffers.record_binary(1, BinaryPoint(False), event_class=EventClass.CLASS_1)
+        assert not buffers.holds_unsynchronized
+
+    def test_two_events_differing_only_in_that_are_still_equal(self):
+        """Like the order, it is not part of what the event says."""
+        marked = BinaryEvent(1, BinaryPoint(True), 5, synchronized=False)
+        assert marked == BinaryEvent(1, BinaryPoint(True), 5)

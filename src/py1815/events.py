@@ -87,6 +87,10 @@ class BinaryEvent:
     #: Not part of what the event says, so two events are still equal
     #: without it; it is what puts a response in the order things happened.
     order: int = field(default=0, compare=False)
+    #: Whether the clock that stamped it had been set. An event stamped
+    #: by a clock that had not is reported with relative time, behind a
+    #: common time that says so.
+    synchronized: bool = field(default=True, compare=False)
 
 
 @dataclass(frozen=True)
@@ -182,6 +186,21 @@ class EventBuffers:
         #: newest is kept. What makes superseding one a lookup rather than a
         #: scan of every class on every reading.
         self._pending_analog: dict[int, AnalogEvent] = {}
+        #: Whether the clock stamping events has been set. A session
+        #: that asks its master for the time clears this until the
+        #: time is written; binary events recorded meanwhile carry it.
+        self.synchronized = True
+        self._unsynchronized = 0
+
+    @property
+    def holds_unsynchronized(self) -> bool:
+        """Whether any buffered binary event was stamped by a clock that had not been set."""
+        return self._unsynchronized > 0
+
+    def _forget(self, event: Event) -> None:
+        """Stop counting an event that has left the buffers."""
+        if isinstance(event, BinaryEvent) and not event.synchronized:
+            self._unsynchronized -= 1
 
     def count(self, event_class: EventClass) -> int:
         return len(self._buffers[event_class].events)
@@ -266,7 +285,12 @@ class EventBuffers:
         """
         confirmed = set(map(id, events))
         for buffer in self._buffers.values():
-            remaining = deque(e for e in buffer.events if id(e) not in confirmed)
+            remaining: deque[Event] = deque()
+            for event in buffer.events:
+                if id(event) in confirmed:
+                    self._forget(event)
+                else:
+                    remaining.append(event)
             buffer.events = remaining
         for index, pending in list(self._pending_analog.items()):
             if id(pending) in confirmed:
@@ -295,6 +319,8 @@ class EventBuffers:
         evicted = buffer.events[0] if len(buffer.events) >= buffer.capacity else None
         if buffer.add(event):
             self._overflow_generation += 1
+        if evicted is not None:
+            self._forget(evicted)
         if isinstance(evicted, AnalogEvent) and self._pending_analog.get(evicted.index) is evicted:
             del self._pending_analog[evicted.index]
 
@@ -429,11 +455,15 @@ class EventBuffers:
         *,
         event_class: EventClass,
         timestamp_ms: int | None = None,
+        synchronized: bool | None = None,
     ) -> BinaryEvent | None:
         """Record a binary reading, returning the event it generated, if any.
 
         No deadband: a binary point has two values, so any change is the whole
         of its range.
+
+        ``synchronized`` says whether the clock behind the timestamp had
+        been set, and defaults to what these buffers were last told.
         """
         self._checked_index(index)
         previous = self._last_binary.get(index)
@@ -445,7 +475,10 @@ class EventBuffers:
             point,
             timestamp_ms if timestamp_ms is not None else now_ms(),
             order=self._next_order(),
+            synchronized=self.synchronized if synchronized is None else synchronized,
         )
+        if not event.synchronized:
+            self._unsynchronized += 1
         self._last_binary[index] = point
         self._buffer(event_class, event)
         return event

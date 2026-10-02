@@ -99,10 +99,18 @@ class TestWritingTheTime:
 
     def test_without_a_sink_the_object_is_unknown(self):
         """An outstation with nowhere to put the time does not pretend to take it."""
-        session = Session(Reader(), need_time=True)
+        session = Session(Reader())
         response = session._handle_fragment(_request(FunctionCode.WRITE, self.WRITE + bytes(6)))
         assert _iin(response)[1] & IIN2Bit.OBJECT_UNKNOWN
-        assert session.need_time is True
+
+    def test_without_a_sink_the_time_cannot_be_asked_for(self):
+        """Asking for a time that could never be taken would be asking forever."""
+        with pytest.raises(ValueError):
+            Session(Reader(), need_time=True)
+        session = Session(Reader())
+        with pytest.raises(ValueError):
+            session.need_time = True
+        assert session.need_time is False
 
     def test_a_sink_that_raises_leaves_the_outstation_still_asking(self):
         def refuse(_moment: int) -> None:
@@ -120,6 +128,41 @@ class TestWritingTheTime:
         )
         assert not _iin(response)[0] & IINBit.DEVICE_RESTART
         assert written == []
+
+
+class TestTheClockStateOfTheEventBuffers:
+    """A session that asks for the time marks the buffers; one that does not leaves them."""
+
+    def test_a_session_that_asks_for_the_time_marks_the_clock_unset(self):
+        buffers = EventBuffers()
+        Session(Reader(), events=buffers, need_time=True, time_sink=lambda _ms: None)
+        assert not buffers.synchronized
+
+    def test_a_session_that_does_not_ask_keeps_what_the_caller_said(self):
+        """A clock unset for a reason of its own, NTP not yet synced, stays unset."""
+        buffers = EventBuffers()
+        buffers.synchronized = False
+        Session(Reader(), events=buffers, need_time=False)
+        assert not buffers.synchronized
+
+    def test_and_does_not_unset_a_clock_the_caller_says_is_set(self):
+        buffers = EventBuffers()
+        Session(Reader(), events=buffers, need_time=False)
+        assert buffers.synchronized
+
+    def test_a_restart_that_asks_again_marks_the_clock_unset(self):
+        buffers = EventBuffers()
+        session = Session(Reader(), events=buffers, need_time=True, time_sink=lambda _ms: None)
+        buffers.synchronized = True
+        session.restart()
+        assert not buffers.synchronized
+
+    def test_a_restart_that_does_not_ask_keeps_what_the_caller_said(self):
+        buffers = EventBuffers()
+        session = Session(Reader(), events=buffers, need_time=False)
+        buffers.synchronized = False
+        session.restart()
+        assert not buffers.synchronized
 
 
 class TestMeasuringTheDelay:

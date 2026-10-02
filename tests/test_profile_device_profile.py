@@ -134,11 +134,15 @@ class TestEveryRequestTheTableListsIsAnswered:
 
     def test_writes(self, simulation):
         sender, rows = self._rows(simulation, {device_profile.WRITE})
-        assert {row.group for row in rows} == {50, 80}
+        assert {(row.group, row.variation) for row in rows} == {(50, 1), (50, 3), (80, 1)}
         for row in rows:
             for qualifier in row.request[1]:
                 if row.group == 50:
-                    body = bytes([50, 1, qualifier, 1]) + (1_700_000_000_000).to_bytes(6, "little")
+                    if row.variation == 3:
+                        # The last recorded time is written after asking for one to be recorded.
+                        assert not _refused(sender.send(FunctionCode.RECORD_CURRENT_TIME))
+                    moment = (1_700_000_000_000).to_bytes(6, "little")
+                    body = bytes([50, row.variation, qualifier, 1]) + moment
                 else:
                     span = bytes([7, 7]) if qualifier == 0x00 else struct.pack("<HH", 7, 7)
                     body = bytes([80, 1, qualifier]) + span + b"\x00"
@@ -192,10 +196,11 @@ class TestEveryRequestTheTableListsIsAnswered:
         session = simulation.outstation.session()
         table = device_profile.implementation(simulation.outstation, session.facts)
         sender = Sender(session)
-        assert set(table.function_codes) == {0, 21, 23}
+        assert set(table.function_codes) == {0, 21, 23, 24}
         assert sender.send(FunctionCode.CONFIRM) == b""
         assert not _refused(sender.send(FunctionCode.DISABLE_UNSOLICITED, bytes([60, 2, 6])))
         assert not _refused(sender.send(FunctionCode.DELAY_MEASURE))
+        assert not _refused(sender.send(FunctionCode.RECORD_CURRENT_TIME))
 
 
 class TestEveryResponseTheTableListsIsWhatIsSent:
@@ -207,8 +212,15 @@ class TestEveryResponseTheTableListsIsWhatIsSent:
         assert len(rows) > 10
         for row in rows:
             response = sender.send(1, bytes([row.group, row.variation, 0x06]))
-            assert tuple(response[4:6]) == (row.group, row.variation), row
-            assert response[6] in row.response[1], (row, "qualifier", hex(response[6]))
+            body = response[4:]
+            if (row.group, row.variation) == (2, 3):
+                # Relative times count from a common time, which comes first.
+                assert body[0] == 51 and (51, body[1]) in {
+                    (r.group, r.variation) for r in table.rows
+                }
+                body = body[10:]
+            assert tuple(body[:2]) == (row.group, row.variation), row
+            assert body[2] in row.response[1], (row, "qualifier", hex(body[2]))
 
     def test_variation_zero_is_answered_in_a_variation_the_table_lists(self, simulation):
         session = simulation.outstation.session()
@@ -443,7 +455,7 @@ class TestConfigurationIsReadFromTheSession:
             NS,
         )
         names = {child.tag.split("}")[1] for child in codes}
-        assert names == {"code1", "code2", "code4", "code12", "code15"}
+        assert names == {"code1", "code2", "code3", "code4", "code12", "code15"}
 
 
 class TestThePointLists:
