@@ -795,7 +795,9 @@ answer, and then every event is sent that way behind a common time saying which 
 clock stamped it. A relative time is sixteen bits, so a run of events gets a new common
 time whenever one falls outside that reach, the clock's state changes, or a new fragment
 begins. `EventBuffers.synchronized` is the state, and a caller recording its own events
-can say so per event.
+can say so per event. Only a session that asks for the time clears it; one that does not
+leaves it as the caller set it, since a clock can be unset for reasons of its own, such as
+a network time source that has not yet answered.
 *Trade-off:* a master that cannot parse the common time object cannot read events from an
 outstation whose time it has not yet written; a Level 2 master is required to.
 

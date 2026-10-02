@@ -130,6 +130,41 @@ class TestWritingTheTime:
         assert written == []
 
 
+class TestTheClockStateOfTheEventBuffers:
+    """A session that asks for the time marks the buffers; one that does not leaves them."""
+
+    def test_a_session_that_asks_for_the_time_marks_the_clock_unset(self):
+        buffers = EventBuffers()
+        Session(Reader(), events=buffers, need_time=True, time_sink=lambda _ms: None)
+        assert not buffers.synchronized
+
+    def test_a_session_that_does_not_ask_keeps_what_the_caller_said(self):
+        """A clock unset for a reason of its own, NTP not yet synced, stays unset."""
+        buffers = EventBuffers()
+        buffers.synchronized = False
+        Session(Reader(), events=buffers, need_time=False)
+        assert not buffers.synchronized
+
+    def test_and_does_not_unset_a_clock_the_caller_says_is_set(self):
+        buffers = EventBuffers()
+        Session(Reader(), events=buffers, need_time=False)
+        assert buffers.synchronized
+
+    def test_a_restart_that_asks_again_marks_the_clock_unset(self):
+        buffers = EventBuffers()
+        session = Session(Reader(), events=buffers, need_time=True, time_sink=lambda _ms: None)
+        buffers.synchronized = True
+        session.restart()
+        assert not buffers.synchronized
+
+    def test_a_restart_that_does_not_ask_keeps_what_the_caller_said(self):
+        buffers = EventBuffers()
+        session = Session(Reader(), events=buffers, need_time=False)
+        buffers.synchronized = False
+        session.restart()
+        assert not buffers.synchronized
+
+
 class TestMeasuringTheDelay:
     def test_the_answer_is_one_fine_time_delay(self):
         session = Session(Reader())

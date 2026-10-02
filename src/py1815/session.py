@@ -23,6 +23,15 @@ for a parse error either. A refusal contract written only in terms of returned
 statuses would leave the functions that return nothing as the ones an
 implementation executes by omission.
 
+Three more silences follow from what a request is, not from Table 4-2 (D59 and
+D62 in the design notes). A fragment that is not a whole request is discarded:
+too short to hold an application header, not both first and final, or
+carrying the unsolicited bit when it is not a confirmation. A link frame whose
+length contradicts its function is dropped before it reaches the application
+layer. And a function the caller disabled is dropped unexecuted when it is one
+that never takes a response, since refusing it out loud would answer a master
+that asked for no answer. Everything else that is refused gets a response.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -789,9 +798,12 @@ class Session:
         #: session's clock, until the write that uses it.
         self._recorded_at: float | None = None
         self._need_time_at_start = need_time
-        if events is not None:
-            # A session that asks for the time has a clock nobody has set.
-            events.synchronized = not need_time
+        if need_time and events is not None:
+            # A session that asks for the time has a clock nobody has set. One
+            # that does not ask says nothing about the clock, so the buffers
+            # keep whatever the caller told them: a clock waiting on its first
+            # network sync is unset whether or not a master is asked.
+            events.synchronized = False
         #: The data link's secondary station state: whether the master has
         #: reset the link, and the frame count bit the next confirmed frame
         #: has to carry.
@@ -825,8 +837,8 @@ class Session:
         self._need_time = self._need_time_at_start
         self._broadcast = None
         self._recorded_at = None
-        if self._events is not None:
-            self._events.synchronized = not self._need_time
+        if self._need_time and self._events is not None:
+            self._events.synchronized = False
 
     @property
     def facts(self) -> SessionFacts:

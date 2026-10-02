@@ -420,8 +420,7 @@ def event_block(
     narrow = count <= 0xFF and widest <= 0xFF
     if qualifier is QualifierCode.UINT8_COUNT_UINT8_INDEX and not narrow:
         raise ValueError("the block does not fit an eight-bit count and index")
-    if qualifier not in (
-        None,
+    if qualifier is not None and qualifier not in (
         QualifierCode.UINT8_COUNT_UINT8_INDEX,
         QualifierCode.UINT16_COUNT_UINT16_INDEX,
     ):
