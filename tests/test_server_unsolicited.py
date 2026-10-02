@@ -296,6 +296,7 @@ async def test_the_idle_timeout_still_ends_a_silent_master():
         master = await Master.connect(server.port)
         sent = await master.until_closed(timeout=3)
         assert len(sent) > 3, "retried while the connection lasted"
+        assert not master.writer.is_closing(), "the close was the listener's"
         assert not server.connected
     finally:
         await server.stop()

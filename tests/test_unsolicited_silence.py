@@ -385,6 +385,7 @@ async def test_through_a_listener_retries_go_on_and_the_setpoint_is_written_once
                     unsolicited += 1
 
         assert unsolicited > 5, "retried, unconfirmed, until the idle timeout"
+        assert not writer.is_closing(), "and the close was the listener's"
         assert device.writes == [("setpoint", 12.5)]
         writer.close()
     finally:
