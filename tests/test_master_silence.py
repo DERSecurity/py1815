@@ -19,6 +19,7 @@ these passing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 from profile_fixtures import small, units
@@ -157,8 +158,15 @@ def _frames(fragment: bytes) -> bytes:
     return b"".join(link.build(control, OUTSTATION, MASTER, part) for part in segment(fragment))
 
 
-async def _exchange(port: int, fragment: bytes) -> tuple[bytes, asyncio.StreamReader]:
-    """Send one request over a new connection and return its response and the reader."""
+async def _exchange(
+    port: int, fragment: bytes
+) -> tuple[bytes, asyncio.StreamReader, asyncio.StreamWriter]:
+    """Send one request over a new connection; return its response and the connection.
+
+    The writer is returned, and has to be kept, because dropping the last
+    reference to it closes the client's end. A test waiting for the listener to
+    close an idle connection would then see the client's own close instead.
+    """
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write(_frames(fragment))
     await writer.drain()
@@ -169,7 +177,13 @@ async def _exchange(port: int, fragment: bytes) -> tuple[bytes, asyncio.StreamRe
         for frame in frames.feed(data):
             whole = reassembler.add(frame.payload)
             if whole is not None:
-                return whole, reader
+                return whole, reader, writer
+
+
+async def _close(writer: asyncio.StreamWriter) -> None:
+    writer.close()
+    with contextlib.suppress(ConnectionError, OSError):
+        await writer.wait_closed()
 
 
 class TestThroughTheListener:
@@ -178,20 +192,32 @@ class TestThroughTheListener:
         """The whole path: a master commands, says nothing, and is disconnected."""
         outstation, device, _ = _built()
         session = outstation.session(outstation_address=OUTSTATION, master_address=MASTER)
-        server = OutstationServer(session, bind="127.0.0.1:0", idle_timeout=0.2)
+        idle = 0.2
+        server = OutstationServer(session, bind="127.0.0.1:0", idle_timeout=idle)
         await server.start()
+        writers: list[asyncio.StreamWriter] = []
         try:
-            response, reader = await _exchange(
+            response, reader, writer = await _exchange(
                 server.port, _request(FunctionCode.DIRECT_OPERATE, SETPOINT)
             )
+            writers.append(writer)
             assert CommandStatus(response[-1]) is CommandStatus.SUCCESS
 
+            loop = asyncio.get_running_loop()
+            silent_from = loop.time()
             closed = await asyncio.wait_for(reader.read(4096), timeout=5)
             assert closed == b"", "the listener gave up on the silent connection"
+            # The client's end is still open and referenced, so the close is
+            # the listener's, and it came no sooner than the idle timeout.
+            assert not writer.is_closing()
+            assert loop.time() - silent_from >= idle * 0.8
             assert device.writes == [("setpoint", 12.5)]
 
-            again, _ = await _exchange(server.port, _request(FunctionCode.READ, STATUS, 1))
+            again, _, writer = await _exchange(server.port, _request(FunctionCode.READ, STATUS, 1))
+            writers.append(writer)
             assert _status(again) == 125
         finally:
+            for writer in writers:
+                await _close(writer)
             await server.stop()
         assert device.writes == [("setpoint", 12.5)]
