@@ -15,11 +15,14 @@ on:
 # Four implementations across three jobs, chosen so that no two of them are the
 # same codebase wearing different clothes:
 #
-#   opendnp3-master  a C++ stack, driven through its Python bindings. Reads
-#                    points and checks them.
-#   rust-master      a Rust stack by different authors. Reads points, checks
-#                    the quality octet the C++ one discards, and confirms a
-#                    refused control arrives as a refusal.
+#   opendnp3-master  opendnp3 (https://github.com/dnp3/opendnp3), a C++ stack,
+#                    driven through the dnp3-python bindings. Reads points
+#                    and checks them.
+#   rust-master      the `dnp3` crate by Step Function I/O
+#                    (https://github.com/stepfunc/dnp3), a Rust stack by
+#                    different authors. Reads points, checks the quality
+#                    octet the C++ one discards, and confirms a refused
+#                    control arrives as a refusal.
 #   parsers          Wireshark and Suricata, two independent C dissectors,
 #                    reading a capture of the whole function code sweep and
 #                    verifying every checksum in it.
@@ -104,9 +107,15 @@ jobs:
     # discard the quality octet, so that job verifies values and not flags.
     # This stack hands the flags to its read handler.
     #
-    # The crate it uses is source available rather than open source, and is here
-    # for continuous integration only. interop/rust-master/Cargo.toml carries
-    # the reasoning; deleting that directory and this job removes it entirely.
+    # The crate is Step Function I/O's `dnp3`, used under their public license,
+    # which is not an open-source license:
+    #   https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt
+    # They have said that this use, in this repository's public CI, is in line
+    # with it (https://github.com/DERSecurity/py1815/issues/48).
+    # A fork running this job should read the license for its own use;
+    # commercial licensing is at https://stepfunc.io/contact.
+    # interop/rust-master/README.md says more, and deleting that directory and
+    # this job removes the crate entirely.
     steps:
       - uses: actions/checkout@v4
 
