@@ -549,8 +549,16 @@ class DerOutstation:
         The counterpart of :meth:`_ranges` for a read that named indices. A
         block holds one variation, so a point that takes a different one from
         the point before it starts a new block, exactly as a range does.
+
+        Where it differs is a point with nothing to report, which today is a
+        frozen counter that has never been frozen. A range passes over it. A
+        read that named it is refused, for the reason an index that is not a
+        point is refused: leaving it out would answer with clean indications
+        and fewer objects than were asked for (D63).
         """
         prefix = _INDEXED[qualifier]
+        # Group, variation and qualifier, then a count as wide as an index.
+        header = 3 + prefix
         blocks: list[bytes] = []
         current = variation
         items: list[tuple[int, bytes]] = []
@@ -565,12 +573,10 @@ class DerOutstation:
         for point in points:
             result = self._encode(group, variation, point)
             if result is None:
-                continue
+                raise ParameterError(f"group {group} has nothing to report at index {point.index}")
             taken, encoded = result
             cost = prefix + len(encoded)
-            # Five octets is the widest indexed header: group, variation,
-            # qualifier and a sixteen-bit count.
-            if items and (taken != current or size + cost + 5 > self._block_octets):
+            if items and (taken != current or size + cost + header > self._block_octets):
                 flush()
             if not items:
                 current = taken

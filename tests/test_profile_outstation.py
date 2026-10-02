@@ -257,6 +257,54 @@ class TestReadingByIndex:
         assert not response[3] & IIN2Bit.OBJECT_UNKNOWN
         assert len(response) == 4, "and the point that does exist is not sent on its own"
 
+    def test_a_named_point_with_nothing_to_report_is_a_parameter_error(self):
+        """A frozen counter never frozen is served and has no value. Named, that is said."""
+        outstation, _ = _built()
+        session = outstation.session()
+        response = _read(session, bytes([21, 0, INDEX_8, 1, 0]))
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert not response[3] & IIN2Bit.OBJECT_UNKNOWN
+        assert len(response) == 4, "an empty answer with clean indications would look complete"
+        outstation.freeze_all()
+        response = _read(session, bytes([21, 0, INDEX_8, 1, 0]), sequence=1)
+        assert not response[3]
+        assert [(group, index) for group, index, _ in _named(response)] == [(21, 0)]
+
+    def test_it_takes_the_points_named_beside_it_with_it(self):
+        """One header, one answer: a counter with a value is not sent without the other."""
+        outstation, _ = _built()
+        session = outstation.session()
+        mixed = bytes([20, 0, INDEX_8, 1, 0]), bytes([21, 0, INDEX_8, 1, 0])
+        response = _read(session, *mixed)
+        assert response[3] & IIN2Bit.PARAM_ERROR and len(response) == 4
+
+    def test_a_range_over_the_same_counter_is_still_empty_and_not_an_error(self):
+        """The contrast: a range asks for whatever is there, and nothing is."""
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([21, 0, 0x00, 0, 0]))
+        assert not response[3] & (IIN2Bit.PARAM_ERROR | IIN2Bit.OBJECT_UNKNOWN)
+        assert len(response) == 4
+
+    @pytest.mark.parametrize(("qualifier", "fits"), [(INDEX_8, 10), (INDEX_16, 8)])
+    def test_a_block_is_filled_to_the_budget_its_own_header_leaves(self, qualifier, fits):
+        """The header is four octets with an eight-bit count and five with sixteen."""
+        rows = [analog(f"Point {index}", index, event_class=3) for index in range(40)]
+        point_map = load.resolve(document({"AI": rows}), units(0))
+        binding = Binding()
+        for index in range(40):
+            binding.read(AI, index, lambda index=index: float(index))
+        outstation = DerOutstation(point_map, binding, block_octets=64)
+        width = 1 if qualifier == INDEX_8 else 2
+        asked = list(range(30))
+        request = (
+            bytes([0xC0, FunctionCode.READ, 30, 1, qualifier])
+            + len(asked).to_bytes(width, "little")
+            + b"".join(index.to_bytes(width, "little") for index in asked)
+        )
+        blocks = outstation.read_blocks(_headers_of(request))
+        assert all(len(block) <= 64 for block in blocks)
+        assert int.from_bytes(blocks[0][3 : 3 + width], "little") == fits
+
     def test_a_read_that_names_no_index_is_a_parameter_error(self):
         outstation, _ = _built()
         response = _read(outstation.session(), bytes([30, 1, INDEX_8, 0]))

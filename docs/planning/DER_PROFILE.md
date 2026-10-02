@@ -575,7 +575,8 @@ missing part is merged and tested.
   range. No subset level requires an outstation to accept one, and the builder refused it
   as an unknown object. *Built:* a read by index is answered by index, in the order asked
   and the qualifier asked, split at the block budget like a range; an index that is not a
-  served point is a parameter error for the whole header (D63 in
+  served point, or that names a point with nothing to report, is a parameter error for the
+  whole header (D63 in
   [DESIGN.md](../DESIGN.md)); and the device profile document lists the qualifiers.
 
 One step the deployment does **not** need: the layout. One unit needs no `stride` or

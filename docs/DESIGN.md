@@ -833,8 +833,12 @@ range is allowed to cross a gap and return what exists. The difference is delibe
 range is a master saying "whatever is in here", and it cannot know where the gaps are. An
 index is a master saying a point is there, so a wrong one is an error in what the master
 believes about the device, and answering with the points that do exist would bury it in a
-response that looks complete. A read that names no index is the same error. The object
-is known in both cases, so the indication is the parameter one and not `OBJECT_UNKNOWN`.
+response that looks complete. A read that names no index is the same error. So is one
+that names a point with nothing to report, which today means a frozen counter that has
+never been frozen: a range passes over it, and a read that named it and got back clean
+indications and no object could not tell "never frozen" from "answered". The object is
+known in every one of these cases, so the indication is the parameter one and not
+`OBJECT_UNKNOWN`.
 *Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
 answer, and has the range read for that.
 
