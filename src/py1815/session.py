@@ -1517,6 +1517,9 @@ class Session:
         self._select = None
         # And the wait of a read held behind an unsolicited response.
         self._deferred = None
+        # And a rest after the retries ran out: a master that speaks, by
+        # broadcast or otherwise, is a reason to start reporting again.
+        self._resting = False
         if len(fragment) < REQUEST_HEADER_SIZE:
             return
         function = fragment[1]

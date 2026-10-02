@@ -960,6 +960,18 @@ class TestRetries:
 
         assert _indices(_one(session)) == [0]
 
+    def test_after_giving_up_a_broadcast_from_the_master_starts_it_again(self):
+        """A broadcast is a request from the master too, though nobody answers it."""
+        session, buffers, clock = _enabled(unsolicited_retries=0, unsolicited_resume=None)
+        _analog(buffers, 0)
+        _said(session)
+        clock.now += TIMEOUT
+        assert _said(session) == []
+
+        assert session.receive(_broadcast(_request(FunctionCode.DELAY_MEASURE))) == b""
+
+        assert _indices(_one(session)) == [0]
+
     def test_after_giving_up_a_new_connection_starts_it_again(self):
         session, buffers, clock = _enabled(unsolicited_retries=0, unsolicited_resume=None)
         _analog(buffers, 0)
