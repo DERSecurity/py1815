@@ -26,6 +26,7 @@ from py1815.profile import load
 from py1815.profile.binding import Binding, Quality, Reading
 from py1815.profile.model import Kind, MapError
 from py1815.profile.outstation import DerOutstation
+from py1815.profile.policy import EventPolicy, EventRule
 from py1815.profile.probe import parse_objects
 
 AI, AO, BI, BO, CTR = Kind.AI, Kind.AO, Kind.BI, Kind.BO, Kind.CTR
@@ -469,6 +470,113 @@ class TestWhatABuildRefuses:
             Binding().read(BI, 0, lambda: False, deadband=1.0)
 
 
+def _with_policy(policy, binding: Binding | None = None) -> DerOutstation:
+    """An outstation over the small map, built under an event policy."""
+    point_map = load.resolve(small(), units(0))
+    if binding is None:
+        binding = Device().binding()
+    return DerOutstation(point_map, binding, strict=False, event_policy=policy)
+
+
+class TestWhatAnEventPolicyIsRefusedFor:
+    """A bad policy stops the build, so it is found at startup and not in service."""
+
+    def test_a_point_the_map_does_not_hold(self):
+        with pytest.raises(MapError, match="AI4040"):
+            _with_policy({"points": {"AI4040": {"class": 1}}})
+
+    @pytest.mark.parametrize("event_class", [0, 4, -1, "2", 2.5, True])
+    def test_a_class_outside_one_to_three(self, event_class):
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            _with_policy({"points": {"AI2": {"class": event_class}}})
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            _with_policy({"defaults": {"BI": {"class": event_class}}})
+
+    @pytest.mark.parametrize("deadband", [-0.5, float("nan"), float("inf"), "1", True])
+    def test_a_deadband_that_is_not_zero_or_more(self, deadband):
+        with pytest.raises(ValueError, match="deadband"):
+            _with_policy({"points": {"AI2": {"deadband": deadband}}})
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"BI0": {"deadband": 1.0}}}, id="a binary input"),
+            pytest.param({"points": {"CTR0": {"deadband": 1.0}}}, id="a counter"),
+            pytest.param({"defaults": {"BI": {"deadband": 1.0}}}, id="every binary input"),
+        ],
+    )
+    def test_a_deadband_on_anything_but_an_analog_input(self, policy):
+        with pytest.raises(ValueError, match="only an analog input"):
+            _with_policy(policy)
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"AO0": {"class": 1}}}, id="a point"),
+            pytest.param({"defaults": {"BO": {"class": 1}}}, id="a kind"),
+        ],
+    )
+    def test_an_event_class_for_an_output(self, policy):
+        with pytest.raises(ValueError, match="output"):
+            _with_policy(policy)
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"AI2": {"clas": 1}}}, id="in a rule"),
+            pytest.param({"default": {"AI": {"class": 1}}}, id="in the policy"),
+            pytest.param({"points": {"XX2": {"class": 1}}}, id="a kind that is not one"),
+            pytest.param({"points": {"AI": {"class": 1}}}, id="a point with no index"),
+            pytest.param({"defaults": {"AI2": {"class": 1}}}, id="a point where a kind goes"),
+            pytest.param({"points": {"AI2": 1}}, id="a rule that is not a mapping"),
+        ],
+    )
+    def test_a_key_it_does_not_know(self, policy):
+        """A misspelled key would otherwise be a rule that silently does nothing."""
+        with pytest.raises(ValueError):
+            _with_policy(policy)
+
+    def test_a_rule_that_turns_events_off_and_names_a_class(self):
+        with pytest.raises(ValueError, match="turned off"):
+            _with_policy({"points": {"AI2": {"events": False, "class": 2}}})
+
+    def test_a_class_for_a_point_left_out_of_class_0(self):
+        """An event would report a change to a value the integrity poll never gave."""
+        with pytest.raises(MapError, match="AI65000"):
+            _with_policy({"points": {"AI65000": {"class": 3}}})
+
+    def test_a_class_for_a_counter_with_no_frozen_twin(self):
+        with pytest.raises(MapError, match="CTR5"):
+            _with_policy({"points": {"CTR5": {"class": 3}}})
+
+    def test_events_turned_on_for_a_point_nothing_gives_a_class(self):
+        with pytest.raises(MapError, match="AI4"):
+            _with_policy({"points": {"AI4": {"events": True}}})
+
+    def test_a_deadband_for_a_point_that_reports_no_events(self):
+        with pytest.raises(MapError, match="AI4"):
+            _with_policy({"points": {"AI4": {"deadband": 1.0}}})
+        off = {"defaults": {"AI": {"events": False}}, "points": {"AI2": {"deadband": 1}}}
+        with pytest.raises(MapError, match="AI2"):
+            _with_policy(off)
+
+    def test_the_dataclasses_refuse_what_the_plain_form_does(self):
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            EventRule(event_class=4)
+        with pytest.raises(ValueError, match="deadband"):
+            EventRule(deadband=-1.0)
+        with pytest.raises(ValueError, match="only an analog input"):
+            EventPolicy(points={(BI, 0): EventRule(deadband=1.0)})
+        with pytest.raises(ValueError, match="output"):
+            EventPolicy(defaults={AO: EventRule(event_class=1)})
+
+    def test_a_point_the_map_holds_and_nothing_serves_is_not_an_error(self):
+        """A policy may run ahead of a binding that is still growing."""
+        binding = Binding()
+        binding.read(AI, 2, lambda: 240.0)
+        _with_policy({"points": {"BI9": {"class": 3}, "AI1": {"deadband": 5}}}, binding)
+
+
 def _control(function: FunctionCode, body: bytes, sequence: int) -> bytes:
     return bytes([0xC0 | sequence, function]) + body
 
@@ -672,6 +780,217 @@ class TestEvents:
             _control(FunctionCode.DIRECT_OPERATE, _analog_command(0, 125), 0)
         )
         assert response[2] & IINBit.CLASS_2_EVENTS
+
+
+def _reported(session, event_class: int, sequence: int = 0) -> list[tuple[int, int]]:
+    """The events a read of one class is answered with, as group and index."""
+    response = _read(session, bytes([60, event_class + 1, ALL]), sequence=sequence)
+    _, events = parse_objects(response[4:])
+    return [(event.group, event.index) for event in events]
+
+
+def _moved(policy, **kwargs) -> tuple[DerOutstation, Device]:
+    """An outstation under a policy whose alarm, power and voltage have all changed."""
+    device = Device()
+    point_map = load.resolve(small(), units(0))
+    outstation = DerOutstation(point_map, device.binding(), event_policy=policy, **kwargs)
+    outstation.poll()
+    device.alarm = True
+    device.power = 1600.0
+    device.voltage = 250.0
+    outstation.poll()
+    return outstation, device
+
+
+class TestAnEventPolicy:
+    """The class and deadband a deployment sets, seen from the master's side."""
+
+    def test_without_one_the_tables_decide(self):
+        outstation, _ = _moved(None)
+        session = outstation.session()
+        assert _reported(session, 1) == [(2, 0)]
+        assert _reported(session, 2, sequence=1) == [(32, 2)]
+        assert _reported(session, 3, sequence=2) == [(32, 1)]
+
+    def test_an_empty_one_changes_nothing(self):
+        outstation, _ = _moved({})
+        session = outstation.session()
+        assert _reported(session, 1) == [(2, 0)]
+        assert _reported(session, 2, sequence=1) == [(32, 2)]
+        assert _reported(session, 3, sequence=2) == [(32, 1)]
+
+    def test_a_point_reports_in_the_class_it_is_given(self):
+        outstation, _ = _moved({"points": {"AI2": {"class": 1}, "BI0": {"class": 3}}})
+        session = outstation.session()
+        assert _reported(session, 1) == [(32, 2)]
+        assert _reported(session, 2, sequence=1) == []
+        assert sorted(_reported(session, 3, sequence=2)) == [(2, 0), (32, 1)]
+
+    def test_a_kind_reports_in_the_class_its_default_gives(self):
+        outstation, _ = _moved({"defaults": {"AI": {"class": 1}}})
+        session = outstation.session()
+        assert sorted(_reported(session, 1)) == [(2, 0), (32, 1), (32, 2)]
+        assert _reported(session, 2, sequence=1) == []
+        assert _reported(session, 3, sequence=2) == []
+
+    def test_a_point_named_is_an_exception_to_its_kinds_default(self):
+        policy = {"defaults": {"AI": {"class": 1}}, "points": {"AI1": {"class": 2}}}
+        outstation, _ = _moved(policy)
+        session = outstation.session()
+        assert sorted(_reported(session, 1)) == [(2, 0), (32, 2)]
+        assert _reported(session, 2, sequence=1) == [(32, 1)]
+
+    def test_events_turned_off_for_a_point_leave_it_static_only(self):
+        outstation, _ = _moved({"points": {"BI0": {"events": False}}})
+        session = outstation.session()
+        assert _reported(session, 1) == []
+        assert _reported(session, 2, sequence=1) == [(32, 2)], "the others still report"
+        assert _values(_read(session, CLASS_0, sequence=2))[(1, 0)] == 1, "and it is still read"
+
+    def test_events_turned_off_for_a_kind_and_back_on_for_one_point(self):
+        policy = {
+            "defaults": {"AI": {"events": False}},
+            "points": {"AI2": {"events": True}, "AI1": {"class": 1}},
+        }
+        outstation, _ = _moved(policy)
+        session = outstation.session()
+        assert sorted(_reported(session, 1)) == [(2, 0), (32, 1)]
+        assert _reported(session, 2, sequence=1) == [(32, 2)], "in the class the tables gave it"
+        assert _reported(session, 3, sequence=2) == []
+
+    def test_a_kinds_default_leaves_a_static_point_static(self):
+        """What the tables give no events is given none by a rule for its whole kind."""
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 1, lambda: device.power)
+        binding.read(AI, 4, lambda: device.power)
+        outstation = _with_policy({"defaults": {"AI": {"class": 1}}}, binding)
+        outstation.poll()
+        device.power = 1600.0
+        assert outstation.poll() == 1
+        assert _reported(outstation.session(), 1) == [(32, 1)]
+
+    def test_and_naming_the_point_gives_it_events(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 4, lambda: device.power)
+        outstation = _with_policy({"points": {"AI4": {"class": 2}}}, binding)
+        outstation.poll()
+        device.power = 1600.0
+        outstation.poll()
+        assert _reported(outstation.session(), 2) == [(32, 4)]
+
+    def test_a_deadband_is_stated_in_engineering_units(self):
+        """Two volts, at a multiplier of 0.1, is twenty counts on the wire."""
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 2, lambda: device.voltage)
+        outstation = _with_policy({"points": {"AI2": {"deadband": 2.0}}}, binding)
+        outstation.poll()
+        device.voltage = 241.0
+        assert outstation.poll() == 0, "one volt, inside a deadband of two"
+        device.voltage = 243.0
+        assert outstation.poll() == 1
+        assert _reported(outstation.session(), 2) == [(32, 2)]
+
+    def test_a_kinds_deadband_is_converted_by_each_points_own_scaling(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 1, lambda: device.power)
+        binding.read(AI, 2, lambda: device.voltage)
+        outstation = _with_policy({"defaults": {"AI": {"deadband": 5}}}, binding)
+        outstation.poll()
+        device.power, device.voltage = 1504.0, 244.0
+        assert outstation.poll() == 0, "four watts and four volts, each inside five"
+        device.voltage = 246.0
+        assert outstation.poll() == 1
+        device.power = 1506.0
+        assert outstation.poll() == 1
+
+    def test_a_deadband_given_when_binding_still_holds_and_outranks_the_kinds(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 2, lambda: device.voltage, deadband=20)
+        outstation = _with_policy({"defaults": {"AI": {"deadband": 0.5}}}, binding)
+        outstation.poll()
+        device.voltage = 241.0
+        assert outstation.poll() == 0, "ten counts, inside the twenty the binding gave"
+        device.voltage = 243.0
+        assert outstation.poll() == 1
+
+    def test_and_a_deadband_for_the_point_by_name_outranks_the_bindings(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 2, lambda: device.voltage, deadband=20)
+        outstation = _with_policy({"points": {"AI2": {"deadband": 0.5}}}, binding)
+        outstation.poll()
+        device.voltage = 241.0
+        assert outstation.poll() == 1, "ten counts, past the five the policy gave"
+
+    def test_a_change_of_quality_is_reported_whatever_the_deadband(self):
+        quality = [Quality.GOOD]
+        binding = Binding()
+        binding.read(AI, 2, lambda: Reading(240.0, quality[0]))
+        outstation = _with_policy({"points": {"AI2": {"deadband": 100.0}}}, binding)
+        outstation.poll()
+        quality[0] = Quality.COMM_LOST
+        assert outstation.poll() == 1
+
+    def test_a_counters_class_is_the_one_its_freezes_are_logged_in(self):
+        outstation, _ = _built(event_policy={"points": {"CTR0": {"class": 1}}})
+        session = outstation.session()
+        outstation.freeze_all()
+        assert _reported(session, 1) == [(23, 0)]
+        assert _reported(session, 3, sequence=1) == [(23, 1)]
+
+    def test_a_counter_with_events_off_freezes_and_logs_nothing(self):
+        outstation, _ = _built(event_policy={"points": {"CTR1": {"events": False}}})
+        session = outstation.session()
+        outstation.freeze_all()
+        assert _reported(session, 3) == [(23, 0)]
+        values = _values(_read(session, CLASS_0, sequence=1))
+        assert values[(21, 0)] == 10 and values[(21, 1)] == 20, "both are frozen all the same"
+
+    def test_a_control_reports_its_mirror_in_the_class_the_policy_gives(self):
+        outstation, _ = _built(event_policy={"points": {"AI3": {"class": 1}}})
+        session = outstation.session()
+        outstation.poll()
+        response = session._handle_fragment(
+            _control(FunctionCode.DIRECT_OPERATE, _analog_command(0, 125), 0)
+        )
+        assert response[2] & IINBit.CLASS_1_EVENTS
+        assert not response[2] & IINBit.CLASS_2_EVENTS
+
+    def test_the_plain_form_and_the_dataclasses_are_one_policy(self):
+        plain = EventPolicy.from_mapping(
+            {
+                "defaults": {"AI": {"class": 2, "deadband": 0.5}, "BI": {"events": False}},
+                "points": {"AI2": {"class": 1}, "ctr0": {"class": 2}},
+            }
+        )
+        assert plain == EventPolicy(
+            defaults={
+                AI: EventRule(event_class=2, deadband=0.5),
+                BI: EventRule(events=False),
+            },
+            points={(AI, 2): EventRule(event_class=1), (CTR, 0): EventRule(event_class=2)},
+        )
+
+    def test_the_builder_takes_either(self):
+        policy = EventPolicy(points={(AI, 2): EventRule(event_class=1)})
+        outstation, _ = _moved(policy)
+        assert sorted(_reported(outstation.session(), 1)) == [(2, 0), (32, 2)]
+
+    def test_the_outstation_says_what_is_in_force(self):
+        policy = {"defaults": {"BI": {"events": False}}, "points": {"AI2": {"deadband": 2.0}}}
+        outstation = _with_policy(policy)
+        assert outstation.event_class(BI, 0) == 0
+        assert outstation.event_class(AI, 2) == 2
+        assert outstation.event_class(AI, 4) == 0, "the tables gave it none"
+        assert outstation.event_class(CTR, 0) == 3
+        assert outstation.event_class(AO, 0) == 0
+        assert outstation.deadband(2) == 20
+        assert outstation.deadband(1) == 0
 
 
 class TestFreezing:

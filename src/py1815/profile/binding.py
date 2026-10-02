@@ -93,7 +93,8 @@ class Binding:
         self.readers: dict[Address, Reader] = {}
         self.outputs: dict[Address, Output] = {}
         #: Event deadbands, in transmitted units. An analog input absent from
-        #: here reports every change of its transmitted value.
+        #: here reports every change of its transmitted value, unless an
+        #: event policy gives it a deadband.
         self.deadbands: dict[int, float] = {}
 
     def read(
