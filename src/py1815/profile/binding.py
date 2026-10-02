@@ -26,7 +26,7 @@ from py1815.profile.model import Address, Kind
 class Quality(Enum):
     """What a source knows about the value it is handing over.
 
-    Three states, because three have a representation on the wire. A value
+    Four states, because four have a representation on the wire. A value
     that is merely old has none -- static objects carry no timestamp -- so a
     source decides for itself when old becomes ``COMM_LOST``.
     """
@@ -36,6 +36,9 @@ class Quality(Enum):
     COMM_LOST = "comm-lost"
     #: Nothing has been read since this outstation started.
     NEVER_READ = "never-read"
+    #: The value is there and is not in effect: it belongs to a function
+    #: that is disabled. Reported with no flag set at all.
+    OFFLINE = "offline"
 
 
 @dataclass(frozen=True)

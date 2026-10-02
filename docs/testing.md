@@ -138,6 +138,33 @@ them by section number and describe what they check in their own words.
 This is the project's own assessment. It is not a certification, and the device
 profile the outstation generates does not claim one.
 
+## The DER profile's test procedure runs against the simulated DER
+
+EPRI's *Test Procedure for Validating DNP Application Note AN2018-001 in Distributed
+Energy Resources* (report 3002016144) tests an outstation the way a controlling station
+uses the profile: read a function's points, write its settings and read them back,
+enable and disable it, and edit curves through the window all curves share.
+`tests/test_epri_der_procedures.py` carries it out, with each test named for the
+procedure's identifier (`test_mon_001_...` is MON-001) and the twenty-one mode
+procedures as one parametrized test.
+
+The procedures carry no point list of their own. Which input reads an output back,
+which points make up a function and which input says it is supported are read from the
+tables the outstation was built from, and a point counts as supported if the outstation
+serves it. Each procedure therefore runs twice: against synthetic tables that give the
+simulated DER's points invented pairings, which is what CI has, and against the IEEE
+1815.2 tables on a machine that holds them, where it tests the published pairings.
+
+For a function the simulated DER implements, the procedure is carried out in full,
+including that its inputs are sent without the ONLINE flag while it is disabled. For
+one it does not, the procedure checks that the function says so, cannot be enabled, and
+serves none of its points.
+
+`tests/test_epri_coverage.py` lists every procedure in the report as tested or not
+applicable, and records where the suite departs from the report. The report predates
+IEEE 1815.2; where they differ (the status for a write to a locked curve, which input a
+command is read back at) the suite follows the standard.
+
 ## The DER profile is tested against tables invented for the purpose
 
 The IEEE 1815.2 point tables may not be redistributed, so the repository has none and CI

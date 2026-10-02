@@ -727,6 +727,38 @@ and not the default. A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
 process it does not own.
 
+**D56 -- Curves live in a store with the standard's three rules, and a function gets its
+curve by asking.** `py1815.profile.curves.CurveStore` is the state behind the multiplexed
+curve block of clause 6.1.3: the curves, which one the edit window shows, and which
+function names which. It binds the block's points itself and enforces what the clause asks:
+a selector naming a curve that does not exist is refused with `OUT_OF_RANGE`; a curve named
+by an enabled function is locked, and a write to its type, units or points is refused with
+`AUTOMATION_INHIBIT` and changes nothing; and the indicator that the selected curve is
+referenced follows the functions' curve numbers. Both statuses are the ones the clause
+recommends. A function's curve number is bound through `reference`, which states the curve
+types the function follows and returns a callable giving its `Curve`. Pointing a function
+at a curve of another type, or changing the type of a curve under a function that names it,
+is refused with `NOT_SUPPORTED`; the standard names no status for that case. The values of
+a curve are kept as they travel, because their scaling depends on the units the curve
+declares, and the function applies it. This is what **D41** planned as a builder-owned edit
+buffer, built as a store a caller binds so that a device with its own curve storage can
+bind the block to that instead.
+*Trade-off:* a caller wires the store to its functions itself, against a builder that would
+have to know every function's curve types.
+
+**D57 -- The inputs of a disabled function are sent without the ONLINE flag.** Clause
+6.1.1 requires it: the value is still reported, marked as not in effect. A function is the
+points the tables give one purpose under one heading, around an enable output paired with
+a supports input, so the outstation derives the rule from the tables and a caller binds
+nothing extra. Two inputs are exempt because what they say holds either way: the supports
+input, and the input reporting whether the function is enabled. A quality worse than good
+is never replaced, so a source that cannot be reached still says so. Enabling a function
+therefore produces events for its inputs, which is how a master following events learns
+the settings came into effect. `DerOutstation(disabled_offline=False)` turns the rule off,
+for a controlling station that discards any value not flagged ONLINE and so could not
+verify a setting before enabling the function it belongs to.
+*Trade-off:* conformance by default, against masters that read the flag as "bad data".
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -779,6 +811,13 @@ them out against a Level 2 configuration, each test named for the section it per
 and `tests/test_ied_coverage.py` lists every section as either tested or not applicable
 with the reason. Passing them is this project's own assessment and is not a
 certification, which only an authorized test house can grant.
+
+**The DER profile's own test procedure.** EPRI published a test procedure for the
+application note IEEE 1815.2 replaced. `tests/test_epri_der_procedures.py` carries it
+out against the simulated DER, each test named for the procedure it performs, with the
+point pairings read from the tables and not written into the tests. Where the standard
+has since changed what the procedure expects, the suite follows the standard and
+`tests/test_epri_coverage.py` lists each such departure with its reason.
 
 ## Roadmap
 
