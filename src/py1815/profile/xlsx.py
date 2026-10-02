@@ -162,7 +162,19 @@ def _value(cell: ElementTree.Element, strings: list[str]) -> Any:
     if raw is None or raw.text is None:
         return None
     if kind == "s":
-        return strings[int(raw.text)]
+        # Looked up by hand and not by subscript: a negative index would be
+        # answered from the end of the table, and a wrong string is worse than
+        # a refusal.
+        try:
+            position = int(raw.text)
+        except ValueError:
+            position = -1
+        if not 0 <= position < len(strings):
+            raise WorkbookError(
+                f"cell {cell.get('r', '?')} names shared string {raw.text!r}, "
+                f"and the workbook holds {len(strings)}"
+            )
+        return strings[position]
     if kind == "b":
         return raw.text == "1"
     if kind in ("str", "e"):

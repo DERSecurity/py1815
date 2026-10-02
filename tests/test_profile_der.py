@@ -148,6 +148,16 @@ class TestStateCommands:
         assert _latch(session, der.BO_START, True, 4) is CommandStatus.SUCCESS
         assert simulation.der.started
 
+    def test_stopping_needs_permission(self, simulation):
+        session = simulation.outstation.session()
+        assert simulation.der.started
+        _latch(session, der.BO_PERMIT_STOP, False)
+        assert _latch(session, der.BO_STOP, True, 1) is CommandStatus.BLOCKED
+        assert simulation.der.started, "a refused stop leaves the DER running"
+        _latch(session, der.BO_PERMIT_STOP, True, 2)
+        assert _latch(session, der.BO_STOP, True, 3) is CommandStatus.SUCCESS
+        assert not simulation.der.started
+
     def test_opening_the_switch_disconnects(self, simulation):
         _latch(simulation.outstation.session(), der.BO_CONNECT, False)
         _settle(simulation)
@@ -327,3 +337,35 @@ def _headers(body: bytes):
     from py1815.application import parse_request
 
     return parse_request(bytes([0xC0, FunctionCode.READ]) + body).headers
+
+
+class TestAResponseCutShort:
+    """A truncated response is the probe's error to report, not ``struct``'s."""
+
+    #: Group 30 variation 1, 8-bit start and stop, indices 0 to 1: two objects
+    #: of five octets each.
+    RANGE = bytes([30, 1, 0x00, 0, 1]) + bytes(10)
+    #: Group 32 variation 1, 8-bit count and index, one object of five octets.
+    INDEXED = bytes([32, 1, 0x17, 1, 4]) + bytes(5)
+    #: The same two with 16-bit selectors.
+    WIDE_RANGE = bytes([30, 1, 0x01, 0, 0, 1, 0]) + bytes(10)
+    WIDE_INDEXED = bytes([32, 1, 0x28, 1, 0, 4, 0]) + bytes(5)
+
+    @pytest.mark.parametrize("body", [RANGE, INDEXED, WIDE_RANGE, WIDE_INDEXED])
+    def test_the_whole_response_parses(self, body):
+        static, events = probe.parse_objects(body)
+        assert len(static) + len(events) in (1, 2)
+
+    @pytest.mark.parametrize(
+        "body",
+        [RANGE, INDEXED, WIDE_RANGE, WIDE_INDEXED],
+        ids=["range", "indexed", "wide", "wide-i"],
+    )
+    def test_every_shorter_response_is_a_probe_error(self, body):
+        """Cut at each octet in turn: none may escape as anything else."""
+        for length in range(1, len(body)):
+            cut = body[:length]
+            # A cut that lands exactly between two whole headers is a shorter
+            # valid response, which these bodies, holding one header, have none of.
+            with pytest.raises(probe.ProbeError):
+                probe.parse_objects(cut)
