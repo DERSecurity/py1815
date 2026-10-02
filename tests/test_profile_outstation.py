@@ -791,6 +791,46 @@ class TestAReadOnlyOutstation:
         assert _operate(session, _analog_command(0, 125), sequence=1) is CommandStatus.SUCCESS
         assert device.applied == [("setpoint", 12.5)]
 
+    def test_a_role_change_spends_a_select_granted_before_it(self):
+        """A select is permission given under one role. It is not carried into another."""
+        outstation, device = _built()
+        session = outstation.session()
+        selected = session._handle_fragment(
+            _control(FunctionCode.SELECT, _analog_command(0, 125), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.SUCCESS
+        outstation.read_only = True
+        outstation.read_only = False
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.NO_SELECT
+        assert device.applied == []
+
+    def test_setting_the_role_it_already_has_spends_nothing(self):
+        """The control for the test above: no change of role, and the select stands."""
+        outstation, device = _built()
+        session = outstation.session()
+        session._handle_fragment(_control(FunctionCode.SELECT, _analog_command(0, 125), 0))
+        outstation.read_only = False
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.SUCCESS
+        assert device.applied == [("setpoint", 12.5)]
+
+    def test_giving_the_role_back_does_not_restore_trust_in_an_old_write(self):
+        """Another interface may have changed the value while this one only reported."""
+        outstation, _ = _built()
+        session = outstation.session()
+        _operate(session, _analog_command(0, 125))
+        outstation.read_only = True
+        outstation.read_only = False
+        assert _flags(_read(session, SETPOINT_STATUS, sequence=1))[(40, 0)] == 0x02
+        assert _flags(_read(session, SETPOINT_MIRROR, sequence=2))[(30, 3)] == 0x02
+        assert _operate(session, _analog_command(0, 100), sequence=3) is CommandStatus.SUCCESS
+        assert _values(_read(session, SETPOINT_STATUS, sequence=4))[(40, 0)] == 100
+
     def test_counters_are_still_frozen_on_request(self):
         """A freeze changes what the outstation reports, not what the device does."""
         outstation, _ = _built(read_only=True)

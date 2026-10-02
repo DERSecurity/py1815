@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
+import weakref
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
@@ -204,8 +205,11 @@ class DerOutstation:
             raise ValueError("read_only_status is SUCCESS, which refuses nothing")
         self._map = point_map
         self._binding = binding
-        self.read_only = read_only
+        self._read_only = read_only
         self._read_only_status = read_only_status
+        #: The sessions :meth:`session` wired to this outstation, so a change of
+        #: role can withdraw the selects they granted under the old one.
+        self._sessions: weakref.WeakSet[Session] = weakref.WeakSet()
         self._block_octets = block_octets
         self._clock_ms = clock_ms
         self._level2 = level2
@@ -363,6 +367,26 @@ class DerOutstation:
         if point.kind.is_output:
             return point.address in self._binding.outputs
         return point.address in self._sources
+
+    @property
+    def read_only(self) -> bool:
+        """Whether this outstation reports and refuses every control (D65)."""
+        return self._read_only
+
+    @read_only.setter
+    def read_only(self, value: bool) -> None:
+        if bool(value) == self._read_only:
+            return
+        self._read_only = bool(value)
+        # The writes this outstation accepted are no longer its to vouch for:
+        # while it only reported, another interface may have changed every one
+        # of them. Without a status reader, an output reports nothing until it
+        # is written again under the new role.
+        self._state.clear()
+        # And a select granted under the old role is not permission under the
+        # new one, in either direction.
+        for session in list(self._sessions):
+            session.abandon_select()
 
     @property
     def point_map(self) -> PointMap:
@@ -835,7 +859,7 @@ class DerOutstation:
             )
         options.setdefault("need_time", True)
         options.setdefault("analog_event_variation", AnalogEventVariation.INT32)
-        return Session(
+        session = Session(
             self,
             control_provider=self if self._binding.outputs else None,
             events=self.events,
@@ -844,6 +868,8 @@ class DerOutstation:
             max_response=max_response,
             **options,
         )
+        self._sessions.add(session)
+        return session
 
 
 def _constant(value: float | bool) -> Reader:
