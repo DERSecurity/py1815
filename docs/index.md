@@ -17,7 +17,8 @@ A DNP3 (IEEE 1815) outstation in pure Python.
 There is no maintained, importable DNP3 stack for current Python. The widely
 used bindings wrap [opendnp3](https://github.com/dnp3/opendnp3), archived and
 declared end-of-life in September 2022, and they publish wheels only up to
-CPython 3.10. Everything else in the ecosystem is a compiled extension, which
+CPython 3.10. opendnp3 is still one of the two masters this library is tested
+against, and the source of two of its choices; [Testing](testing.md) says which. Everything else in the ecosystem is a compiled extension, which
 means a prebuilt wheel per interpreter version and a cross-compiler for anything
 unusual.
 

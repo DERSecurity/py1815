@@ -87,6 +87,7 @@ class CommandStatus(IntEnum):
     LOCAL = 7
     #: Too many *operations* -- throttled for having been asked too often. Not
     #: an object count, despite the ``TOO_MANY_OBJS`` spelling that circulates.
+    #: The name is the one opendnp3 publishes, which is the one that interoperates.
     TOO_MANY_OPS = 8
     NOT_AUTHORIZED = 9
     AUTOMATION_INHIBIT = 10

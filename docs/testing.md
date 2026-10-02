@@ -27,8 +27,8 @@ are the same codebase wearing different clothes.
 
 | Peer | What it answers |
 |---|---|
-| A C++ master, through its Python bindings | are the values right |
-| A Rust master, by different authors | are the values *and the quality octet* right, and does a refused control arrive as a refusal |
+| [opendnp3](https://github.com/dnp3/opendnp3), a C++ master, through its [Python bindings](https://pypi.org/project/dnp3-python/) | are the values right |
+| [`dnp3`](https://github.com/stepfunc/dnp3) by Step Function I/O, a Rust master by different authors | are the values *and the quality octet* right, and does a refused control arrive as a refusal |
 | Wireshark's dissector | is what went on the wire well-formed DNP3, and does every checksum verify |
 | Suricata's parser | the same question, from a second independent parser |
 
@@ -52,14 +52,38 @@ interoperability work turned up in the library rather than in the harness.
 
 ### What the peers cannot check
 
-The C++ master stores point values as bare scalars and discards the quality
-octet, so the job driving it checks values and not flags. The fixture serves one
+The Python bindings to opendnp3 store point values as bare scalars and discard
+the quality octet, so the job driving that master checks values and not flags. The fixture serves one
 point offline specifically to exercise quality, and that point reads back as a
 number like any other there.
 
 Closing that gap needed a peer that exposes quality rather than a change to the
-harness, which is what the Rust master is for. Quality is also pinned at the
-object level by the unit suite.
+harness, which is what Step Function I/O's `dnp3` is for. Quality is also pinned
+at the object level by the unit suite.
+
+### Who the peers are, and on what terms
+
+The masters are other people's work, and this page leans on them, so they are
+credited here and not only in the directory that runs them.
+
+**[`dnp3`](https://github.com/stepfunc/dnp3)** is published by [Step Function I/O](https://stepfunc.io).
+It is used under their public [license](https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt), which is not an open-source
+license and is better read than summarized. Step Function I/O has said that
+reading this outstation with the crate in this repository's public continuous
+integration is in line with that license ([#48](https://github.com/DERSecurity/py1815/issues/48)). That is a statement
+about this repository. Anyone running the job from a fork, or using the crate
+for anything else, should read the license for their own use; commercial
+licensing is at <https://stepfunc.io/contact>. Nothing the crate provides is linked into,
+distributed with, or depended on by this library.
+
+**[opendnp3](https://github.com/dnp3/opendnp3)** is under the Apache License 2.0 and is driven through
+the [`dnp3-python`](https://pypi.org/project/dnp3-python/) bindings. Its upstream is archived, which rules
+it out as a dependency and not as a witness: a frame it parses is a frame that
+was correct when it was maintained, and the wire format has not moved. This
+library also took two things from it directly. The ten-second default for how
+long a select stays armed is opendnp3's. So is the name `TOO_MANY_OPS` for
+control status 8: other spellings circulate, and the one that interoperates is
+the one opendnp3 publishes.
 
 ## The standard is checked mechanically, not remembered
 
