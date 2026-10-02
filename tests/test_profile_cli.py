@@ -91,6 +91,25 @@ class TestTablesFetch:
         with pytest.raises(OSError):
             cli._workbook_from_archive(_archive(members))
 
+    def test_a_workbook_that_inflates_past_the_cap_is_refused(self, monkeypatch):
+        """The cap bounds the archive; this bounds what comes out of it."""
+        data = _archive({"Data Point Tables.xlsx": b"x" * 64})
+        monkeypatch.setattr(cli, "_MAX_DOWNLOAD", 63)
+        with pytest.raises(OSError, match="exceeds"):
+            cli._workbook_from_archive(data)
+        monkeypatch.setattr(cli, "_MAX_DOWNLOAD", 64)
+        assert cli._workbook_from_archive(data)[1] == b"x" * 64
+
+    def test_an_oversized_workbook_is_a_failed_download(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli, "_download", lambda _url: _archive({"Data Point Tables.xlsx": b"x" * 64})
+        )
+        monkeypatch.setattr(cli, "_MAX_DOWNLOAD", 63)
+        out = tmp_path / "tables.json"
+        assert cli.main(["tables", "fetch", "--out", str(out)]) == 1
+        assert "download failed" in capsys.readouterr().err
+        assert not (tmp_path / "Data Point Tables.xlsx").exists()
+
     def test_a_failed_download_says_how_to_do_it_by_hand(self, tmp_path, monkeypatch, capsys):
         def refuse(_url: str) -> bytes:
             raise OSError("no route to host")
@@ -186,3 +205,32 @@ class TestRun:
         with _Served() as port:
             assert cli.main(["run", "--bind", f"127.0.0.1:{port}"]) == 1
         assert "cannot listen" in capsys.readouterr().err
+
+
+class TestArguments:
+    """What the command line refuses before anything is loaded or served."""
+
+    @pytest.mark.parametrize("option", ["--meters", "--der-units", "--inverters", "--batteries"])
+    @pytest.mark.parametrize("command", ["run", "points"])
+    def test_a_negative_count_is_refused_as_usage(self, command, option, tables, capsys):
+        with pytest.raises(SystemExit) as stopped:
+            cli.main([command, option, "-1"])
+        assert stopped.value.code == 2
+        message = capsys.readouterr().err
+        assert "cannot be negative" in message
+        assert "Traceback" not in message
+
+    @pytest.mark.parametrize("tick", ["0", "-1", "nan", "inf", "soon"])
+    def test_a_tick_that_is_no_interval_is_refused_as_usage(self, tick, tables, capsys):
+        """Zero or less would spin the run loop; the server is never started."""
+        with pytest.raises(SystemExit) as stopped:
+            cli.main(["run", "--tick", tick])
+        assert stopped.value.code == 2
+        assert "--tick" in capsys.readouterr().err
+
+    def test_a_composition_that_refuses_itself_is_reported_not_raised(self, tables, capsys):
+        """Past the parser, for a caller that builds the arguments itself."""
+        args = cli._parser().parse_args(["points"])
+        args.meters = -1
+        assert cli._load(args) is None
+        assert "cannot be negative" in capsys.readouterr().err
