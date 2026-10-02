@@ -377,15 +377,32 @@ class DerOutstation:
         for kind in Kind:
             for point in self._map.of(kind):
                 source = self._origins.get(point.address, Source.ABSENT)
-                quality = None if source is Source.ABSENT else self._quality(point)
-                entries.append(Entry(point, source, quality))
+                if source is Source.ABSENT:
+                    entries.append(Entry(point, source))
+                    continue
+                quality, online = self._standing_on_the_wire(point)
+                entries.append(Entry(point, source, quality, online))
         return Coverage(tuple(entries))
 
-    def _quality(self, point: Point) -> Quality:
-        """The quality a served point would be sent with now."""
+    def _standing_on_the_wire(self, point: Point) -> tuple[Quality, bool]:
+        """A served point's quality now, and whether it goes out with ONLINE set.
+
+        One question to the source, answered both ways. They differ for a
+        value with no number: the source calls it good, and the wire sends
+        zero with ONLINE clear and a reference error, as it does for any NaN.
+        """
         if point.kind.is_output:
-            return _FLAG_QUALITY[self._output_status(point)[1]]
-        return self._reading(point).quality
+            value, flags = self._output_status(point)
+            quality = _FLAG_QUALITY[flags]
+            online = quality is Quality.GOOD
+            if online and point.kind is Kind.AO and value is not None:
+                online = not math.isnan(point.to_wire(float(value)))
+            return quality, online
+        reading = self._reading(point)
+        online = reading.quality is Quality.GOOD
+        if online and point.kind is Kind.AI:
+            online = not math.isnan(point.to_wire(float(reading.value)))
+        return reading.quality, online
 
     # ---------------------------------------------------------------- time
 
@@ -560,7 +577,12 @@ class DerOutstation:
         if group == GROUP_BINARY_OUTPUT_STATUS:
             return variation, encode_binary_output_status(state=bool(value), flags=flags)
         raw = point.to_wire(float(value or 0))
-        return variation, encode_analog_output_status(float(round(raw)), variation, flags=flags)
+        if math.isfinite(raw):
+            # Rounded to the integer the variation carries. A value with no
+            # number is passed as it is, and the encoder sends it flagged
+            # instead of the read failing on it.
+            raw = float(round(raw))
+        return variation, encode_analog_output_status(raw, variation, flags=flags)
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""

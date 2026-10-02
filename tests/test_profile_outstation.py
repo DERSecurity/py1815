@@ -793,6 +793,31 @@ def _sources(report) -> dict[tuple[Kind, int], Source]:
 class TestTheCoverageReport:
     """What a built outstation says about how much of the profile it serves."""
 
+    def test_a_value_with_no_number_is_reported_offline_as_the_wire_has_it(self):
+        """A source can be good and hand over NaN, which goes out with ONLINE clear."""
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.read(AI, 1, lambda: float("nan"))
+        binding.read(AI, 2, lambda: 240.0)
+        outstation = DerOutstation(point_map, binding, strict=False)
+        report = outstation.coverage()
+        nan, fine = report.entry(AI, 1), report.entry(AI, 2)
+        assert nan.quality is Quality.GOOD, "the source said nothing was wrong"
+        assert not nan.online and nan in report.offline
+        assert fine.online and fine not in report.offline
+        flags = _flags(_read(outstation.session(), bytes([30, 1, 0x00, 1, 2])))
+        assert not flags[(30, 1)] & 0x01 and flags[(30, 2)] & 0x01, "and the wire agrees"
+
+    def test_so_is_an_output_whose_status_has_no_number(self):
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.output(AO, 0, status=lambda: float("nan"))
+        outstation = DerOutstation(point_map, binding, strict=False)
+        entry = outstation.coverage().entry(AO, 0)
+        assert entry.quality is Quality.GOOD and not entry.online
+        flags = _flags(_read(outstation.session(), bytes([40, 0, ALL])))
+        assert not flags[(40, 0)] & 0x01
+
     def test_every_point_of_the_map_is_in_it_once(self):
         outstation, _ = _built()
         addresses = [entry.point.address for entry in outstation.coverage().entries]

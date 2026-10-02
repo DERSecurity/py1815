@@ -59,16 +59,15 @@ class Entry:
     #: builder's own rules: a source that raised is ``COMM_LOST``, and an input
     #: of a disabled function is ``OFFLINE``. None for a point that is absent.
     quality: Quality | None = None
+    #: Whether the point was being sent with its ONLINE flag set. Taken from
+    #: what goes on the wire and not from the quality alone: a good source can
+    #: hand over a value with no number, which is sent with ONLINE clear.
+    online: bool = False
 
     @property
     def served(self) -> bool:
         """Whether a master can read the point at all."""
         return self.source is not Source.ABSENT
-
-    @property
-    def online(self) -> bool:
-        """Whether the point was being sent with its ONLINE flag set."""
-        return self.quality is Quality.GOOD
 
     @property
     def address(self) -> str:

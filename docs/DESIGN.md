@@ -853,9 +853,11 @@ index is refused.
 
 Offline is a different thing and is kept apart. A point that is offline is served, and is
 sent with its ONLINE flag clear: its source cannot be reached, it has never been read or
-written, or its function is disabled (**D57**). That is a fact about a moment and not about
-the binding, so the report asks each source once when it is made and records the quality
-beside the source. Two reports of one outstation agree on every source and may differ in
+written, its function is disabled (**D57**), or its source called it good and handed over a
+value with no number, which goes out as zero with a reference error. That is a fact about a
+moment and not about the binding, so the report asks each source once when it is made and
+records the quality beside the source, and whether ONLINE went out is read from what the
+wire carries and not inferred from the quality. Two reports of one outstation agree on every source and may differ in
 quality. A deployment tracking growth compares sources; one asking why a master sees a
 point flagged reads the quality.
 
