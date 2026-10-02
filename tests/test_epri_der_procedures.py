@@ -197,6 +197,16 @@ def test_serv_001_a_start_without_permission_is_refused(dut: Dut) -> None:
     assert dut.state(dut.map.point(Kind.BI, BI_STOPPED))
 
 
+def test_serv_001_a_stop_without_permission_is_refused(dut: Dut) -> None:
+    """The other half of the pair: permission to stop is an interlock too."""
+    assert dut.latch(der.BO_PERMIT_STOP, False) is CommandStatus.SUCCESS
+    assert dut.latch(der.BO_STOP, True) is CommandStatus.BLOCKED
+    assert not dut.state(dut.map.point(Kind.BI, BI_STOPPING)), "no stop is under way"
+    dut.advance(3)
+    assert dut.state(dut.map.point(Kind.BI, BI_STARTED))
+    assert not dut.state(dut.map.point(Kind.BI, BI_STOPPED))
+
+
 # --------------------------------------------------------------- curve tests
 
 

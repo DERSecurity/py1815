@@ -287,7 +287,7 @@ def _profile(args: argparse.Namespace) -> int:
         port=int(port) if port.isdigit() else None,
     )
     # The simulated DER's bindings refuse while locked out, without permission
-    # to start, and for a unit it does not count in.
+    # to start or to stop, and for a unit it does not count in.
     statuses = (CommandStatus.BLOCKED, CommandStatus.NOT_SUPPORTED, CommandStatus.OUT_OF_RANGE)
     document = device_profile.render(
         device_profile.build(outstation, session, identity, statuses=statuses)
