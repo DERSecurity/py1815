@@ -228,6 +228,33 @@ that only the implemented functions report as supported, and that the advertised
 starts agree with where the blocks resolve. A change to `py1815.profile` should be run
 there before it is merged.
 
+## The suite also runs where an integer is 32 bits
+
+The library is meant to run on small ARM controllers, and some of those are
+32-bit. A `struct` format that used a native size, an integer assumed to be 64
+bits wide, or a time that stops fitting in 2038 would pass on every 64-bit
+machine and fail there. So the `test-arm32` job runs the whole unit suite on
+Python 3.12 for `linux/arm/v7`, emulated with QEMU, and begins by checking that
+the interpreter it was handed really is 32-bit, so that it cannot pass by
+running somewhere else.
+
+It runs the tests and nothing more. Ruff, mypy and the changelog check read the
+source and answer the same on any machine, so they stay in the `test` job, and
+this one installs the package, `pytest` and `pytest-asyncio`. Emulation makes it
+the slowest job in the workflow, at several minutes, which is why it runs one
+Python version: the question it asks is about the platform.
+
+When it was first run the whole suite passed, and nothing in the library had to
+change. The wire encoders name little-endian and an explicit width in every
+`struct` format, and a DNP3 time is a Python integer of milliseconds that never
+passes through a C `time_t`. The job is there so that stays true.
+
+The same job then runs `scripts/measure_event_memory.py`, which puts the memory
+a full event buffer costs on that platform in the log; see
+[Memory on a small controller](der.md#memory-on-a-small-controller). A second
+job, `image-arm`, builds the Docker image for `linux/arm64` and `linux/arm/v7`
+and starts the command in each.
+
 ## Running them
 
 ```bash
@@ -240,3 +267,11 @@ mypy src
 The interoperability jobs need peers that are not installed by the dev extras,
 so they run in continuous integration rather than locally. See
 `.github/workflows/interop.yml`.
+
+The 32-bit run needs Docker with QEMU's ARM emulation registered. With that in
+place it is the command the `test-arm32` job runs:
+
+```bash
+docker run --rm --platform linux/arm/v7 -v "$PWD":/src:ro -w /src python:3.12-slim \
+  sh -ec 'pip install -q . pytest pytest-asyncio && pytest -q -x -p no:cacheprovider'
+```

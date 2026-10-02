@@ -242,6 +242,49 @@ quality is not normal, so an offline point is never read as a plain number. This
 the configuration the conformance tests run against; see
 [Testing](testing.md#the-certification-procedures-are-carried-out-section-by-section).
 
+## Memory on a small controller
+
+The library is pure Python with no runtime dependencies, so it runs wherever
+CPython does, including 32-bit and 64-bit ARM Linux. CI runs the unit suite on
+32-bit ARM as well as on the 64-bit machines the other jobs use; see
+[Testing](testing.md#the-suite-also-runs-where-an-integer-is-32-bits).
+
+The one part of an outstation whose size you choose is the event buffers.
+`event_capacity` is how many events each of the three classes holds before its
+oldest is dropped, and the default is 2000. The buffers are empty while a
+master keeps polling and full when it has gone away, so the full figure is the
+one to budget for.
+
+Measured on CPython 3.12, 64-bit Linux, an event costs a little under 300 bytes,
+and all three classes full at the default capacity come to about 1.7 MiB. The
+figure is approximate: it counts what Python allocates for the events and not
+the interpreter around them, and it moves with the Python version. A 32-bit
+build needs roughly half as much, because most of an event is pointers, and the
+32-bit CI job prints its own figure on every run. To get the number for your
+own interpreter and capacity:
+
+```bash
+python scripts/measure_event_memory.py --capacity 250
+```
+
+The [script](https://github.com/DERSecurity/py1815/blob/main/scripts/measure_event_memory.py)
+is in the repository and not in the installed package.
+
+To size the buffers down, pass a smaller `event_capacity`. The cost is linear
+in it, and what you give up is history: how many changes the outstation can
+hold for a master that is not reading them. A workable capacity is the number
+of binary changes and counter freezes you expect between two polls of the
+slowest master you serve, with room for the outage you want to ride through.
+Analog inputs do not need counting, because the builder keeps only the latest
+event per analog point, so they occupy at most one slot each however long the
+master is away. When a class does fill, its oldest event is dropped and the
+master is told, through the event buffer overflow indication, that it missed
+something.
+
+A session built without the profile takes its buffers from
+`EventBuffers(capacity=...)`, which has its own default and the same cost per
+event.
+
 ## What is not there yet
 
 - **Schedules as objects.** The schedule blocks are ordinary points to the
