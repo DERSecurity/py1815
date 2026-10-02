@@ -91,7 +91,36 @@ def _body(group: int, variation: int, qualifier: int) -> bytes:
         return header(group, variation, qualifier, 5)
     if qualifier in (Q_RANGE_8, Q_RANGE_16):
         return header(group, variation, qualifier, 0, 1)
+    if qualifier in (Q_INDEX_8, Q_INDEX_16):
+        # One object named by its index, with no data after it: what an
+        # indexed request for anything but a control looks like.
+        width = 1 if qualifier == Q_INDEX_8 else 2
+        one, first = (1).to_bytes(width, "little"), (0).to_bytes(width, "little")
+        return bytes([group, variation, qualifier]) + one + first
     raise AssertionError(f"no request is built for qualifier 0x{qualifier:02X}")
+
+
+@pytest.mark.parametrize("group", [1, 12, 30, 41, 50, 80])
+@pytest.mark.parametrize(
+    "qualifier", [Q_ALL, Q_COUNT_8, Q_COUNT_16, Q_RANGE_8, Q_RANGE_16, Q_INDEX_8, Q_INDEX_16]
+)
+def test_a_request_is_built_for_every_qualifier_the_tables_use(group, qualifier):
+    """No row is dropped for want of a body: the test below sends all of them.
+
+    Runs without the workbook, so the guarantee does not depend on a copy
+    being present.
+    """
+    assert _body(group, 1, qualifier)[:2] == bytes([group, 1])
+
+
+def test_an_indexed_request_names_one_object_and_carries_no_data():
+    assert _body(1, 2, Q_INDEX_8) == bytes([1, 2, Q_INDEX_8, 1, 0])
+    assert _body(30, 1, Q_INDEX_16) == bytes([30, 1, Q_INDEX_16, 1, 0, 0, 0])
+
+
+def test_a_qualifier_no_request_is_built_for_is_an_error_not_a_skip():
+    with pytest.raises(AssertionError, match="no request is built"):
+        _body(1, 2, 0x5B)
 
 
 @pytest.mark.skipif(not WORKBOOK, reason="PY1815_SUBSET_TABLES does not name the subset workbook")
@@ -104,8 +133,6 @@ def test_tb2016_003_every_level_2_request_is_answered():
         dut = Dut(need_time=True)
         dut.toggle(0)
         dut.step(0)
-        if qualifier in (Q_INDEX_8, Q_INDEX_16) and group not in (12, 41):
-            continue
         reply = dut.master.request(function, _body(group, variation, qualifier))
         if function in SILENT:
             if not reply.silent:
