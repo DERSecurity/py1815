@@ -52,6 +52,12 @@ profile's table (step 2). The open item on time
 synchronization is settled by D44 in [DESIGN.md](../DESIGN.md), and the one on freezes by
 D45: the functions are served, and the profile's own periodic freeze is the caller's timer.
 
+Also not built: what the aggregator's first deployment asks of the builder beyond the nine
+steps. Those are items G1, G2, G5 and G6, under
+[Needs from a single-unit gateway](#needs-from-a-single-unit-gateway) below. The rest of
+that deployment's list is about the outstation and not the profile, and is in
+[GATEWAY.md](GATEWAY.md).
+
 ## Scope
 
 An IEEE 1815.2-2025 outstation, with the predecessor profile (DNP3 Application
@@ -516,6 +522,57 @@ table, its ordering rule, its ceiling policy and its role model exactly as its
 plan states them. Its first phase (build the map's semantic half, obtain the
 companion tables, reconcile, record deltas) is what step 2 mechanizes.
 
+## Needs from a single-unit gateway
+
+The aggregator's first use of the builder is narrower than the fleet shape its plan
+describes, and it asks for things the nine steps do not. [GATEWAY.md](GATEWAY.md) describes
+the deployment and carries the whole list, G1 through G9. The four items below are the
+ones that land in `py1815.profile`, so they are tracked here, once. Tick an item when the
+missing part is merged and tested.
+
+- [ ] **G1. Either role, chosen by the caller: commanding or read-only.** The gateway
+  names one upstream interface as its control interface and serves the others read-only,
+  and which one holds control is configuration. So the same outstation has to run both
+  ways. Commanding is what the builder does today. Read-only is not a mode it has: the
+  nearest thing is binding no writers, which answers `NOT_SUPPORTED`, and that tells a
+  master the point cannot be controlled when the truth is that this interface may not
+  control it. *Missing:* a builder-level read-only switch under which every control
+  (select, operate, direct operate) is refused per object with one stated status, while
+  output status and the inputs that mirror outputs keep reporting the value in force. In
+  that mode another interface set that value, so it comes from the output's `status`
+  reader and never from a last accepted write. Which status a refused master receives is
+  a decision to record in [DESIGN.md](../DESIGN.md), and the device profile document
+  should state the mode the outstation was built in.
+- [ ] **G2. In the commanding role, the outstation relays and reports what was applied.**
+  The gateway passes a setpoint to the unit's own controller, which applies its limits
+  and may put a different value in force. The master has to see that value, not its own
+  request echoed back. `Output.apply` and `Output.status` already allow it. *Missing:* a
+  test and a documented pattern for an output whose status differs from the last write,
+  including that the mirroring input raises an event when the applied value changes
+  without a new command, since that is how a master learns its setpoint was reduced.
+- [ ] **G5. Event class and deadband are the deployment's to set.** What a plant
+  controller wants reported differs by customer, so the policy has to be configuration
+  and not a property of the build. Today a caller may give an analog input a deadband
+  when binding it, in transmitted units; without one the table's resolution is the
+  default; and the event class always comes from the table. *Missing:* the caller
+  choosing the class per point and turning events off for a point; a policy supplied as
+  data (defaults by point kind plus per-point exceptions) so a deployment edits a file
+  and not code; deadbands stated in engineering units and converted with the point's
+  scaling; validation when the outstation is built, so an unknown point, a class outside
+  1 to 3 or a negative deadband fails at startup; and the device profile document
+  reporting the values in force.
+- [ ] **G6. A partial map that grows.** The deployment starts with the points its source
+  publishes today and expects that set to grow substantially, with controls following
+  measurements. `strict=False` builds a deliberately partial map. *Missing:* a coverage
+  report from a built outstation listing which of the profile's points are bound, which
+  are served offline and which are absent, so growth is tracked against the profile and
+  a point added in the source and forgotten here is visible; and a check that adding a
+  binding entry is the whole of the change, with the device profile document following
+  from the rebuild.
+
+One step the deployment does **not** need: the layout. One unit needs no `stride` or
+`concatenate`, so step 6 is not on its path and stays where the fleet shape needs it.
+
 ## Sequencing
 
 Steps 1 and 2 first, together, because the extractor is what turns the
@@ -528,6 +585,9 @@ Then 6, which is small and only the aggregator needs. 7 runs throughout; 8 close
 The companion tables are in; the map format can be designed against the real
 thing from the start, and reconciling AN2018-001 against it is a data change
 through the extractor rather than a code change.
+
+The gateway's items are ordered in [GATEWAY.md](GATEWAY.md). Of the four here, G1 and G2
+come first and together, since they are the two roles; G5 and G6 follow.
 
 ## Open
 
