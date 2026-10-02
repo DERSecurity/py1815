@@ -1172,12 +1172,11 @@ class Session:
             remaining = awaited.at + self._unsolicited_timeout - now
             if remaining > 0:
                 return remaining
-            if self._deferred is not None:
-                # The read held behind it is answered as soon as the wait is
-                # over, and is not itself made to wait for anything.
-                return 0.0
             # A retry is unsolicited traffic like the first transmission, and
-            # waits for a solicited response to be settled as that did.
+            # waits for a solicited response to be settled as that did. A read
+            # held behind it never waits here: holding it ended any solicited
+            # response, and every request that could start another discards
+            # the read.
             return self._solicited_wait(now)
         if not self._has_news():
             return None

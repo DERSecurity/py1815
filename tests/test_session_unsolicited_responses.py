@@ -920,7 +920,8 @@ class TestRetries:
         assert session.initiate_after() == 30.0
         clock.now += 29.9
         assert _said(session) == []
-        clock.now += 0.1
+        clock.now += 1.0
+        assert session.initiate_after() == 0.0, "due, and not overdue by a negative wait"
 
         assert _indices(_one(session)) == [0]
 
