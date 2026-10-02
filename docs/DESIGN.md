@@ -842,6 +842,40 @@ known in every one of these cases, so the indication is the parameter one and no
 *Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
 answer, and has the range read for that.
 
+**D66 -- The event policy is data the caller hands over, and the library reads no file.**
+The tables give each point a default event class, and what a controlling station wants
+reported differs by deployment, so `DerOutstation` takes an `event_policy`: an
+`EventPolicy`, or the plain mapping `EventPolicy.from_mapping` makes one from. It holds a
+rule for each kind of point and exceptions for points named one at a time, and a rule may
+set the class (1, 2 or 3), turn events off, and for an analog input state a deadband. The
+library defines that mapping and validates it. It does not define a file format and does
+not open a file: a caller that embeds the outstation already has a configuration format
+and a loader for it, and a second format here would be one more thing to keep in step with
+the first. JSON and YAML both load to the mapping as it stands.
+
+Three rules decide what a policy means. For the class, a rule naming the point outranks
+the rule for its kind, which outranks the tables. A kind's rule moves only the points the
+tables already have reporting: a "supports" input, or a point the tables give no class,
+stays static under a rule for every binary input, and is given events by naming it. For
+the deadband, a rule naming the point outranks the deadband given to `Binding.read`, which
+outranks the rule for its kind, so the more specific statement wins and, between two that
+name the same point, the deployment's data wins over the code. A policy deadband is in
+engineering units and is converted with the point's multiplier, because the person writing
+the policy knows volts and not counts; the one given to `Binding.read` stays in transmitted
+units, as it was. Turning events off leaves the point in class 0: it stops reporting
+changes and is still read. A counter's rule governs the event each freeze logs.
+
+A policy that cannot be right stops the build, with `ValueError` for what is wrong in
+itself (a class outside 1 to 3, a negative deadband, a deadband on anything but an analog
+input, a rule for an output, a key it does not know) and `MapError` for what is wrong
+against the map (a point the map does not hold, events for a point left out of class 0 or
+for a counter with no frozen counter, a deadband on a point that reports none). A point the
+map holds and the binding does not yet serve is not an error, so a policy may be written
+for the whole profile ahead of a binding that grows. The device profile document lists the
+class and the deadband in force, read from the outstation and not from the tables.
+*Trade-off:* a caller wanting a policy file writes the three lines that load one, against a
+library that would otherwise own a format, a parser choice and a dependency for it.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

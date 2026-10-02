@@ -59,7 +59,7 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   outstation refusing every control and still reporting the value in force.
 - **G2.** In the commanding role, the outstation reports what the unit applied, which may
   differ from what the master asked for.
-- **G5.** Event class and deadband set by the deployment, as data, per point.
+- **G5.** Event class and deadband set by the deployment, as data, per point. Built.
 - **G6.** A partial map that grows, with a report of what is bound against the profile.
 - **G10.** Static groups read by index, for a master that picks scattered points. Built.
 
@@ -116,9 +116,10 @@ closes. G7 follows the roadmap and is not gated on the rest.
 - **A second master address while one is active** (G4): refuse it, or let it displace the
   first. Displacing is friendlier to a master that restarted with a different address;
   refusing is safer when two masters are both alive.
-- **Whether the event policy file is the library's format or the caller's** (G5). The
-  library needs the policy as data either way; the question is whether it also defines
-  and validates a file form, or takes a mapping and leaves the file to the gateway.
+- **Whether the event policy file is the library's format or the caller's** (G5).
+  Settled: the caller's. The library takes the policy as a mapping it validates and
+  reads no file, so the gateway keeps the policy in its own configuration and hands
+  over what that loads to (D66 in [DESIGN.md](../DESIGN.md)).
 
 ## References
 

@@ -802,7 +802,9 @@ def _scaling(point: Point) -> list[Any]:
     return items
 
 
-def _points(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
+def _points(
+    served: dict[Kind, list[Point]], facts: SessionFacts, outstation: DerOutstation
+) -> Items:
     definition = ("configuration", [("pointListDefinition", ["fixed"])])
     lists: list[Any] = []
 
@@ -811,10 +813,15 @@ def _points(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
             points = [(element, describe(point)) for point in served[kind]]
             lists.append((name, [definition, ("dataPoints", points)]))
 
+    def event_class(point: Point) -> str:
+        # The class in force, which an event policy may have set, and not
+        # the tables' default for the point.
+        return _CLASS_WORDS[outstation.event_class(point.kind, point.index)]
+
     def binary_input(point: Point) -> list[Any]:
         return [
             *_names(point),
-            ("changeEventClass", _CLASS_WORDS[point.event_class]),
+            ("changeEventClass", event_class(point)),
             ("includedInClass0Response", _included(point)),
             *_states(point),
         ]
@@ -854,14 +861,14 @@ def _points(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
         if point.frozen:
             items += [
                 ("frozenCountersIncludedInClass0", _included(point)),
-                ("frozenCounterEventClass", _CLASS_WORDS[point.frozen_event_class or 3]),
+                ("frozenCounterEventClass", event_class(point)),
             ]
         return items
 
     def analog_input(point: Point) -> list[Any]:
         items: list[Any] = [
             *_names(point),
-            ("changeEventClass", _CLASS_WORDS[point.event_class]),
+            ("changeEventClass", event_class(point)),
             ("includedInClass0Response", _included(point)),
         ]
         if point.minimum is not None and point.maximum is not None:
@@ -869,7 +876,12 @@ def _points(served: dict[Kind, list[Point]], facts: SessionFacts) -> Items:
                 ("minIntegerTransmittedValue", int(point.minimum)),
                 ("maxIntegerTransmittedValue", int(point.maximum)),
             ]
-        return items + _scaling(point)
+        items += _scaling(point)
+        if outstation.event_class(point.kind, point.index):
+            # The deadband in force, in transmitted units like the range
+            # above. A point that reports no events has none to state.
+            items.append(("dnpData", [("deadband", outstation.deadband(point.index))]))
+        return items
 
     def analog_output(point: Point) -> list[Any]:
         operations = (
@@ -923,7 +935,8 @@ def build(
     """The Device Profile document for an outstation and the session serving it.
 
     Args:
-        outstation: What is served: the points, and each one's class and scaling.
+        outstation: What is served: the points, each one's scaling, and the
+            event class and deadband in force for it.
         session: How it is served: addresses, fragment sizes, timeouts, and
             which of time, freezes, controls and events it was given.
         identity: The vendor, device and version strings, and where it listens.
@@ -987,7 +1000,7 @@ def build(
             ),
             ("database", _database(served, facts, outstation)),
             ("implementationTable", _table(implementation(outstation, facts))),
-            ("dataPointsList", _points(served, facts)),
+            ("dataPointsList", _points(served, facts, outstation)),
         ],
     )
     return root

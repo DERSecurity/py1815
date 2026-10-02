@@ -133,7 +133,7 @@ outstation.
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
 | **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. `disabled_offline=False` turns this off. |
 | **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
-| **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The first `poll()` only notes where each point stands. |
+| **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone. |
 | **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear. Call `freeze_all()` on the period the master sets. |
 | **Time** | The session asks for the time until a master writes it, and event and freeze times follow what was written. |
@@ -146,6 +146,76 @@ binding.output(Kind.AO, 87, set_limit, check=lambda _value: (
     CommandStatus.LOCAL if inverter.in_local_mode else None
 ))
 ```
+
+## Setting the event policy
+
+The tables give each point a default event class. Which points report, in which
+class, and how far an analog input moves before it does, is the deployment's to
+decide, and it is decided with data and not in the code that binds the points:
+
+```python
+policy = {
+    "defaults": {
+        "AI": {"class": 2},
+        "BI": {"class": 1},
+    },
+    "points": {
+        "AI537": {"class": 1, "deadband": 500},   # 500 W, in engineering units
+        "AI536": {"deadband": 0.05},              # 0.05 Hz
+        "BI12": {"events": False},                # static only
+        "CTR0": {"class": 2},                     # the class its freezes are logged in
+    },
+}
+
+outstation = DerOutstation(point_map, binding, event_policy=policy)
+```
+
+`defaults` holds a rule for a kind of point (`BI`, `AI` or `CTR`) and `points` a
+rule for one point, named by kind and index. A rule may carry any of three keys:
+
+| Key | Meaning |
+|---|---|
+| `class` | The class the point's events are reported in: 1, 2 or 3. |
+| `events` | `false` turns events off. The point is still read and still answers class 0. `true` turns them back on for one point of a kind whose rule turned them off. |
+| `deadband` | Analog inputs only. How far the value moves before the change is an event, in engineering units; the point's multiplier converts it. |
+
+What is in force for a point is settled in this order:
+
+| | First | Then | Then |
+|---|---|---|---|
+| **Class** | the point's own rule | the rule for its kind | the tables |
+| **Deadband** | the point's own rule | `deadband=` given to `binding.read`, in transmitted units | the rule for its kind |
+
+A rule for a kind moves the points that already report events and leaves the
+others alone: a "supports" input, or a point the tables give no class, stays
+static until it is named. A deadband for a whole kind is the same number of
+engineering units for every analog input, watts and volts alike, so it suits a
+map whose points share a scale and is best left out otherwise. With no deadband
+from anywhere, every change of the transmitted value is an event. A change of
+quality is always an event, whatever the deadband.
+
+The policy is checked when the outstation is built, so a mistake stops startup:
+a point the map does not hold, a class outside 1 to 3, a negative deadband, a
+deadband on anything but an analog input, a rule for an output, or a key that
+is not one of the three. A point the map holds and you have not bound yet is
+accepted, so one policy can cover a binding that is still growing.
+
+The library reads no policy file. The mapping above is what a JSON or YAML
+document loads to, so keep the policy wherever your configuration lives and
+hand over the result:
+
+```python
+import json
+
+with open("event-policy.json", encoding="utf-8") as stream:
+    outstation = DerOutstation(point_map, binding, event_policy=json.load(stream))
+```
+
+`EventPolicy` and `EventRule` are the same thing as dataclasses, for a policy
+built in code, and `EventPolicy.from_mapping` turns the mapping into them.
+`outstation.event_class(kind, index)` and `outstation.deadband(index)` say what
+is in force, and the [Device Profile document](#the-device-profile-document)
+lists both for every point.
 
 ## Curves
 
@@ -198,7 +268,9 @@ document = device_profile.render(device_profile.build(outstation, session, ident
 
 The document is schema version 2.12.00 and is read from the objects it
 describes. The point lists are what the outstation serves, with each point's
-class, class 0 membership, range, scaling and units. The addresses, fragment
+class, class 0 membership, range, scaling and units. The class is the one in
+force, so an event policy shows in it, and each analog input that reports
+events lists its deadband in transmitted units. The addresses, fragment
 sizes, select timeout and event buffer size are the session's. The
 implementation table lists the objects, function codes and qualifiers that
 session answers, so a monitor lists no controls and an outstation with no
