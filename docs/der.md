@@ -256,7 +256,7 @@ master keeps polling and full when it has gone away, so the full figure is the
 one to budget for.
 
 Measured on CPython 3.12, 64-bit Linux, an event costs a little under 300 bytes,
-and all three classes full at the default capacity come to about 1.7 MiB. The
+and all three classes full at the default capacity come to about 1.6 MiB. The
 figure is approximate: it counts what Python allocates for the events and not
 the interpreter around them, and it moves with the Python version. A 32-bit
 build needs roughly half as much, because most of an event is pointers, and the
