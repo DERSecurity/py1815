@@ -108,7 +108,7 @@ plan replaces.
 Class bits from the buffers per **D22**, overflow per **D23**.
 
 **Acceptance:** a buffer with class 2 events sets `IIN1.2` and neither
-neighbour; the bits clear when the events are confirmed away; overflow survives
+neighbor; the bits clear when the events are confirmed away; overflow survives
 until the response reporting it is confirmed.
 
 ### 5. `DISABLE_UNSOLICITED` -- landed

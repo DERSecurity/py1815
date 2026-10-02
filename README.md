@@ -105,7 +105,7 @@ certification body:
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
 | DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
-| Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is catalogued as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, disabling function codes, and the rules for unsolicited responses |
+| Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is cataloged as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, disabling function codes, and the rules for unsolicited responses |
 | Unsolicited responses (optional in the profile) | Implemented, off by default: `py1815-der run --unsolicited`, or `session(unsolicited=True)` |
 | Floating-point variations, device attributes (both optional in the profile), secure authentication | Not implemented |
 
@@ -181,7 +181,7 @@ Two rules, both learned the hard way:
 - **Wire behavior is pinned to literal octets**, not to round trips. A test that builds a frame
   with this library and parses it back agrees with itself even when both halves are wrong --
   through swapped addresses, inverted endianness or a misplaced checksum. The framing tests
-  carry published frames and hand-derived vectors, and the CRC is pinned to its catalogue check
+  carry published frames and hand-derived vectors, and the CRC is pinned to its catalog check
   value.
 - **Interoperability is tested against other implementations**, not against a peer written from
   the same understanding of the specification, which would share its misreadings. CI reads this

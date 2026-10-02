@@ -104,7 +104,7 @@ conformant, and under D7 there is one association, so there is exactly one selec
 configurable timeout, ten seconds by default; it is consumed by the operate that matches it and
 left alone by one that does not, since a master that sent the wrong operate still holds the
 reservation it was granted; a second select replaces the first; and `connection_reset` discards
-it, because a reservation held for an operate on a socket that died must not be honoured over the
+it, because a reservation held for an operate on a socket that died must not be honored over the
 connection that replaced it.
 
 Any fragment other than the operate that spends it also ends the exchange it belongs to. Two
@@ -119,7 +119,7 @@ lower is what let the refusals, the functions that answer nothing, and the unrea
 hold a reservation open across traffic the master had plainly moved on from. Deciding it there
 also means a fragment too damaged to parse clears the selection -- the opposite of what damage
 does to a held event response, and deliberately. Replaying a response costs nothing if the guess
-is wrong, while holding a control reservation open through noise can authorise an operate the
+is wrong, while holding a control reservation open through noise can authorize an operate the
 master never selected.
 
 Two fragments are excluded. An OPERATE, because spending a select is what it is for, and because
@@ -169,7 +169,7 @@ Two limits on that, both found after the first implementation and both places wh
 request received was too generous rather than too strict.
 
 **A select that selected nothing arms nothing.** The reasoning above -- that the master will
-resend what it sent -- only holds while there is an operate the select could authorise. Where
+resend what it sent -- only holds while there is an operate the select could authorize. Where
 every object came back refused there is none, and arming it would let a point the outstation
 declined to select be executed by the operate that followed. One success is enough; the refused
 objects are answered on their own merits again at operate.
@@ -373,7 +373,7 @@ encodings; it now costs none.
 That is what `peek`'s `limit` is for, and it settles the open question about it. The limit is not
 how a count qualifier is answered -- a limit taken before deduplication would come back short -- it
 is how a caller avoids paying for a buffer it has no room for. It has to slice while walking the
-deque rather than after materialising it, or the call still costs the buffer.
+deque rather than after materializing it, or the call still costs the buffer.
 
 This was a cap rather than a split until **D28** made a response a conversation. What survives of it
 is the ceiling itself: every fragment is still fitted to what the master can receive, and a response
@@ -496,7 +496,7 @@ That is a statement about the event half and not about the conversation. Static 
 outside the bound, so a response whose provider answers in blocks can pass sixteen fragments and go
 round the sequence space again -- twenty-eight fragments, with sequences 0 to 15 and then 0 to 11,
 is a legitimate answer. The argument for sixteen is unaffected, because it was always an argument
-about bounding events; what it does not do is characterise the whole exchange. **D34** is where that
+about bounding events; what it does not do is characterize the whole exchange. **D34** is where that
 matters. A full default buffer of a
 thousand events is about seven fragments at the 2,048-octet ceiling, so sixteen leaves room for a
 buffer twice that size while still stopping one that fills as fast as it drains.
@@ -976,7 +976,7 @@ Each layer is testable without the ones above it, and the session does no I/O.
 **Literal octets, not round trips.** A test that encodes with this library and decodes with it
 agrees with itself through swapped addresses, inverted endianness, wrong length semantics or
 misplaced block checksums. The framing suite therefore carries a published frame this
-implementation reproduces octet for octet, a hand-derived populated frame, and the CRC catalogue
+implementation reproduces octet for octet, a hand-derived populated frame, and the CRC catalog
 check value -- the one assertion an implementation that is self-consistently wrong cannot
 satisfy.
 

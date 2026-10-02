@@ -268,7 +268,7 @@ class EventBuffers:
 
         ``limit`` is taken from the front, and taken while the deque is walked
         rather than after. The difference is the whole point of the parameter:
-        materialising the class and slicing it afterwards costs the buffer on
+        materializing the class and slicing it afterwards costs the buffer on
         every call, and ``capacity`` has no upper bound, so a caller asking for
         the few events that fit a response would still pay for all of them.
         """

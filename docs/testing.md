@@ -10,7 +10,7 @@ wrong length semantics, a misplaced block checksum: a round trip is happy with
 all of them.
 
 So the framing suite carries a published frame this implementation reproduces
-octet for octet, a hand-derived populated frame, and the CRC catalogue check
+octet for octet, a hand-derived populated frame, and the CRC catalog check
 value, which is the one assertion an implementation that is self-consistently
 wrong cannot satisfy.
 

@@ -303,7 +303,7 @@ _EVENT_GROUPS: dict[int, type | None] = {
 #:
 #: A range is not among them. Class objects have no indices to range over -- a
 #: class is a reporting priority, not a set of points -- so a start and a stop
-#: name nothing, and honouring one would mean inventing a meaning for it.
+#: name nothing, and honoring one would mean inventing a meaning for it.
 #: The fewest octets an event occupies on the wire in the default variations: a
 #: one-octet index prefix in front of a binary event with time, which is a flag
 #: octet and a six-octet timestamp. The budget divided by the smallest event a
@@ -543,7 +543,7 @@ class _Outstanding:
     #: the objects keeps them alive, so the ids stay theirs for as long as this
     #: selection is outstanding, whether or not the buffer still has them.
     events: tuple[Event, ...]
-    #: The request this answered, octet for octet. A repeat is recognised by
+    #: The request this answered, octet for octet. A repeat is recognized by
     #: what was asked and not by the sequence alone: a master that reuses a
     #: sequence for a different request has not retransmitted anything, and
     #: replaying an event response to, say, an operate would answer a question
@@ -881,7 +881,7 @@ class Session:
         self._max_fragment = max_fragment
         if max_response < RESPONSE_HEADER_SIZE:
             # A response is four octets before it carries anything, so a smaller
-            # ceiling is one nothing can honour -- every answer this outstation
+            # ceiling is one nothing can honor -- every answer this outstation
             # gives would break it, including the refusal it would give instead.
             # Refused at construction, where the number is, rather than logged
             # on each response that overruns it.
@@ -1072,7 +1072,7 @@ class Session:
 
         An armed select is the exception among the things that could survive,
         and is discarded here per D12. It is a reservation held for the operate
-        that was about to follow on the socket that just died; honouring it
+        that was about to follow on the socket that just died; honoring it
         across a reconnect would let an operate arrive over a connection the
         select never crossed.
 
@@ -1668,7 +1668,7 @@ class Session:
             # opposite of what a damaged fragment does to the outstanding event
             # response, and deliberately: replaying a response costs nothing if
             # the guess is wrong, while holding a control reservation open
-            # through noise can authorise an operate the master never selected.
+            # through noise can authorize an operate the master never selected.
             # An unreadable fragment claiming to be an OPERATE keeps it, which
             # is the corrupted-retransmission case worth keeping it for.
             self._select = None
@@ -2155,7 +2155,7 @@ class Session:
                 # succeeded, so that the operate a master sends next -- which is
                 # the request it already sent -- still matches. That reasoning
                 # runs out when nothing succeeded: there is no operate this
-                # select could authorise, and arming it would let a point the
+                # select could authorize, and arming it would let a point the
                 # outstation refused to select be executed by the operate that
                 # followed.
                 key = _match_key(controls)
@@ -2269,7 +2269,7 @@ class Session:
         if unusable:
             # Refused rather than answered with everything the class holds. A
             # master that asked for a selection and received the whole buffer
-            # has been told its request was honoured when it was ignored, which
+            # has been told its request was honored when it was ignored, which
             # is the shape of failure D9 exists to rule out.
             logger.info(
                 "dnp3: class read refused: qualifier 0x%02X selects nothing on a class",
