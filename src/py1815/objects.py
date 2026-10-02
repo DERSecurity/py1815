@@ -414,6 +414,19 @@ def event_block(
     return header + bytes(body)
 
 
+def indexed_block(
+    group: int, variation: int, items: Sequence[tuple[int, bytes]], *, qualifier: QualifierCode
+) -> bytes:
+    """An object header and its objects, each prefixed by its own index.
+
+    The answer to a read that named its points by index. The layout is the
+    one events use, for the same reason: what is being sent is a chosen set
+    and not a run. The qualifier is the request's and is not narrowed, since a
+    master that asked in sixteen-bit indices is answered in them.
+    """
+    return event_block(group, variation, items, qualifier=qualifier)
+
+
 #: Which static variation each event variation encodes its value as.
 _EVENT_TO_STATIC = {
     AnalogEventVariation.INT32: AnalogVariation.INT32_WITH_FLAG,

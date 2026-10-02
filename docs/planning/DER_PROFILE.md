@@ -53,7 +53,7 @@ synchronization is settled by D44 in [DESIGN.md](../DESIGN.md), and the one on f
 D45: the functions are served, and the profile's own periodic freeze is the caller's timer.
 
 Also not built: what the aggregator's first deployment asks of the builder beyond the nine
-steps. Those are items G1, G2, G5 and G6, under
+steps. Those are items G1, G2, G5, G6 and G10, under
 [Needs from a single-unit gateway](#needs-from-a-single-unit-gateway) below. The rest of
 that deployment's list is about the outstation and not the profile, and is in
 [GATEWAY.md](GATEWAY.md).
@@ -526,7 +526,7 @@ companion tables, reconcile, record deltas) is what step 2 mechanizes.
 
 The aggregator's first use of the builder is narrower than the fleet shape its plan
 describes, and it asks for things the nine steps do not. [GATEWAY.md](GATEWAY.md) describes
-the deployment and carries the whole list, G1 through G9. The four items below are the
+the deployment and carries the whole list, G1 through G10. The five items below are the
 ones that land in `py1815.profile`, so they are tracked here, once. Tick an item when the
 missing part is merged and tested.
 
@@ -569,6 +569,14 @@ missing part is merged and tested.
   a point added in the source and forgotten here is visible; and a check that adding a
   binding entry is the whole of the change, with the device profile document following
   from the rebuild.
+
+- [x] **G10. Static groups read by index.** A master nobody has identified may pick a few
+  scattered points with an index-prefixed read (qualifiers 0x17 and 0x28) instead of a
+  range. No subset level requires an outstation to accept one, and the builder refused it
+  as an unknown object. *Built:* a read by index is answered by index, in the order asked
+  and the qualifier asked, split at the block budget like a range; an index that is not a
+  served point is a parameter error for the whole header (D63 in
+  [DESIGN.md](../DESIGN.md)); and the device profile document lists the qualifiers.
 
 One step the deployment does **not** need: the layout. One unit needs no `stride` or
 `concatenate`, so step 6 is not on its path and stays where the fleet shape needs it.

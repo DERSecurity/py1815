@@ -128,7 +128,8 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
     rows: list[Row] = []
 
     def static(group: int, default: str, variations: dict[int, str]) -> None:
-        select = tuple(_RANGE + _ALL)
+        # A read by index is answered by index, and every other read by range.
+        select = tuple(_RANGE + _ALL + _INDEXED)
         rows.append(Row(group, 0, f"{default} - any variation", request=(READ, select)))
         for variation, description in variations.items():
             rows.append(
@@ -137,7 +138,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     variation,
                     description,
                     request=(READ, select),
-                    response=(RESPONSE, tuple(_RANGE)),
+                    response=(RESPONSE, tuple(_RANGE + _INDEXED)),
                 )
             )
 

@@ -199,6 +199,129 @@ class TestReadingByGroup:
         assert _values(response)[(30, 1)] == 1500
 
 
+def _named(response: bytes) -> list[tuple[int, int, float]]:
+    """The index-prefixed objects of a response, in the order sent."""
+    _, indexed = parse_objects(response[4:])
+    return [(value.group, value.index, value.value) for value in indexed]
+
+
+INDEX_8 = QualifierCode.UINT8_COUNT_UINT8_INDEX
+INDEX_16 = QualifierCode.UINT16_COUNT_UINT16_INDEX
+
+
+class TestReadingByIndex:
+    """Points named one at a time. No subset level requires it; a master may still ask."""
+
+    def test_the_points_named_come_back_in_the_order_asked(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([30, 1, INDEX_8, 2, 2, 1]))
+        assert not response[3], "nothing is refused"
+        assert _named(response) == [(30, 2, 2400), (30, 1, 1500)]
+        static, _ = parse_objects(response[4:])
+        assert not static, "an indexed read is not answered with a range"
+
+    def test_the_answer_uses_the_qualifier_that_asked(self):
+        outstation, _ = _built()
+        narrow = _read(outstation.session(), bytes([30, 1, INDEX_8, 1, 1]))
+        assert narrow[4:8] == bytes([30, 1, INDEX_8, 1])
+        wide = _read(outstation.session(), bytes([30, 1, INDEX_16]) + struct.pack("<HH", 1, 1))
+        assert wide[4:9] == bytes([30, 1, INDEX_16]) + struct.pack("<H", 1), "not narrowed"
+        assert _named(wide) == [(30, 1, 1500)]
+
+    def test_points_either_side_of_a_gap_are_one_request(self):
+        """What a range cannot do without sending everything between."""
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([20, 0, INDEX_8, 2, 0, 5]))
+        assert _named(response) == [(20, 0, 10), (20, 5, 30)]
+
+    def test_variation_zero_takes_the_default(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([30, 0, INDEX_8, 1, 1]))
+        assert response[4:6] == bytes([30, 1])
+
+    def test_a_point_named_twice_is_sent_twice(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([30, 1, INDEX_8, 2, 1, 1]))
+        assert _named(response) == [(30, 1, 1500), (30, 1, 1500)]
+
+    def test_output_status_is_read_by_index(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([10, 0, INDEX_8, 1, 0]))
+        assert [(group, index) for group, index, _ in _named(response)] == [(10, 0)]
+
+    def test_an_index_that_is_not_a_point_is_a_parameter_error(self):
+        """A range may cross a gap. An index says a point is there, and it is not."""
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([20, 0, INDEX_8, 2, 0, 3]))
+        assert response[3] & IIN2Bit.PARAM_ERROR
+        assert not response[3] & IIN2Bit.OBJECT_UNKNOWN
+        assert len(response) == 4, "and the point that does exist is not sent on its own"
+
+    def test_a_read_that_names_no_index_is_a_parameter_error(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([30, 1, INDEX_8, 0]))
+        assert response[3] & IIN2Bit.PARAM_ERROR
+
+    def test_an_index_into_a_kind_with_no_points_is_an_unknown_object(self):
+        point_map = load.resolve(small(), units(0))
+        session = DerOutstation(point_map, Binding(), strict=False).session()
+        response = _read(session, bytes([20, 0, INDEX_8, 1, 0]))
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
+
+    def test_a_variation_not_offered_is_still_an_unknown_object(self):
+        outstation, _ = _built()
+        response = _read(outstation.session(), bytes([30, 5, INDEX_8, 1, 1]))
+        assert response[3] & IIN2Bit.OBJECT_UNKNOWN
+
+    def test_a_range_and_an_index_list_share_one_request(self):
+        outstation, _ = _built()
+        response = _read(
+            outstation.session(), bytes([30, 1, 0x00, 1, 2]), bytes([20, 0, INDEX_8, 1, 5])
+        )
+        assert set(_values(response)) == {(30, 1), (30, 2)}
+        assert _named(response) == [(20, 5, 30)]
+
+    def test_a_point_that_cannot_be_trusted_takes_the_variation_with_flags(self):
+        """As in a range: asking for the compact form never hides a bad value."""
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.read(AI, 1, lambda: 1500.0)
+        binding.read(AI, 2, lambda: Reading(240.0, Quality.COMM_LOST))
+        outstation = DerOutstation(point_map, binding, strict=False)
+        request = bytes([0xC0, FunctionCode.READ, 30, 3, INDEX_8, 2, 1, 2])
+        blocks = outstation.read_blocks(_headers_of(request))
+        assert [block[:4] for block in blocks] == [
+            bytes([30, 3, INDEX_8, 1]),
+            bytes([30, 1, INDEX_8, 1]),
+        ], "a block holds one variation, so the flagged point starts its own"
+
+    def test_a_long_list_is_split_into_blocks_that_fit(self):
+        rows = [analog(f"Point {index}", index, event_class=3) for index in range(400)]
+        point_map = load.resolve(document({"AI": rows}), units(0))
+        binding = Binding()
+        for index in range(400):
+            binding.read(AI, index, lambda index=index: float(index))
+        outstation = DerOutstation(point_map, binding, block_octets=256)
+        asked = list(range(399, 99, -3))
+        request = (
+            bytes([0xC0, FunctionCode.READ, 30, 1, INDEX_16])
+            + struct.pack("<H", len(asked))
+            + struct.pack(f"<{len(asked)}H", *asked)
+        )
+        blocks = outstation.read_blocks(_headers_of(request))
+        assert len(blocks) > 1
+        assert all(len(block) <= 256 for block in blocks)
+        _, indexed = parse_objects(b"".join(blocks))
+        assert [value.index for value in indexed] == asked, "nothing lost or reordered at the seams"
+        assert [value.value for value in indexed] == asked
+
+
+def _headers_of(request: bytes):
+    from py1815.application import parse_request
+
+    return parse_request(request).headers
+
+
 class TestQuality:
     def _one(self, reading) -> int | None:
         point_map = load.resolve(small(), units(0))

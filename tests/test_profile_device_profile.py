@@ -96,6 +96,10 @@ def _read_header(outstation: DerOutstation, row: Row, qualifier: int) -> bytes:
     if qualifier == 0x08:
         return head + struct.pack("<H", 1)
     index = _index(outstation, row.group)
+    if qualifier == 0x17:
+        return head + bytes([1, index])
+    if qualifier == 0x28:
+        return head + struct.pack("<HH", 1, index)
     return head + (bytes([index, index]) if qualifier == 0x00 else struct.pack("<HH", index, index))
 
 
@@ -670,3 +674,31 @@ class TestTheCommand:
         pytest.importorskip("xmlschema")
         assert cli.main(["profile", "--validate", str(SCHEMA)]) == 0
         assert "valid against" in capsys.readouterr().err
+
+
+class TestAReadByIndexIsDeclaredAndAnswered:
+    """The table says a static group may be read by index; the session agrees."""
+
+    def test_every_static_row_lists_the_index_qualifiers(self, simulation):
+        session = simulation.outstation.session()
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        static = [
+            row
+            for row in table.rows
+            if row.group in (1, 10, 20, 21, 30, 40) and row.request and row.request[0] == 1
+        ]
+        assert static
+        for row in static:
+            assert {0x17, 0x28} <= set(row.request[1]), row
+            if row.response is not None:
+                assert {0x17, 0x28} <= set(row.response[1]), row
+
+    def test_the_answer_to_an_indexed_read_uses_a_qualifier_the_row_lists(self, simulation):
+        session = simulation.outstation.session()
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        sender = Sender(session)
+        row = next(r for r in table.rows if r.group == 30 and r.variation == 1)
+        for qualifier in (0x17, 0x28):
+            response = sender.send(1, _read_header(simulation.outstation, row, qualifier))
+            assert not _refused(response)
+            assert response[6] == qualifier and qualifier in row.response[1]
