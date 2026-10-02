@@ -304,9 +304,13 @@ class ReferenceDer:
         self.started = True
         return None
 
-    def _stop(self, value: float) -> None:
-        if value:
-            self.started = False
+    def _stop(self, value: float) -> CommandStatus | None:
+        if not value:
+            return None
+        if not self._on(BO_PERMIT_STOP):
+            return CommandStatus.BLOCKED
+        self.started = False
+        return None
 
     def _bind_state(self, binding: Binding) -> None:
         # The lockout itself stays commandable while locked out: it is how a

@@ -44,3 +44,10 @@ UserData.xslt
 blank-device-profile.xml
 dnp_xsl.bat
 dnp_xsl.ps1
+
+# And everything else placed in schema/, whatever it is called. The names above
+# are the ones one release of the package shipped; the next added an examples
+# archive, release notes and a specification in another format, and a list of
+# names is always one release behind. The directory holds one file of ours.
+schema/*
+!schema/README.md
