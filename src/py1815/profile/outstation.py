@@ -63,6 +63,7 @@ from py1815.objects import (
     encode_binary,
     encode_counter,
     encode_frozen_counter,
+    indexed_block,
 )
 from py1815.profile.binding import Binding, Output, Quality, Reader, Reading
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
@@ -120,6 +121,13 @@ _GROUP_KINDS = {
 _CLASS_0_GROUPS = (GROUP_BINARY_INPUT, GROUP_COUNTER, GROUP_FROZEN_COUNTER, GROUP_ANALOG_INPUT)
 
 _RANGES = (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
+
+#: The qualifiers that name points one at a time, and the octets each spends
+#: on a count and on an index.
+_INDEXED = {
+    QualifierCode.UINT8_COUNT_UINT8_INDEX: 1,
+    QualifierCode.UINT16_COUNT_UINT16_INDEX: 2,
+}
 
 #: The class frozen counter events report in where the tables do not say.
 _DEFAULT_FROZEN_CLASS = EventClass.CLASS_3
@@ -410,7 +418,13 @@ class DerOutstation:
                     points = [p for p in self._served[_GROUP_KINDS[group]] if p.in_class_0]
                     blocks += self._ranges(group, self._defaults[group], points)
                 continue
-            blocks += self._ranges(header.group, self._variation(header), self._selected(header))
+            variation = self._variation(header)
+            if header.qualifier in _INDEXED:
+                blocks += self._indexed(
+                    header.group, variation, self._named(header), header.qualifier
+                )
+            else:
+                blocks += self._ranges(header.group, variation, self._selected(header))
         return blocks
 
     def _variation(self, header: ObjectHeader) -> int:
@@ -422,6 +436,27 @@ class DerOutstation:
         if header.variation not in served:
             raise UnknownObject(f"group {header.group} variation {header.variation} is not offered")
         return header.variation
+
+    def _named(self, header: ObjectHeader) -> list[Point]:
+        """The served points a read names one index at a time, in the order named.
+
+        Not required of an outstation at any subset level, and answered
+        because a master picking a few scattered points has no better way to
+        ask. Every index has to be a point this outstation serves. A range is
+        allowed to cross a gap, since a master cannot know where the gaps
+        are; an index is a statement that a point is there, and one that is
+        not there is the master's error to hear about (D63).
+        """
+        points = self._served[_GROUP_KINDS[header.group]]
+        if not points:
+            raise UnknownObject(f"group {header.group} holds no points")
+        if not header.indices:
+            raise ParameterError(f"an indexed read of group {header.group} names no index")
+        by_index = {point.index: point for point in points}
+        absent = sorted({index for index in header.indices if index not in by_index})
+        if absent:
+            raise ParameterError(f"group {header.group} has no point at index {absent[0]}")
+        return [by_index[index] for index in header.indices]
 
     def _selected(self, header: ObjectHeader) -> list[Point]:
         """The served points a static read header names."""
@@ -505,6 +540,50 @@ class DerOutstation:
             # Never written and given no initial value: nothing to report yet.
             return None, _QUALITY_FLAGS[Quality.NEVER_READ]
         return value, _QUALITY_FLAGS[Quality.GOOD]
+
+    def _indexed(
+        self, group: int, variation: int, points: Iterable[Point], qualifier: QualifierCode
+    ) -> list[bytes]:
+        """Points as index-prefixed objects, in the order given, split at the block budget.
+
+        The counterpart of :meth:`_ranges` for a read that named indices. A
+        block holds one variation, so a point that takes a different one from
+        the point before it starts a new block, exactly as a range does.
+
+        Where it differs is a point with nothing to report, which today is a
+        frozen counter that has never been frozen. A range passes over it. A
+        read that named it is refused, for the reason an index that is not a
+        point is refused: leaving it out would answer with clean indications
+        and fewer objects than were asked for (D63).
+        """
+        prefix = _INDEXED[qualifier]
+        # Group, variation and qualifier, then a count as wide as an index.
+        header = 3 + prefix
+        blocks: list[bytes] = []
+        current = variation
+        items: list[tuple[int, bytes]] = []
+        size = 0
+
+        def flush() -> None:
+            nonlocal items, size
+            if items:
+                blocks.append(indexed_block(group, current, items, qualifier=qualifier))
+            items, size = [], 0
+
+        for point in points:
+            result = self._encode(group, variation, point)
+            if result is None:
+                raise ParameterError(f"group {group} has nothing to report at index {point.index}")
+            taken, encoded = result
+            cost = prefix + len(encoded)
+            if items and (taken != current or size + cost + header > self._block_octets):
+                flush()
+            if not items:
+                current = taken
+            items.append((point.index, encoded))
+            size += cost
+        flush()
+        return blocks
 
     def _ranges(self, group: int, variation: int, points: Iterable[Point]) -> list[bytes]:
         """Points as object ranges: split at index gaps and at the block budget.

@@ -818,6 +818,30 @@ leaves out what is disabled. An outstation with no use for cold restart, or whos
 set some other way, is safer not accepting the function than accepting and ignoring it.
 Confirm cannot be disabled.
 
+**D63 -- A static group may be read by index, and every index named has to exist.** The
+subset tables list a read with an index-prefixed qualifier as a request a master may send
+and require it of an outstation at no level, so refusing it was conformant. It is answered
+all the same: the profile's points sit in blocks with gaps between them, and a master that
+wants three points from three blocks otherwise sends three ranges or reads everything
+between. The answer is the objects named, in the order named, each behind its index, in
+the qualifier the request used and not a narrower one, for the reason **D14** gives for an
+echo. A point named twice is sent twice. A block holds one variation, so a point whose
+flags force the flagged variation starts a block of its own, exactly as in a range.
+
+An index that is not a served point refuses the whole header with `PARAM_ERROR`, where a
+range is allowed to cross a gap and return what exists. The difference is deliberate. A
+range is a master saying "whatever is in here", and it cannot know where the gaps are. An
+index is a master saying a point is there, so a wrong one is an error in what the master
+believes about the device, and answering with the points that do exist would bury it in a
+response that looks complete. A read that names no index is the same error. So is one
+that names a point with nothing to report, which today means a frozen counter that has
+never been frozen: a range passes over it, and a read that named it and got back clean
+indications and no object could not tell "never frozen" from "answered". The object is
+known in every one of these cases, so the indication is the parameter one and not
+`OBJECT_UNKNOWN`.
+*Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
+answer, and has the range read for that.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

@@ -49,7 +49,7 @@ Not in scope, and recorded so it is not built for this:
 
 ## The list
 
-Tick an item when the missing part is merged and tested. G1, G2, G5 and G6 land in
+Tick an item when the missing part is merged and tested. G1, G2, G5, G6 and G10 land in
 `py1815.profile` and are tracked in [DER_PROFILE.md](DER_PROFILE.md), where the builder's
 plan is; they are summarized here and ticked there. The others are tracked here.
 
@@ -61,6 +61,7 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   differ from what the master asked for.
 - **G5.** Event class and deadband set by the deployment, as data, per point.
 - **G6.** A partial map that grows, with a report of what is bound against the profile.
+- **G10.** Static groups read by index, for a master that picks scattered points. Built.
 
 **In the outstation and the project:**
 
@@ -121,7 +122,7 @@ closes. G7 follows the roadmap and is not gated on the rest.
 
 ## References
 
-- [DER_PROFILE.md](DER_PROFILE.md), for the builder and items G1, G2, G5 and G6
+- [DER_PROFILE.md](DER_PROFILE.md), for the builder and items G1, G2, G5, G6 and G10
 - [EVENTS.md](EVENTS.md) and [CONTROLS.md](CONTROLS.md), whose mechanisms G2, G3 and G5
   build on
 - [DESIGN.md](../DESIGN.md): the decision on one master association per session, the
