@@ -72,6 +72,18 @@ class TestCellValues:
         )
         assert _rows(path) == [("one",)]
 
+    @pytest.mark.parametrize("index", ["2", "-1", "1.5", "one"])
+    def test_a_shared_string_that_is_not_there_is_a_workbook_error(self, tmp_path, index):
+        """Past the end, before the start, and not a whole number at all."""
+        data = f'<row r="1"><c r="A1" t="s"><v>{index}</v></c></row>'
+        path = _workbook(
+            tmp_path / "w.xlsx",
+            {"S": data},
+            strings=["<si><t>zero</t></si>", "<si><t>one</t></si>"],
+        )
+        with pytest.raises(xlsx.WorkbookError, match="shared string"):
+            _rows(path)
+
     def test_rich_text_runs_are_joined_and_phonetic_runs_are_not(self, tmp_path):
         item = "<si><r><t>Volt</t></r><r><t>-Var</t></r><rPh><t>ignored</t></rPh></si>"
         data = '<row r="1"><c r="A1" t="s"><v>0</v></c></row>'

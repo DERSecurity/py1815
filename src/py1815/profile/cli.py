@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import io
 import logging
+import math
 import pathlib
 import signal
 import sys
@@ -65,6 +66,12 @@ def _workbook_from_archive(data: bytes) -> tuple[str, bytes]:
         tables = [name for name in names if "point tables" in name.lower()] or names
         if len(tables) != 1:
             raise OSError(f"expected one workbook in the download and found {len(names)}")
+        # The cap on the download bounds the archive, not what it inflates to:
+        # a small archive can hold a member of any size. The declared size is
+        # the bound that matters, because the reader stops at it: a member
+        # that inflates past its declaration fails its checksum instead.
+        if archive.getinfo(tables[0]).file_size > _MAX_DOWNLOAD:
+            raise OSError(f"the workbook in the download exceeds {_MAX_DOWNLOAD} octets")
         return pathlib.PurePosixPath(tables[0]).name, archive.read(tables[0])
 
 
@@ -121,7 +128,8 @@ def _composition(args: argparse.Namespace) -> Composition:
 def _load(args: argparse.Namespace) -> PointMap | None:
     try:
         return load.load(args.tables, _composition(args))
-    except MapError as error:
+    except (MapError, ValueError) as error:
+        # A composition refuses a count it cannot mean, and says which.
         print(str(error), file=sys.stderr)
         return None
 
@@ -293,6 +301,32 @@ def _profile(args: argparse.Namespace) -> int:
     return _validate(document, args.validate) if args.validate is not None else 0
 
 
+def _count(text: str) -> int:
+    """An equipment count from the command line: a whole number, not below zero."""
+    try:
+        number = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"{number} is below zero; a count cannot be negative")
+    return number
+
+
+def _interval(text: str) -> float:
+    """A positive, finite number of seconds.
+
+    Zero or less would have the run loop sleep for no time at all and spin a
+    processor; not-a-number and infinity are no interval either.
+    """
+    try:
+        seconds = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError(f"{text} is not a positive number of seconds")
+    return seconds
+
+
 def _add_map_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--tables",
@@ -308,7 +342,7 @@ def _add_map_options(parser: argparse.ArgumentParser) -> None:
         ("batteries", "batteries"),
     ):
         parser.add_argument(
-            f"--{name}", type=int, default=0, help=f"equipment blocks to resolve for {what}"
+            f"--{name}", type=_count, default=0, help=f"equipment blocks to resolve for {what}"
         )
     parser.add_argument("--seed", type=int, default=0, help="seed for the simulation's noise")
 
@@ -344,7 +378,7 @@ def _parser() -> argparse.ArgumentParser:
         default=f"127.0.0.1:{DEFAULT_PORT}",
         help="host:port to listen on (default: loopback only)",
     )
-    run.add_argument("--tick", type=float, default=1.0, help="seconds between simulation steps")
+    run.add_argument("--tick", type=_interval, default=1.0, help="seconds between simulation steps")
     run.set_defaults(handler=_run)
 
     points = commands.add_parser("points", help="list the points the simulated DER serves")
