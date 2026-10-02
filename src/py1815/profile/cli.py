@@ -150,7 +150,9 @@ async def _serve(args: argparse.Namespace, point_map: PointMap) -> None:
     simulation = der.build(point_map, seed=args.seed)
     outstation = simulation.outstation
     session = outstation.session(
-        outstation_address=args.outstation_address, master_address=args.master_address
+        outstation_address=args.outstation_address,
+        master_address=args.master_address,
+        unsolicited=args.unsolicited,
     )
     server = OutstationServer(session, bind=args.bind)
     await server.start()
@@ -169,6 +171,9 @@ async def _serve(args: argparse.Namespace, point_map: PointMap) -> None:
             now = time.monotonic()
             simulation.advance(now - last)
             last = now
+            # What the step just buffered is reported now, if a master has
+            # enabled its class, and not at the listener's next look.
+            server.notify()
     finally:
         await server.stop()
 
@@ -274,7 +279,9 @@ def _profile(args: argparse.Namespace) -> int:
         return 1
     outstation = der.build(point_map, seed=args.seed).outstation
     session = outstation.session(
-        outstation_address=args.outstation_address, master_address=args.master_address
+        outstation_address=args.outstation_address,
+        master_address=args.master_address,
+        unsolicited=args.unsolicited,
     )
     host, _, port = args.bind.rpartition(":")
     identity = device_profile.Identity(
@@ -352,6 +359,15 @@ def _add_link_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--master-address", type=int, default=1)
 
 
+def _add_unsolicited_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--unsolicited",
+        action="store_true",
+        help="send unsolicited responses: announce a restart, and report the events "
+        "of each class the master enables (default: report only when polled)",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="py1815-der", description="An IEEE 1815.2 DER outstation over DNP3."
@@ -379,6 +395,7 @@ def _parser() -> argparse.ArgumentParser:
         help="host:port to listen on (default: loopback only)",
     )
     run.add_argument("--tick", type=_interval, default=1.0, help="seconds between simulation steps")
+    _add_unsolicited_option(run)
     run.set_defaults(handler=_run)
 
     points = commands.add_parser("points", help="list the points the simulated DER serves")
@@ -399,6 +416,7 @@ def _parser() -> argparse.ArgumentParser:
     profile.add_argument("--hardware-version", default="Not applicable (software)")
     profile.add_argument("--software-version", default="", help="default: this library's version")
     profile.add_argument("--author", default="py1815")
+    _add_unsolicited_option(profile)
     profile.add_argument(
         "--validate",
         type=pathlib.Path,

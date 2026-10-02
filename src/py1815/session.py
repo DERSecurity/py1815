@@ -10,6 +10,15 @@ Kept free of I/O on purpose. :meth:`Session.receive` takes the octets that
 arrived and returns the octets to send, so every rule below is testable against
 literal frames with no listener, no TLS and no event loop.
 
+An outstation that reports without being asked needs a second way in, since
+nothing arrives to answer. :meth:`Session.initiate` is that: the owner calls
+it, and it returns the octets that are due by the clock or by what has been
+recorded, which is usually none. :meth:`Session.initiate_after` says how long
+until it is worth calling again. The session still starts no timer and writes
+to nothing. Unsolicited responses are off unless a session is built with
+them on, and a session built without them answers exactly as it did before
+they existed (D69 to D71 in the design notes).
+
 **What it refuses, it refuses out loud.** A control function gets a response
 carrying IIN2.0 rather than silence, because a master that times out learns
 nothing and retries.
@@ -48,6 +57,7 @@ from typing import Protocol, runtime_checkable
 from py1815 import control as control_objects
 from py1815 import link
 from py1815.application import (
+    CLASS_GROUP,
     CON_MASK,
     FIN_MASK,
     FIR_MASK,
@@ -235,6 +245,30 @@ DEFAULT_SELECT_TIMEOUT = 10.0
 #: the same as it returning None.
 _EVENT_CLASSES = frozenset({EventClass.CLASS_1, EventClass.CLASS_2, EventClass.CLASS_3})
 
+#: The class object, group 60, that names each event class: variation 2 is
+#: class 1, and so on. What a request to enable or disable unsolicited
+#: responses carries, and what an unsolicited response selects its events by.
+_CLASS_VARIATIONS = {
+    EventClass.CLASS_1: 2,
+    EventClass.CLASS_2: 3,
+    EventClass.CLASS_3: 4,
+}
+
+#: How long an unsolicited response waits to be confirmed before it is sent
+#: again. The standard has the setting cover at least one second to one
+#: minute and names no default; five seconds is in common use.
+DEFAULT_UNSOLICITED_CONFIRM_TIMEOUT = 5.0
+
+#: How many times an unsolicited response carrying events is sent again when
+#: it is not confirmed, where None is without limit. Without limit is what
+#: the DNP Users Group's guidance on default settings recommends (AN2015-001),
+#: on the grounds that delivering what it reports is the outstation's job.
+DEFAULT_UNSOLICITED_RETRIES: int | None = None
+
+#: How long after the retries of one unsolicited response are spent before
+#: another is started with nothing else to prompt it.
+DEFAULT_UNSOLICITED_RESUME = 60.0
+
 #: Which indication bit says a class has something waiting.
 _CLASS_BITS = {
     EventClass.CLASS_1: IINBit.CLASS_1_EVENTS,
@@ -269,7 +303,7 @@ _EVENT_GROUPS: dict[int, type | None] = {
 #:
 #: A range is not among them. Class objects have no indices to range over -- a
 #: class is a reporting priority, not a set of points -- so a start and a stop
-#: name nothing, and honouring one would mean inventing a meaning for it.
+#: name nothing, and honoring one would mean inventing a meaning for it.
 #: The fewest octets an event occupies on the wire in the default variations: a
 #: one-octet index prefix in front of a binary event with time, which is a flag
 #: octet and a six-octet timestamp. The budget divided by the smallest event a
@@ -455,6 +489,18 @@ class SessionFacts:
     broadcast_controls: bool = False
     #: Function codes turned off by configuration, and refused as unsupported.
     disabled_functions: frozenset[int] = frozenset()
+    #: Whether unsolicited responses are on: the initial null response is
+    #: sent, and a master may enable reporting by class.
+    unsolicited: bool = False
+    #: Seconds an unsolicited response waits to be confirmed before it is
+    #: sent again.
+    unsolicited_confirm_timeout: float = DEFAULT_UNSOLICITED_CONFIRM_TIMEOUT
+    #: Times an unsolicited response carrying events is sent again, or None
+    #: for no limit.
+    unsolicited_retries: int | None = DEFAULT_UNSOLICITED_RETRIES
+    #: Seconds after the retries are spent before reporting starts again
+    #: unprompted, or None for never.
+    unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME
 
 
 class FreezeProvider(Protocol):
@@ -497,7 +543,7 @@ class _Outstanding:
     #: the objects keeps them alive, so the ids stay theirs for as long as this
     #: selection is outstanding, whether or not the buffer still has them.
     events: tuple[Event, ...]
-    #: The request this answered, octet for octet. A repeat is recognised by
+    #: The request this answered, octet for octet. A repeat is recognized by
     #: what was asked and not by the sequence alone: a master that reuses a
     #: sequence for a different request has not retransmitted anything, and
     #: replaying an event response to, say, an operate would answer a question
@@ -518,6 +564,41 @@ class _Outstanding:
     at: float = 0.0
     #: Whether it told the master a broadcast had been received, in the mode
     #: where the indication stands until that telling is confirmed.
+    broadcast: bool = False
+
+
+@dataclass(frozen=True)
+class _Unsolicited:
+    """An unsolicited response, waiting for the master to confirm it.
+
+    Kept apart from :class:`_Outstanding` because the two are separate
+    exchanges with separate sequence numbers, and both can be waiting at
+    once: a request that is not a read is answered while an unsolicited
+    response is still unconfirmed, and that answer may ask for a confirmation
+    of its own.
+    """
+
+    #: The unsolicited sequence it went out under. Its confirmation carries
+    #: the unsolicited bit and this number, and no other retires it.
+    sequence: int
+    #: The events it carried, held as :class:`_Outstanding` holds them and
+    #: for the same reason. Empty for the initial null response.
+    events: tuple[Event, ...]
+    #: The response as it was sent. A retry that would be the same octet for
+    #: octet goes out under the same sequence number; one that differs takes
+    #: the next (D70).
+    fragment: bytes
+    #: The overflow generation it reported, or None if it carried no
+    #: overflow bit, as on a solicited response (D23).
+    reported_overflow: int | None
+    #: When it was last sent, by the session's clock.
+    at: float
+    #: How many times it has been sent again since the first.
+    retries: int
+    #: Whether it is the null response that announces a restart, which is
+    #: retried without limit and until whose confirmation no events are sent.
+    null: bool
+    #: Whether it told the master a broadcast had been received.
     broadcast: bool = False
 
 
@@ -647,6 +728,10 @@ class Session:
         restart_handler: Callable[[], int] | None = None,
         broadcast_controls: bool = False,
         disabled_functions: Iterable[int] = (),
+        unsolicited: bool = False,
+        unsolicited_confirm_timeout: float = DEFAULT_UNSOLICITED_CONFIRM_TIMEOUT,
+        unsolicited_retries: int | None = DEFAULT_UNSOLICITED_RETRIES,
+        unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME,
     ) -> None:
         """
         Args:
@@ -735,6 +820,34 @@ class Session:
                 broadcast. An outstation with no use for a function is
                 safer not accepting it. Confirm cannot be disabled; a
                 response that asks for confirmation would never be done.
+            unsolicited: Whether this outstation reports without being
+                asked. Off by default, and off means off: nothing is sent
+                that was not requested, a request to enable unsolicited
+                responses is refused as unsupported, and every answer is
+                what it was before the option existed. On, the session
+                announces a restart with a null unsolicited response,
+                accepts a master enabling and disabling reporting for
+                classes 1 to 3, and reports the events of an enabled class
+                as they are buffered. None of that is sent by the session
+                itself: its owner calls :meth:`initiate` and writes what
+                comes back, which :class:`~py1815.server.OutstationServer`
+                does. Turn it on for a master that confirms unsolicited
+                responses. While one is unconfirmed a read is held back,
+                so a master that ignores them has every read answered up
+                to ``unsolicited_confirm_timeout`` late (D71).
+            unsolicited_confirm_timeout: Seconds an unsolicited response
+                waits for its confirmation before it is sent again.
+            unsolicited_retries: How many times an unsolicited response
+                carrying events is sent again when it is not confirmed.
+                None, the default, is without limit. The null response
+                that announces a restart is retried without limit whatever
+                this says.
+            unsolicited_resume: Seconds after the retries are spent before
+                reporting is tried again with nothing to prompt it. A new
+                event, a request from the master or a new connection
+                starts it again sooner. None leaves it to those three.
+                The events are kept either way, and a class poll reads
+                them.
         """
         self._provider = provider
         self._controls = control_provider
@@ -768,7 +881,7 @@ class Session:
         self._max_fragment = max_fragment
         if max_response < RESPONSE_HEADER_SIZE:
             # A response is four octets before it carries anything, so a smaller
-            # ceiling is one nothing can honour -- every answer this outstation
+            # ceiling is one nothing can honor -- every answer this outstation
             # gives would break it, including the refusal it would give instead.
             # Refused at construction, where the number is, rather than logged
             # on each response that overruns it.
@@ -818,6 +931,57 @@ class Session:
         #: A select being repeated, held across the reset every request makes.
         self._repeated_select: _ArmedSelect | None = None
 
+        if unsolicited:
+            if confirm_timeout is None:
+                # Nothing unsolicited is sent while a solicited response
+                # waits to be confirmed. With no limit on that wait, one
+                # master that never confirms a read would silence
+                # unsolicited reporting for good.
+                raise ValueError(
+                    "unsolicited responses wait for a solicited confirmation to arrive or "
+                    "time out, so they need a confirm_timeout"
+                )
+            if not unsolicited_confirm_timeout > 0:
+                raise ValueError(
+                    f"unsolicited_confirm_timeout is {unsolicited_confirm_timeout}; "
+                    "a retry needs a wait before it"
+                )
+            if unsolicited_retries is not None and unsolicited_retries < 0:
+                raise ValueError(
+                    f"unsolicited_retries is {unsolicited_retries}; it is a count, or None "
+                    "for no limit"
+                )
+            if unsolicited_resume is not None and not unsolicited_resume > 0:
+                raise ValueError(
+                    f"unsolicited_resume is {unsolicited_resume}; it is a wait, or None "
+                    "to wait for an event or the master"
+                )
+        self._unsolicited = unsolicited
+        self._unsolicited_timeout = unsolicited_confirm_timeout
+        self._unsolicited_retries = unsolicited_retries
+        self._unsolicited_resume = unsolicited_resume
+        #: The classes a master has enabled since the last restart. Empty at
+        #: startup: a master enables what it wants.
+        self._enabled: set[EventClass] = set()
+        #: Whether the null response that announces a restart has been
+        #: confirmed. Until it has, no events are sent unsolicited.
+        self._announced = False
+        #: The unsolicited response awaiting confirmation, if one is.
+        self._awaited: _Unsolicited | None = None
+        #: The sequence number the next unsolicited response takes, unless it
+        #: repeats the last one octet for octet. A series of its own, apart
+        #: from the one requests and their answers count in.
+        self._unsolicited_sequence = 0
+        #: A read that arrived while an unsolicited response was unconfirmed,
+        #: held until that is settled one way or the other (D71).
+        self._deferred: bytes | None = None
+        #: Whether the retries ran out and reporting is waiting for a reason
+        #: to start again: when it gives up waiting, and how many events had
+        #: been recorded when it began to.
+        self._resting = False
+        self._rest_until: float | None = None
+        self._rest_mark = 0
+
     @property
     def restart_indication(self) -> bool:
         return self._restart
@@ -831,8 +995,14 @@ class Session:
         forgotten, the data link's included. Buffered events are the
         caller's: a device that keeps them across a restart leaves them, and
         one that does not hands this session a new buffer.
+
+        With unsolicited responses on, a restart is announced again with a
+        null response, and no class is enabled until a master enables it:
+        what was enabled before the restart is not carried across it.
         """
         self.connection_reset()
+        self._enabled.clear()
+        self._announced = False
         self._restart = True
         self._need_time = self._need_time_at_start
         self._broadcast = None
@@ -864,7 +1034,20 @@ class Session:
             cold_restart=self._restart_handler is not None,
             broadcast_controls=self._broadcast_controls,
             disabled_functions=self._disabled,
+            unsolicited=self._unsolicited,
+            unsolicited_confirm_timeout=self._unsolicited_timeout,
+            unsolicited_retries=self._unsolicited_retries,
+            unsolicited_resume=self._unsolicited_resume,
         )
+
+    @property
+    def unsolicited_classes(self) -> frozenset[EventClass]:
+        """The classes a master has enabled unsolicited reporting for.
+
+        Empty after a restart, and always empty for a session built without
+        unsolicited responses.
+        """
+        return frozenset(self._enabled)
 
     @property
     def need_time(self) -> bool:
@@ -889,10 +1072,19 @@ class Session:
 
         An armed select is the exception among the things that could survive,
         and is discarded here per D12. It is a reservation held for the operate
-        that was about to follow on the socket that just died; honouring it
+        that was about to follow on the socket that just died; honoring it
         across a reconnect would let an operate arrive over a connection the
         select never crossed.
+
+        An unsolicited response in flight is forgotten the same way, with
+        the read that was waiting behind it. Its events stay buffered, and
+        the next :meth:`initiate` reports them over the new connection. What
+        a master enabled survives, as does whether the restart has been
+        announced: both are the association's.
         """
+        self._awaited = None
+        self._deferred = None
+        self._resting = False
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._broadcast_reassembler.reset()
@@ -911,6 +1103,303 @@ class Session:
         for frame in self._frames.feed(data):
             out += self._handle_frame(frame)
         return bytes(out)
+
+    # --------------------------------------------- outstation-initiated traffic
+
+    def initiate(self) -> bytes:
+        """The octets to send that no request asked for, if any are due.
+
+        The second way into the session, for traffic the outstation starts.
+        It returns an unsolicited response when one is due: the null response
+        that announces a restart, the events of a class the master enabled,
+        or either of those again because its confirmation did not arrive in
+        time. It also returns the answer to a read that was held back behind
+        an unsolicited response whose confirmation never came. Usually it
+        returns nothing.
+
+        The owner calls it when a connection is made, after it records
+        events, after :meth:`receive`, and when the time
+        :meth:`initiate_after` gave has passed, and writes what comes back to
+        the master. Calling it more often than that costs little and sends
+        nothing extra. A session built without unsolicited responses returns
+        nothing, always.
+
+        Like everything else here it does no I/O and starts no timer: time is
+        the injected clock, read when this is called. And it reports, which
+        is all it does. Nothing on this path calls a control provider or
+        changes an output, however long a master stays silent (D71).
+        """
+        now = self._clock()
+        wait = self._initiate_wait(now)
+        if wait is None or wait > 0:
+            return b""
+        awaited = self._awaited
+        if awaited is None:
+            return self._send(self._unsolicited_response(now))
+        return self._unconfirmed(awaited, now)
+
+    def initiate_after(self) -> float | None:
+        """Seconds until :meth:`initiate` is next worth calling for the time alone.
+
+        Zero when something is due now. None when nothing is waiting on the
+        clock, so only a recorded event, something received, or a new
+        connection can give :meth:`initiate` anything to send; an owner calls
+        it after each of those whatever this said. A call to :meth:`initiate`
+        that returns nothing although this said zero means nothing could be
+        sent, and is not a reason to call again at once.
+        """
+        return self._initiate_wait(self._clock())
+
+    def _unsolicited_destination(self) -> int | None:
+        """The link address unsolicited responses go to, or None for nowhere.
+
+        The one place that answers "where does this go" for traffic nobody
+        asked for. A response to a request can always go back to whoever
+        asked. An unsolicited response has no request to take an address
+        from, so with no master known there is nowhere to send it and
+        nothing is sent. Today the master is the one configured, and this is
+        never None; a session that learns its master from the first frame of
+        a connection answers here with nobody until that frame arrives.
+        """
+        return self._master_address
+
+    def _initiate_wait(self, now: float) -> float | None:
+        """How long until something is due: zero for now, None for not by the clock."""
+        if not self._unsolicited or self._unsolicited_destination() is None:
+            return None
+        awaited = self._awaited
+        if awaited is not None:
+            remaining = awaited.at + self._unsolicited_timeout - now
+            if remaining > 0:
+                return remaining
+            # A retry is unsolicited traffic like the first transmission, and
+            # waits for a solicited response to be settled as that did. A read
+            # held behind it never waits here: holding it ended any solicited
+            # response, and every request that could start another discards
+            # the read.
+            return self._solicited_wait(now)
+        if not self._has_news():
+            return None
+        held = self._solicited_wait(now)
+        if held > 0:
+            return held
+        if self._announced and self._is_resting(now):
+            return None if self._rest_until is None else self._rest_until - now
+        return 0.0
+
+    def _solicited_wait(self, now: float) -> float:
+        """Seconds a solicited response still has to be confirmed in, or zero.
+
+        Nothing unsolicited is sent while a solicited response is waiting for
+        its confirmation: not a first transmission and not a retry. A master
+        walking through a response it asked for is not interrupted, and the
+        events in that response are not offered a second way while the first
+        is undecided. The wait ends when the confirmation arrives or its time
+        runs out (D51), whichever is first.
+        """
+        pending = self._outstanding
+        if pending is None or self._confirm_timeout is None:
+            return 0.0
+        return max(0.0, pending.at + self._confirm_timeout - now)
+
+    def _has_news(self) -> bool:
+        """Whether there is anything an unsolicited response would carry.
+
+        The restart, until its announcement is confirmed. After that, any
+        event in a class the master enabled. An event recorded before its
+        class was enabled counts: enabling a class is asking for what it
+        holds, and what a poll already retired is no longer there to count.
+        """
+        if not self._announced:
+            return True
+        events = self._events
+        return events is not None and any(events.count(cls) for cls in self._enabled)
+
+    def _is_resting(self, now: float) -> bool:
+        """Whether reporting has stopped and nothing has yet said to start again.
+
+        It stops when the retries run out, or when the oldest event will not
+        fit a fragment. A new event ends the rest, as does the time set for
+        it. A request from the master and a new connection end it where they
+        arrive.
+        """
+        if not self._resting:
+            return False
+        if self._events is not None and self._events.recorded != self._rest_mark:
+            return False
+        return self._rest_until is None or now < self._rest_until
+
+    def _unsolicited_response(self, now: float, previous: _Unsolicited | None = None) -> bytes:
+        """Build an unsolicited response, record it as awaited, and return its fragment.
+
+        Built from the buffers as they stand, whether this is a first
+        transmission or a retry (D70). ``previous`` is the response being
+        retried. If what is built now matches it octet for octet it is the
+        same response sent again, and keeps its sequence number; if anything
+        differs, in the events or in the indications, it is a new response
+        and takes the next one. A master tells the two apart exactly that
+        way: the same number means the same octets.
+
+        Nothing is returned, and nothing is awaited, when there turns out to
+        be nothing to say: the class was disabled, the events were evicted,
+        or none of them fits a fragment.
+        """
+        selected: list[Event] = []
+        body = b""
+        null = not self._announced
+        if not null:
+            classes = sorted(self._enabled)
+            if self._events is not None and classes:
+                headers = [
+                    ObjectHeader(CLASS_GROUP, _CLASS_VARIATIONS[cls], QualifierCode.ALL_OBJECTS)
+                    for cls in classes
+                ]
+                # The same selection, order, blocking and fit to the fragment
+                # a class poll gets, because it is the same code: one
+                # fragment's worth, oldest first (D27 and D52). What does not
+                # fit follows once this is confirmed.
+                body, selected, _ = self._event_body(
+                    headers, [None] * len(headers), self._max_response - RESPONSE_HEADER_SIZE
+                )
+            if not selected:
+                self._awaited = None
+                if self._has_news():
+                    # There are events, and the oldest will not fit a fragment:
+                    # a ceiling D27 allows. Trying again at every call would
+                    # build the same nothing, so this waits, as it does when
+                    # the retries run out, for something to change.
+                    self._rest(now, None)
+                return b""
+
+        if self._outstanding is not None:
+            # A solicited response whose time to be confirmed has run out,
+            # or this would not have been reached. It is given up on here
+            # and not left for a late confirmation to find, because the
+            # events it carried may be about to go out again in this one.
+            self._abandon()
+
+        iin = self._indications(reporting=selected)
+        overflowed = (
+            self._events.overflow_generation
+            if self._events is not None and iin.second & IIN2Bit.EVENT_BUFFER_OVERFLOW
+            else None
+        )
+
+        def build(sequence: int) -> bytes:
+            return build_response(
+                # One fragment, always: first and final. And always asking
+                # to be confirmed, with events or without.
+                control=AppControl(fir=True, fin=True, con=True, uns=True, sequence=sequence),
+                iin=iin,
+                body=body,
+                function=FunctionCode.UNSOLICITED_RESPONSE,
+            )
+
+        if previous is not None and build(previous.sequence) == previous.fragment:
+            sequence = previous.sequence
+        else:
+            sequence = self._unsolicited_sequence
+            self._unsolicited_sequence = (sequence + 1) % SEQUENCE_MODULUS
+        response = build(sequence)
+        self._awaited = _Unsolicited(
+            sequence=sequence,
+            events=tuple(selected),
+            fragment=response,
+            reported_overflow=overflowed,
+            at=now,
+            retries=0 if previous is None else previous.retries + 1,
+            null=null,
+            broadcast=self._broadcast is not None,
+        )
+        self._resting = False
+        logger.info(
+            "dnp3: sending unsolicited sequence %d (%s, attempt %d)",
+            sequence,
+            "null" if null else f"{len(selected)} event(s)",
+            self._awaited.retries + 1,
+        )
+        return response
+
+    def _unconfirmed(self, awaited: _Unsolicited, now: float) -> bytes:
+        """What follows an unsolicited response whose confirmation did not come.
+
+        With a read held behind it, the read is answered and the response is
+        not retried: its events go back to being unreported, and the read may
+        well be the master asking for them. Reporting starts again afterwards
+        if anything is left to report.
+
+        Otherwise it is sent again, until the retries allowed have been
+        spent. After that the outstation stops, keeps the events, and waits
+        for a reason to start again. The null response is the exception: it
+        is sent again for as long as it takes.
+        """
+        deferred, self._deferred = self._deferred, None
+        if deferred is not None:
+            logger.info(
+                "dnp3: unsolicited sequence %d not confirmed; answering the read held behind it",
+                awaited.sequence,
+            )
+            self._awaited = None
+            out = self._send(self._handle_fragment(deferred))
+            wait = self._initiate_wait(now)
+            if wait is not None and wait <= 0:
+                out += self._send(self._unsolicited_response(now))
+            return out
+
+        limit = self._unsolicited_retries
+        if not awaited.null and limit is not None and awaited.retries >= limit:
+            logger.warning(
+                "dnp3: unsolicited sequence %d not confirmed after %d retries; "
+                "its events stay buffered",
+                awaited.sequence,
+                awaited.retries,
+            )
+            self._awaited = None
+            self._rest(now, self._unsolicited_resume)
+            return b""
+        return self._send(self._unsolicited_response(now, previous=awaited))
+
+    def _rest(self, now: float, resume: float | None) -> None:
+        """Stop reporting until an event, the master, a connection or *resume* seconds."""
+        self._resting = True
+        self._rest_until = None if resume is None else now + resume
+        self._rest_mark = self._events.recorded if self._events is not None else 0
+
+    def _confirm_unsolicited(self, sequence: int) -> bytes:
+        """Retire what the confirmed unsolicited response carried.
+
+        Only the response most recently sent can be confirmed, and only under
+        its own sequence number. One naming an earlier response is late: that
+        response has been replaced, and what it carried is in the one that
+        replaced it, still unacknowledged.
+
+        There is no deadline of its own on this, unlike a solicited
+        confirmation (D51). A master does not time an unsolicited response
+        out; it confirms on receipt. So a confirmation naming the response
+        last sent means that response arrived, however long it took, and
+        its events are retired.
+
+        The read held behind the response, if there is one, is answered now
+        and as though it had only just arrived, after the events are retired
+        so that it does not report them again.
+        """
+        awaited = self._awaited
+        if awaited is None or awaited.sequence != sequence:
+            logger.info("dnp3: ignoring an unsolicited confirmation for sequence %d", sequence)
+            return b""
+        if awaited.broadcast:
+            self._broadcast = None
+        if self._events is not None:
+            self._events.drop(awaited.events)
+            if awaited.reported_overflow == self._events.overflow_generation:
+                self._events.clear_overflow()
+        if awaited.null:
+            self._announced = True
+        self._awaited = None
+        deferred, self._deferred = self._deferred, None
+        if deferred is None:
+            return b""
+        return self._handle_fragment(deferred)
 
     def _handle_frame(self, frame: link.LinkFrame) -> bytes:
         if not self._addressed_to_us(frame):
@@ -1026,6 +1515,11 @@ class Session:
         self._broadcast = link.Broadcast(frame.destination)
         # A request from the master, like any other, ends an armed select.
         self._select = None
+        # And the wait of a read held behind an unsolicited response.
+        self._deferred = None
+        # And a rest after the retries ran out: a master that speaks, by
+        # broadcast or otherwise, is a reason to start reporting again.
+        self._resting = False
         if len(fragment) < REQUEST_HEADER_SIZE:
             return
         function = fragment[1]
@@ -1177,7 +1671,7 @@ class Session:
             # opposite of what a damaged fragment does to the outstanding event
             # response, and deliberately: replaying a response costs nothing if
             # the guess is wrong, while holding a control reservation open
-            # through noise can authorise an operate the master never selected.
+            # through noise can authorize an operate the master never selected.
             # An unreadable fragment claiming to be an OPERATE keeps it, which
             # is the corrupted-retransmission case worth keeping it for.
             self._select = None
@@ -1246,7 +1740,7 @@ class Session:
             # below, which the octet comparison there would now settle on its
             # own -- the order is what keeps it settled if that comparison is
             # ever loosened back to the sequence number.
-            if request.control.uns:
+            if request.control.uns and not self._unsolicited:
                 # The UNS bit is what tells a confirmation for an unsolicited
                 # response apart from one for a solicited response, and the two
                 # count sequence numbers separately. This outstation sends no
@@ -1259,6 +1753,11 @@ class Session:
                     sequence,
                 )
                 return b""
+            if request.control.uns:
+                # With unsolicited responses on, the bit sends the
+                # confirmation to the unsolicited exchange and nowhere else.
+                # The solicited selection is still not touched by it.
+                return self._confirm_unsolicited(sequence)
             return self._confirm(sequence)
 
         if self._acted is not None and self._acted[0] == fragment:
@@ -1316,6 +1815,23 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.FUNC_NOT_SUPPORTED)),
             )
 
+        if known is FunctionCode.READ and self._awaited is not None:
+            # A read is not answered while an unsolicited response waits to be
+            # confirmed (D71). The events in that response are neither
+            # reported nor unreported until the master says which, and a read
+            # answered now would have to guess: send them again, or leave
+            # them out and hope. So the read is held, and answered when the
+            # confirmation arrives or the wait for it ends. A second read
+            # arriving meanwhile replaces the first, and any other request
+            # discards it, which `_abandon` has just done.
+            logger.info(
+                "dnp3: holding the read at sequence %d until unsolicited sequence %d is settled",
+                sequence,
+                self._awaited.sequence,
+            )
+            self._deferred = fragment
+            return b""
+
         if known in _CONTROL_FUNCTIONS and self._controls is None:
             logger.info("dnp3: refusing control function %s: monitor role", known.name)
             # Answered as an unknown object, not an unsupported function.
@@ -1333,6 +1849,7 @@ class Session:
             and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
             and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
             and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
+            and not (known is FunctionCode.ENABLE_UNSOLICITED and self._unsolicited)
         ):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
@@ -1353,7 +1870,12 @@ class Session:
         if known is FunctionCode.COLD_RESTART:
             return self._cold_restart(request)
 
+        if known is FunctionCode.ENABLE_UNSOLICITED:
+            return self._set_unsolicited(request, enable=True)
+
         if known is FunctionCode.DISABLE_UNSOLICITED:
+            if self._unsolicited:
+                return self._set_unsolicited(request, enable=False)
             return self._disable_unsolicited(request)
 
         if known in _FREEZE_FUNCTIONS:
@@ -1413,9 +1935,9 @@ class Session:
         saying so is the honest answer rather than the matching one.
 
         Nothing is recorded. There is no state to enter that is not already the
-        state, and a flag tracking it would be one a sending path does not yet
-        exist to read. When unsolicited responses land, this becomes the place
-        that flag is written, and the answer given here does not change.
+        state. This is the answer of a session built without unsolicited
+        responses, and only of one: with them on, the request goes to
+        ``_set_unsolicited``, which examines what it names (D69).
 
         The classes named in the request are accepted without being examined,
         because the answer is the same for any of them: none is being sent for.
@@ -1430,6 +1952,68 @@ class Session:
             len(request.headers),
         )
         return null_response(sequence=request.control.sequence, iin=self._indications())
+
+    def _set_unsolicited(self, request: Request, *, enable: bool) -> bytes:
+        """Turn unsolicited reporting on or off for the classes a master names (D69).
+
+        The request names classes 1 to 3 with the class object and the
+        qualifier that means all of it, and is answered with a null response.
+        Anything else is refused out loud and changes nothing, including the
+        classes named beside it: a request half applied would leave a master
+        unsure what it had enabled. Another object, class 0 among them, is an
+        object this function does not apply to. A class named with a count or
+        a range is a parameter that means nothing here, as is a request that
+        names nothing at all.
+
+        Enabling a class that holds no events is accepted, and so is
+        disabling one that was never enabled. Neither is an error; they are
+        how a master puts the outstation in a known state.
+
+        Disabling stops events of that class being sent unsolicited from
+        here on. It discards nothing: the events stay buffered for a poll.
+        An unsolicited response already sent is still confirmed in the
+        ordinary way if its confirmation arrives; if it does not, what is
+        sent in its place is built from the classes still enabled.
+        """
+        sequence = request.control.sequence
+        name = "ENABLE_UNSOLICITED" if enable else "DISABLE_UNSOLICITED"
+        named: list[EventClass] = []
+        for header in request.headers:
+            if header.event_class not in _EVENT_CLASSES:
+                logger.info(
+                    "dnp3: %s refused: group %d variation %d is not an event class",
+                    name,
+                    header.group,
+                    header.variation,
+                )
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN))
+                )
+            if header.qualifier is not QualifierCode.ALL_OBJECTS:
+                logger.info(
+                    "dnp3: %s refused: qualifier 0x%02X selects nothing on a class",
+                    name,
+                    int(header.qualifier),
+                )
+                return null_response(
+                    sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+                )
+            named.append(EventClass(header.event_class))
+        if not named:
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        if enable:
+            self._enabled.update(named)
+        else:
+            self._enabled.difference_update(named)
+        logger.info(
+            "dnp3: %s for class(es) %s; now enabled: %s",
+            name,
+            ", ".join(str(int(cls)) for cls in named),
+            ", ".join(str(int(cls)) for cls in sorted(self._enabled)) or "none",
+        )
+        return null_response(sequence=sequence, iin=self._indications())
 
     def _handle_freeze(self, request: Request, known: FunctionCode) -> bytes:
         """Freeze what the request names, and say only whether it could (D45).
@@ -1574,7 +2158,7 @@ class Session:
                 # succeeded, so that the operate a master sends next -- which is
                 # the request it already sent -- still matches. That reasoning
                 # runs out when nothing succeeded: there is no operate this
-                # select could authorise, and arming it would let a point the
+                # select could authorize, and arming it would let a point the
                 # outstation refused to select be executed by the operate that
                 # followed.
                 key = _match_key(controls)
@@ -1688,7 +2272,7 @@ class Session:
         if unusable:
             # Refused rather than answered with everything the class holds. A
             # master that asked for a selection and received the whole buffer
-            # has been told its request was honoured when it was ignored, which
+            # has been told its request was honored when it was ignored, which
             # is the shape of failure D9 exists to rule out.
             logger.info(
                 "dnp3: class read refused: qualifier 0x%02X selects nothing on a class",
@@ -1903,6 +2487,11 @@ class Session:
         """
         self._outstanding = None
         self._conversation = None
+        # A read held behind an unsolicited response goes with it: the master
+        # sent something else, and is not waiting for that answer any more.
+        self._deferred = None
+        # And a master that speaks is a reason to start reporting again.
+        self._resting = False
 
     def _confirm(self, sequence: int) -> bytes:
         """Retire the events the confirmed response carried.

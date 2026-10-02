@@ -13,6 +13,7 @@ import struct
 import pytest
 from profile_fixtures import analog, document, small, units
 
+from py1815 import link
 from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
 from py1815.control import (
     CommandStatus,
@@ -27,6 +28,7 @@ from py1815.profile.binding import Binding, Quality, Reading
 from py1815.profile.model import Kind, MapError
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.probe import parse_objects
+from py1815.transport import Reassembler
 
 AI, AO, BI, BO, CTR = Kind.AI, Kind.AO, Kind.BI, Kind.BO, Kind.CTR
 ALL = QualifierCode.ALL_OBJECTS
@@ -765,3 +767,52 @@ class TestTheSessionItWires:
         binding.output(AO, 0, status=lambda: 33.3)
         session = DerOutstation(point_map, binding, strict=False).session()
         assert _values(_read(session, bytes([40, 0, ALL])))[(40, 0)] == 333
+
+
+class TestUnsolicitedResponses:
+    """The profile's consumers expect outstation-initiated reporting. The
+    builder passes the option through and changes nothing else for it."""
+
+    def test_they_are_off_unless_named(self):
+        outstation, _ = _built()
+        assert outstation.session().facts.unsolicited is False
+
+    def test_the_option_passes_through_with_its_settings(self):
+        outstation, _ = _built()
+        facts = outstation.session(
+            unsolicited=True, unsolicited_confirm_timeout=3.0, unsolicited_retries=2
+        ).facts
+        assert facts.unsolicited is True
+        assert facts.unsolicited_confirm_timeout == 3.0
+        assert facts.unsolicited_retries == 2
+
+    def test_what_poll_buffers_is_reported_once_a_master_enables_its_class(self):
+        clock = [1000.0]
+        outstation, device = _built()
+        outstation.poll()
+        session = outstation.session(unsolicited=True, clock=lambda: clock[0])
+        null = _initiated(session)
+        session._handle_fragment(bytes([0xD0 | (null[0] & 0x0F), FunctionCode.CONFIRM]))
+        enabled = session._handle_fragment(
+            bytes([0xC1, FunctionCode.ENABLE_UNSOLICITED, 60, 2, ALL, 60, 3, ALL, 60, 4, ALL])
+        )
+        assert enabled[3] == 0
+
+        device.power = 2500.0
+        outstation.poll()
+        fragment = _initiated(session)
+
+        assert fragment[1] == FunctionCode.UNSOLICITED_RESPONSE
+        _, events = parse_objects(fragment[4:])
+        assert [(event.group, event.index) for event in events] == [(32, 1)]
+
+
+def _initiated(session) -> bytes:
+    """The one fragment the session sends unasked."""
+    found, reassembler = [], Reassembler()
+    for frame in link.FrameReader().feed(session.initiate()):
+        whole = reassembler.add(frame.payload)
+        if whole is not None:
+            found.append(whole)
+    (fragment,) = found
+    return fragment

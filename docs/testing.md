@@ -10,7 +10,7 @@ wrong length semantics, a misplaced block checksum: a round trip is happy with
 all of them.
 
 So the framing suite carries a published frame this implementation reproduces
-octet for octet, a hand-derived populated frame, and the CRC catalogue check
+octet for octet, a hand-derived populated frame, and the CRC catalog check
 value, which is the one assertion an implementation that is self-consistently
 wrong cannot satisfy.
 
@@ -164,8 +164,8 @@ master built from the session's own decoder would agree with the session's mista
 
 `tests/test_ied_coverage.py` is the catalog. Every section of the procedures appears
 there once, either with the tests that carry it out or with the reason it does not
-apply (the outstation never requests link confirmation, does not send unsolicited
-responses, has no serial port, and so on). Two checks hold the catalog and the tests
+apply (the outstation never requests link confirmation, offers no UDP, has no
+serial port, and so on). Two checks hold the catalog and the tests
 together: a section listed as tested must have a test, and a test may not claim a
 section the catalog has not accounted for. Adding a feature that makes a section
 applicable means moving its entry and writing its test in the same change.

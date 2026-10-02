@@ -794,6 +794,13 @@ class DerOutstation:
         parse; the time is asked for from the first response; and the freeze
         functions are served only when there are counters to freeze. The
         first two are defaults a caller may override by naming the option.
+
+        Every other option of :class:`~py1815.session.Session` passes
+        through. ``unsolicited=True`` is the one a profile's consumers ask
+        about: the session then reports the events :meth:`poll` buffers to a
+        master that has enabled their class, without waiting to be polled.
+        It is off unless named, and nothing about the map or the binding
+        changes with it.
         """
         if self._block_octets + RESPONSE_HEADER_SIZE > max_response:
             raise ValueError(
