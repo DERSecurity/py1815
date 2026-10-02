@@ -61,6 +61,7 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   differ from what the master asked for.
 - **G5.** Event class and deadband set by the deployment, as data, per point.
 - **G6.** A partial map that grows, with a report of what is bound against the profile.
+  Built.
 - **G10.** Static groups read by index, for a master that picks scattered points. Built.
 
 **In the outstation and the project:**

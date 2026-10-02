@@ -66,6 +66,7 @@ from py1815.objects import (
     indexed_block,
 )
 from py1815.profile.binding import Binding, Output, Quality, Reader, Reading
+from py1815.profile.coverage import Coverage, Entry, Source
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
 from py1815.session import Control, ParameterError, Session, UnknownObject
 
@@ -138,6 +139,10 @@ _QUALITY_FLAGS = {
     Quality.NEVER_READ: int(AnalogQuality.RESTART),
     Quality.OFFLINE: 0,
 }
+
+#: The same table read the other way, for a report that has an output's flags
+#: and wants the quality they stand for.
+_FLAG_QUALITY = {flags: quality for quality, flags in _QUALITY_FLAGS.items()}
 
 
 class DerOutstation:
@@ -219,6 +224,9 @@ class DerOutstation:
             for address, output in binding.outputs.items()
             if output.initial is not None
         }
+        #: How each served point comes to be served. Kept for the coverage
+        #: report; nothing that answers a master reads it.
+        self._origins: dict[Address, Source] = dict.fromkeys(binding.outputs, Source.BOUND)
         self._sources = self._resolve_sources()
         #: For each input of a function, the output that enables the function.
         self._gates: dict[Address, Address] = self._function_gates() if disabled_offline else {}
@@ -273,12 +281,16 @@ class DerOutstation:
             address = point.address
             if address in self._binding.readers:
                 sources[address] = self._binding.readers[address]
+                self._origins[address] = Source.BOUND
             elif address in mirrors:
                 sources[address] = self._mirror(mirrors[address])
+                self._origins[address] = Source.MIRROR
             elif point.enabled_by is not None:
                 sources[address] = _constant(point.enabled_by in self._binding.outputs)
+                self._origins[address] = Source.SUPPORTS
             elif point.fixed_value is not None:
                 sources[address] = _constant(point.fixed_value)
+                self._origins[address] = Source.FIXED
         return sources
 
     def _function_gates(self) -> dict[Address, Address]:
@@ -348,6 +360,49 @@ class DerOutstation:
     def value(self, kind: Kind, index: int) -> float | bool | None:
         """The last value an output accepted, or None if it has none yet."""
         return self._state.get((kind, index))
+
+    def coverage(self) -> Coverage:
+        """Every point of the map against what this outstation serves.
+
+        For each point: whether it is bound, served without a binding (and
+        how), or absent, and for a served point the quality it has at this
+        moment. Where a point's value comes from was settled when the
+        outstation was built and is the same in every report. The quality is
+        read now, by asking each source once, so a report is a snapshot.
+
+        A report, and no part of what a master is answered with: it buffers
+        no event, changes no output and is read by nothing here (D67).
+        """
+        entries: list[Entry] = []
+        for kind in Kind:
+            for point in self._map.of(kind):
+                source = self._origins.get(point.address, Source.ABSENT)
+                if source is Source.ABSENT:
+                    entries.append(Entry(point, source))
+                    continue
+                quality, online = self._standing_on_the_wire(point)
+                entries.append(Entry(point, source, quality, online))
+        return Coverage(tuple(entries))
+
+    def _standing_on_the_wire(self, point: Point) -> tuple[Quality, bool]:
+        """A served point's quality now, and whether it goes out with ONLINE set.
+
+        One question to the source, answered both ways. They differ for a
+        value with no number: the source calls it good, and the wire sends
+        zero with ONLINE clear and a reference error, as it does for any NaN.
+        """
+        if point.kind.is_output:
+            value, flags = self._output_status(point)
+            quality = _FLAG_QUALITY[flags]
+            online = quality is Quality.GOOD
+            if online and point.kind is Kind.AO and value is not None:
+                online = not math.isnan(point.to_wire(float(value)))
+            return quality, online
+        reading = self._reading(point)
+        online = reading.quality is Quality.GOOD
+        if online and point.kind is Kind.AI:
+            online = not math.isnan(point.to_wire(float(reading.value)))
+        return reading.quality, online
 
     # ---------------------------------------------------------------- time
 
@@ -522,7 +577,12 @@ class DerOutstation:
         if group == GROUP_BINARY_OUTPUT_STATUS:
             return variation, encode_binary_output_status(state=bool(value), flags=flags)
         raw = point.to_wire(float(value or 0))
-        return variation, encode_analog_output_status(float(round(raw)), variation, flags=flags)
+        if math.isfinite(raw):
+            # Rounded to the integer the variation carries. A value with no
+            # number is passed as it is, and the encoder sends it flagged
+            # instead of the read failing on it.
+            raw = float(round(raw))
+        return variation, encode_analog_output_status(raw, variation, flags=flags)
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""
