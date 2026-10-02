@@ -545,6 +545,38 @@ class TestThePointLists:
         analog = self._point(root, Kind.AO, 0)
         assert _text(analog, "d:minTransmittedValue") == "-1000"
 
+    def _listed(self, root, kind: Kind) -> list[int]:
+        path = "d:referenceDevice/d:dataPointsList/" + self.PATHS[kind]
+        return [int(point.find("d:index", NS).text) for point in root.findall(path, NS)]
+
+    def test_a_point_bound_later_is_listed_by_the_rebuild_and_nothing_else_moves(self):
+        """A map that grows: the binding entry is the whole of the change."""
+
+        def built(*extra: int) -> DerOutstation:
+            binding = Binding()
+            binding.read(Kind.BI, 0, lambda: False)
+            binding.read(Kind.AI, 1, lambda: 1.0)
+            for index in extra:
+                binding.read(Kind.AI, index, lambda: 240.0)
+            return DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+
+        today = datetime.date(2026, 1, 2)
+        before, after = built(), built(2)
+        first = device_profile.build(before, before.session(), today=today)
+        second = device_profile.build(after, after.session(), today=today)
+        assert 2 not in self._listed(first, Kind.AI)
+        assert self._listed(second, Kind.AI) == sorted([*self._listed(first, Kind.AI), 2])
+        assert _text(self._point(second, Kind.AI, 2), "d:scaleFactor") == "0.1"
+        for kind in set(Kind) - {Kind.AI}:
+            assert self._listed(second, kind) == self._listed(first, kind)
+        # The document and the coverage report are two readings of one outstation.
+        report = after.coverage()
+        for kind in (Kind.BI, Kind.AI):
+            served = [e.point.index for e in report.served if e.point.kind is kind]
+            assert self._listed(second, kind) == served
+        moved = [entry.point.address for entry in report.changed_since(before.coverage())]
+        assert moved == [(Kind.AI, 2)]
+
     def test_a_long_name_becomes_a_name_and_a_description(self):
         tables = small()
         tables["points"]["BI"][0]["name"] = "Alarm. Raised when the widget is out of range."

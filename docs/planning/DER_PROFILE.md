@@ -561,14 +561,19 @@ missing part is merged and tested.
   scaling; validation when the outstation is built, so an unknown point, a class outside
   1 to 3 or a negative deadband fails at startup; and the device profile document
   reporting the values in force.
-- [ ] **G6. A partial map that grows.** The deployment starts with the points its source
+- [x] **G6. A partial map that grows.** The deployment starts with the points its source
   publishes today and expects that set to grow substantially, with controls following
-  measurements. `strict=False` builds a deliberately partial map. *Missing:* a coverage
-  report from a built outstation listing which of the profile's points are bound, which
-  are served offline and which are absent, so growth is tracked against the profile and
-  a point added in the source and forgotten here is visible; and a check that adding a
-  binding entry is the whole of the change, with the device profile document following
-  from the rebuild.
+  measurements. `strict=False` builds a deliberately partial map. *Built:*
+  `DerOutstation.coverage()` reports every point of the resolved map as bound, served
+  without a binding (mirrored from a bound output, derived as a supports input, or fixed
+  by the tables) or absent, with mandatory points told apart from optional ones and the
+  mandatory points still missing named; each served point carries the quality it had when
+  the report was made, which is how a point served offline shows (D67 in
+  [DESIGN.md](../DESIGN.md)). The report is data with a text rendering, two of them can
+  be compared, and `py1815-der points --coverage` prints it for the simulated DER. Tests
+  pin that adding one binding entry is the whole of the change: the report moves by that
+  point, the point is on the wire, and the device profile document of the rebuilt
+  outstation lists it.
 
 - [x] **G10. Static groups read by index.** A master nobody has identified may pick a few
   scattered points with an index-prefixed read (qualifiers 0x17 and 0x28) instead of a
