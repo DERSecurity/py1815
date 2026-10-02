@@ -9,7 +9,8 @@ with whatever static data it serves. This connects the two.
 
 **Solicited reads only.** A master asks; the outstation answers from its
 buffers and the master confirms. Unsolicited responses -- outstation-initiated
-traffic with its own retry timer -- are a separate plan.
+traffic with its own retry timer -- are a separate plan, now built:
+[UNSOLICITED.md](UNSOLICITED.md).
 
 That split is not a way of deferring the awkward half. It is that unsolicited
 introduces a class of risk nothing here has: a bug in a request/response path
@@ -117,8 +118,9 @@ it is the half that needs no sending.
 
 Nothing is recorded when it is accepted. There is no state to enter that is not
 already the state, and a flag tracking it would be one no sending path exists to
-read. When unsolicited responses land, this becomes where that flag is written,
-and the answer given here does not change.
+read. Unsolicited responses have since landed, and a session built with them
+takes this request by class instead (D69); one built without them, the default,
+answers as described here.
 
 The classes the request names are accepted without being examined, since the
 answer is the same for any of them. They are emphatically not a selection to

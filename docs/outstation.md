@@ -3,10 +3,10 @@
 !!! warning "Early development"
     The protocol layers, the listener, controls and the event path are
     implemented and tested: a master reads classes 1 to 3, confirms what it was
-    sent, and is told through the indication bits what is still waiting. Not yet
-    done are unsolicited responses, which is outstation-initiated traffic. An
+    sent, and is told through the indication bits what is still waiting. An
     answer too large for one fragment is a conversation:
-    the master confirms each fragment and the next follows. The first release is
+    the master confirms each fragment and the next follows. Unsolicited
+    responses are there for a session built to send them, and off otherwise. The first release is
     `0.1.0` and the API is not stable: while the major version is `0`, a minor
     bump may carry a breaking change.
 
@@ -101,6 +101,80 @@ the next connection would splice two conversations into one request.
 
 So a reconnecting master finds the restart indication it has not cleared, and
 the events it has not read, exactly where it left them. See [D7](DESIGN.md).
+
+## Unsolicited responses
+
+An outstation can report events without waiting to be polled, once a master has
+enabled the classes it wants. It is off unless you turn it on, and a session
+with it off answers every request exactly as one built before the option
+existed: `ENABLE_UNSOLICITED` is refused as unsupported.
+
+```python
+from py1815.events import EventBuffers, EventClass
+from py1815.objects import AnalogPoint
+from py1815.session import Session
+
+buffers = EventBuffers()
+session = Session(
+    Provider(),
+    events=buffers,
+    outstation_address=1024,
+    master_address=1,
+    unsolicited=True,
+    unsolicited_confirm_timeout=5.0,  # seconds before an unconfirmed one is sent again
+    unsolicited_retries=None,         # how many times; None, the default, is no limit
+)
+```
+
+With it on, the session:
+
+- announces a restart with a null unsolicited response, sent again every
+  `unsolicited_confirm_timeout` until the master confirms it;
+- answers a master enabling or disabling classes 1, 2 and 3 with
+  `ENABLE_UNSOLICITED` and `DISABLE_UNSOLICITED`, and starts every class
+  disabled after a restart;
+- sends the events of an enabled class in an unsolicited response, and removes
+  them from the buffers only when the master confirms that response, so an
+  event is never lost to a confirmation that did not arrive. When the retries
+  run out the events stay buffered, a class poll reads them, and reporting
+  starts again at the next event, the next request from the master, a new
+  connection, or after `unsolicited_resume` seconds (sixty unless set);
+- holds a read that arrives while an unsolicited response is waiting to be
+  confirmed, and answers it once the confirmation arrives or the wait ends.
+  Turn it on for a master that confirms unsolicited responses: one that ignores
+  them would have every read answered up to the timeout late.
+
+The session still does no I/O. Unsolicited traffic comes from a second method,
+`session.initiate()`, which returns the octets that are due, usually none, and
+`session.initiate_after()`, which says how many seconds until the clock alone
+could change that. `OutstationServer` calls them for you on each connection:
+when the master connects, after everything it receives, when the session's
+own retry time comes, and every `unsolicited_interval` (half a second unless
+set). Tell it when you have recorded events and they go out at once:
+
+```python
+server = OutstationServer(session, bind="0.0.0.0:20000")
+await server.start()
+
+# ... in the loop that reads the device:
+buffers.record_analog(0, AnalogPoint(power), event_class=EventClass.CLASS_1, deadband=5)
+server.notify()
+```
+
+Call `notify()` from the event loop's own thread; from another, use
+`loop.call_soon_threadsafe(server.notify)`. Without it, the next look at the
+interval finds the event.
+
+A session you drive yourself, without the listener, is driven the same way:
+after a connection is made, after each `receive()`, after recording events,
+and when `initiate_after()` says, call `initiate()` and write what it returns
+to the master. While there is no connection, do not call it; when one is made,
+call `connection_reset()` and then `initiate()`, and the master is told at once
+what it missed.
+
+The timer that drives the retries only reports. Nothing on that path operates
+a control or changes an output, however long the master is silent. See
+[D69 to D71](DESIGN.md).
 
 ## TLS
 

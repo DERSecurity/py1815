@@ -75,12 +75,13 @@ Two things the library does not do yet are named here rather than assumed,
 because a caller assembling an outstation from this will ask about both:
 
 - **Unsolicited responses.** The profile's consumers expect outstation-initiated
-  reporting, and this library still refuses `ENABLE_UNSOLICITED`. The generator
-  does not assume it exists: an outstation built under these nine steps reports
-  events when polled, and gains unsolicited reporting when the library does,
-  through the same `EventBuffers` and with no change to the map or the binding.
-  That work is its own roadmap entry in [DESIGN.md](../DESIGN.md), not a step
-  here.
+  reporting. The library has it now, off unless asked for (D69 to D71 in
+  [DESIGN.md](../DESIGN.md), and [UNSOLICITED.md](UNSOLICITED.md)), and the
+  generator needed nothing for it, as this paragraph expected: an outstation
+  built under these nine steps reports events when polled, and also unsolicited
+  when its session is built with `outstation.session(unsolicited=True)`, through
+  the same `EventBuffers` and with no change to the map or the binding.
+  `py1815-der run --unsolicited` serves the simulated DER that way.
 - **Floating-point analog events.** The library serves floating-point static
   analog inputs and integer analog events only; a point whose static form is a
   float has no float event form to report a change in. That asymmetry is not a

@@ -22,6 +22,11 @@ The common cause of a second connection is a master whose socket died without a
 FIN, and refusing it would leave the outstation unreachable until a timeout it
 cannot observe.
 
+For a session built with unsolicited responses on, the listener is also what
+asks it, for as long as a master is connected, whether anything is due to be
+sent unasked, and writes what it says (D69 to D71). Nothing else about a
+connection changes: the idle timeout still counts only what the master sends.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 

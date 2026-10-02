@@ -1216,10 +1216,12 @@ class Session:
         return events is not None and any(events.count(cls) for cls in self._enabled)
 
     def _is_resting(self, now: float) -> bool:
-        """Whether the retries ran out and nothing has yet said to start again.
+        """Whether reporting has stopped and nothing has yet said to start again.
 
-        A new event ends the rest, as does the time set for it. A request
-        from the master and a new connection end it where they arrive.
+        It stops when the retries run out, or when the oldest event will not
+        fit a fragment. A new event ends the rest, as does the time set for
+        it. A request from the master and a new connection end it where they
+        arrive.
         """
         if not self._resting:
             return False

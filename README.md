@@ -29,8 +29,9 @@ implemented and tested: a master reads classes 1 to 3, confirms what it was sent
 through the indication bits what is still waiting. An answer too large to send at once is a
 conversation -- the master confirms each fragment and the next follows -- and a provider that says
 where its own objects end has its point map split the same way. An IEEE 1815.2 DER outstation is
-assembled from the profile's point tables and runs from one command, below. Not yet done are
-unsolicited responses, which is outstation-initiated traffic. The first release
+assembled from the profile's point tables and runs from one command, below. Unsolicited
+responses, which is outstation-initiated traffic, are there for a session built to send them,
+and off otherwise. The first release
 is `0.1.0`, and the API is not stable: while the major version is `0`, a minor bump may carry a
 breaking change.
 
@@ -104,8 +105,9 @@ certification body:
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
 | DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
-| Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is catalogued as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, and disabling function codes |
-| Unsolicited responses, floating-point variations, device attributes (all optional in the profile), secure authentication | Not implemented |
+| Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is catalogued as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, disabling function codes, and the rules for unsolicited responses |
+| Unsolicited responses (optional in the profile) | Implemented, off by default: `py1815-der run --unsolicited`, or `session(unsolicited=True)` |
+| Floating-point variations, device attributes (both optional in the profile), secure authentication | Not implemented |
 
 `py1815-der profile` writes the outstation's DNP3 Device Profile document (schema version
 2.12.00), generated from the running configuration: its point lists, limits and
