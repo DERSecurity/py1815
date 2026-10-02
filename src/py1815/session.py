@@ -825,6 +825,10 @@ class Session:
         #: response has told the master so.
         self._broadcast: link.Broadcast | None = None
         self._broadcast_reassembler = Reassembler(max_fragment=max_fragment)
+        #: Who sent the broadcast segments being reassembled. Segments from two
+        #: sources are not one fragment, which matters once any address may be
+        #: heard: half a request from one and half from another must not run.
+        self._broadcast_source: int | None = None
         #: The last request that acted, and its answer, for a retry (D49).
         self._acted: tuple[bytes, bytes] | None = None
         #: A select being repeated, held across the reset every request makes.
@@ -844,7 +848,12 @@ class Session:
         caller's: a device that keeps them across a restart leaves them, and
         one that does not hands this session a new buffer.
         """
+        # A restart forgets what was in flight on the connection, and not who
+        # is on it: a master that commanded the restart is owed the answer,
+        # and goes on being served on the connection it is still using.
+        peer = self._peer
         self.connection_reset()
+        self._peer = peer
         self._restart = True
         self._need_time = self._need_time_at_start
         self._broadcast = None
@@ -908,6 +917,7 @@ class Session:
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._broadcast_reassembler.reset()
+        self._broadcast_source = None
         self._select = None
         self._outstanding = None
         self._conversation = None
@@ -1032,6 +1042,15 @@ class Session:
 
     def _receive_broadcast(self, frame: link.LinkFrame) -> None:
         """Act on a broadcast request, and remember to say one was received (D50)."""
+        if frame.source != self._broadcast_source:
+            if self._broadcast_source is not None:
+                logger.info(
+                    "dnp3: broadcast from %d abandons one in progress from %d",
+                    frame.source,
+                    self._broadcast_source,
+                )
+            self._broadcast_reassembler.reset()
+            self._broadcast_source = frame.source
         try:
             fragment = self._broadcast_reassembler.add(frame.payload)
         except TransportError as exc:

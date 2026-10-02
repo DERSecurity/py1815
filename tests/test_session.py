@@ -248,6 +248,47 @@ class TestAMasterNotKnownInAdvance:
         assert frame.destination == 99
         assert _fragments(session.receive(_user_data(CLASS_0_READ, source=99)))
 
+    def test_a_cold_restart_is_answered_at_the_master_that_asked(self):
+        """A restart forgets the exchange in flight. It does not forget who is connected."""
+        session = Session(
+            Recorder(),
+            outstation_address=OUTSTATION,
+            master_address=None,
+            restart_handler=lambda: 0,
+        )
+        reply = session.receive(_user_data(bytes([0xC0, FunctionCode.COLD_RESTART]), source=99))
+        (frame,) = _frames(reply)
+        assert frame.destination == 99
+        assert session.master_address == 99
+
+    def _broadcast_segment(self, source: int, segment: bytes) -> bytes:
+        control = link.control_byte(
+            from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+        )
+        return link.build(control, link.Broadcast.NO_CONFIRM, source, payload=segment)
+
+    def _record_time_in_two_segments(self) -> tuple[bytes, bytes]:
+        fragment = bytes([0xC0, FunctionCode.RECORD_CURRENT_TIME])
+        return bytes([0x40]) + fragment[:1], bytes([0x81]) + fragment[1:]
+
+    def test_a_broadcast_is_reassembled_from_one_source_only(self):
+        """Two half-broadcasts from two addresses are not one broadcast."""
+        session = self._session()
+        first, last = self._record_time_in_two_segments()
+        session.receive(self._broadcast_segment(55, first))
+        session.receive(self._broadcast_segment(77, last))
+        (response,) = _fragments(session.receive(_user_data(CLASS_0_READ, source=99)))
+        assert not response[2] & IINBit.BROADCAST, "no broadcast was received whole"
+
+    def test_and_one_source_sending_both_halves_is_heard(self):
+        """The control for the test above: the same two segments, one sender."""
+        session = self._session()
+        first, last = self._record_time_in_two_segments()
+        session.receive(self._broadcast_segment(55, first))
+        session.receive(self._broadcast_segment(55, last))
+        (response,) = _fragments(session.receive(_user_data(CLASS_0_READ, source=99)))
+        assert response[2] & IINBit.BROADCAST
+
     def test_the_facts_name_no_expected_address(self):
         session = self._session()
         assert session.facts.master_address is None
