@@ -25,6 +25,14 @@ One conversation with one outstation, with no I/O: octets in, octets out.
 
 ::: py1815.master.store
 
+## The trace
+
+::: py1815.master.trace
+
+## The service
+
+::: py1815.master.service
+
 ## Requests
 
 ::: py1815.master.requests

@@ -28,6 +28,13 @@ ALL: Literal["all"] = "all"
 Indices = Sequence[int] | Literal["all"] | None
 
 
+def _event_classes(classes: Sequence[int]) -> Sequence[int]:
+    named = classes or (1, 2, 3)
+    if any(number not in (1, 2, 3) for number in named):
+        raise ValueError("unsolicited reporting is by event class: 1, 2 or 3")
+    return named
+
+
 class Operations(Generic[ResultT]):
     """What a master can be asked to do. This first version reads."""
 
@@ -49,6 +56,18 @@ class Operations(Generic[ResultT]):
     def integrity_poll(self) -> ResultT:
         """Read every event class and then every static value."""
         return self.scan("integrity")
+
+    def enable_unsolicited(self, *classes: int) -> ResultT:
+        """Ask the outstation to report the named event classes without being polled."""
+        return self._exchange(
+            FunctionCode.ENABLE_UNSOLICITED, requests.class_scan(*_event_classes(classes))
+        )
+
+    def disable_unsolicited(self, *classes: int) -> ResultT:
+        """Ask the outstation to stop reporting the named event classes unasked."""
+        return self._exchange(
+            FunctionCode.DISABLE_UNSOLICITED, requests.class_scan(*_event_classes(classes))
+        )
 
     def read(
         self,

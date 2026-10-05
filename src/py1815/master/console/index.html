@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Satori DNP3 Master</title>
+<link rel="icon" href="satori-mark.png">
+<link rel="stylesheet" href="console.css">
+</head>
+<body>
+<header class="masthead">
+  <img src="satori.png" alt="Satori" class="lockup">
+  <div class="product">DNP3 Master</div>
+  <div class="spacer"></div>
+  <div id="service-state" class="chip">connecting</div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <h2>Outstations</h2>
+    <ul id="outstations" class="outstations"></ul>
+
+    <details class="add" id="add-panel">
+      <summary>Add outstation</summary>
+      <form id="add-form" autocomplete="off">
+        <label>Name <input name="name" required placeholder="lab-inverter"></label>
+        <label>Host <input name="host" required value="127.0.0.1"></label>
+        <label>Port <input name="port" type="number" min="1" max="65535" value="20000"></label>
+        <label>Outstation address <input name="outstation_address" type="number" min="0" max="65519" value="1024"></label>
+        <label>Master address <input name="master_address" type="number" min="0" max="65519" value="1"></label>
+        <label>Integrity poll every (s) <input name="integrity_interval" type="number" min="1" step="any" placeholder="off"></label>
+        <label>Event poll every (s) <input name="event_interval" type="number" min="0.2" step="any" placeholder="off"></label>
+        <button type="submit" class="primary">Add and connect</button>
+        <p id="add-error" class="error" role="alert"></p>
+      </form>
+    </details>
+  </aside>
+
+  <main>
+    <div id="empty" class="empty">
+      <h1>No outstation selected</h1>
+      <p>Add an outstation to read its points, events and traffic.</p>
+    </div>
+
+    <section id="workspace" hidden>
+      <div class="title-row">
+        <h1 id="title"></h1>
+        <span id="title-state" class="chip"></span>
+        <div class="spacer"></div>
+        <button id="connect-button"></button>
+        <button id="remove-button" class="quiet">Remove</button>
+      </div>
+
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button role="tab" data-tab="points">Points</button>
+        <button role="tab" data-tab="commands">Commands</button>
+        <button role="tab" data-tab="events">Events <span id="events-count" class="count"></span></button>
+        <button role="tab" data-tab="traffic">Traffic <span id="traffic-count" class="count"></span></button>
+        <button role="tab" data-tab="log">Log</button>
+      </nav>
+
+      <div class="panel" data-panel="overview">
+        <div class="cards">
+          <div class="card">
+            <h3>Connection</h3>
+            <dl id="overview-connection" class="facts"></dl>
+          </div>
+          <div class="card">
+            <h3>Requests</h3>
+            <dl id="overview-counts" class="facts"></dl>
+          </div>
+          <div class="card">
+            <h3>Points reported</h3>
+            <dl id="overview-points" class="facts"></dl>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Internal indications <span class="hint">from the last response</span></h3>
+          <div id="indications" class="lamps"></div>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="points" hidden>
+        <div class="toolbar">
+          <div id="point-types" class="segmented"></div>
+          <input id="point-filter" type="search" placeholder="Filter by index, name or flag">
+          <label class="check"><input id="point-changed" type="checkbox"> Changed in the last 10 s</label>
+          <div class="spacer"></div>
+          <span id="point-summary" class="hint"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="points-table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="commands" hidden>
+        <div class="cards">
+          <div class="card">
+            <h3>Scan</h3>
+            <div class="buttons" id="scan-buttons">
+              <button data-scan="integrity" class="primary">Integrity poll</button>
+              <button data-scan="events">Event poll (Class 1, 2, 3)</button>
+              <button data-scan="class0">Class 0</button>
+              <button data-scan="class1">Class 1</button>
+              <button data-scan="class2">Class 2</button>
+              <button data-scan="class3">Class 3</button>
+            </div>
+            <h4>Repeat</h4>
+            <form id="repeat-form" class="inline">
+              <label>Integrity poll every <input name="integrity" type="number" min="1" step="any" placeholder="off"> s</label>
+              <label>Event poll every <input name="events" type="number" min="0.2" step="any" placeholder="off"> s</label>
+              <button type="submit">Apply</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h3>Read points</h3>
+            <form id="read-form" class="stack">
+              <label>Point type
+                <select name="type">
+                  <option value="bi">Binary inputs (group 1)</option>
+                  <option value="bo">Binary output status (group 10)</option>
+                  <option value="counter">Counters (group 20)</option>
+                  <option value="frozen">Frozen counters (group 21)</option>
+                  <option value="ai" selected>Analog inputs (group 30)</option>
+                  <option value="ao">Analog output status (group 40)</option>
+                </select>
+              </label>
+              <label>Indices <input name="indices" placeholder="all, or 4, 6, 8"></label>
+              <button type="submit">Read</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h3>Unsolicited responses</h3>
+            <form id="unsolicited-form" class="stack">
+              <div class="checks">
+                <label class="check"><input type="checkbox" name="class" value="1" checked> Class 1</label>
+                <label class="check"><input type="checkbox" name="class" value="2" checked> Class 2</label>
+                <label class="check"><input type="checkbox" name="class" value="3" checked> Class 3</label>
+              </div>
+              <div class="buttons">
+                <button type="submit" name="action" value="enable_unsolicited">Enable</button>
+                <button type="submit" name="action" value="disable_unsolicited">Disable</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <h3>Request by function code</h3>
+            <form id="raw-form" class="stack">
+              <label>Function
+                <select name="function">
+                  <option>READ</option>
+                  <option>DELAY_MEASURE</option>
+                  <option>ENABLE_UNSOLICITED</option>
+                  <option>DISABLE_UNSOLICITED</option>
+                  <option>IMMED_FREEZE</option>
+                  <option>FREEZE_CLEAR</option>
+                </select>
+              </label>
+              <label>Object headers, in hexadecimal <input name="body" placeholder="3C 02 06" class="mono"></label>
+              <button type="submit">Send</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card" id="result-card" hidden>
+          <h3>Result</h3>
+          <div id="result"></div>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="events" hidden>
+        <div class="toolbar">
+          <span class="hint">Newest first</span>
+          <div class="spacer"></div>
+          <button id="events-clear" class="quiet">Clear</button>
+        </div>
+        <div class="table-wrap">
+          <table id="events-table">
+            <thead><tr>
+              <th>Received</th><th>Type</th><th class="num">Index</th><th>Name</th>
+              <th class="num">Value</th><th>Flags</th><th>Outstation time</th><th>Reported</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="traffic" hidden>
+        <div class="toolbar">
+          <div class="segmented" id="traffic-direction">
+            <button data-direction="all" aria-pressed="true">Both</button>
+            <button data-direction="tx">Sent</button>
+            <button data-direction="rx">Received</button>
+          </div>
+          <label class="check"><input id="traffic-application" type="checkbox"> Application layer only</label>
+          <label class="check"><input id="traffic-pause" type="checkbox"> Pause</label>
+          <div class="spacer"></div>
+          <button id="traffic-clear" class="quiet">Clear</button>
+        </div>
+        <div class="split">
+          <div class="table-wrap">
+            <table id="traffic-table">
+              <thead><tr><th>Time</th><th></th><th>Frame</th><th class="num">Octets</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="detail" id="frame-detail">
+            <p class="hint">Select a frame to read it layer by layer.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" data-panel="log" hidden>
+        <div class="toolbar">
+          <span class="hint">What this console asked for, and what came of it</span>
+          <div class="spacer"></div>
+          <button id="log-clear" class="quiet">Clear</button>
+        </div>
+        <ol id="log" class="log"></ol>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="console.js"></script>
+</body>
+</html>

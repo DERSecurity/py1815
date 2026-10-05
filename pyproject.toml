@@ -28,6 +28,8 @@ dependencies = []
 # The IEEE 1815.2 DER outstation: fetch the profile's point tables, serve a
 # simulated DER, poll a running outstation. See `py1815.profile.cli`.
 py1815-der = "py1815.profile.cli:main"
+# The master: its JSON service and its web console. See `py1815.master.cli`.
+py1815-master = "py1815.master.cli:main"
 
 [project.optional-dependencies]
 # Building the documentation site. mkdocstrings reads the package's own

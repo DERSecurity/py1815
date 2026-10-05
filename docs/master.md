@@ -6,8 +6,8 @@ outstations: this library's, in tests, and any other, on a bench.
 !!! note "A first version"
     It reads. It polls by class, reads named points, confirms what asks to be
     confirmed, takes unsolicited responses and keeps the last value of every
-    point. It does not command an output, does not reconnect by itself, and
-    has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    point, from Python, from a JSON service, or from a web console. It does
+    not command an output, does not reconnect by itself, and has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -125,6 +125,120 @@ needs: events left unconfirmed are still there on the next scan.
 ```python
 lab = await master.add("lab", host="192.0.2.10", confirm=False)
 ```
+
+## Repeating a scan
+
+Nothing is sent on a schedule unless you ask for it:
+
+```python
+lab.repeat_scan("integrity", 30)   # every thirty seconds
+lab.repeat_scan("events", 2)
+lab.repeat_scan("events", None)    # stop
+```
+
+A repeated scan takes its turn with every other request, stops when the
+connection ends, and starts again when `connect()` makes it again.
+
+## The traffic
+
+Each outstation keeps a `trace`: every frame sent and received, with its time,
+its octets and a reading of them one layer at a time.
+
+```python
+for entry in lab.trace.since():
+    print(entry.direction, entry.summary)
+# tx READ seq 0: class 1, class 2, class 3, class 0
+# rx RESPONSE seq 0 CON [NEED_TIME, DEVICE_RESTART]: g1v2 x49, g30v1 x283
+```
+
+## The console
+
+```bash
+py1815-master console --demo
+```
+
+serves a web console on `http://127.0.0.1:8815/` and, with `--demo`, starts a
+simulated IEEE 1815.2 DER beside it and connects to it. The demonstration
+needs the profile's point tables, which `py1815-der tables fetch` obtains; see
+[Serving a DER](der.md).
+
+To watch a device of your own:
+
+```bash
+py1815-master console --outstation lab=192.0.2.10:20000 \
+    --integrity-interval 30 --event-interval 2
+```
+
+| Tab | Shows |
+|---|---|
+| **Overview** | Addresses, connection state, counts, and every internal indication of the last response |
+| **Points** | A table for each point type: index, value, flags by name, the outstation's time, the object that carried it, and whether a poll or an event reported it |
+| **Commands** | Scans by class, a read of named points, enabling and disabling unsolicited responses, any request by function code, and the result of each |
+| **Events** | Events as they arrive, polled or unsolicited |
+| **Traffic** | Each frame with its time and direction, and the selected one read layer by layer beside its octets |
+| **Log** | What the console asked for, and what came of it |
+
+The console listens on this machine only. To reach it from another, give it a
+token, which every request then has to carry:
+
+```bash
+py1815-master console --bind 0.0.0.0:8815 --token "$(openssl rand -hex 16)"
+```
+
+It refuses a request that comes from a page it did not serve, since a browser
+will carry a request from any site to a port on your own machine. It loads
+nothing from the network: no fonts, no scripts, no styles.
+
+## The service
+
+The console holds no logic. It speaks to a service whose operations are JSON,
+and anything it does a script can do with the same messages.
+
+```bash
+py1815-master serve --bind 127.0.0.1:8816
+```
+
+A request is one JSON object on one line, and so is its answer:
+
+```json
+{"id": 1, "op": "add", "params": {"name": "lab", "host": "192.0.2.10", "port": 20000}}
+{"id": 2, "op": "scan", "outstation": "lab", "params": {"kind": "integrity"}}
+{"id": 3, "op": "read", "outstation": "lab", "params": {"points": {"ai": [4, 6, 8], "bi": "all"}}}
+```
+
+```json
+{"id": 3, "ok": true, "result": {"function": "READ", "outcome": "complete", "fragments": 1,
+  "indications": ["NEED_TIME", "DEVICE_RESTART"], "object_count": 52, "elapsed_ms": 14.2,
+  "objects": [{"type": "ai", "index": 4, "value": 50000, "flags": ["ONLINE"], "...": "..."}]}}
+```
+
+| Operation | Does |
+|---|---|
+| `status` | Each outstation: connection, addresses, indications, counts |
+| `add`, `remove` | An outstation, by name. `add` takes `host`, `port`, both link addresses, `integrity_interval` and `event_interval` |
+| `connect`, `disconnect` | Its connection |
+| `scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3` |
+| `read` | Named points by type: `bi`, `bo`, `counter`, `frozen`, `ai`, `ao`, each a list of indices or `"all"` |
+| `values` | What the store holds, with no traffic |
+| `events` | The events received |
+| `request` | Any request: `function` by name or number, `body` in hexadecimal |
+| `enable_unsolicited`, `disable_unsolicited` | By `classes` |
+| `repeat` | A scan of `kind` every `interval` seconds, or `null` to stop |
+| `trace` | The frames recorded, optionally `after` an id |
+| `clear` | The `trace` or the `events` |
+| `stop` | Ends the service |
+
+An answer has `"ok": false` and an `error` with a `message` when the message
+could not be acted on (`"kind": "request"`) or there was no connection
+(`"kind": "connection"`). An outstation that did not answer is not an error:
+the result's `outcome` is `timeout`.
+
+Send `{"op": "subscribe"}` and the same connection is also sent what happens
+unasked, one line each, with an `event` field: `frame`, `exchange`,
+`unsolicited`, `connection`, `outstations`.
+
+The console uses the same messages over HTTP: `POST /api` with a message as
+`application/json`, and `GET /events` for the stream as server-sent events.
 
 ## In one process, with no socket
 
