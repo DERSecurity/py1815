@@ -1330,23 +1330,169 @@ class TestWithNobodyToSendTo:
 
         assert session._unsolicited_destination() == 42
 
-    def test_a_session_that_takes_any_master_has_none_configured_and_sends_none(self):
-        """Not even once a master has spoken and enabled every class."""
-        session, buffers, clock = _built(outstation_address=OUTSTATION, master_address=None)
+
+class TestAMasterLearnedFromTheConnection:
+    """A session that takes any master reports to the one it is serving, and
+    only what that master asked to be told."""
+
+    FIRST, SECOND = 7, 9
+
+    @staticmethod
+    def _from(master: int, fragment: bytes) -> bytes:
         control = link.control_byte(
             from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
         )
-        enable = _request(FunctionCode.ENABLE_UNSOLICITED, CLASSES)
-        answered = session.receive(link.build(control, OUTSTATION, 7, b"\xc0" + enable))
-        (frame,) = link.FrameReader().feed(answered)
-        assert frame.destination == session.master_address == 7
+        return link.build(control, OUTSTATION, master, b"\xc0" + fragment)
+
+    @staticmethod
+    def _sent(octets: bytes) -> list[tuple[int, bytes]]:
+        """Each fragment in what the session returned, with the address it went to."""
+        found, reassembler = [], Reassembler()
+        for frame in link.FrameReader().feed(octets):
+            assert frame.source == OUTSTATION
+            whole = reassembler.add(frame.payload)
+            if whole is not None:
+                found.append((frame.destination, whole))
+        return found
+
+    def _unasked(self, session: Session) -> tuple[int, bytes]:
+        (sent,) = self._sent(session.initiate())
+        return sent
+
+    def _serving(self, master: int) -> tuple[Session, EventBuffers, Clock]:
+        """A session that has heard from ``master``, announced to it, and been enabled by it."""
+        session, buffers, clock = _built(outstation_address=OUTSTATION, master_address=None)
+        session.receive(self._from(master, _read(CLASS_0)))
+        self._announce_to(session, master)
+        self._enable(session, master)
+        return session, buffers, clock
+
+    def _announce_to(self, session: Session, master: int) -> None:
+        destination, null = self._unasked(session)
+        assert destination == master and null[1] == FunctionCode.UNSOLICITED_RESPONSE
+        confirm = _confirm(null[0] & 0x0F, unsolicited=True)
+        assert session.receive(self._from(master, confirm)) == b""
+
+    def _enable(self, session: Session, master: int, sequence: int = 1) -> None:
+        enable = _request(FunctionCode.ENABLE_UNSOLICITED, CLASSES, sequence)
+        ((destination, response),) = self._sent(session.receive(self._from(master, enable)))
+        assert destination == master and response[3] == 0
+
+    def test_nothing_is_sent_before_anyone_has_spoken(self):
+        session, buffers, clock = _built(outstation_address=OUTSTATION, master_address=None)
         _analog(buffers, 0)
 
         for _ in range(3):
             assert session.initiate() == b""
             assert session.initiate_after() is None
             clock.now += TIMEOUT
-        assert buffers.total == 1, "the event waits for a poll"
+
+    def test_the_restart_is_announced_to_the_master_that_spoke(self):
+        session, _, _ = _built(outstation_address=OUTSTATION, master_address=None)
+        session.receive(self._from(self.FIRST, _read(CLASS_0)))
+
+        assert self._unasked(session) == (self.FIRST, bytes.fromhex("f0828000"))
+
+    def test_a_broadcast_is_not_someone_to_report_to(self):
+        """It is addressed to everyone and names no master, so it opens nothing."""
+        session, _, _ = _built(outstation_address=OUTSTATION, master_address=None)
+        session.receive(_broadcast(_request(FunctionCode.RECORD_CURRENT_TIME)))
+
+        assert session.master_address is None
+        assert session.initiate() == b""
+
+    def test_its_events_are_reported_to_it(self):
+        session, buffers, _ = self._serving(self.FIRST)
+        _analog(buffers, 4)
+
+        destination, fragment = self._unasked(session)
+
+        assert destination == self.FIRST
+        assert _indices(fragment) == [4]
+
+    def test_another_address_on_the_connection_confirms_nothing(self):
+        session, buffers, _ = self._serving(self.FIRST)
+        _analog(buffers, 4)
+        _, fragment = self._unasked(session)
+        confirm = _confirm(fragment[0] & 0x0F, unsolicited=True)
+
+        session.receive(self._from(self.SECOND, confirm))
+        assert buffers.total == 1
+        assert session.master_address == self.FIRST
+
+        session.receive(self._from(self.FIRST, confirm))
+        assert buffers.total == 0
+
+    def test_a_new_connection_is_told_nothing_until_someone_speaks_on_it(self):
+        session, buffers, clock = self._serving(self.FIRST)
+        session.connection_reset()
+        _analog(buffers, 4)
+
+        for _ in range(3):
+            assert session.initiate() == b""
+            assert session.initiate_after() is None
+            clock.now += TIMEOUT
+        assert buffers.total == 1
+
+    def test_the_same_master_coming_back_is_still_reported_to(self):
+        """What it enabled stands across its reconnection, as for a configured master."""
+        session, buffers, _ = self._serving(self.FIRST)
+        session.connection_reset()
+        _analog(buffers, 4)
+
+        session.receive(self._from(self.FIRST, _read(CLASS_0, 2)))
+
+        assert session.unsolicited_classes == {
+            EventClass.CLASS_1,
+            EventClass.CLASS_2,
+            EventClass.CLASS_3,
+        }
+        destination, fragment = self._unasked(session)
+        assert destination == self.FIRST
+        assert _indices(fragment) == [4]
+
+    def test_a_different_master_is_not_sent_what_the_last_one_enabled(self):
+        """It asked for nothing, and may not be a master that confirms a report."""
+        session, buffers, clock = self._serving(self.FIRST)
+        session.connection_reset()
+        _analog(buffers, 4)
+
+        session.receive(self._from(self.SECOND, _read(CLASS_0)))
+
+        assert session.master_address == self.SECOND
+        assert session.unsolicited_classes == frozenset()
+        for _ in range(3):
+            assert session.initiate() == b""
+            clock.now += TIMEOUT
+        assert buffers.total == 1, "the event waits for a poll, or for this master to enable"
+
+    def test_and_is_sent_them_once_it_enables_them_itself(self):
+        session, buffers, _ = self._serving(self.FIRST)
+        session.connection_reset()
+        _analog(buffers, 4)
+        session.receive(self._from(self.SECOND, _read(CLASS_0)))
+
+        self._enable(session, self.SECOND)
+
+        destination, fragment = self._unasked(session)
+        assert destination == self.SECOND
+        assert _indices(fragment) == [4]
+
+    def test_a_restart_is_announced_again_to_the_master_still_connected(self):
+        session, _, _ = self._serving(self.FIRST)
+
+        session.restart()
+
+        assert session.unsolicited_classes == frozenset()
+        destination, null = self._unasked(session)
+        assert destination == self.FIRST
+        assert null[1:] == bytes.fromhex("828000"), "a null response, with the restart indication"
+
+    def test_a_configured_master_is_reported_to_before_it_speaks(self):
+        """The control: naming the master is what lets the outstation speak first."""
+        session, _, _ = _built(outstation_address=OUTSTATION, master_address=self.FIRST)
+
+        assert self._unasked(session) == (self.FIRST, bytes.fromhex("f0828000"))
 
 
 class TestThroughTheLinkLayer:

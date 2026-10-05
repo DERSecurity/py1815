@@ -101,10 +101,11 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   `OutstationServer` drives it, and `notify()` reports a new event at once. Off by default,
   and off answers as before, refusing `ENABLE_UNSOLICITED`. D69 to D71 in
   [DESIGN.md](../DESIGN.md) and [UNSOLICITED.md](UNSOLICITED.md) record it. The
-  destination is asked of one helper, which names the configured master and says nowhere
-  when there is none. A session that takes any master (G4) has none configured, so it
-  sends nothing unsolicited and its events are read by polling. *Missing:* that helper
-  answering with the master learned from the connection.
+  destination is asked of one helper, which names the master being served and says nowhere
+  when there is none. A session that takes any master (G4) reports to the master that
+  spoke first on the connection, sends nothing before one has, and disables every class
+  when a different master takes the next connection, so no master is sent what another
+  enabled (D72).
 - [x] **G8. Small ARM controllers.** The gateway runs in a container on 32-bit and 64-bit
   ARM Linux controllers with little memory. No runtime dependencies and pure Python
   already make that possible. *Built:* the `test-arm32` job runs the whole unit suite on

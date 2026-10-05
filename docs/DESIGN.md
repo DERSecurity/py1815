@@ -1015,8 +1015,7 @@ for: `initiate()` returns the octets that are due, usually none, and `initiate_a
 says how many seconds until the clock alone could change that. Time is the injected
 clock. `OutstationServer` calls them, so a caller writes no loop. Where an unsolicited
 response goes is answered in one place, `_unsolicited_destination`, which names the
-configured master and says nowhere, so nothing is sent, when none is configured: a session
-that takes any master (D64) reports by being polled.
+master being served and says nowhere, so nothing is sent, when there is none (D72).
 *Trade-off:* a master that wants unsolicited reporting from an outstation it did not
 configure gets `FUNC_NOT_SUPPORTED` until someone turns it on, against an outstation
 that never sends anything its operator did not choose to send.
@@ -1091,6 +1090,33 @@ that neither polls nor confirms is disconnected as before. *Trade-off:* a master
 ignores unsolicited responses has every read answered up to the confirmation timeout
 late, which is what the standard asks of the outstation and is why the feature is for a
 master that uses it.
+
+**D72 -- A session that takes any master reports to the one it is serving, and only what
+that master enabled.** D64 lets a session learn its master from the first frame of a
+connection, and D69 sends unsolicited responses to a master. Together the destination is
+the master being served. An unsolicited response has no request to take an address from,
+so a session with no configured master sends none until a master has spoken on the
+connection, and none again from the moment the connection ends: the restart is announced
+to the first master to speak, after its first request is answered, and not into a
+connection nobody has identified themselves on.
+
+What a master enabled belongs to that master. It stands across a new connection when the
+same address is the first to speak on it, exactly as it stands for a configured master,
+because a master that reconnects without a restart in between has no reason to enable
+again and would otherwise stop being told with nothing to say so. When a different address
+speaks first, every class is disabled. That master asked for nothing, and it may be one
+that does not confirm unsolicited responses, which D71 would make pay for another
+master's request with every read answered late. It enables what it wants, as a master
+does after a restart. Whether the restart was announced is still the association's: once
+one master has confirmed the announcement it is not sent again to the next, which sees the
+restart indication in every response until one of them clears it.
+
+An address is not an identity, and this decision does not pretend otherwise. A peer that
+connects under the address of the master that enabled a class is reported to, as it would
+be read by and commanded by under D64. What restricts that is what restricts everything
+else about an outstation built this way: the listener's TLS allow-list, or the network.
+*Trade-off:* a master that reconnects under a different address has to enable again, and
+until it does its events wait in the buffers for a poll.
 
 ## Layering
 
