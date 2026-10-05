@@ -24,7 +24,8 @@ the README has the commands.
 
 `py1815-der points` lists every point it serves. `py1815-der run --help` has
 the link addresses, the bind address, and options for resolving equipment
-blocks (`--inverters 2`, and so on).
+blocks (`--inverters 2`, and so on). `py1815-der run --unsolicited` serves it
+with unsolicited responses on, for a master that enables them.
 
 ## Where the tables come from
 
@@ -211,6 +212,7 @@ event and changes no output.
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone. |
 | **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear. Call `freeze_all()` on the period the master sets. |
 | **Time** | The session asks for the time until a master writes it, and event and freeze times follow what was written. |
+| **Unsolicited responses** | Off unless the session is built with `outstation.session(unsolicited=True)`. Then the events `poll()` buffers are reported to a master that has enabled their class, without waiting to be polled; call `server.notify()` after `poll()` to send them at once. Nothing in the map or the binding changes. See [Serving an outstation](outstation.md#unsolicited-responses). |
 
 A check that depends on state, not on the value, goes in `check=`: it runs on
 select and again on operate, and returns the status to refuse with.
@@ -396,7 +398,6 @@ the configuration the conformance tests run against; see
 - **Floating-point variations.** Inputs are served as integers, scaled by the
   tables, which is the profile's baseline. A floating-point setpoint is
   accepted and taken as engineering units.
-- **Unsolicited responses.** Events are reported when polled.
 - **Measured figures in the Device Profile.** Clock drift, response time and
   timestamp error are left unstated until someone measures them.
 

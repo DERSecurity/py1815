@@ -38,7 +38,9 @@ MASTER = 1
 CONFIRM, READ, WRITE, SELECT, OPERATE, DIRECT_OPERATE, DIRECT_OPERATE_NR = 0, 1, 2, 3, 4, 5, 6
 FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR = 7, 8, 9, 10
 COLD_RESTART, ASSIGN_CLASS, DELAY_MEASURE, RECORD_CURRENT_TIME = 13, 22, 23, 24
+ENABLE_UNSOLICITED, DISABLE_UNSOLICITED = 20, 21
 RESPONSE = 0x81
+UNSOLICITED_RESPONSE = 0x82
 
 # Qualifier codes.
 Q_RANGE_8, Q_RANGE_16, Q_ALL, Q_COUNT_8, Q_COUNT_16, Q_INDEX_8, Q_INDEX_16 = (
@@ -307,7 +309,17 @@ class TestMaster:
 
     def raw(self, octets: bytes) -> Reply:
         """Send octets exactly as given and collect whatever comes back."""
-        out = self.session.receive(octets)
+        return self._collect(self.session.receive(octets))
+
+    def listen(self) -> Reply:
+        """Send nothing, and collect whatever the outstation sends unasked.
+
+        What a tester does when a procedure says to wait and watch the line.
+        The waiting is done by moving the clock; this is the watching.
+        """
+        return self._collect(self.session.initiate())
+
+    def _collect(self, out: bytes) -> Reply:
         reply = Reply(raw=out)
         reader = link.FrameReader()
         for frame in reader.feed(out):
@@ -364,6 +376,10 @@ class TestMaster:
 
     def confirm_sequence(self, sequence: int) -> Reply:
         return self.raw(self.frames(bytes([0xC0 | sequence, CONFIRM])))
+
+    def confirm_unsolicited(self, sequence: int) -> Reply:
+        """Confirm an unsolicited response: the same function, with the unsolicited bit."""
+        return self.raw(self.frames(bytes([0xD0 | sequence, CONFIRM])))
 
     def poll(self, *headers: bytes, confirm: bool = True) -> list[Fragment]:
         """A read followed to its end, confirming each fragment that asks."""

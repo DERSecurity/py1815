@@ -75,8 +75,11 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   the session's clock moving on, the caller's loop still polling and freezing, a select
   left to expire, and the listener closing a connection it has heard nothing on. The
   binding has been called once and the output stands where the master left it.
-  Unsolicited responses bring the library's first timer, and that timer retries a report;
-  these tests are what it must leave passing.
+  Unsolicited responses brought the library's first timer, and that timer retries a
+  report. These tests pass unchanged with it, and `tests/test_unsolicited_silence.py` runs
+  their session tests again with unsolicited responses on and retrying, and counts the
+  calls to a binding through hours of unconfirmed retries, over a session and over a
+  listener: one each time.
 - [x] **G4. A master that is not known in advance.** `Session` served one configured
   `master_address` and dropped frames from any other source, for a stated reason: answering
   an unexpected address would interleave two conversations over one set of sequence
@@ -88,12 +91,20 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   Accepting any address is not authorization, and the option's documentation says so:
   without transport security, any peer that can reach the port can command (D64 in
   [DESIGN.md](../DESIGN.md)).
-- [ ] **G7. Unsolicited responses, when a master asks.** An unknown master may send
-  `ENABLE_UNSOLICITED`. It is refused today, which stays the honest answer until the
-  roadmap entry in [DESIGN.md](../DESIGN.md) lands. *Missing:* that entry, which this
-  deployment is the first consumer waiting on. Until a master enables them the outstation
-  sends none, which is also the right default for a master nobody has identified: there
-  is no known address to send to.
+- [x] **G7. Unsolicited responses, when a master asks.** *Built:* a session constructed
+  with `unsolicited=True`, which the profile builder passes through, announces a restart
+  with a null response and takes `ENABLE_UNSOLICITED` and `DISABLE_UNSOLICITED` by class.
+  Events of an enabled class are sent in unsolicited responses, retired by their
+  confirmation, and retried at a configurable timeout, a configurable number of times or
+  without limit. A read is held while one waits, and nothing unsolicited is sent while a
+  solicited response waits. The session gained `initiate()` and still does no I/O;
+  `OutstationServer` drives it, and `notify()` reports a new event at once. Off by default,
+  and off answers as before, refusing `ENABLE_UNSOLICITED`. D69 to D71 in
+  [DESIGN.md](../DESIGN.md) and [UNSOLICITED.md](UNSOLICITED.md) record it. The
+  destination is asked of one helper, which names the configured master and says nowhere
+  when there is none. A session that takes any master (G4) has none configured, so it
+  sends nothing unsolicited and its events are read by polling. *Missing:* that helper
+  answering with the master learned from the connection.
 - [ ] **G8. Small ARM controllers.** The gateway runs in a container on 32-bit and 64-bit
   ARM Linux controllers with little memory. No runtime dependencies and pure Python
   already make that possible. *Missing:* the test suite run on a 32-bit target at least

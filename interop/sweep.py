@@ -263,7 +263,7 @@ CASES: list[Case] = [
         expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
         note="events and static data in one response, the events in front",
     ),
-    # -- the one unsolicited request this outstation can honestly agree to ----
+    # -- the one unsolicited request an outstation sending none agrees to ------
     Case(
         name="unsolicited: disable",
         # Naming classes 1, 2 and 3, which is the shape a real master sends
@@ -289,7 +289,7 @@ CASES: list[Case] = [
     _refused(
         FunctionCode.ENABLE_UNSOLICITED,
         "unsolicited: enable",
-        "asks for something this outstation does not do; refused rather than agreed to",
+        "asks for something this outstation, built without it, does not do; refused",
     ),
     _refused(FunctionCode.ASSIGN_CLASS, "class: assign"),
     Case(

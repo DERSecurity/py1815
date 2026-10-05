@@ -22,6 +22,11 @@ The common cause of a second connection is a master whose socket died without a
 FIN, and refusing it would leave the outstation unreachable until a timeout it
 cannot observe.
 
+For a session built with unsolicited responses on, the listener is also what
+asks it, for as long as a master is connected, whether anything is due to be
+sent unasked, and writes what it says (D69 to D71). Nothing else about a
+connection changes: the idle timeout still counts only what the master sends.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -55,6 +60,15 @@ FINGERPRINT_PREFIX = "sha256:"
 
 #: How long a displaced connection is waited on before it is abandoned.
 _CLOSE_TIMEOUT = 2.0
+
+#: Seconds between looks at the session for something to send unasked, when
+#: nothing else prompts one. What bounds how long an event recorded without a
+#: call to :meth:`OutstationServer.notify` waits to be reported.
+UNSOLICITED_INTERVAL = 0.5
+
+#: The shortest wait between two such looks. A session that says something is
+#: due and then has nothing to send must not be asked again in a tight loop.
+_MIN_INITIATE_WAIT = 0.01
 
 
 class PeerRefused(Exception):
@@ -177,6 +191,7 @@ class OutstationServer:
         authorized_peers: frozenset[str] | None = None,
         idle_timeout: float = IDLE_TIMEOUT,
         broadcast_datagrams: bool = False,
+        unsolicited_interval: float = UNSOLICITED_INTERVAL,
     ) -> None:
         """
         Args:
@@ -197,11 +212,24 @@ class OutstationServer:
                 one, and what a broadcast may do (freeze counters, set
                 the time, and operate controls if the session allows it)
                 is done on that say-so.
+            unsolicited_interval: Seconds between looks at the session for
+                something to send unasked, when nothing else prompts one.
+                Only a session built with ``unsolicited=True`` is looked at;
+                for any other this changes nothing. The listener also looks
+                when a connection is admitted, after everything it receives,
+                when the session's own retry time comes, and when
+                :meth:`notify` is called, so this is the longest an event
+                recorded without calling :meth:`notify` waits to be
+                reported.
 
         Raises:
             ValueError: If TLS is configured without an allow-list, or with a
                 context that does not require a client certificate.
         """
+        if not unsolicited_interval > 0:
+            raise ValueError(
+                f"unsolicited_interval is {unsolicited_interval}; it is a wait between looks"
+            )
         if ssl_context is not None:
             # Structural rather than a caller convention. Trusting a CA alone
             # authenticates every certificate that CA ever issued, and the DNP3
@@ -252,6 +280,22 @@ class OutstationServer:
         #: itself too. Two sockets would drive one session concurrently, which
         #: is the state D7 exists to make impossible.
         self._admission = asyncio.Lock()
+        self._unsolicited_interval = unsolicited_interval
+        #: Set to have the session looked at now for something to send
+        #: unasked, and not at the next interval.
+        self._wake = asyncio.Event()
+
+    def notify(self) -> None:
+        """Say that events were recorded, so they are reported now.
+
+        For a caller that records into the session's event buffers and wants
+        an enabled class reported at once, not at the next
+        ``unsolicited_interval``. It sends nothing itself and does nothing
+        for a session without unsolicited responses, or with no master
+        connected. Call it from the event loop's own thread; from another,
+        hand it over with ``loop.call_soon_threadsafe(server.notify)``.
+        """
+        self._wake.set()
 
     @property
     def running(self) -> bool:
@@ -433,15 +477,84 @@ class OutstationServer:
                 await writer.wait_closed()
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        while True:
-            data = await asyncio.wait_for(reader.read(_READ_SIZE), timeout=self._idle_timeout)
-            if not data:
-                return
-            reply = self._session.receive(data)
-            if reply:
-                writer.write(reply)
-                # Bounded like the read: a peer that connects and stops reading
-                # would otherwise park this handler in drain() indefinitely,
-                # holding the association -- which is what the idle timeout is
-                # for, applied to only half the exchange.
-                await asyncio.wait_for(writer.drain(), timeout=self._idle_timeout)
+        # Only a session that sends unasked has anything to be driven. For
+        # every other, the loop below is the whole of what this connection
+        # does, as it always was.
+        #: Held across a drain. Two tasks write to this connection when the
+        #: session sends unasked, and a drain is not something to rely on two
+        #: of them waiting in at once.
+        draining = asyncio.Lock()
+        initiator = (
+            asyncio.create_task(self._initiate(writer, draining))
+            if self._session.facts.unsolicited
+            else None
+        )
+        try:
+            while True:
+                # The idle timeout is on what is *received*, and stays there.
+                # What this outstation sends unasked does not count as the
+                # master being present: a master that neither polls nor
+                # confirms is as gone as it ever was.
+                data = await asyncio.wait_for(reader.read(_READ_SIZE), timeout=self._idle_timeout)
+                if not data:
+                    return
+                reply = self._session.receive(data)
+                if reply:
+                    writer.write(reply)
+                    # Bounded like the read: a peer that connects and stops reading
+                    # would otherwise park this handler in drain() indefinitely,
+                    # holding the association -- which is what the idle timeout is
+                    # for, applied to only half the exchange.
+                    async with draining:
+                        await asyncio.wait_for(writer.drain(), timeout=self._idle_timeout)
+                if initiator is not None:
+                    # What arrived may have settled something the session was
+                    # waiting on: a confirmation, or a class being enabled.
+                    self._wake.set()
+        finally:
+            if initiator is not None:
+                initiator.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await initiator
+
+    async def _initiate(self, writer: asyncio.StreamWriter, draining: asyncio.Lock) -> None:
+        """Send what the session has to say unasked, for as long as this connection lasts.
+
+        The session does no I/O and starts no timer, so something has to ask
+        it whether anything is due and write what comes back. This asks when
+        the connection is admitted, whenever :meth:`notify` or the serve loop
+        says something changed, when the time the session gave comes round,
+        and every ``unsolicited_interval`` regardless, which is what catches
+        an event recorded by a caller that never calls :meth:`notify`.
+
+        It runs beside the serve loop and belongs to the same connection: it
+        is started after admission and cancelled when the connection ends, so
+        it only ever writes to the connection that is the master. Both hand
+        the transport whole frames in one call, with nothing awaited between
+        the session producing octets and the write, so the frames of one
+        never land inside the frames of the other.
+
+        A failure here ends the connection instead of leaving it open and
+        mute. Closing the transport is what tells the serve loop.
+        """
+        try:
+            while True:
+                self._wake.clear()
+                out = self._session.initiate()
+                if out:
+                    writer.write(out)
+                    async with draining:
+                        await asyncio.wait_for(writer.drain(), timeout=self._idle_timeout)
+                due = self._session.initiate_after()
+                wait = self._unsolicited_interval if due is None else due
+                wait = min(self._unsolicited_interval, max(_MIN_INITIATE_WAIT, wait))
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), timeout=wait)
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, ConnectionResetError, BrokenPipeError) as exc:
+            logger.info("dnp3: unsolicited reporting ended with the connection: %s", exc)
+            writer.close()
+        except Exception:
+            logger.exception("dnp3: unsolicited reporting failed; closing the connection")
+            writer.close()
