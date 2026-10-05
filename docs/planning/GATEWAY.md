@@ -129,8 +129,6 @@ closes. G7 follows the roadmap and is not gated on the rest.
 
 ## Open
 
-- **The status a read-only outstation refuses a control with** (G1). It has to tell a
-  master "not through this interface" and not "this point cannot be controlled".
 - **Whether the event policy file is the library's format or the caller's** (G5).
   Settled: the caller's. The library takes the policy as a mapping it validates and
   reads no file, so the gateway keeps the policy in its own configuration and hands

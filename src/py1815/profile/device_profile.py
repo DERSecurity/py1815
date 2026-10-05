@@ -31,7 +31,7 @@ from __future__ import annotations
 import datetime
 import importlib.metadata
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from xml.etree import ElementTree
 
@@ -128,6 +128,10 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
     lists no freezes. The tests hold every row to the session's behavior.
     """
     served = _served(outstation)
+    if outstation.read_only:
+        # A control is answered, with a refusal, and is not something a master
+        # may usefully send: it is left off the list of what is supported.
+        facts = replace(facts, controls=False)
     rows: list[Row] = []
 
     def static(group: int, default: str, variations: dict[int, str]) -> None:
@@ -1041,6 +1045,10 @@ def build(
     """
     identity = identity or Identity()
     facts = session.facts
+    if outstation.read_only:
+        # The document describes what a master may ask of this outstation, and
+        # a read-only one offers no control, though it answers one out loud.
+        facts = replace(facts, controls=False)
     served = _served(outstation)
     codes = sorted({int(status) for status in (*_OWN_STATUSES, *statuses)} - {0})
 

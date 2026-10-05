@@ -206,10 +206,11 @@ event and changes no output.
 | **Scaling** | A value goes on the wire as `(value - offset) / multiplier`, rounded, from the tables. A setpoint comes off it the other way. |
 | **Range** | An input outside the tables' range is reported with `OVER_RANGE`. A setpoint outside it is refused with `OUT_OF_RANGE`, not clamped. |
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
-| **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. `disabled_offline=False` turns this off. |
+| **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. Whether it is enabled is what its enable output stands at: your `status=` reader when you give one, the last accepted write when you do not. `disabled_offline=False` turns this off. |
 | **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone. |
+| **Output status** | An output's status and the input that mirrors it report the same thing: your `status=` reader when you give one, the last accepted write when you do not. |
 | **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear. Call `freeze_all()` on the period the master sets. |
 | **Time** | The session asks for the time until a master writes it, and event and freeze times follow what was written. |
 | **Unsolicited responses** | Off unless the session is built with `outstation.session(unsolicited=True)`. Then the events `poll()` buffers are reported to a master that has enabled their class, without waiting to be polled; call `server.notify()` after `poll()` to send them at once. Nothing in the map or the binding changes. See [Serving an outstation](outstation.md#unsolicited-responses). |
@@ -222,6 +223,61 @@ binding.output(Kind.AO, 87, set_limit, check=lambda _value: (
     CommandStatus.LOCAL if inverter.in_local_mode else None
 ))
 ```
+
+## When the device applies something else
+
+A device may put a different value in force than the one a master wrote: it
+clamps to a limit, ramps, or refuses part of the request. The master has to see
+what was applied, not its own request echoed back. Bind the output's status to
+the device, and both the output status and the mirroring input report it:
+
+```python
+binding.output(Kind.AO, 87, inverter.set_power_limit, status=lambda: inverter.power_limit)
+```
+
+`poll()` reads that input like any other, so when the device changes the value
+with no command behind it, the master gets an event.
+
+The same reader decides whether a function is enabled. Give an enable output a
+`status=` reader and the function's inputs are marked as in effect when the
+device says it is enabled: after the outstation restarts beside a device that
+kept running, when another interface enabled it, and no longer once the device
+has turned it off by itself. The reader is called for each of the function's
+inputs that is read, so keep it as cheap as the others. If it raises, the
+function is treated as disabled until it answers again.
+
+## Reporting without commanding
+
+An outstation can be one of several interfaces onto a device, with another of
+them holding control. Build it read-only and it reports everything and
+commands nothing:
+
+```python
+outstation = DerOutstation(point_map, binding, read_only=True)
+```
+
+Every control on a bound output is refused with `NOT_AUTHORIZED`, on select,
+operate and direct operate, and your binding is never called. Pass
+`read_only_status=CommandStatus.BLOCKED_OTHER_MASTER` if that says it better
+for your device. Reads, freezes and the time write work as before.
+
+It still reports what each output stands at, from the `status=` reader, since
+that value was set by whichever interface does command. Give every output a
+status reader on a read-only outstation: without one it can only report the
+initial value you bound, or that it has nothing to report. That matters most
+for an enable output, because without a reader the function it enables is
+reported as disabled, and its inputs as not in effect, unless you bound it
+with `initial=True`.
+
+`outstation.read_only` may be changed while the outstation runs, for a device
+whose control interface is reassigned. A change forgets the writes the
+outstation had accepted: an output without a `status=` reader reports nothing
+until it is written again. An operate that arrives after the outstation became
+read-only is refused like any other control, with the same status, even when
+its select was granted before the change. Giving control back withdraws any
+select granted before the outstation was read-only, so the master has to select
+again. A `Session` you build yourself instead of through `outstation.session()`
+is not told; call its `abandon_select()` when you give control back.
 
 ## Setting the event policy
 
