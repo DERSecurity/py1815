@@ -193,7 +193,10 @@ class DerOutstation:
             disabled_offline: Report the inputs of a function that is
                 disabled with the ONLINE flag clear, as IEEE 1815.2
                 clause 6.1.1 requires: the value is still sent, marked
-                as not in effect. Turn it off for a controlling station
+                as not in effect. A function is enabled when its enable
+                output stands at on, by the output's ``status`` reader if
+                it has one and by the last accepted write if not. Turn it
+                off for a controlling station
                 that discards any value not flagged ONLINE, and so
                 could not check a setting before enabling its function.
             event_policy: Which points report events, in which class, and
@@ -573,11 +576,26 @@ class DerOutstation:
             return Reading(0, Quality.COMM_LOST)
         reading = result if isinstance(result, Reading) else Reading(result)
         gate = self._gates.get(point.address)
-        if gate is not None and reading.quality is Quality.GOOD and not self._state.get(gate):
+        if gate is not None and reading.quality is Quality.GOOD and not self._enabled(gate):
             # The function this input belongs to is disabled. The value is
             # sent as it stands and marked as not in effect.
             return Reading(reading.value, Quality.OFFLINE, reading.timestamp_ms)
         return reading
+
+    def _enabled(self, gate: Address) -> bool:
+        """Whether the function behind an enable output is enabled, as far as is known.
+
+        What the enable output stands at, asked as its status and its mirror
+        ask it, so the three cannot disagree (D65). A device that reports its
+        own state is believed over the last write accepted here: it may have
+        been enabled before this outstation started, or by another interface,
+        or have turned the function off itself. A standing value that cannot
+        be vouched for, because the reader failed or nothing has been written,
+        is not taken as enabled: not knowing is not grounds to tell a master
+        that a setting is in force.
+        """
+        standing = self._standing(gate)
+        return standing.quality is Quality.GOOD and bool(standing.value)
 
     def _binary(self, point: Point) -> BinaryPoint:
         reading = self._reading(point)

@@ -206,7 +206,7 @@ event and changes no output.
 | **Scaling** | A value goes on the wire as `(value - offset) / multiplier`, rounded, from the tables. A setpoint comes off it the other way. |
 | **Range** | An input outside the tables' range is reported with `OVER_RANGE`. A setpoint outside it is refused with `OUT_OF_RANGE`, not clamped. |
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
-| **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. `disabled_offline=False` turns this off. |
+| **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. Whether it is enabled is what its enable output stands at: your `status=` reader when you give one, the last accepted write when you do not. `disabled_offline=False` turns this off. |
 | **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone. |
@@ -238,6 +238,14 @@ binding.output(Kind.AO, 87, inverter.set_power_limit, status=lambda: inverter.po
 `poll()` reads that input like any other, so when the device changes the value
 with no command behind it, the master gets an event.
 
+The same reader decides whether a function is enabled. Give an enable output a
+`status=` reader and the function's inputs are marked as in effect when the
+device says it is enabled: after the outstation restarts beside a device that
+kept running, when another interface enabled it, and no longer once the device
+has turned it off by itself. The reader is called for each of the function's
+inputs that is read, so keep it as cheap as the others. If it raises, the
+function is treated as disabled until it answers again.
+
 ## Reporting without commanding
 
 An outstation can be one of several interfaces onto a device, with another of
@@ -256,7 +264,10 @@ for your device. Reads, freezes and the time write work as before.
 It still reports what each output stands at, from the `status=` reader, since
 that value was set by whichever interface does command. Give every output a
 status reader on a read-only outstation: without one it can only report the
-initial value you bound, or that it has nothing to report.
+initial value you bound, or that it has nothing to report. That matters most
+for an enable output, because without a reader the function it enables is
+reported as disabled, and its inputs as not in effect, unless you bound it
+with `initial=True`.
 
 `outstation.read_only` may be changed while the outstation runs, for a device
 whose control interface is reassigned. A change forgets the writes the
