@@ -979,6 +979,10 @@ class Session:
         #: The classes a master has enabled since the last restart. Empty at
         #: startup: a master enables what it wants.
         self._enabled: set[EventClass] = set()
+        #: The master those classes are enabled for: the one being served,
+        #: or the one last served while a session that takes any master
+        #: waits to hear who is on the new connection.
+        self._enabled_for: int | None = master_address
         #: Whether the null response that announces a restart has been
         #: confirmed. Until it has, no events are sent unsolicited.
         self._announced = False
@@ -1066,7 +1070,9 @@ class Session:
         """The classes a master has enabled unsolicited reporting for.
 
         Empty after a restart, and always empty for a session built without
-        unsolicited responses.
+        unsolicited responses. A session that takes any master empties it
+        when a different master is the first to speak on a new connection:
+        what one master enabled is not sent to another.
         """
         return frozenset(self._enabled)
 
@@ -1101,7 +1107,9 @@ class Session:
         the read that was waiting behind it. Its events stay buffered, and
         the next :meth:`initiate` reports them over the new connection. What
         a master enabled survives, as does whether the restart has been
-        announced: both are the association's.
+        announced: both are the association's. A session that takes any
+        master sends nothing until a master speaks on the new connection,
+        and keeps what was enabled only if it is the same one.
         """
         self._awaited = None
         self._deferred = None
@@ -1183,11 +1191,12 @@ class Session:
         asked for. A response to a request can always go back to whoever
         asked. An unsolicited response has no request to take an address
         from, so with no master known there is nowhere to send it and
-        nothing is sent. The master is the one configured. A session built to
-        serve any master has none configured, so it answers here with nobody
-        and sends nothing unsolicited, whoever has spoken on the connection.
+        nothing is sent. That is the master being served: the configured one,
+        or for a session built to serve any master, the one that spoke first
+        on this connection. Such a session answers here with nobody until a
+        master has spoken, and again from the moment the connection ends.
         """
-        return self._master_address
+        return self._peer
 
     def _initiate_wait(self, now: float) -> float | None:
         """How long until something is due: zero for now, None for not by the clock."""
@@ -1602,6 +1611,16 @@ class Session:
             # it opens no conversation and settles nothing about who is here.
             self._peer = frame.source
             logger.info("dnp3: serving master address %d on this connection", frame.source)
+            if self._enabled and frame.source != self._enabled_for:
+                # Enabling a class is one master asking to be told. The master
+                # here now is another, which asked for nothing and may not be
+                # one that confirms a report, so it starts with none enabled.
+                logger.info(
+                    "dnp3: master %d did not enable unsolicited reporting; classes disabled",
+                    frame.source,
+                )
+                self._enabled.clear()
+            self._enabled_for = frame.source
         return True
 
     @property

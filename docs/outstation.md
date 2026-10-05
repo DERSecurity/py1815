@@ -199,9 +199,13 @@ numbers. A new connection starts again, so a master that comes back under a
 different address is served. `session.master_address` says who is being served
 now, and is `None` until someone has spoken.
 
-A session built this way sends no unsolicited responses, whatever a master
-enables: they go to a configured master address, and there is none. Its events
-are read by polling.
+Built with `unsolicited=True` as well, the session reports to the master it is
+serving. It sends nothing until a master has spoken on the connection, since
+until then there is no address to send to, and the restart is announced after
+that master's first request is answered. What a master enabled stands when the
+same address comes back on a new connection. A different address starts with
+every class disabled and enables what it wants, so no master is sent reports
+another one asked for.
 
 !!! warning
     A link address is not authorization, and this makes that plain. With no
