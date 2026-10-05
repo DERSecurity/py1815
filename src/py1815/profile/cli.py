@@ -139,6 +139,9 @@ def _points(args: argparse.Namespace) -> int:
     if point_map is None:
         return 1
     outstation = der.build(point_map, seed=args.seed).outstation
+    if args.coverage:
+        print(outstation.coverage().render())
+        return 0
     for kind in Kind:
         for point in outstation.served(kind):
             marker = "M" if point.mandatory else " "
@@ -400,6 +403,11 @@ def _parser() -> argparse.ArgumentParser:
 
     points = commands.add_parser("points", help="list the points the simulated DER serves")
     _add_map_options(points)
+    points.add_argument(
+        "--coverage",
+        action="store_true",
+        help="report every point of the profile: bound, served without a binding, or absent",
+    )
     points.set_defaults(handler=_points)
 
     profile = commands.add_parser(

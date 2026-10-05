@@ -20,6 +20,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 from py1815.profile.binding import Binding, Output, Quality, Reading
+from py1815.profile.coverage import Coverage
 from py1815.profile.load import default_tables, read_tables, resolve
 
 # Not exported as `load`: that is the submodule's name, and a function of the
@@ -32,6 +33,7 @@ __all__ = [
     "Address",
     "Binding",
     "Composition",
+    "Coverage",
     "DerOutstation",
     "Kind",
     "MapError",

@@ -864,6 +864,33 @@ makes plain what was already true: any peer that can reach the listener can read
 command if controls are bound. A deployment that needs to restrict that uses the
 listener's TLS allow-list, or the network.
 
+**D67 -- Coverage is a report read from the built outstation, and no part of what it
+answers.** `DerOutstation.coverage()` lists every point of the resolved map with where its
+value comes from: bound by the caller, mirrored from a bound output, derived as a
+"supports" input, fixed by the tables, or absent. These are the builder's own cases and
+are recorded as it resolves them, so the report cannot disagree with the wire about which
+points exist, and `conformant` is the test `strict` applies. Absent means what **D43**
+means by it: nothing serves the point, a class 0 read does not carry it and a read of its
+index is refused.
+
+Offline is a different thing and is kept apart. A point that is offline is served, and is
+sent with its ONLINE flag clear: its source cannot be reached, it has never been read or
+written, its function is disabled (**D57**), or its source called it good and handed over a
+value with no number, which goes out as zero with a reference error. That is a fact about a
+moment and not about the binding, so the report asks each source once when it is made and
+records the quality beside the source, and whether ONLINE went out is read from what the
+wire carries and not inferred from the quality. Two reports of one outstation agree on every source and may differ in
+quality. A deployment tracking growth compares sources; one asking why a master sees a
+point flagged reads the quality.
+
+Nothing that answers a master reads the report, and taking one buffers no event and
+changes no output. Its text is for people and is not a format to parse: the dataclasses
+are the interface.
+*Trade-off:* a report costs one call to every source, and a source that is slow or counts
+its reads will notice; a report that did not ask could not say which bound points are
+dark, which is the half of the question a growing deployment cannot answer from its own
+configuration.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
