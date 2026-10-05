@@ -85,6 +85,20 @@ long a select stays armed is opendnp3's. So is the name `TOO_MANY_OPS` for
 control status 8: other spellings circulate, and the one that interoperates is
 the one opendnp3 publishes.
 
+## Silence is tested as an input
+
+An outstation that relays commands has no opinion about what a device should
+do when its master stops talking: the last value written stays in force until a
+master writes another. That is easy to break without noticing, since the code
+that would break it is a timer nobody is watching.
+
+`tests/test_master_silence.py` commands an output and then lets time pass with
+no request, through each thing that happens while a master is away: the
+session's clock moving on, the caller's own loop still polling for events and
+freezing counters, a select left to expire, and the listener closing a
+connection it has heard nothing on. Afterwards the binding has been called
+exactly once. Any timer added to the library has to leave those passing.
+
 ## The standard is checked mechanically, not remembered
 
 The function codes, indication bits and qualifier codes here were transcribed

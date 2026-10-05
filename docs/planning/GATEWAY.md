@@ -65,14 +65,17 @@ plan is; they are summarized here and ticked there. The others are tracked here.
 
 **In the outstation and the project:**
 
-- [ ] **G3. Nothing happens when the master goes quiet.** The outstation must hold no
-  timeout that changes an output and apply no fallback when requests stop. Today it has
-  none: nothing in the session or the builder changes an output because time has passed,
-  and the profile builder passes the profile's timing parameters through as point values
-  for the DER to honor. *Missing:* a
-  test that pins it, so later work cannot introduce a path from "no request for a while"
-  to "an output changed". Unsolicited responses bring the library's first timer, and that
-  timer retries a report; it must never touch an output.
+- [x] **G3. Nothing happens when the master goes quiet.** The outstation must hold no
+  timeout that changes an output and apply no fallback when requests stop. It has none:
+  nothing in the session or the builder changes an output because time has passed, and the
+  profile builder passes the profile's timing parameters through as point values for the
+  DER to honor. *Built:* `tests/test_master_silence.py` pins it. Each test commands an
+  output and then lets time pass with no request, in every way the library meets silence:
+  the session's clock moving on, the caller's loop still polling and freezing, a select
+  left to expire, and the listener closing a connection it has heard nothing on. The
+  binding has been called once and the output stands where the master left it.
+  Unsolicited responses bring the library's first timer, and that timer retries a report;
+  these tests are what it must leave passing.
 - [x] **G4. A master that is not known in advance.** `Session` served one configured
   `master_address` and dropped frames from any other source, for a stated reason: answering
   an unexpected address would interleave two conversations over one set of sequence
