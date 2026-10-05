@@ -75,12 +75,13 @@ Two things the library does not do yet are named here rather than assumed,
 because a caller assembling an outstation from this will ask about both:
 
 - **Unsolicited responses.** The profile's consumers expect outstation-initiated
-  reporting, and this library still refuses `ENABLE_UNSOLICITED`. The generator
-  does not assume it exists: an outstation built under these nine steps reports
-  events when polled, and gains unsolicited reporting when the library does,
-  through the same `EventBuffers` and with no change to the map or the binding.
-  That work is its own roadmap entry in [DESIGN.md](../DESIGN.md), not a step
-  here.
+  reporting. The library has it now, off unless asked for (D69 to D71 in
+  [DESIGN.md](../DESIGN.md), and [UNSOLICITED.md](UNSOLICITED.md)), and the
+  generator needed nothing for it, as this paragraph expected: an outstation
+  built under these nine steps reports events when polled, and also unsolicited
+  when its session is built with `outstation.session(unsolicited=True)`, through
+  the same `EventBuffers` and with no change to the map or the binding.
+  `py1815-der run --unsolicited` serves the simulated DER that way.
 - **Floating-point analog events.** The library serves floating-point static
   analog inputs and integer analog events only; a point whose static form is a
   float has no float event form to report a change in. That asymmetry is not a
@@ -419,7 +420,8 @@ through a callable, whichever the consumer has; either way a change beyond the
 deadband or any change of quality enqueues an event in `EventBuffers` with the
 source timestamp. Supports flags never produce events. The mechanism is the
 existing one; what is new is that the deadband and class come from the table
-rather than from the caller.
+rather than from the caller. A deployment that wants otherwise says so in an
+event policy, which is G5 below.
 
 ### Layout
 
@@ -550,25 +552,32 @@ missing part is merged and tested.
   mirror reported the last write whatever the reader said. The mirroring input raises an
   event when the applied value changes without a new command, which is how a master
   learns its setpoint was reduced (D65).
-- [ ] **G5. Event class and deadband are the deployment's to set.** What a plant
+- [x] **G5. Event class and deadband are the deployment's to set.** What a plant
   controller wants reported differs by customer, so the policy has to be configuration
-  and not a property of the build. Today a caller may give an analog input a deadband
-  when binding it, in transmitted units; without one the table's resolution is the
-  default; and the event class always comes from the table. *Missing:* the caller
-  choosing the class per point and turning events off for a point; a policy supplied as
-  data (defaults by point kind plus per-point exceptions) so a deployment edits a file
-  and not code; deadbands stated in engineering units and converted with the point's
-  scaling; validation when the outstation is built, so an unknown point, a class outside
-  1 to 3 or a negative deadband fails at startup; and the device profile document
-  reporting the values in force.
-- [ ] **G6. A partial map that grows.** The deployment starts with the points its source
+  and not a property of the build. A caller could give an analog input a deadband when
+  binding it, in transmitted units, and the event class always came from the table.
+  *Built:* `DerOutstation` takes an `event_policy`, as an `EventPolicy` or the plain
+  mapping one is made from: a rule for each kind of point and exceptions for points named
+  one at a time, each able to set the class, turn events off, and give an analog input a
+  deadband in engineering units, which the point's scaling converts. A point's own rule
+  outranks its kind's, and the deadband given when binding still works and sits between
+  the two. An unknown point, a class outside 1 to 3, a negative deadband or a deadband on
+  anything but an analog input stops the build. The device profile document lists the
+  class and deadband in force. The library reads no file: the mapping is what JSON or
+  YAML loads to, and loading it is the caller's (D66 in [DESIGN.md](../DESIGN.md)).
+- [x] **G6. A partial map that grows.** The deployment starts with the points its source
   publishes today and expects that set to grow substantially, with controls following
-  measurements. `strict=False` builds a deliberately partial map. *Missing:* a coverage
-  report from a built outstation listing which of the profile's points are bound, which
-  are served offline and which are absent, so growth is tracked against the profile and
-  a point added in the source and forgotten here is visible; and a check that adding a
-  binding entry is the whole of the change, with the device profile document following
-  from the rebuild.
+  measurements. `strict=False` builds a deliberately partial map. *Built:*
+  `DerOutstation.coverage()` reports every point of the resolved map as bound, served
+  without a binding (mirrored from a bound output, derived as a supports input, or fixed
+  by the tables) or absent, with mandatory points told apart from optional ones and the
+  mandatory points still missing named; each served point carries the quality it had when
+  the report was made, which is how a point served offline shows (D67 in
+  [DESIGN.md](../DESIGN.md)). The report is data with a text rendering, two of them can
+  be compared, and `py1815-der points --coverage` prints it for the simulated DER. Tests
+  pin that adding one binding entry is the whole of the change: the report moves by that
+  point, the point is on the wire, and the device profile document of the rebuilt
+  outstation lists it.
 
 - [x] **G10. Static groups read by index.** A master nobody has identified may pick a few
   scattered points with an index-prefixed read (qualifiers 0x17 and 0x28) instead of a

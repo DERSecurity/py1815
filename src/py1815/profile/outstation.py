@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import math
 import weakref
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from py1815.application import CLASS_GROUP, RESPONSE_HEADER_SIZE, ObjectHeader, QualifierCode
@@ -67,7 +67,9 @@ from py1815.objects import (
     indexed_block,
 )
 from py1815.profile.binding import Binding, Output, Quality, Reader, Reading
+from py1815.profile.coverage import Coverage, Entry, Source
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
+from py1815.profile.policy import EventPolicy, EventRule
 from py1815.session import Control, ParameterError, Session, UnknownObject
 
 logger = logging.getLogger(__name__)
@@ -140,6 +142,10 @@ _QUALITY_FLAGS = {
     Quality.OFFLINE: 0,
 }
 
+#: The same table read the other way, for a report that has an output's flags
+#: and wants the quality they stand for.
+_FLAG_QUALITY = {flags: quality for quality, flags in _QUALITY_FLAGS.items()}
+
 
 class DerOutstation:
     """An IEEE 1815.2 outstation's device side, built from a map and a binding.
@@ -160,6 +166,7 @@ class DerOutstation:
         clock_ms: Callable[[], int] = wall_clock_ms,
         level2: bool = False,
         disabled_offline: bool = True,
+        event_policy: EventPolicy | Mapping[str, Any] | None = None,
         read_only: bool = False,
         read_only_status: CommandStatus = CommandStatus.NOT_AUTHORIZED,
     ) -> None:
@@ -189,6 +196,13 @@ class DerOutstation:
                 as not in effect. Turn it off for a controlling station
                 that discards any value not flagged ONLINE, and so
                 could not check a setting before enabling its function.
+            event_policy: Which points report events, in which class, and
+                past what deadband, where that is not to be the tables'
+                choice: an :class:`~py1815.profile.policy.EventPolicy`, or
+                the plain mapping one is made from. A policy that names a
+                point the map does not hold, or asks of a point what it
+                cannot do, is refused here. None leaves every class to the
+                tables and every deadband to the binding.
             read_only: Report and do not command (D65). Every control on a
                 bound output is refused with ``read_only_status`` and nothing
                 reaches the binding. For an outstation that is one of several
@@ -238,6 +252,9 @@ class DerOutstation:
             for address, output in binding.outputs.items()
             if output.initial is not None
         }
+        #: How each served point comes to be served. Kept for the coverage
+        #: report; nothing that answers a master reads it.
+        self._origins: dict[Address, Source] = dict.fromkeys(binding.outputs, Source.BOUND)
         self._sources = self._resolve_sources()
         #: For each input of a function, the output that enables the function.
         self._gates: dict[Address, Address] = self._function_gates() if disabled_offline else {}
@@ -250,6 +267,17 @@ class DerOutstation:
         #: Each frozen counter's value and the moment it was frozen.
         self._frozen: dict[int, tuple[CounterPoint, int]] = {}
         self._primed = False
+        if event_policy is None:
+            event_policy = EventPolicy()
+        elif not isinstance(event_policy, EventPolicy):
+            event_policy = EventPolicy.from_mapping(event_policy)
+        #: The event class each input reports in, and 0 for one that reports
+        #: none. For a counter it is the class its freezes are logged in.
+        self._classes: dict[Address, int] = {}
+        #: Each event-reporting analog input's deadband, in transmitted units.
+        #: One absent from here reports every change of its transmitted value.
+        self._deadbands: dict[int, float] = {}
+        self._apply_policy(event_policy)
 
         if strict:
             missing = sorted(
@@ -292,12 +320,16 @@ class DerOutstation:
             address = point.address
             if address in self._binding.readers:
                 sources[address] = self._binding.readers[address]
+                self._origins[address] = Source.BOUND
             elif address in mirrors:
                 sources[address] = self._mirror(mirrors[address])
+                self._origins[address] = Source.MIRROR
             elif point.enabled_by is not None:
                 sources[address] = _constant(point.enabled_by in self._binding.outputs)
+                self._origins[address] = Source.SUPPORTS
             elif point.fixed_value is not None:
                 sources[address] = _constant(point.fixed_value)
+                self._origins[address] = Source.FIXED
         return sources
 
     def _function_gates(self) -> dict[Address, Address]:
@@ -330,6 +362,48 @@ class DerOutstation:
             if gate is not None and point.address in self._sources:
                 gates[point.address] = gate.address
         return gates
+
+    def _apply_policy(self, policy: EventPolicy) -> None:
+        """Settle each input's event class and deadband, the policy's word first.
+
+        For the class, a rule naming the point outranks the rule for its
+        kind, which outranks the tables. A kind's rule moves the points that
+        already report and leaves alone the ones the tables keep static: a
+        "supports" input is not made to report by a rule for every binary
+        input. Naming such a point is how it is given events.
+
+        For the deadband, a rule naming the point outranks the deadband given
+        when the point was bound, which outranks the rule for its kind. The
+        two from the policy are in engineering units and are converted here;
+        the binding's is in transmitted units already (D66).
+        """
+        unknown = sorted(_name(address) for address in policy.points if address not in self._map)
+        if unknown:
+            raise MapError(
+                f"the event policy names points the map does not hold: {', '.join(unknown)}"
+            )
+        for point in self._map.points.values():
+            if point.kind.is_output:
+                continue
+            default = policy.defaults.get(point.kind)
+            own = policy.points.get(point.address)
+            reported = _class_in_force(point, default, own)
+            self._classes[point.address] = reported
+            if point.kind is not Kind.AI:
+                continue
+            if not reported:
+                if own is not None and own.deadband is not None:
+                    raise MapError(
+                        f"the event policy gives {_name(point.address)} a deadband, "
+                        "and the point reports no events"
+                    )
+                continue
+            if own is not None and own.deadband is not None:
+                self._deadbands[point.index] = _transmitted(point, own.deadband)
+            elif point.index in self._binding.deadbands:
+                self._deadbands[point.index] = self._binding.deadbands[point.index]
+            elif default is not None and default.deadband is not None:
+                self._deadbands[point.index] = _transmitted(point, default.deadband)
 
     def _mirror(self, output: Address) -> Reader:
         # The input paired with an output says what the output stands at,
@@ -413,9 +487,68 @@ class DerOutstation:
         """The points of one kind this outstation serves, in index order."""
         return list(self._served[kind])
 
+    def event_class(self, kind: Kind, index: int) -> int:
+        """The class a point's events are reported in: 1, 2 or 3, or 0 for none.
+
+        What is in force, after the event policy and the tables have both had
+        their say. For a counter it is the class its freezes are logged in.
+        """
+        return self._classes.get(self._map.point(kind, index).address, 0)
+
+    def deadband(self, index: int) -> float:
+        """An analog input's event deadband in force, in transmitted units.
+
+        Zero reports every change of the transmitted value, and is also the
+        answer for a point that reports no events at all.
+        """
+        return self._deadbands.get(self._map.point(Kind.AI, index).index, 0.0)
+
     def value(self, kind: Kind, index: int) -> float | bool | None:
         """The last value an output accepted, or None if it has none yet."""
         return self._state.get((kind, index))
+
+    def coverage(self) -> Coverage:
+        """Every point of the map against what this outstation serves.
+
+        For each point: whether it is bound, served without a binding (and
+        how), or absent, and for a served point the quality it has at this
+        moment. Where a point's value comes from was settled when the
+        outstation was built and is the same in every report. The quality is
+        read now, by asking each source once, so a report is a snapshot.
+
+        A report, and no part of what a master is answered with: it buffers
+        no event, changes no output and is read by nothing here (D67).
+        """
+        entries: list[Entry] = []
+        for kind in Kind:
+            for point in self._map.of(kind):
+                source = self._origins.get(point.address, Source.ABSENT)
+                if source is Source.ABSENT:
+                    entries.append(Entry(point, source))
+                    continue
+                quality, online = self._standing_on_the_wire(point)
+                entries.append(Entry(point, source, quality, online))
+        return Coverage(tuple(entries))
+
+    def _standing_on_the_wire(self, point: Point) -> tuple[Quality, bool]:
+        """A served point's quality now, and whether it goes out with ONLINE set.
+
+        One question to the source, answered both ways. They differ for a
+        value with no number: the source calls it good, and the wire sends
+        zero with ONLINE clear and a reference error, as it does for any NaN.
+        """
+        if point.kind.is_output:
+            value, flags = self._output_status(point)
+            quality = _FLAG_QUALITY[flags]
+            online = quality is Quality.GOOD
+            if online and point.kind is Kind.AO and value is not None:
+                online = not math.isnan(point.to_wire(float(value)))
+            return quality, online
+        reading = self._reading(point)
+        online = reading.quality is Quality.GOOD
+        if online and point.kind is Kind.AI:
+            online = not math.isnan(point.to_wire(float(reading.value)))
+        return reading.quality, online
 
     # ---------------------------------------------------------------- time
 
@@ -590,7 +723,12 @@ class DerOutstation:
         if group == GROUP_BINARY_OUTPUT_STATUS:
             return variation, encode_binary_output_status(state=bool(value), flags=flags)
         raw = point.to_wire(float(value or 0))
-        return variation, encode_analog_output_status(float(round(raw)), variation, flags=flags)
+        if math.isfinite(raw):
+            # Rounded to the integer the variation carries. A value with no
+            # number is passed as it is, and the encoder sends it flagged
+            # instead of the read failing on it.
+            raw = float(round(raw))
+        return variation, encode_analog_output_status(raw, variation, flags=flags)
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""
@@ -704,7 +842,8 @@ class DerOutstation:
         now = self.now_ms()
         buffered = 0
         for point in self._served[Kind.BI]:
-            if point.event_class not in (1, 2, 3):
+            reported = self._classes[point.address]
+            if not reported:
                 continue
             binary = self._binary(point)
             if not self._primed:
@@ -712,12 +851,13 @@ class DerOutstation:
             elif self.events.record_binary(
                 point.index,
                 binary,
-                event_class=EventClass(point.event_class),
+                event_class=EventClass(reported),
                 timestamp_ms=now,
             ):
                 buffered += 1
         for point in self._served[Kind.AI]:
-            if point.event_class not in (1, 2, 3):
+            reported = self._classes[point.address]
+            if not reported:
                 continue
             analog = self._analog(point)
             if not self._primed:
@@ -725,8 +865,8 @@ class DerOutstation:
             elif self.events.record_analog(
                 point.index,
                 analog,
-                event_class=EventClass(point.event_class),
-                deadband=self._binding.deadbands.get(point.index, 0.0),
+                event_class=EventClass(reported),
+                deadband=self._deadbands.get(point.index, 0.0),
                 timestamp_ms=now,
             ):
                 buffered += 1
@@ -770,20 +910,15 @@ class DerOutstation:
             self._frozen[point.index] = (value, now)
             if clear:
                 self._cleared_at[point.index] = self._cleared_at.get(point.index, 0) + value.value
-            if self._level2:
-                # Frozen counter events are not Level 2 objects.
-                frozen += 1
-                continue
-            event_class = point.frozen_event_class
-            self.events.record_frozen_counter(
-                point.index,
-                value,
-                event_class=(
-                    EventClass(event_class) if event_class in (1, 2, 3) else _DEFAULT_FROZEN_CLASS
-                ),
-                timestamp_ms=now,
-            )
             frozen += 1
+            reported = self._classes[point.address]
+            if self._level2 or not reported:
+                # Frozen counter events are not Level 2 objects, and a policy
+                # may turn a counter's off. The counter is frozen either way.
+                continue
+            self.events.record_frozen_counter(
+                point.index, value, event_class=EventClass(reported), timestamp_ms=now
+            )
         return frozen
 
     # ------------------------------------------------------------- controls
@@ -858,6 +993,13 @@ class DerOutstation:
         parse; the time is asked for from the first response; and the freeze
         functions are served only when there are counters to freeze. The
         first two are defaults a caller may override by naming the option.
+
+        Every other option of :class:`~py1815.session.Session` passes
+        through. ``unsolicited=True`` is the one a profile's consumers ask
+        about: the session then reports the events :meth:`poll` buffers to a
+        master that has enabled their class, without waiting to be polled.
+        It is off unless named, and nothing about the map or the binding
+        changes with it.
         """
         if self._block_octets + RESPONSE_HEADER_SIZE > max_response:
             raise ValueError(
@@ -881,6 +1023,64 @@ class DerOutstation:
 
 def _constant(value: float | bool) -> Reader:
     return lambda: Reading(value)
+
+
+def _name(address: Address) -> str:
+    return f"{address[0].value}{address[1]}"
+
+
+def _class_in_force(point: Point, default: EventRule | None, own: EventRule | None) -> int:
+    """The class one input reports in under a policy's rules, or 0 for no events."""
+    tabled: int | None
+    if point.kind is Kind.CTR:
+        # A counter reports through its frozen twin, and only if it has one.
+        tabled = point.frozen_event_class if point.frozen else 0
+        if point.frozen and tabled not in (1, 2, 3):
+            tabled = int(_DEFAULT_FROZEN_CLASS)
+    else:
+        tabled = point.event_class
+    if own is not None and own.decides_reporting:
+        if own.events is False:
+            return 0
+        if point.kind is Kind.CTR and not point.frozen:
+            raise MapError(
+                f"the event policy gives {_name(point.address)} events, "
+                "and the counter has no frozen counter to log them"
+            )
+        if tabled is None or not point.in_class_0:
+            # An event reports a change to a value the master first learned
+            # from class 0, and this point is not in class 0. For a counter the
+            # class comes from its frozen twin, so membership is asked directly.
+            raise MapError(
+                f"the event policy gives {_name(point.address)} events, "
+                "and the point is left out of class 0"
+            )
+        chosen = own.event_class or (default.event_class if default is not None else None)
+        chosen = chosen or tabled
+        if chosen not in (1, 2, 3):
+            raise MapError(
+                f"the event policy turns events on for {_name(point.address)}, "
+                "and nothing gives the point a class"
+            )
+        return chosen
+    if tabled is None or tabled not in (1, 2, 3) or not point.in_class_0:
+        return 0
+    if default is None:
+        return tabled
+    if default.events is False:
+        return 0
+    return default.event_class or tabled
+
+
+def _transmitted(point: Point, deadband: float) -> float:
+    """A deadband in engineering units as the span of transmitted values it covers.
+
+    A span and not a value, so the point's offset has no part in it, and
+    neither has the sign of its multiplier.
+    """
+    if point.multiplier is None:
+        return float(deadband)
+    return abs(deadband / point.multiplier)
 
 
 def _latched(command: ControlRelayOutputBlock) -> bool | None:

@@ -20,6 +20,8 @@ from ied_harness import (
     DELAY_MEASURE,
     DIRECT_OPERATE,
     DIRECT_OPERATE_NR,
+    DISABLE_UNSOLICITED,
+    ENABLE_UNSOLICITED,
     FREEZE,
     FREEZE_NR,
     IIN1_BROADCAST,
@@ -36,6 +38,7 @@ from ied_harness import (
     READ,
     RECORD_CURRENT_TIME,
     SELECT,
+    UNSOLICITED_RESPONSE,
     WRITE,
     Dut,
     classes,
@@ -605,3 +608,86 @@ class TestRecommendedDefaults:
     def test_an2015_001_a_read_naming_every_object_is_answered(self):
         dut = Dut()
         assert dut.master.read(header(1, 0, Q_ALL)).fragment.of(1)
+
+    def test_an2015_001_unsolicited_reporting_is_off_and_its_retries_are_unlimited(self):
+        assert Session(Provider()).facts.unsolicited is False
+        assert Session(Provider(), unsolicited=True).facts.unsolicited_retries is None
+
+    def test_an2015_001_a_broadcast_enable_or_disable_is_not_acted_on(self):
+        dut = Dut(unsolicited=True)
+        for function in (ENABLE_UNSOLICITED, DISABLE_UNSOLICITED):
+            assert dut.master.request(function, classes(1, 2, 3), destination=0xFFFF).silent
+        assert dut.session.unsolicited_classes == frozenset()
+
+
+# ------------------------------------------------- TB2015-002 and TB2016-004
+
+
+def _unsolicited_null(dut: Dut):
+    (fragment,) = dut.master.listen().fragments
+    assert fragment.function == UNSOLICITED_RESPONSE and not fragment.body
+    return fragment
+
+
+class TestUnsolicitedResponseBehavior:
+    """TB2015-002a rewrites the rules for a request that arrives while an
+    unsolicited response waits to be confirmed, and separates the initial null
+    response from one carrying events. TB2016-004 lets an outstation that cannot
+    send hold what it would have sent until it can."""
+
+    def test_tb2015_002_a_read_behind_the_null_response_is_answered_on_its_confirmation(self):
+        dut = Dut(unsolicited=True)
+        null = _unsolicited_null(dut)
+
+        assert dut.master.read(classes(0)).silent
+        answer = dut.master.confirm_unsolicited(null.sequence).fragment
+
+        assert answer.function == 0x81 and answer.of(30)
+
+    def test_tb2015_002_at_its_timeout_the_read_is_answered_and_the_null_sent_again(self):
+        dut = Dut(unsolicited=True, unsolicited_confirm_timeout=5.0)
+        null = _unsolicited_null(dut)
+        dut.master.read(classes(0))
+
+        dut.clock.advance(5.0)
+        answer, again = dut.master.listen().fragments
+
+        assert answer.function == 0x81 and answer.of(30)
+        assert again.function == UNSOLICITED_RESPONSE and not again.body
+        assert again.octets[1:] == null.octets[1:]
+
+    def test_tb2015_002_a_disable_does_not_stop_the_null_response(self):
+        dut = Dut(unsolicited=True, unsolicited_confirm_timeout=5.0)
+        _unsolicited_null(dut)
+
+        assert dut.master.request(DISABLE_UNSOLICITED, classes(1, 2, 3)).fragment.is_null
+        dut.clock.advance(5.0)
+
+        _unsolicited_null(dut)
+
+    def test_tb2015_002_a_disable_ends_a_data_series_at_the_timeout(self):
+        dut = Dut(unsolicited=True, unsolicited_confirm_timeout=5.0)
+        null = _unsolicited_null(dut)
+        dut.master.confirm_unsolicited(null.sequence)
+        dut.master.request(ENABLE_UNSOLICITED, classes(1, 2, 3))
+        dut.toggle(0)
+        (first,) = dut.master.listen().fragments
+        assert first.of(2)
+
+        dut.master.request(DISABLE_UNSOLICITED, classes(1, 2, 3))
+        dut.clock.advance(5.0)
+
+        assert dut.master.listen().silent, "no retry of what was disabled"
+        polled = dut.master.read(classes(1)).fragment
+        assert polled.of(2), "and the events were kept for a poll"
+
+    def test_tb2016_004_nothing_is_sent_until_there_is_a_connection_then_at_once(self):
+        """An owner with no connection does not ask the session, so nothing is
+        sent while there is none; the connection that comes is told at once,
+        with the rules applied as they stand when it does."""
+        dut = Dut(unsolicited=True, unsolicited_confirm_timeout=5.0)
+        dut.clock.advance(3600.0)
+
+        dut.session.connection_reset()
+
+        _unsolicited_null(dut)
