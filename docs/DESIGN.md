@@ -758,9 +758,11 @@ points the tables give one purpose under one heading, around an enable output pa
 a supports input, so the outstation derives the rule from the tables and a caller binds
 nothing extra. Two inputs are exempt because what they say holds either way: the supports
 input, and the input reporting whether the function is enabled. A quality worse than good
-is never replaced, so a source that cannot be reached still says so. Enabling a function
-therefore produces events for its inputs, which is how a master following events learns
-the settings came into effect. `DerOutstation(disabled_offline=False)` turns the rule off,
+is never replaced, so a source that cannot be reached still says so. Whether a function is
+enabled is what its enable output stands at, asked as the output's status is asked (D65).
+Enabling a function therefore produces events for its inputs, which is how a master
+following events learns the settings came into effect.
+`DerOutstation(disabled_offline=False)` turns the rule off,
 for a controlling station that discards any value not flagged ONLINE and so could not
 verify a setting before enabling the function it belongs to.
 *Trade-off:* conformance by default, against masters that read the flag as "bad data".
@@ -869,6 +871,58 @@ source addresses are never validated and any data link address is expected.
 makes plain what was already true: any peer that can reach the listener can read, and can
 command if controls are bound. A deployment that needs to restrict that uses the
 listener's TLS allow-list, or the network.
+
+**D65 -- An output's standing value is one question, and a read-only outstation refuses
+controls on a status the caller chooses.** Two things about outputs, decided together
+because they meet in a device that has more than one way in.
+
+*What an output stands at.* An output's status and the input that mirrors it are the same
+statement, so they are answered the same way: from the binding's `status` reader when it
+has one, and from the last write this outstation accepted when it has none. Before this
+the status used the reader and the mirroring input used the last write, so a device that
+applied something other than what was written (a limit, a ramp, a clamp) reported the
+applied value in one group and the request in the other. With one source, the mirror also
+raises an event when the value in force changes with no command behind it, which is how a
+master learns its setpoint was reduced after it was accepted.
+
+Whether a function is enabled (D57) is a third reading of the same thing, the standing
+value of its enable output, and it is answered from the same place. It used to be the last
+write accepted here whatever the reader said, which was wrong whenever the device knew
+better: a function already enabled when the outstation started had its inputs marked as
+not in effect, one the device turned off by itself kept them marked as in effect, and a
+read-only outstation, which accepts no write, could never show a function as enabled at
+all. A standing value that cannot be vouched for, because the reader failed or nothing has
+been written, is not taken as enabled.
+
+*Read-only.* `DerOutstation(read_only=True)` reports and does not command. A control on a
+bound output is refused per object, on select, operate and direct operate, before its
+value is examined and before the binding's `check` or `apply` is asked anything; a direct
+operate that takes no response is dropped unexecuted. The status is `NOT_AUTHORIZED` by
+default, because the truth is "not through this interface" and `NOT_SUPPORTED` would say
+the point cannot be controlled at all; a caller that knows another master holds the point
+may choose `BLOCKED_OTHER_MASTER`. A point with no binding is still `NOT_SUPPORTED`, since
+that is a different fact. Reads, freezes and the time write are unaffected: a freeze
+changes what the outstation reports and not what the device does.
+
+A read-only outstation still reports what its outputs stand at, from the status reader. It
+does not vouch for a write it accepted before it became read-only, since another interface
+may have changed the value since, so without a reader it reports the binding's initial
+value or that it has nothing to report. The role is an attribute and may change while the
+outstation runs. A change in either direction forgets the writes the outstation accepted,
+so an output with no status reader reports nothing until it is written under the new role,
+instead of reporting a value another interface may since have changed. A select is
+permission given under the conditions of the moment, and each direction ends one
+differently. Becoming read-only leaves a select armed, so the operate it was granted for is
+refused with the read-only status like every other control: `NO_SELECT` would tell the
+master to select again when the truth is that this interface may no longer command. Giving
+control back withdraws, in every session the outstation wired, a select granted before the
+outstation was read-only, so an operate arriving afterwards finds none and has to select
+again. The device profile document for a read-only outstation lists no control requests
+and still lists output status.
+*Trade-off:* a master that commands a read-only outstation gets a refusal per point and
+not the unsupported-function indication, so it has to read a status code to learn why. And
+an enable output's status reader is called once for each input of its function that is
+read, so it has to be as cheap as any other reader.
 
 **D66 -- The event policy is data the caller hands over, and the library reads no file.**
 The tables give each point a default event class, and what a controlling station wants

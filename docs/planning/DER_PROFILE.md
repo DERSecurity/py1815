@@ -532,26 +532,26 @@ the deployment and carries the whole list, G1 through G10. The five items below 
 ones that land in `py1815.profile`, so they are tracked here, once. Tick an item when the
 missing part is merged and tested.
 
-- [ ] **G1. Either role, chosen by the caller: commanding or read-only.** The gateway
+- [x] **G1. Either role, chosen by the caller: commanding or read-only.** The gateway
   names one upstream interface as its control interface and serves the others read-only,
   and which one holds control is configuration. So the same outstation has to run both
-  ways. Commanding is what the builder does today. Read-only is not a mode it has: the
-  nearest thing is binding no writers, which answers `NOT_SUPPORTED`, and that tells a
-  master the point cannot be controlled when the truth is that this interface may not
-  control it. *Missing:* a builder-level read-only switch under which every control
-  (select, operate, direct operate) is refused per object with one stated status, while
-  output status and the inputs that mirror outputs keep reporting the value in force. In
-  that mode another interface set that value, so it comes from the output's `status`
-  reader and never from a last accepted write. Which status a refused master receives is
-  a decision to record in [DESIGN.md](../DESIGN.md), and the device profile document
-  should state the mode the outstation was built in.
-- [ ] **G2. In the commanding role, the outstation relays and reports what was applied.**
+  ways. Binding no writers was the nearest thing, and it answers `NOT_SUPPORTED`, which
+  tells a master the point cannot be controlled when the truth is that this interface may
+  not control it. *Built:* `DerOutstation(read_only=True)`, also settable while it runs.
+  Every control on a bound output is refused per object, on select, operate and direct
+  operate, with `NOT_AUTHORIZED` or a status the caller names, and the binding is never
+  asked. Output status and the inputs that mirror outputs keep reporting the value in
+  force from the output's `status` reader, and never from a write accepted earlier. The
+  device profile document lists no control requests for it (D65 in
+  [DESIGN.md](../DESIGN.md)).
+- [x] **G2. In the commanding role, the outstation relays and reports what was applied.**
   The gateway passes a setpoint to the unit's own controller, which applies its limits
   and may put a different value in force. The master has to see that value, not its own
-  request echoed back. `Output.apply` and `Output.status` already allow it. *Missing:* a
-  test and a documented pattern for an output whose status differs from the last write,
-  including that the mirroring input raises an event when the applied value changes
-  without a new command, since that is how a master learns its setpoint was reduced.
+  request echoed back. *Built:* an output's status and the input that mirrors it now
+  answer from one place, the binding's `status` reader when it has one. Before, the
+  mirror reported the last write whatever the reader said. The mirroring input raises an
+  event when the applied value changes without a new command, which is how a master
+  learns its setpoint was reduced (D65).
 - [x] **G5. Event class and deadband are the deployment's to set.** What a plant
   controller wants reported differs by customer, so the policy has to be configuration
   and not a property of the build. A caller could give an analog input a deadband when

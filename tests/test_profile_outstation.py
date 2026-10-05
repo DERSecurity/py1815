@@ -776,6 +776,261 @@ class TestBinaryOutputsBehaveAsLatched:
         assert _values(_read(session, CLASS_0, sequence=1))[(1, 2)] == 1
 
 
+class Unit:
+    """A device that applies its own limit, so what is in force is not what was asked."""
+
+    def __init__(self, limit: float = 10.0) -> None:
+        self.limit = limit
+        self.setpoint = 0.0
+        self.asked: list[float] = []
+
+    def apply(self, value: float) -> None:
+        self.asked.append(value)
+        self.setpoint = max(-self.limit, min(self.limit, value))
+
+    def outstation(self, **kwargs) -> DerOutstation:
+        binding = Binding()
+        binding.output(AO, 0, self.apply, status=lambda: self.setpoint)
+        return DerOutstation(load.resolve(small(), units(0)), binding, strict=False, **kwargs)
+
+
+SETPOINT_STATUS = bytes([40, 0, ALL])
+SETPOINT_MIRROR = bytes([30, 1, 0x00, 3, 3])
+
+
+class TestWhatWasApplied:
+    """A commanding outstation relays, and reports what the device put in force."""
+
+    def test_the_status_and_the_mirror_both_report_the_applied_value(self):
+        unit = Unit(limit=10.0)
+        session = unit.outstation().session()
+        assert _operate(session, _analog_command(0, 125)) is CommandStatus.SUCCESS
+        assert unit.asked == [12.5]
+        assert _values(_read(session, SETPOINT_STATUS, sequence=1))[(40, 0)] == 100
+        mirror = _values(_read(session, SETPOINT_MIRROR, sequence=2))
+        assert mirror[(30, 3)] == 100, "the input shows what is in force, not what was asked"
+
+    def test_the_event_a_control_raises_carries_the_applied_value(self):
+        unit = Unit(limit=10.0)
+        outstation = unit.outstation()
+        session = outstation.session()
+        outstation.poll()
+        response = session._handle_fragment(
+            _control(FunctionCode.DIRECT_OPERATE, _analog_command(0, 125), 0)
+        )
+        assert response[2] & IINBit.CLASS_2_EVENTS
+        _, events = parse_objects(_read(session, bytes([60, 3, ALL]), sequence=1)[4:])
+        assert [(event.index, event.value) for event in events] == [(3, 100)]
+
+    def test_a_change_with_no_command_behind_it_is_an_event(self):
+        """How a master learns its setpoint was reduced after it was accepted."""
+        unit = Unit(limit=20.0)
+        outstation = unit.outstation()
+        session = outstation.session()
+        _operate(session, _analog_command(0, 125))
+        outstation.poll()
+        _read(session, bytes([60, 3, ALL]), sequence=1)
+        unit.setpoint = 8.0
+        assert outstation.poll() == 1
+        _, events = parse_objects(_read(session, bytes([60, 3, ALL]), sequence=2)[4:])
+        assert [(event.index, event.value) for event in events] == [(3, 80)]
+
+    def test_a_status_that_cannot_be_read_says_so_on_the_mirror_too(self):
+        binding = Binding()
+
+        def gone() -> float:
+            raise RuntimeError("device went away")
+
+        binding.output(AO, 0, status=gone)
+        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        flags = _flags(_read(outstation.session(), SETPOINT_MIRROR))
+        assert flags[(30, 3)] == 0x04
+
+    def test_without_a_status_reader_the_mirror_is_still_the_last_write(self):
+        outstation, _ = _built()
+        session = outstation.session()
+        _operate(session, _analog_command(0, 125))
+        assert _values(_read(session, SETPOINT_MIRROR, sequence=1))[(30, 3)] == 125
+
+
+class TestAReadOnlyOutstation:
+    """Built to report and not to command: every control is refused, and says why."""
+
+    def test_a_direct_operate_is_refused_and_nothing_is_applied(self):
+        outstation, device = _built(read_only=True)
+        status = _operate(outstation.session(), _analog_command(0, 125))
+        assert status is CommandStatus.NOT_AUTHORIZED
+        assert device.applied == []
+
+    def test_a_latch_is_refused_too(self):
+        outstation, device = _built(read_only=True)
+        block = ControlRelayOutputBlock.build(OperationType.LATCH_ON)
+        assert _operate(outstation.session(), _crob(0, block)) is CommandStatus.NOT_AUTHORIZED
+        assert device.applied == []
+
+    def test_a_select_is_refused_so_no_operate_is_armed(self):
+        outstation, device = _built(read_only=True)
+        session = outstation.session()
+        selected = session._handle_fragment(
+            _control(FunctionCode.SELECT, _analog_command(0, 125), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.NOT_AUTHORIZED
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is not CommandStatus.SUCCESS
+        assert device.applied == []
+
+    def test_a_direct_operate_that_takes_no_response_is_not_applied_either(self):
+        outstation, device = _built(read_only=True)
+        response = outstation.session()._handle_fragment(
+            _control(FunctionCode.DIRECT_OPERATE_NR, _analog_command(0, 125), 0)
+        )
+        assert response == b"" and device.applied == []
+
+    def test_the_bindings_own_check_is_never_asked(self):
+        asked: list[float] = []
+        binding = Binding()
+        binding.output(AO, 0, check=lambda value: asked.append(value))
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, read_only=True
+        )
+        _operate(outstation.session(), _analog_command(0, 125))
+        assert asked == []
+
+    def test_a_point_that_is_not_there_is_still_not_supported(self):
+        """The refusal is about this interface. A missing point is a different fact."""
+        outstation, _ = _built(read_only=True)
+        assert _operate(outstation.session(), _analog_command(9, 1)) is CommandStatus.NOT_SUPPORTED
+
+    def test_the_status_it_refuses_with_is_the_callers_to_choose(self):
+        outstation, _ = _built(read_only=True, read_only_status=CommandStatus.BLOCKED_OTHER_MASTER)
+        status = _operate(outstation.session(), _analog_command(0, 125))
+        assert status is CommandStatus.BLOCKED_OTHER_MASTER
+
+    def test_success_is_not_a_refusal(self):
+        with pytest.raises(ValueError, match="refus"):
+            _built(read_only=True, read_only_status=CommandStatus.SUCCESS)
+
+    def test_reads_are_answered_as_before(self):
+        outstation, _ = _built(read_only=True)
+        values = _values(_read(outstation.session(), CLASS_0))
+        assert values[(30, 1)] == 1500
+
+    def test_the_value_in_force_is_reported_from_the_status_reader(self):
+        """Another interface set it, so this one reports it and did not write it."""
+        unit = Unit()
+        unit.setpoint = 7.5
+        session = unit.outstation(read_only=True).session()
+        assert _values(_read(session, SETPOINT_STATUS))[(40, 0)] == 75
+        assert _values(_read(session, SETPOINT_MIRROR, sequence=1))[(30, 3)] == 75
+        assert _operate(session, _analog_command(0, 10), sequence=2) is CommandStatus.NOT_AUTHORIZED
+        assert unit.asked == []
+
+    def test_with_no_status_reader_an_initial_value_is_what_stands(self):
+        binding = Binding()
+        binding.output(AO, 0, initial=12.5)
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, read_only=True
+        )
+        assert _values(_read(outstation.session(), SETPOINT_STATUS))[(40, 0)] == 125
+
+    def test_a_write_accepted_before_it_became_read_only_is_not_reported_as_in_force(self):
+        """Once another interface commands, the last thing written here says nothing."""
+        outstation, _ = _built()
+        session = outstation.session()
+        _operate(session, _analog_command(0, 125))
+        assert _values(_read(session, SETPOINT_STATUS, sequence=1))[(40, 0)] == 125
+        outstation.read_only = True
+        assert _flags(_read(session, SETPOINT_STATUS, sequence=2))[(40, 0)] == 0x02
+        assert _flags(_read(session, SETPOINT_MIRROR, sequence=3))[(30, 3)] == 0x02
+
+    def test_the_role_can_be_given_back(self):
+        outstation, device = _built(read_only=True)
+        session = outstation.session()
+        assert _operate(session, _analog_command(0, 125)) is CommandStatus.NOT_AUTHORIZED
+        outstation.read_only = False
+        assert _operate(session, _analog_command(0, 125), sequence=1) is CommandStatus.SUCCESS
+        assert device.applied == [("setpoint", 12.5)]
+
+    def test_a_role_change_spends_a_select_granted_before_it(self):
+        """A select is permission given under one role. It is not carried into another."""
+        outstation, device = _built()
+        session = outstation.session()
+        selected = session._handle_fragment(
+            _control(FunctionCode.SELECT, _analog_command(0, 125), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.SUCCESS
+        outstation.read_only = True
+        outstation.read_only = False
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.NO_SELECT
+        assert device.applied == []
+
+    def test_an_operate_after_it_became_read_only_is_refused_as_read_only(self):
+        """The select was good. What changed is who may command, and the answer says so."""
+        outstation, device = _built(read_only_status=CommandStatus.BLOCKED_OTHER_MASTER)
+        session = outstation.session()
+        selected = session._handle_fragment(
+            _control(FunctionCode.SELECT, _analog_command(0, 125), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.SUCCESS
+        outstation.read_only = True
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.BLOCKED_OTHER_MASTER
+        assert device.applied == []
+
+    def test_and_that_refusal_spends_the_select(self):
+        """Refused once as read-only, the select is not there to operate on afterwards."""
+        outstation, device = _built()
+        session = outstation.session()
+        session._handle_fragment(_control(FunctionCode.SELECT, _analog_command(0, 125), 0))
+        outstation.read_only = True
+        session._handle_fragment(_control(FunctionCode.OPERATE, _analog_command(0, 125), 1))
+        outstation.read_only = False
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 2)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.NO_SELECT
+        assert device.applied == []
+
+    def test_setting_the_role_it_already_has_spends_nothing(self):
+        """The control for the test above: no change of role, and the select stands."""
+        outstation, device = _built()
+        session = outstation.session()
+        session._handle_fragment(_control(FunctionCode.SELECT, _analog_command(0, 125), 0))
+        outstation.read_only = False
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.SUCCESS
+        assert device.applied == [("setpoint", 12.5)]
+
+    def test_giving_the_role_back_does_not_restore_trust_in_an_old_write(self):
+        """Another interface may have changed the value while this one only reported."""
+        outstation, _ = _built()
+        session = outstation.session()
+        _operate(session, _analog_command(0, 125))
+        outstation.read_only = True
+        outstation.read_only = False
+        assert _flags(_read(session, SETPOINT_STATUS, sequence=1))[(40, 0)] == 0x02
+        assert _flags(_read(session, SETPOINT_MIRROR, sequence=2))[(30, 3)] == 0x02
+        assert _operate(session, _analog_command(0, 100), sequence=3) is CommandStatus.SUCCESS
+        assert _values(_read(session, SETPOINT_STATUS, sequence=4))[(40, 0)] == 100
+
+    def test_counters_are_still_frozen_on_request(self):
+        """A freeze changes what the outstation reports, not what the device does."""
+        outstation, _ = _built(read_only=True)
+        session = outstation.session()
+        response = session._handle_fragment(bytes([0xC0, FunctionCode.IMMED_FREEZE, 20, 0, ALL]))
+        assert not response[3]
+        assert (21, 0) in _values(_read(session, bytes([21, 0, ALL]), sequence=1))
+
+
 class TestEvents:
     def test_the_first_poll_reports_nothing(self):
         """A master learns initial values from its integrity poll."""

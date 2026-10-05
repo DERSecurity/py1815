@@ -1035,6 +1035,18 @@ class Session:
         if self._need_time and self._events is not None:
             self._events.synchronized = False
 
+    def abandon_select(self) -> None:
+        """Forget an armed select, so the operate it was granted for finds none.
+
+        For a control provider whose ability to command changed after the
+        select was granted, such as an outstation that became read-only and
+        then was given control back. A select is permission given under the
+        conditions of the moment it was granted, and an operate arriving after
+        those changed has to ask again.
+        """
+        self._select = None
+        self._repeated_select = None
+
     @property
     def facts(self) -> SessionFacts:
         """This session's configuration, as it stands now."""

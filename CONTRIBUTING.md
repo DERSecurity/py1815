@@ -55,6 +55,14 @@ python scripts/build_changelog.py --check
 
 CI runs all five on Python 3.11, 3.12 and 3.13.
 
+It also runs the unit suite once more on 32-bit ARM (`linux/arm/v7`, Python
+3.12, emulated), because the library is meant for small controllers and every
+other job runs where an integer is 64 bits. That job, `test-arm32`, takes
+several minutes and runs only `pytest`. A change to an encoder, a `struct`
+format or anything that handles time should expect to be checked there.
+`image-arm` builds the Docker image for 64-bit and 32-bit ARM beside the
+`image` job's build for the runner. [Testing](docs/testing.md) has the detail.
+
 The documentation site builds from `docs/`, and its build is a check on every
 pull request:
 
@@ -109,7 +117,8 @@ maintainers' own. Direct pushes, force pushes and branch deletion are blocked by
 branch protection, with no bypass.
 
 A pull request merges when the three test jobs and the `interop` gate are green
-and it carries an approving review. Branches do not have to be up to date with
+and it carries an approving review. The ARM jobs run on every pull request and
+are not among the checks a merge waits for, so read them before merging. Branches do not have to be up to date with
 `main` first: merging one pull request does not send the others back for a
 rebase, because the peer jobs run against the merge result anyway.
 

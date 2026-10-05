@@ -106,12 +106,16 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   spoke first on the connection, sends nothing before one has, and disables every class
   when a different master takes the next connection, so no master is sent what another
   enabled (D72).
-- [ ] **G8. Small ARM controllers.** The gateway runs in a container on 32-bit and 64-bit
+- [x] **G8. Small ARM controllers.** The gateway runs in a container on 32-bit and 64-bit
   ARM Linux controllers with little memory. No runtime dependencies and pure Python
-  already make that possible. *Missing:* the test suite run on a 32-bit target at least
-  once and then in CI, since nothing here has been exercised where a native integer is
-  32 bits; and a stated memory cost for the event buffers at their default capacity, with
-  guidance for sizing them down.
+  already make that possible. *Built:* the `test-arm32` job runs the whole unit suite on
+  Python 3.12 for `linux/arm/v7` under emulation on every pull request, and `image-arm`
+  builds the Docker image for `linux/arm64` and `linux/arm/v7`. The first 32-bit run
+  passed every test and found nothing to fix: the encoders name their byte order and
+  widths, and a time is a Python integer that never passes through a native one. The
+  memory a full event buffer costs is measured by `scripts/measure_event_memory.py` and
+  stated, with how to size `event_capacity` down, in
+  [Serving a DER](../der.md#memory-on-a-small-controller).
 - [ ] **G9. A release the gateway can pin.** With G1 through G5 in it. The API is not
   stable below `1.0`, so the gateway pins an exact version, and the release notes say
   which of these items it carries.
@@ -126,8 +130,6 @@ closes. G7 follows the roadmap and is not gated on the rest.
 
 ## Open
 
-- **The status a read-only outstation refuses a control with** (G1). It has to tell a
-  master "not through this interface" and not "this point cannot be controlled".
 - **Whether the event policy file is the library's format or the caller's** (G5).
   Settled: the caller's. The library takes the policy as a mapping it validates and
   reads no file, so the gateway keeps the policy in its own configuration and hands
