@@ -7,7 +7,9 @@ means. This package is where that knowledge lives, in three parts:
   DER of known composition into absolute indices (`model`, `load`).
 - **A binding and a builder.** A caller says where each point's value comes
   from, in engineering units, and `DerOutstation` does the rest: scaling,
-  flags, class 0, events, controls, freezes (`binding`, `outstation`).
+  flags, class 0, events, controls, freezes (`binding`, `outstation`). Which
+  points report events, in which class and past what deadband, is the
+  deployment's to set as data (`policy`).
 - **A simulated DER**, bound through the same interface, so the outstation
   runs with nothing attached (`der`), and the `py1815-der` command (`cli`).
 
@@ -28,6 +30,7 @@ from py1815.profile.load import default_tables, read_tables, resolve
 from py1815.profile.load import load as load_map
 from py1815.profile.model import Address, Composition, Kind, MapError, Point, PointMap
 from py1815.profile.outstation import DerOutstation
+from py1815.profile.policy import EventPolicy, EventRule
 
 __all__ = [
     "Address",
@@ -35,6 +38,8 @@ __all__ = [
     "Composition",
     "Coverage",
     "DerOutstation",
+    "EventPolicy",
+    "EventRule",
     "Kind",
     "MapError",
     "Output",

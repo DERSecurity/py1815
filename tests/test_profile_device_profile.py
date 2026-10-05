@@ -491,16 +491,19 @@ class TestThePointLists:
         }
         assert root.find(".//d:controlStatusCodesSupported", NS) is None
 
-    def _small(self) -> ElementTree.Element:
+    def _small(self, policy=None, deadband: float | None = None) -> ElementTree.Element:
         binding = Binding()
         binding.read(Kind.BI, 0, lambda: False)
-        binding.read(Kind.AI, 1, lambda: 1.0)
+        binding.read(Kind.AI, 1, lambda: 1.0, deadband=deadband)
         binding.read(Kind.AI, 2, lambda: 240.0)
+        binding.read(Kind.AI, 4, lambda: 7.0)
         binding.read(Kind.CTR, 0, lambda: 1)
         binding.read(Kind.CTR, 5, lambda: 1)
         binding.output(Kind.BO, 0)
         binding.output(Kind.AO, 0)
-        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, event_policy=policy
+        )
         return device_profile.build(outstation, outstation.session())
 
     def _point(self, root, kind: Kind, index: int) -> ElementTree.Element:
@@ -523,6 +526,60 @@ class TestThePointLists:
         advertised = self._point(root, Kind.AI, 65000)
         assert _text(advertised, "d:includedInClass0Response") == "never"
         assert _text(self._point(root, Kind.AI, 2), "d:includedInClass0Response") == "always"
+
+    def test_the_event_class_listed_is_the_one_an_event_policy_put_in_force(self):
+        policy = {
+            "defaults": {"BI": {"events": False}},
+            "points": {"AI2": {"class": 1}, "AI4": {"class": 3}, "CTR0": {"class": 2}},
+        }
+        root = self._small(policy)
+        alarm = self._point(root, Kind.BI, 0)
+        assert _text(alarm, "d:changeEventClass") == "none"
+        assert _text(alarm, "d:includedInClass0Response") == "always", "off is not absent"
+        assert _text(self._point(root, Kind.AI, 2), "d:changeEventClass") == "one"
+        assert _text(self._point(root, Kind.AI, 4), "d:changeEventClass") == "three"
+        assert _text(self._point(root, Kind.AI, 1), "d:changeEventClass") == "three", "untouched"
+        assert _text(self._point(root, Kind.CTR, 0), "d:frozenCounterEventClass") == "two"
+
+    def test_a_counter_whose_freezes_log_no_event_says_so(self):
+        root = self._small({"points": {"CTR0": {"events": False}}})
+        counter = self._point(root, Kind.CTR, 0)
+        assert _text(counter, "d:frozenCounterExists") == "true"
+        assert _text(counter, "d:frozenCounterEventClass") == "none"
+
+    def test_the_deadband_listed_is_the_one_in_force_in_transmitted_units(self):
+        root = self._small({"points": {"AI2": {"deadband": 2.0}}}, deadband=15)
+        assert _text(self._point(root, Kind.AI, 2), "d:dnpData/d:deadband") == "20", (
+            "two volts at a multiplier of 0.1"
+        )
+        assert _text(self._point(root, Kind.AI, 1), "d:dnpData/d:deadband") == "15", (
+            "what the binding gave, which is transmitted units already"
+        )
+
+    def test_a_point_with_no_deadband_lists_zero_and_one_with_no_events_lists_none(self):
+        root = self._small()
+        assert _text(self._point(root, Kind.AI, 2), "d:dnpData/d:deadband") == "0"
+        assert self._point(root, Kind.AI, 4).find("d:dnpData", NS) is None
+        off = self._small({"points": {"AI2": {"events": False}}})
+        assert self._point(off, Kind.AI, 2).find("d:dnpData", NS) is None
+
+    def test_the_document_and_the_wire_agree_on_the_class(self):
+        """The control for the list: an event arrives in the class the document names."""
+        level = [240.0]
+        binding = Binding()
+        binding.read(Kind.AI, 2, lambda: level[0])
+        policy = {"points": {"AI2": {"class": 1}}}
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, event_policy=policy
+        )
+        session = outstation.session()
+        root = device_profile.build(outstation, session)
+        assert _text(self._point(root, Kind.AI, 2), "d:changeEventClass") == "one"
+        outstation.poll()
+        level[0] = 250.0
+        outstation.poll()
+        _, events = parse_objects(Sender(session).send(1, bytes([60, 2, 0x06]))[4:])
+        assert [(event.group, event.index) for event in events] == [(32, 2)]
 
     def test_a_group_with_points_in_and_out_of_class_0_says_it_depends_on_the_point(self):
         mode = self._small().find(
@@ -665,6 +722,20 @@ class TestAgainstTheSchema:
 
     def test_a_monitor_validates(self):
         outstation, _ = _monitor()
+        assert _validate(device_profile.build(outstation, outstation.session())) == []
+
+    def test_an_outstation_under_an_event_policy_validates(self):
+        binding = Binding()
+        binding.read(Kind.BI, 0, lambda: False)
+        binding.read(Kind.AI, 2, lambda: 240.0)
+        binding.read(Kind.CTR, 0, lambda: 1)
+        policy = {
+            "defaults": {"BI": {"events": False}},
+            "points": {"AI2": {"class": 1, "deadband": 0.25}, "CTR0": {"class": 2}},
+        }
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, event_policy=policy
+        )
         assert _validate(device_profile.build(outstation, outstation.session())) == []
 
     def test_a_document_in_the_wrong_order_does_not(self, simulation):

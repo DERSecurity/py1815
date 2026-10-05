@@ -14,6 +14,16 @@ reference.
 
 ::: py1815.profile.binding
 
+## Event policy
+
+Which points report events, in which class, and past what deadband: data a
+deployment hands to the builder as `event_policy`. The guide's
+[Setting the event policy](../der.md#setting-the-event-policy) has an example
+and the order in which a point's own rule, its kind's rule and the tables are
+consulted.
+
+::: py1815.profile.policy
+
 ## Outstation
 
 ::: py1815.profile.outstation
