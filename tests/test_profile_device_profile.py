@@ -19,6 +19,7 @@ from xml.etree import ElementTree
 import pytest
 from profile_fixtures import REAL_TABLES, for_reference_der, small, units
 
+from py1815 import link
 from py1815.application import FunctionCode, IIN2Bit
 from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType, encode_crob
 from py1815.objects import AnalogEventVariation
@@ -29,6 +30,7 @@ from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.probe import parse_objects
 from py1815.session import Session
+from py1815.transport import Reassembler
 
 SCHEMA = pathlib.Path(__file__).resolve().parent.parent / "schema" / device_profile.SCHEMA_FILE
 NS = {"d": NAMESPACE}
@@ -299,6 +301,80 @@ def _monitor() -> tuple[DerOutstation, Binding]:
     return DerOutstation(load.resolve(small(), units(0)), binding, strict=False), binding
 
 
+class TestTheUnsolicitedRowsAreWhatTheSessionDoes:
+    """With unsolicited responses on, the table lists enabling and disabling by
+    class and the objects an unsolicited response carries. Each is sent to the
+    session, or drawn from it, and checked."""
+
+    def _on(self, simulation):
+        session = simulation.outstation.session(unsolicited=True)
+        return session, device_profile.implementation(simulation.outstation, session.facts)
+
+    def test_each_listed_enable_and_disable_is_accepted(self, simulation):
+        session, table = self._on(simulation)
+        sender = Sender(session)
+        rows = [
+            r
+            for r in table.rows
+            if r.request
+            and r.request[0]
+            in (device_profile.ENABLE_UNSOLICITED, device_profile.DISABLE_UNSOLICITED)
+        ]
+        assert len(rows) == 6
+        for row in rows:
+            for qualifier in row.request[1]:
+                response = sender.send(row.request[0], bytes([row.group, row.variation, qualifier]))
+                assert response[1] == FunctionCode.RESPONSE
+                assert not _refused(response), (row, hex(qualifier))
+
+    def test_disable_is_listed_by_class_and_not_as_a_bare_function(self, simulation):
+        _, table = self._on(simulation)
+        assert table.function_codes == (0, 23, 24)
+
+    def test_off_they_are_not_listed_and_enable_is_refused(self, simulation):
+        session = simulation.outstation.session()
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        functions = {r.request[0] for r in table.rows if r.request}
+        assert device_profile.ENABLE_UNSOLICITED not in functions
+        assert not any(r.response and r.response[0] == 130 for r in table.rows)
+        refused = Sender(session).send(FunctionCode.ENABLE_UNSOLICITED, bytes([60, 2, 6]))
+        assert refused[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+
+    def test_an_unsolicited_response_carries_only_listed_objects(self, simulation):
+        clock = [1000.0]
+        session = simulation.outstation.session(
+            unsolicited=True, max_response=8192, clock=lambda: clock[0]
+        )
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        listed = {
+            (r.group, r.variation)
+            for r in table.rows
+            if r.response and r.response[0] == device_profile.UNSOLICITED_RESPONSE
+        }
+        sender = Sender(session)
+        null = _unsolicited_fragments(session.initiate())[0]
+        session._handle_fragment(bytes([0xD0 | (null[0] & 0x0F), 0]))
+        sender.send(FunctionCode.ENABLE_UNSOLICITED, bytes([60, 2, 6, 60, 3, 6, 60, 4, 6]))
+
+        (fragment,) = _unsolicited_fragments(session.initiate())
+
+        assert fragment[1] == 130
+        static, events = parse_objects(fragment[4:])
+        assert not static, "events only"
+        seen = {(value.group, value.variation) for value in events}
+        assert seen and seen <= listed, seen - listed
+
+
+def _unsolicited_fragments(octets: bytes) -> list[bytes]:
+    """The application fragments in what `initiate` returned for the wire."""
+    found, reassembler = [], Reassembler()
+    for frame in link.FrameReader().feed(octets):
+        whole = reassembler.add(frame.payload)
+        if whole is not None:
+            found.append(whole)
+    return found
+
+
 class TestTheTableFollowsTheConfiguration:
     def test_a_monitor_lists_no_outputs_controls_counters_or_freezes(self):
         outstation, _ = _monitor()
@@ -491,16 +567,19 @@ class TestThePointLists:
         }
         assert root.find(".//d:controlStatusCodesSupported", NS) is None
 
-    def _small(self) -> ElementTree.Element:
+    def _small(self, policy=None, deadband: float | None = None) -> ElementTree.Element:
         binding = Binding()
         binding.read(Kind.BI, 0, lambda: False)
-        binding.read(Kind.AI, 1, lambda: 1.0)
+        binding.read(Kind.AI, 1, lambda: 1.0, deadband=deadband)
         binding.read(Kind.AI, 2, lambda: 240.0)
+        binding.read(Kind.AI, 4, lambda: 7.0)
         binding.read(Kind.CTR, 0, lambda: 1)
         binding.read(Kind.CTR, 5, lambda: 1)
         binding.output(Kind.BO, 0)
         binding.output(Kind.AO, 0)
-        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, event_policy=policy
+        )
         return device_profile.build(outstation, outstation.session())
 
     def _point(self, root, kind: Kind, index: int) -> ElementTree.Element:
@@ -524,6 +603,60 @@ class TestThePointLists:
         assert _text(advertised, "d:includedInClass0Response") == "never"
         assert _text(self._point(root, Kind.AI, 2), "d:includedInClass0Response") == "always"
 
+    def test_the_event_class_listed_is_the_one_an_event_policy_put_in_force(self):
+        policy = {
+            "defaults": {"BI": {"events": False}},
+            "points": {"AI2": {"class": 1}, "AI4": {"class": 3}, "CTR0": {"class": 2}},
+        }
+        root = self._small(policy)
+        alarm = self._point(root, Kind.BI, 0)
+        assert _text(alarm, "d:changeEventClass") == "none"
+        assert _text(alarm, "d:includedInClass0Response") == "always", "off is not absent"
+        assert _text(self._point(root, Kind.AI, 2), "d:changeEventClass") == "one"
+        assert _text(self._point(root, Kind.AI, 4), "d:changeEventClass") == "three"
+        assert _text(self._point(root, Kind.AI, 1), "d:changeEventClass") == "three", "untouched"
+        assert _text(self._point(root, Kind.CTR, 0), "d:frozenCounterEventClass") == "two"
+
+    def test_a_counter_whose_freezes_log_no_event_says_so(self):
+        root = self._small({"points": {"CTR0": {"events": False}}})
+        counter = self._point(root, Kind.CTR, 0)
+        assert _text(counter, "d:frozenCounterExists") == "true"
+        assert _text(counter, "d:frozenCounterEventClass") == "none"
+
+    def test_the_deadband_listed_is_the_one_in_force_in_transmitted_units(self):
+        root = self._small({"points": {"AI2": {"deadband": 2.0}}}, deadband=15)
+        assert _text(self._point(root, Kind.AI, 2), "d:dnpData/d:deadband") == "20", (
+            "two volts at a multiplier of 0.1"
+        )
+        assert _text(self._point(root, Kind.AI, 1), "d:dnpData/d:deadband") == "15", (
+            "what the binding gave, which is transmitted units already"
+        )
+
+    def test_a_point_with_no_deadband_lists_zero_and_one_with_no_events_lists_none(self):
+        root = self._small()
+        assert _text(self._point(root, Kind.AI, 2), "d:dnpData/d:deadband") == "0"
+        assert self._point(root, Kind.AI, 4).find("d:dnpData", NS) is None
+        off = self._small({"points": {"AI2": {"events": False}}})
+        assert self._point(off, Kind.AI, 2).find("d:dnpData", NS) is None
+
+    def test_the_document_and_the_wire_agree_on_the_class(self):
+        """The control for the list: an event arrives in the class the document names."""
+        level = [240.0]
+        binding = Binding()
+        binding.read(Kind.AI, 2, lambda: level[0])
+        policy = {"points": {"AI2": {"class": 1}}}
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, event_policy=policy
+        )
+        session = outstation.session()
+        root = device_profile.build(outstation, session)
+        assert _text(self._point(root, Kind.AI, 2), "d:changeEventClass") == "one"
+        outstation.poll()
+        level[0] = 250.0
+        outstation.poll()
+        _, events = parse_objects(Sender(session).send(1, bytes([60, 2, 0x06]))[4:])
+        assert [(event.group, event.index) for event in events] == [(32, 2)]
+
     def test_a_group_with_points_in_and_out_of_class_0_says_it_depends_on_the_point(self):
         mode = self._small().find(
             "d:referenceDevice/d:database/d:analogInputGroup/d:configuration/"
@@ -544,6 +677,38 @@ class TestThePointLists:
         assert {c.tag.split("}")[1] for c in binary} >= {"supportLatchOn", "supportTrip"}
         analog = self._point(root, Kind.AO, 0)
         assert _text(analog, "d:minTransmittedValue") == "-1000"
+
+    def _listed(self, root, kind: Kind) -> list[int]:
+        path = "d:referenceDevice/d:dataPointsList/" + self.PATHS[kind]
+        return [int(point.find("d:index", NS).text) for point in root.findall(path, NS)]
+
+    def test_a_point_bound_later_is_listed_by_the_rebuild_and_nothing_else_moves(self):
+        """A map that grows: the binding entry is the whole of the change."""
+
+        def built(*extra: int) -> DerOutstation:
+            binding = Binding()
+            binding.read(Kind.BI, 0, lambda: False)
+            binding.read(Kind.AI, 1, lambda: 1.0)
+            for index in extra:
+                binding.read(Kind.AI, index, lambda: 240.0)
+            return DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+
+        today = datetime.date(2026, 1, 2)
+        before, after = built(), built(2)
+        first = device_profile.build(before, before.session(), today=today)
+        second = device_profile.build(after, after.session(), today=today)
+        assert 2 not in self._listed(first, Kind.AI)
+        assert self._listed(second, Kind.AI) == sorted([*self._listed(first, Kind.AI), 2])
+        assert _text(self._point(second, Kind.AI, 2), "d:scaleFactor") == "0.1"
+        for kind in set(Kind) - {Kind.AI}:
+            assert self._listed(second, kind) == self._listed(first, kind)
+        # The document and the coverage report are two readings of one outstation.
+        report = after.coverage()
+        for kind in (Kind.BI, Kind.AI):
+            served = [e.point.index for e in report.served if e.point.kind is kind]
+            assert self._listed(second, kind) == served
+        moved = [entry.point.address for entry in report.changed_since(before.coverage())]
+        assert moved == [(Kind.AI, 2)]
 
     def test_a_long_name_becomes_a_name_and_a_description(self):
         tables = small()
@@ -570,13 +735,58 @@ class TestWhatIsNotClaimed:
         ):
             assert root.find(f".//d:{name}", NS) is None, name
 
-    def test_unsolicited_reporting_is_stated_as_not_supported(self, simulation):
+    def test_unsolicited_reporting_is_stated_as_supported_and_off_by_default(self, simulation):
+        """Supported, since the library can; off, since the session was not asked to."""
         root = _document(simulation)
         base = (
             "d:referenceDevice/d:configuration/d:unsolicitedConfig/d:supportsUnsolicitedReporting/"
         )
-        assert root.find(base + "d:capabilities/d:supported/d:no", NS) is not None
+        assert root.find(base + "d:capabilities/d:supported/d:yes", NS) is not None
+        assert root.find(base + "d:capabilities/d:configurable", NS) is not None
         assert root.find(base + "d:currentValue/d:off", NS) is not None
+        assert root.find(base + "d:currentValue/d:on", NS) is None
+        settings = root.find("d:referenceDevice/d:configuration/d:unsolicitedConfig", NS)
+        assert len(settings) == 1, "nothing else is stated about a feature switched off"
+
+    def test_unsolicited_reporting_switched_on_is_stated_with_its_settings(self, simulation):
+        root = _document(
+            simulation,
+            unsolicited=True,
+            master_address=7,
+            unsolicited_confirm_timeout=2.5,
+            unsolicited_retries=4,
+        )
+        base = "d:referenceDevice/d:configuration/d:unsolicitedConfig/"
+        assert (
+            root.find(base + "d:supportsUnsolicitedReporting/d:currentValue/d:on", NS) is not None
+        )
+        assert _text(root, base + "d:masterDataLinkAddress/d:currentValue/d:value") == "7"
+        timeout = "d:unsolicitedResponseConfirmationTimeout/d:currentValue/d:value"
+        assert _text(root, base + timeout) == "2500"
+        assert _text(root, base + "d:maxUnsolicitedRetries/d:currentValue/d:value") == "4"
+        retries = base + "d:maxUnsolicitedRetries/d:capabilities/d:infinite"
+        assert root.find(retries, NS) is not None, "no limit is one of the choices"
+
+    @pytest.mark.parametrize(("retries", "element"), [(None, "infinite"), (0, "none")])
+    def test_no_limit_and_no_retries_are_stated_by_name(self, simulation, retries, element):
+        root = _document(simulation, unsolicited=True, unsolicited_retries=retries)
+        path = (
+            "d:referenceDevice/d:configuration/d:unsolicitedConfig/d:maxUnsolicitedRetries/"
+            f"d:currentValue/d:{element}"
+        )
+        assert root.find(path, NS) is not None
+
+    def test_unsolicited_responses_are_a_notable_addition_only_when_on(self, simulation):
+        path = (
+            "d:referenceDevice/d:configuration/d:deviceConfig/d:notableAdditions/"
+            "d:currentValue/d:notableAddition"
+        )
+
+        def additions(**options) -> list[str]:
+            return [e.text or "" for e in _document(simulation, **options).findall(path, NS)]
+
+        assert not any("nsolicited" in text for text in additions())
+        assert any("nsolicited" in text for text in additions(unsolicited=True))
 
     def test_the_level_claimed_is_two(self, simulation):
         level = _document(simulation).find(
@@ -631,8 +841,27 @@ class TestAgainstTheSchema:
     def test_the_simulated_der_validates(self, simulation):
         assert _validate(_document(simulation)) == []
 
+    @pytest.mark.parametrize("retries", [None, 0, 3])
+    def test_it_validates_with_unsolicited_responses_on(self, simulation, retries):
+        root = _document(simulation, unsolicited=True, unsolicited_retries=retries)
+        assert _validate(root) == []
+
     def test_a_monitor_validates(self):
         outstation, _ = _monitor()
+        assert _validate(device_profile.build(outstation, outstation.session())) == []
+
+    def test_an_outstation_under_an_event_policy_validates(self):
+        binding = Binding()
+        binding.read(Kind.BI, 0, lambda: False)
+        binding.read(Kind.AI, 2, lambda: 240.0)
+        binding.read(Kind.CTR, 0, lambda: 1)
+        policy = {
+            "defaults": {"BI": {"events": False}},
+            "points": {"AI2": {"class": 1, "deadband": 0.25}, "CTR0": {"class": 2}},
+        }
+        outstation = DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, event_policy=policy
+        )
         assert _validate(device_profile.build(outstation, outstation.session())) == []
 
     def test_a_document_in_the_wrong_order_does_not(self, simulation):
@@ -664,6 +893,25 @@ class TestTheCommand:
         output = capsys.readouterr().out
         assert output.startswith("<?xml")
         assert "<value>Example Co</value>" in output
+
+    def test_it_describes_unsolicited_responses_as_the_run_command_would_serve_them(
+        self, tables, capsys
+    ):
+        assert cli.main(["profile"]) == 0
+        off = ElementTree.fromstring(capsys.readouterr().out.split("?>", 2)[2])
+        assert cli.main(["profile", "--unsolicited"]) == 0
+        on = ElementTree.fromstring(capsys.readouterr().out.split("?>", 2)[2])
+        current = (
+            "d:referenceDevice/d:configuration/d:unsolicitedConfig/"
+            "d:supportsUnsolicitedReporting/d:currentValue/d:{}"
+        )
+        assert off.find(current.format("off"), NS) is not None
+        assert on.find(current.format("on"), NS) is not None
+
+    def test_any_master_is_stated_in_the_document(self, tables, capsys):
+        assert cli.main(["profile", "--any-master"]) == 0
+        output = capsys.readouterr().out
+        assert "<anyDataLinkAddress" in output.split("<expectedSourceAddress>")[1][:200]
 
     def test_or_to_a_file_with_the_listener_it_was_told(self, tables, tmp_path, capsys):
         out = tmp_path / "made" / "profile.xml"
@@ -714,3 +962,33 @@ class TestAReadByIndexIsDeclaredAndAnswered:
             response = sender.send(1, _read_header(simulation.outstation, row, qualifier))
             assert not _refused(response)
             assert response[6] == qualifier and qualifier in row.response[1]
+
+
+class TestTheMasterAddressEntry:
+    """What the document says a master's address has to be."""
+
+    BASE = "d:referenceDevice/d:configuration/d:linkConfig/"
+
+    def _link(self, root: ElementTree.Element, name: str) -> list[str]:
+        current = root.find(self.BASE + f"d:{name}/d:currentValue", NS)
+        assert current is not None, name
+        return [child.tag.split("}")[1] for child in current]
+
+    def test_a_configured_master_is_validated_and_named(self, simulation):
+        root = _document(simulation, master_address=9)
+        assert self._link(root, "sourceAddressValidation") == ["alwaysSingleAddress"]
+        assert self._link(root, "expectedSourceAddress") == ["value"]
+
+    def test_any_master_is_not_validated_and_no_address_is_expected(self, simulation):
+        root = _document(simulation, master_address=None)
+        assert self._link(root, "sourceAddressValidation") == ["never"]
+        assert self._link(root, "expectedSourceAddress") == ["anyDataLinkAddress"]
+
+    def test_both_documents_say_the_outstation_can_do_either(self, simulation):
+        for master in (9, None):
+            root = _document(simulation, master_address=master)
+            offered = root.find(self.BASE + "d:sourceAddressValidation/d:capabilities", NS)
+            assert [child.tag.split("}")[1] for child in offered] == [
+                "never",
+                "alwaysSingleAddress",
+            ]

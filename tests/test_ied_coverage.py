@@ -117,6 +117,19 @@ TESTED: dict[str, Tested] = {
     "8.9.2.1 confirmation in fragmentation, desired behavior": ("8_9_2_1_",),
     "8.9.2.2 confirmation in fragmentation": ("8_9_2_2_",),
     "8.10.2 multi-drop support": ("8_10_2_",),
+    # 8.11: unsolicited responses, configured on, and then off
+    "8.11.2.1 configuration and startup": ("8_11_2_1_",),
+    "8.11.2.2 to 8.11.2.4 class 1, 2 and 3 data": ("8_11_2_2_to_4_",),
+    "8.11.2.5.1 transmits data-filled unsolicited responses": ("8_11_2_5_1_",),
+    "8.11.2.5.2 clears transmitted data upon confirmation": ("8_11_2_5_2_",),
+    "8.11.2.5.3 processes non-read requests immediately": ("8_11_2_5_3_",),
+    "8.11.2.5.4 defers a read until the confirmation": ("8_11_2_5_4_",),
+    "8.11.2.5.5 defers a read until the confirmation timeout": ("8_11_2_5_5_",),
+    "8.11.2.5.6 abandons a read upon a later non-read request": ("8_11_2_5_6_",),
+    "8.11.2.5.7 abandons a read upon a later read": ("8_11_2_5_7_",),
+    "8.11.2.5.8 no unsolicited response until a polled one is confirmed": ("8_11_2_5_8_",),
+    "8.11.2.5.9 a configurable number of retries": ("8_11_2_5_9_",),
+    "8.11.2.6 steps 1 to 13 unsolicited responses configured off": ("8_11_2_6_",),
     # 8.13 to 8.26
     "8.13.2.2 no binary inputs": ("8_13_2_2_",),
     "8.13.2.3 binary inputs": ("8_13_2_3_",),
@@ -187,7 +200,10 @@ NOT_APPLICABLE: dict[str, str] = {
     "8.6.4 local": "no local or disabled state for outputs is modeled, so IIN1.5 is never set",
     "8.6.6.2.3 buffer overflow, counter events": "counter change events are not generated",
     "8.6.6.2.4 buffer overflow, double-bit events": "double-bit inputs are not supported",
-    "8.11 unsolicited responses": "not supported, which is permitted at subset levels 1 and 2",
+    "8.11.2.6 steps 14 and 15": (
+        "a departure: with unsolicited responses off, a disable request is agreed to (D21), "
+        "since a device that sends none is already in the state it asks for"
+    ),
     "8.12 collision avoidance": "a serial multi-drop feature; the outstation is TCP only",
     "8.13.2.1": "for a level 1 device that cannot read binary inputs; this one can",
     "8.14.2.1": "for a level 1 device that cannot read binary input events; this one can",
@@ -210,7 +226,10 @@ NOT_APPLICABLE: dict[str, str] = {
     "9.5.1.6 UDP multicast": "optional; not supported",
     "9.5.2 UDP solicited": "UDP is not offered as a main communication method",
     "9.5.3 UDP unsolicited": "UDP is not offered as a main communication method",
-    "9.5.4 unsolicited with both UDP and TCP": "unsolicited responses are not supported",
+    "9.5.4 unsolicited with both UDP and TCP": (
+        "UDP is not offered as a main communication method, so unsolicited responses go over "
+        "TCP only"
+    ),
     "10.3 and 10.4 output events": "output events are not supported, which needs no disabling",
 }
 

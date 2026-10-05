@@ -26,7 +26,15 @@ TESTED: dict[str, tuple[str, str]] = {
     ),
     "TB2014-002 control-related status codes": ("test_technical_bulletins.py", "test_tb2014_002_"),
     "TB2016-001 indications 2.0, 2.1 and 2.2": ("test_technical_bulletins.py", "test_tb2016_001_"),
+    "TB2015-002 unsolicited response behavior": (
+        "test_technical_bulletins.py",
+        "test_tb2015_002_",
+    ),
     "TB2016-003 subset parsing tables": ("test_subset_tables.py", "test_tb2016_003_"),
+    "TB2016-004 unsolicited reporting in constrained environments": (
+        "test_technical_bulletins.py",
+        "test_tb2016_004_",
+    ),
     "TB2017-003 event reporting requirements": ("test_ied_8_inputs.py", "test_8_15_3_"),
     "TB2018-001 time management, common time and event ordering": (
         "test_technical_bulletins.py",
@@ -61,11 +69,7 @@ NOT_APPLICABLE: dict[str, str] = {
         "the document is generated for a later schema version than the one corrected"
     ),
     "TB2015-001 object groups 110 to 115": "octet string objects are not implemented",
-    "TB2015-002 unsolicited response behavior": "unsolicited responses are not sent",
     "TB2016-002 secure authentication deficiencies": "secure authentication is not implemented",
-    "TB2016-004 unsolicited reporting in constrained environments": (
-        "unsolicited responses are not sent"
-    ),
     "TB2016-005 invalid floating point in device attributes": (
         "device attributes are not implemented"
     ),

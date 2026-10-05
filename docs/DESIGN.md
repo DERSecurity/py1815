@@ -104,7 +104,7 @@ conformant, and under D7 there is one association, so there is exactly one selec
 configurable timeout, ten seconds by default; it is consumed by the operate that matches it and
 left alone by one that does not, since a master that sent the wrong operate still holds the
 reservation it was granted; a second select replaces the first; and `connection_reset` discards
-it, because a reservation held for an operate on a socket that died must not be honoured over the
+it, because a reservation held for an operate on a socket that died must not be honored over the
 connection that replaced it.
 
 Any fragment other than the operate that spends it also ends the exchange it belongs to. Two
@@ -119,7 +119,7 @@ lower is what let the refusals, the functions that answer nothing, and the unrea
 hold a reservation open across traffic the master had plainly moved on from. Deciding it there
 also means a fragment too damaged to parse clears the selection -- the opposite of what damage
 does to a held event response, and deliberately. Replaying a response costs nothing if the guess
-is wrong, while holding a control reservation open through noise can authorise an operate the
+is wrong, while holding a control reservation open through noise can authorize an operate the
 master never selected.
 
 Two fragments are excluded. An OPERATE, because spending a select is what it is for, and because
@@ -169,7 +169,7 @@ Two limits on that, both found after the first implementation and both places wh
 request received was too generous rather than too strict.
 
 **A select that selected nothing arms nothing.** The reasoning above -- that the master will
-resend what it sent -- only holds while there is an operate the select could authorise. Where
+resend what it sent -- only holds while there is an operate the select could authorize. Where
 every object came back refused there is none, and arming it would let a point the outstation
 declined to select be executed by the operate that followed. One success is enough; the refused
 objects are answered on their own merits again at operate.
@@ -258,6 +258,9 @@ outstation does not do, and saying so is the honest answer.
 This halves the warnings a real master's startup produces -- the roadmap's complaint -- without
 implementing anything that sends.
 
+This remains the answer of a session built without unsolicited responses, which is the
+default. One built with them takes both requests by class instead (D69).
+
 **D22 -- The class-event indication bits are derived from the buffers, not tracked separately.**
 `IIN1.1`, `1.2` and `1.3` say which classes have events waiting. A master polling on indications
 never asks for events it is not told about, so a bit that drifts from the buffer is an outstation
@@ -329,6 +332,9 @@ selection here would lose the events instead of merely mistiming them. This is t
 **D21** -- an outstation that does not send unsolicited responses answers questions about them by
 declining to act, not by pretending the exchange exists.
 
+A session built with unsolicited responses on sends such a confirmation to its unsolicited exchange,
+and still never to the solicited selection (D70).
+
 **D27 -- Every fragment is fitted to what the master can receive.** ``max_response`` is its own
 number rather than the reassembly ceiling ``max_fragment``: one is the largest request this
 outstation will piece back together, the other the largest fragment the master on the far end can
@@ -367,7 +373,7 @@ encodings; it now costs none.
 That is what `peek`'s `limit` is for, and it settles the open question about it. The limit is not
 how a count qualifier is answered -- a limit taken before deduplication would come back short -- it
 is how a caller avoids paying for a buffer it has no room for. It has to slice while walking the
-deque rather than after materialising it, or the call still costs the buffer.
+deque rather than after materializing it, or the call still costs the buffer.
 
 This was a cap rather than a split until **D28** made a response a conversation. What survives of it
 is the ceiling itself: every fragment is still fitted to what the master can receive, and a response
@@ -490,7 +496,7 @@ That is a statement about the event half and not about the conversation. Static 
 outside the bound, so a response whose provider answers in blocks can pass sixteen fragments and go
 round the sequence space again -- twenty-eight fragments, with sequences 0 to 15 and then 0 to 11,
 is a legitimate answer. The argument for sixteen is unaffected, because it was always an argument
-about bounding events; what it does not do is characterise the whole exchange. **D34** is where that
+about bounding events; what it does not do is characterize the whole exchange. **D34** is where that
 matters. A full default buffer of a
 thousand events is about seven fragments at the 2,048-octet ceiling, so sixteen leaves room for a
 buffer twice that size while still stopping one that fills as fast as it drains.
@@ -842,6 +848,196 @@ known in every one of these cases, so the indication is the parameter one and no
 *Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
 answer, and has the range read for that.
 
+**D64 -- A master that is not known in advance is whoever speaks first on a connection.**
+`Session(master_address=None)` serves a master it was not configured for, which is the
+position of an outstation shipped to a site whose controller nobody has named. The first
+address to send a frame to this outstation on a connection is the master, replies go to
+that address, and it holds for as long as the connection does. A frame from a second
+address on the same connection is dropped, for the reason a configured master's check
+already gives: one association has one set of sequence numbers, one pending
+confirmation and one select awaiting its operate, and two masters would interleave over
+them. A new connection starts again, so a master that restarted under a different address
+is served, and what belongs to the association (the restart indication, buffered events)
+is there for whoever connects, as it is for a reconnecting master under **D7**. That
+answers the choice between refusing a second address and letting it displace the first:
+refused within a connection, where two masters can be alive at once, and displacing
+across connections, where the first is by definition gone. An address no master can have
+(reserved, a broadcast address, or the outstation's own) is not taken as one, and a
+broadcast names nobody, so it opens no conversation. The device profile document says
+source addresses are never validated and any data link address is expected.
+*Trade-off:* the address was never authorization, and without transport security this
+makes plain what was already true: any peer that can reach the listener can read, and can
+command if controls are bound. A deployment that needs to restrict that uses the
+listener's TLS allow-list, or the network.
+
+**D66 -- The event policy is data the caller hands over, and the library reads no file.**
+The tables give each point a default event class, and what a controlling station wants
+reported differs by deployment, so `DerOutstation` takes an `event_policy`: an
+`EventPolicy`, or the plain mapping `EventPolicy.from_mapping` makes one from. It holds a
+rule for each kind of point and exceptions for points named one at a time, and a rule may
+set the class (1, 2 or 3), turn events off, and for an analog input state a deadband. The
+library defines that mapping and validates it. It does not define a file format and does
+not open a file: a caller that embeds the outstation already has a configuration format
+and a loader for it, and a second format here would be one more thing to keep in step with
+the first. JSON and YAML both load to the mapping as it stands.
+
+Three rules decide what a policy means. For the class, a rule naming the point outranks
+the rule for its kind, which outranks the tables. A kind's rule moves only the points the
+tables already have reporting: a "supports" input, or a point the tables give no class,
+stays static under a rule for every binary input, and is given events by naming it. For
+the deadband, a rule naming the point outranks the deadband given to `Binding.read`, which
+outranks the rule for its kind, so the more specific statement wins and, between two that
+name the same point, the deployment's data wins over the code. A policy deadband is in
+engineering units and is converted with the point's multiplier, because the person writing
+the policy knows volts and not counts; the one given to `Binding.read` stays in transmitted
+units, as it was. Turning events off leaves the point in class 0: it stops reporting
+changes and is still read. A counter's rule governs the event each freeze logs.
+
+A policy that cannot be right stops the build, with `ValueError` for what is wrong in
+itself (a class outside 1 to 3, a negative deadband, a deadband on anything but an analog
+input, a rule for an output, a key it does not know) and `MapError` for what is wrong
+against the map (a point the map does not hold, events for a point left out of class 0 or
+for a counter with no frozen counter, a deadband on a point that reports none). A point the
+map holds and the binding does not yet serve is not an error, so a policy may be written
+for the whole profile ahead of a binding that grows. The device profile document lists the
+class and the deadband in force, read from the outstation and not from the tables.
+*Trade-off:* a caller wanting a policy file writes the three lines that load one, against a
+library that would otherwise own a format, a parser choice and a dependency for it.
+
+**D67 -- Coverage is a report read from the built outstation, and no part of what it
+answers.** `DerOutstation.coverage()` lists every point of the resolved map with where its
+value comes from: bound by the caller, mirrored from a bound output, derived as a
+"supports" input, fixed by the tables, or absent. These are the builder's own cases and
+are recorded as it resolves them, so the report cannot disagree with the wire about which
+points exist, and `conformant` is the test `strict` applies. Absent means what **D43**
+means by it: nothing serves the point, a class 0 read does not carry it and a read of its
+index is refused.
+
+Offline is a different thing and is kept apart. A point that is offline is served, and is
+sent with its ONLINE flag clear: its source cannot be reached, it has never been read or
+written, its function is disabled (**D57**), or its source called it good and handed over a
+value with no number, which goes out as zero with a reference error. That is a fact about a
+moment and not about the binding, so the report asks each source once when it is made and
+records the quality beside the source, and whether ONLINE went out is read from what the
+wire carries and not inferred from the quality. Two reports of one outstation agree on every source and may differ in
+quality. A deployment tracking growth compares sources; one asking why a master sees a
+point flagged reads the quality.
+
+Nothing that answers a master reads the report, and taking one buffers no event and
+changes no output. Its text is for people and is not a format to parse: the dataclasses
+are the interface.
+*Trade-off:* a report costs one call to every source, and a source that is slow or counts
+its reads will notice; a report that did not ask could not say which bound points are
+dark, which is the half of the question a growing deployment cannot answer from its own
+configuration.
+
+**D69 -- Unsolicited responses are off unless a session is built with them, and a master
+enables them by class.** `Session(unsolicited=True)` turns them on. Off is the default,
+which is also what the DNP Users Group's guidance on default settings recommends
+(AN2015-001), and off means a session answers exactly as it did before the option
+existed: `ENABLE_UNSOLICITED` is refused as unsupported, `DISABLE_UNSOLICITED` is agreed
+to (D21), and a confirmation carrying the unsolicited bit is ignored (D26). The
+certification procedures put it the same way: a device with the mode off behaves like
+one without the feature. When this was built, a corpus of some forty thousand framed
+exchanges was run through sessions before and after the change and returned the same
+octets; the existing tests of the session's answers, none of them changed, are what
+hold it from here.
+
+On, a request to enable or disable names classes 1 to 3 with the class object (group
+60, variations 2 to 4) and the qualifier for all of it (0x06), and is answered with a
+null response. Anything else is refused out loud and changes nothing: class 0 or
+another object is an object the function does not apply to (`OBJECT_UNKNOWN`), and a
+class named with a count or a range, or a request naming nothing, is a parameter error.
+A request is applied whole or not at all, because a master told its request failed has
+no way to learn that half of it took effect. Enabling by point, which the standard makes
+optional, is not offered. Every class starts disabled after a restart, as the standard
+requires, and what a master enabled survives a new connection, because it belongs to the
+association (D7). An event recorded before its class was enabled is reported once it
+is, unless a poll has read and confirmed it first. A broadcast enable or disable is not
+acted on, which is the default the same guidance recommends.
+
+The session still does no I/O. It gains a second entry point for traffic nobody asked
+for: `initiate()` returns the octets that are due, usually none, and `initiate_after()`
+says how many seconds until the clock alone could change that. Time is the injected
+clock. `OutstationServer` calls them, so a caller writes no loop. Where an unsolicited
+response goes is answered in one place, `_unsolicited_destination`, which names the
+configured master and says nowhere, so nothing is sent, when none is configured: a session
+that takes any master (D64) reports by being polled.
+*Trade-off:* a master that wants unsolicited reporting from an outstation it did not
+configure gets `FUNC_NOT_SUPPORTED` until someone turns it on, against an outstation
+that never sends anything its operator did not choose to send.
+
+**D70 -- An unsolicited response is one fragment in a sequence series of its own, and is
+rebuilt for each retry.** A session that reports unsolicited announces itself after a
+restart with a null response: no objects, function 130, first and final, asking to be
+confirmed, carrying the restart indication while that stands. It is sent again at every
+timeout, without limit, until it is confirmed, and no events are sent unsolicited before
+then. It is sent again after a restart, and to a new connection if it was never
+confirmed: an outstation that waits for its master to connect sends what it has when
+that connection comes (TB2016-004).
+
+After that, events in an enabled class are sent in a response built by the code that
+answers a class poll: the same selection, order, encoding and fit to the fragment
+(D27, D52). It is one fragment, first and final, as the standard requires; what does not
+fit follows once it is confirmed. Its events stay buffered until a confirmation carrying
+the unsolicited bit and its sequence number arrives (D18). Unsolicited sequence numbers
+are a series of their own, starting at zero. Only the response most recently sent can be
+confirmed, and that confirmation has no deadline of its own: a master confirms an
+unsolicited response on receipt, so one naming the response last sent means it arrived.
+
+A response not confirmed within `unsolicited_confirm_timeout` (five seconds unless set)
+is built again from the buffers as they then stand, for the reason D29 gives: they keep
+moving, and a copy held from the first transmission would resend an event the outstation
+has since reported losing. If what is built matches what was sent, octet for octet, it
+goes out under the same sequence number and is an identical retry. If anything differs,
+an event recorded since or an indication that changed, it takes the next number and is a
+regenerated retry. The standard allows either and requires exactly that of each, since
+a master tells a repeat from a new response by those two things together.
+
+`unsolicited_retries` bounds how many times a response carrying events is sent again.
+No limit is the default, as AN2015-001 recommends, since delivering what it reports is
+the outstation's job. When a limit is reached the series ends, the events stay buffered
+and a class poll reads them, and reporting waits for a reason to start again: a newly
+recorded event, any request from the master, a new connection, or `unsolicited_resume`
+seconds, sixty unless set, which `None` turns off. A buffer whose oldest event will not
+fit a fragment waits the same way, because building nothing again would change nothing.
+*Trade-off:* a regenerated retry can carry events the master already received in a
+response whose confirmation was lost, so a master may see an event twice under two
+sequence numbers. It never sees one lost, which is the failure that matters more.
+
+**D71 -- Beside the solicited exchange, a read waits, everything else is answered, and
+the timer only reports.** While an unsolicited response waits to be confirmed, a read is
+held and not answered (rule 16 of the standard's unsolicited rules, as TB2015-002a
+amended it, which holds a read behind the initial null response too). The confirmation
+retires the response's events and then answers the read, so a poll never reports what
+the unsolicited response carried. If the confirmation does not come, the read is answered
+at the timeout instead of a retry: the series ends, its events go back to being
+unreported, and the read is often the master asking for them. A read held behind the
+null response is answered at the timeout too, and the null response is then sent again.
+A second read replaces the first; any other request discards a held read, and is
+answered at once without ending the wait for the unsolicited confirmation.
+
+The other direction is rule 8: nothing unsolicited, first transmission or retry, is
+sent while a solicited response waits for its confirmation. That wait ends at the
+confirmation or at `confirm_timeout` (D51). If it ends by timing out, the solicited
+response is given up on when the unsolicited one is sent, so a late solicited
+confirmation then retires nothing. Events in flight therefore belong to one exchange at
+a time and are retired once. Because the wait has to end, `unsolicited=True` with
+`confirm_timeout=None` is refused when the session is built.
+
+`initiate()` reports and does nothing else. The one request it may handle is a held
+read; it never reaches a control provider, never repeats a control, and never changes an
+output, however long the master is silent. `tests/test_master_silence.py` passes
+unchanged, and its session tests run again with the timer on and retrying, beside tests
+that count the calls to a binding through hours of unconfirmed retries. `OutstationServer`
+drives `initiate()` when a connection is admitted, after each thing received, when
+`notify()` is called, when the session's own time comes and every
+`unsolicited_interval`; the idle timeout is still measured on what arrives, so a master
+that neither polls nor confirms is disconnected as before. *Trade-off:* a master that
+ignores unsolicited responses has every read answered up to the confirmation timeout
+late, which is what the standard asks of the outstation and is why the feature is for a
+master that uses it.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -864,7 +1060,7 @@ Each layer is testable without the ones above it, and the session does no I/O.
 **Literal octets, not round trips.** A test that encodes with this library and decodes with it
 agrees with itself through swapped addresses, inverted endianness, wrong length semantics or
 misplaced block checksums. The framing suite therefore carries a published frame this
-implementation reproduces octet for octet, a hand-derived populated frame, and the CRC catalogue
+implementation reproduces octet for octet, a hand-derived populated frame, and the CRC catalog
 check value -- the one assertion an implementation that is self-consistently wrong cannot
 satisfy.
 
@@ -922,9 +1118,12 @@ asking nothing of this outstation, with the reason.
   send at once is a conversation: the master confirms each fragment and the next follows. A provider
   may also say where its own objects end, so a point map too large for one fragment reaches a master
   rather than being refused.
-- Unsolicited responses: outstation-initiated traffic with its own retry timer, and
-  `ENABLE_UNSOLICITED` becoming something this outstation can agree to. Still refused today,
-  which is the honest answer while nothing is sent.
+- ~~Unsolicited responses: outstation-initiated traffic with its own retry timer, and
+  `ENABLE_UNSOLICITED` becoming something this outstation can agree to.~~ Landed, with D69
+  through D71, and off unless a session is built with `unsolicited=True`. The session gained
+  a second entry point, `initiate()`, so it still does no I/O, and `OutstationServer` drives
+  it. Still to do: running the interoperability masters against it, and the planning notes in
+  [`planning/UNSOLICITED.md`](planning/UNSOLICITED.md) list what else was left out.
 - ~~The point-map loader and an IEEE 1815.2 outstation built from it, with D36 through D47.~~
   Landed as `py1815.profile`: the loader, the builder, a simulated DER and the `py1815-der`
   command. Time synchronization, counters with freezes, and event groups read by name came
