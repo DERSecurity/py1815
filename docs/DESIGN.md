@@ -842,6 +842,28 @@ known in every one of these cases, so the indication is the parameter one and no
 *Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
 answer, and has the range read for that.
 
+**D64 -- A master that is not known in advance is whoever speaks first on a connection.**
+`Session(master_address=None)` serves a master it was not configured for, which is the
+position of an outstation shipped to a site whose controller nobody has named. The first
+address to send a frame to this outstation on a connection is the master, replies go to
+that address, and it holds for as long as the connection does. A frame from a second
+address on the same connection is dropped, for the reason a configured master's check
+already gives: one association has one set of sequence numbers, one pending
+confirmation and one select awaiting its operate, and two masters would interleave over
+them. A new connection starts again, so a master that restarted under a different address
+is served, and what belongs to the association (the restart indication, buffered events)
+is there for whoever connects, as it is for a reconnecting master under **D7**. That
+answers the choice between refusing a second address and letting it displace the first:
+refused within a connection, where two masters can be alive at once, and displacing
+across connections, where the first is by definition gone. An address no master can have
+(reserved, a broadcast address, or the outstation's own) is not taken as one, and a
+broadcast names nobody, so it opens no conversation. The device profile document says
+source addresses are never validated and any data link address is expected.
+*Trade-off:* the address was never authorization, and without transport security this
+makes plain what was already true: any peer that can reach the listener can read, and can
+command if controls are bound. A deployment that needs to restrict that uses the
+listener's TLS allow-list, or the network.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
