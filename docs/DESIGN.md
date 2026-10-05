@@ -1118,6 +1118,45 @@ else about an outstation built this way: the listener's TLS allow-list, or the n
 *Trade-off:* a master that reconnects under a different address has to enable again, and
 until it does its events wait in the buffers for a poll.
 
+**D73 -- The master lives in this package, and its association does no I/O.**
+`py1815.master` is a master for exercising outstations: this one in tests, any other on a
+bench. It is here and not in a distribution of its own because it stands on `link`,
+`transport` and `application`, which are not published as a stable interface for another
+package to depend on. Its core has no runtime dependency, as the rest of the library has
+none. `MasterAssociation` is the session turned around: it is handed the octets that
+arrived and returns the octets to send, and time is a clock read when a method is called.
+A test drives it against a `Session` in one process, through as much protocol time as it
+likes, with no socket and no sleep, and the socket lives in one place above it.
+*Trade-off:* the owner writes the loop that waits, as the listener does for the session.
+
+**D74 -- Objects are read by a decoder written from the standard, not from the encoders.**
+`py1815.decode` holds the layout of every object a response may carry and reads them from
+octets. It was written from the standard's object definitions and is tested from octets
+written out by hand. Producing it by inverting `py1815.objects` would have been less work
+and worth nothing: an encoder and a decoder derived from one another agree through any
+mistake they share, and the reason to read an outstation is to learn what it sent. The
+same argument limits what the master can show. It shares its framing with the outstation
+beside it, so the two agreeing is convenient and is not evidence; the independent masters
+and parsers of the interoperability jobs remain what judges the octets.
+*Trade-off:* two descriptions of each object, kept honest by tests and not by construction.
+
+**D75 -- A decoder reads as far as it can, and says where it stopped.** An object's width
+is the only way to find the object after it, so a group or variation the table does not
+hold ends the reading of that fragment. That is reported, with the reason and the octets
+left unread, beside every object read before it. It is not raised. A response that is
+half understood is still half of what the outstation said, and a tool for evaluating
+outstations will meet objects it does not know more often than one built for a known map.
+*Trade-off:* a caller has to look at `undecoded` to know a fragment was read in full.
+
+**D76 -- What an outstation did with a request is a result, never an exception.** Every
+request returns an `Exchange`: the fragment sent, each fragment received, the objects, the
+indications, how it ended and how long it took. A timeout, an error indication and a
+refusal are outcomes of asking, and are reported the same way a good answer is. An
+exception from the master means the interface was misused or there was no connection to
+ask over. A caller evaluating an outstation is asking what it does, and "it did not
+answer" is as much an answer as any other.
+*Trade-off:* a failure is not loud by itself, so a caller has to check `outcome`.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1134,6 +1173,10 @@ Each layer is testable without the ones above it, and the session does no I/O.
   object data is parsed as far as its first object header; walking further needs the width of
   every group and variation, which the map knows and this layer does not.
 - `session` holds what is true of a conversation rather than of a frame.
+- `decode` reads objects and knows nothing of who asked for them.
+- `master.association` is the session's mirror: what is true of a conversation, from the end
+  that asks. Like the session it does no I/O. `master.api` owns the socket, and
+  `master.loopback` stands in for one by handing octets straight to a session.
 
 ## Testing
 

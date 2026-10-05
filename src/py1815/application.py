@@ -19,7 +19,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -516,4 +516,120 @@ def null_response(*, sequence: int, iin: IIN) -> bytes:
     return build_response(
         control=AppControl(fir=True, fin=True, sequence=sequence),
         iin=iin,
+    )
+
+
+# ---------------------------------------------------------------- the other end
+#
+# What follows is the same envelope read from a master's side: a request built,
+# a response parsed. It stops where the rest of this module stops, at the object
+# data, whose widths belong to the module that knows the objects.
+
+#: The two function codes an outstation sends.
+RESPONSE_FUNCTIONS = (FunctionCode.RESPONSE, FunctionCode.UNSOLICITED_RESPONSE)
+
+
+class ResponseError(Exception):
+    """A fragment from an outstation that is not a response."""
+
+
+@dataclass(frozen=True)
+class Response:
+    """One parsed response fragment: the envelope, and the objects unread."""
+
+    control: AppControl
+    function: FunctionCode
+    iin: IIN
+    #: The object headers and objects, exactly as sent.
+    body: bytes = b""
+
+    @property
+    def unsolicited(self) -> bool:
+        return self.function is FunctionCode.UNSOLICITED_RESPONSE
+
+
+def parse_response(fragment: bytes) -> Response:
+    """Parse a response fragment, or say why it is not one.
+
+    A fragment whose function code and unsolicited bit disagree is refused: a
+    master confirms the two kinds in different sequence series, and one that
+    could be read either way would be confirmed in the wrong one.
+    """
+    if len(fragment) < RESPONSE_HEADER_SIZE:
+        raise ResponseError("fragment is shorter than a response header")
+    control = AppControl.from_byte(fragment[0])
+    try:
+        function = FunctionCode(fragment[1])
+    except ValueError as exc:
+        raise ResponseError(f"function code 0x{fragment[1]:02X} is not a response") from exc
+    if function not in RESPONSE_FUNCTIONS:
+        raise ResponseError(f"{function.name} is a request, and an outstation sends none")
+    if control.uns != (function is FunctionCode.UNSOLICITED_RESPONSE):
+        raise ResponseError(
+            f"{function.name} arrived with the unsolicited bit {'set' if control.uns else 'clear'}"
+        )
+    return Response(
+        control=control,
+        function=function,
+        iin=IIN(fragment[2], fragment[3]),
+        body=bytes(fragment[RESPONSE_HEADER_SIZE:]),
+    )
+
+
+def build_request(function: FunctionCode, *, sequence: int, body: bytes = b"") -> bytes:
+    """One request fragment, ready for the transport function.
+
+    A request is always a single fragment, first and final, and never asks to
+    be confirmed: the response is the acknowledgment.
+    """
+    control = AppControl(fir=True, fin=True, sequence=sequence)
+    return bytes([control.to_byte(), function]) + body
+
+
+def build_confirm(*, sequence: int, unsolicited: bool = False) -> bytes:
+    """The confirmation of a response fragment that asked for one.
+
+    It carries the sequence number of the fragment it confirms and that
+    fragment's unsolicited bit, which is what tells an outstation which of
+    its two exchanges is being confirmed.
+    """
+    control = AppControl(fir=True, fin=True, uns=unsolicited, sequence=sequence)
+    return bytes([control.to_byte(), FunctionCode.CONFIRM])
+
+
+def all_objects_header(group: int, variation: int) -> bytes:
+    """An object header asking for every object of a group and variation."""
+    return bytes([group, variation, QualifierCode.ALL_OBJECTS])
+
+
+def class_header(event_class: int) -> bytes:
+    """The header that asks for a class: 0 for static data, 1 to 3 for events."""
+    variations = {number: variation for variation, number in CLASS_VARIATIONS.items()}
+    if event_class not in variations:
+        raise ValueError(f"there is no class {event_class}; a class is 0 to 3")
+    return all_objects_header(CLASS_GROUP, variations[event_class])
+
+
+def index_list_header(group: int, variation: int, indices: Sequence[int]) -> bytes:
+    """An object header naming points one at a time, in the narrowest qualifier.
+
+    For a request that carries no object data, where the indices follow the
+    count as a list. The order given is the order asked, and an index may
+    repeat.
+    """
+    if not indices:
+        raise ValueError("an index list names at least one point")
+    if min(indices) < 0 or max(indices) > 0xFFFF:
+        raise ValueError("an index is 0 to 65535")
+    if max(indices) <= 0xFF and len(indices) <= 0xFF:
+        return bytes(
+            [group, variation, QualifierCode.UINT8_COUNT_UINT8_INDEX, len(indices), *indices]
+        )
+    return struct.pack(
+        f"<BBBH{len(indices)}H",
+        group,
+        variation,
+        QualifierCode.UINT16_COUNT_UINT16_INDEX,
+        len(indices),
+        *indices,
     )

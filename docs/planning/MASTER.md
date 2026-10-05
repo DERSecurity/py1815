@@ -133,21 +133,22 @@ interface.
               TCP or TLS     in process, to a Session
 ```
 
-| Module | Holds |
-|---|---|
-| `application` | Gains `build_request` and `parse_response`, beside the two it has |
-| `objects`, `control` | Gain decoders, and one table of object sizes for the whole library |
-| `master.association` | One master association: octets in, octets out, time injected. The mirror of `session` |
-| `master.tasks` | The startup sequence, the scans, the reactions to indications, as data |
-| `master.store` | The last value of every point, and the events in order |
-| `master.channel` | The connection: a TCP or TLS client that reconnects, or a pair of calls into a `Session` |
-| `master.deviations` | Misbehavior, applied between the association and the channel |
-| `master.trace` | Every frame and fragment with its time and direction; the capture writer, moved from `interop/` |
-| `master.api` | `Master` and `Outstation`: the Python interface |
-| `master.service` | The JSON service: the same operations over a local socket and over WebSocket |
-| `master.profile` | The DER profile: names, units, functions, curves |
-| `master.cli` | `py1815-master` |
-| `master.console` | The web console's files |
+| Module | Holds | |
+|---|---|---|
+| `application` | `build_request`, `build_confirm`, `parse_response` and the headers of a read, beside what it had | Built |
+| `decode` | The decoders, and one table of object layouts | Built |
+| `master.association` | One master association: octets in, octets out, time injected. The mirror of `session` | Built |
+| `master.requests`, `master.operations` | The requests as object headers, and the one list of operations every carrier shares | Built, for reading |
+| `master.store` | The last value of every point, and the events in order | Built |
+| `master.loopback` | A master handed straight to a `Session`, with no socket | Built |
+| `master.api` | `Master` and `Outstation`: the Python interface, over TCP | Built, without TLS or reconnection |
+| `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | |
+| `master.deviations` | Misbehavior, applied between the association and the connection | |
+| `master.trace` | Every frame and fragment with its time and direction; the capture writer, moved from `interop/` | |
+| `master.service` | The JSON service: the same operations over a local socket and over WebSocket | |
+| `master.profile` | The DER profile: names, units, functions, curves | |
+| `master.cli` | `py1815-master` | |
+| `master.console` | The web console's files | |
 
 ## The association
 
@@ -191,6 +192,7 @@ through the association:
 
 Numbered M here. Each takes the next number in [DESIGN.md](../DESIGN.md) when
 the phase that builds it lands, so two plans in flight do not claim one number.
+M1 and M2 are recorded there as D73, M3 as D74 and D75, and M8 as D76.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -203,10 +205,11 @@ can be pinned against literal octets and driven through hours of protocol time
 in a test that takes milliseconds.
 
 **M3. Decoders are written from the standard and not from the encoders.** One
-table of object sizes serves the session, the master, the probe and the
-harnesses, in place of the separate ones each holds now. Every decoder has a
-test that starts from octets written out by hand, and where the tables in
-`conformance/` state a width, the size table is checked against them.
+table of object layouts serves the master, and comes to serve the session, the
+probe and the harnesses in place of the separate ones each holds now. Every
+decoder has a test that starts from octets written out by hand, the table is
+compared with the one the certification harness was written with, and where
+the tables in `conformance/` state a width it is to be checked against them.
 
 **M4. Everything the master does unasked is a task that can be turned off.**
 `Master(manual=True)` sends nothing a caller did not ask for: no startup
@@ -506,13 +509,16 @@ done means.
 
 1. **Responses and objects.** `build_request`, `parse_response`, the decoders,
    the one size table. *Done when* the probe and the harnesses can use them and
-   produce the octets and readings they produce now.
+   produce the octets and readings they produce now. *Built,* in `application`
+   and `decode`. *Left:* moving the probe and the harnesses onto them.
 2. **The association.** One request at a time, multi-fragment responses,
    confirmations, timeouts, read retries, the store. In process only. *Done
    when* an integrity poll and a class poll of the simulated DER fill the store
-   with what the outstation holds.
+   with what the outstation holds. *Built,* with unsolicited responses taken
+   and confirmed as well. *Left:* retrying a read.
 3. **The channel.** TCP and TLS, reconnecting. *Done when* `py1815-master poll`
    does what `py1815-der poll` does, and that command is implemented with it.
+   *Built:* TCP, inside `master.api`. *Left:* TLS, reconnection, the command.
 4. **Controls and the rest of the requests.** Select and operate, direct
    operate, freezes, the time, the restart indication, restart. *Done when*
    every request in *Scope* has a test against a `Session` and a pinned frame.
