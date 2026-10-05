@@ -28,6 +28,10 @@ consulted.
 
 ::: py1815.profile.outstation
 
+## Coverage
+
+::: py1815.profile.coverage
+
 ## Curves
 
 ::: py1815.profile.curves

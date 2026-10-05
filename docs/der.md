@@ -124,6 +124,80 @@ refused. A zero would be indistinguishable from a real value.
 anyway. That is useful while bringing a device up, and is not a conformant
 outstation.
 
+## How much of the profile is served
+
+A partial map is expected to grow, and `coverage()` says where it stands:
+
+```python
+report = outstation.coverage()
+print(report)
+```
+
+```
+8 of 17 points served, 9 absent
+  1 of 2 mandatory points served
+  7 of 15 optional points served
+  3 served point(s) offline when this was reported
+not conformant; mandatory points not served: AI1
+
+           mandatory  optional
+bound              1         2
+mirror             0         1
+supports           0         1
+fixed              0         3
+absent             1         8
+
+BO0        absent   -          Enable Widget Mode
+BO1        absent   -          Unpaired switch
+BI0      M bound    good       Alarm
+BI1        supports good       Supports Widget Mode
+BI2        absent   -          Widget Enabled
+BI9        absent   -          Lone flag
+AO0        bound    never-read Setpoint
+AI0        fixed    good       Version
+AI1      M absent   -          Power
+AI2        bound    comm-lost  Voltage
+AI3        mirror   never-read Setpoint readback
+...
+```
+
+There is one line for every point of the map, served or not. The columns are
+the point, `M` if the profile makes it mandatory, where its value comes from,
+its quality, and its name.
+
+- **Where the value comes from** is one of the cases under
+  [Mandatory points](#mandatory-points): `bound` is a point you bound,
+  `mirror` an input reading back a bound output, `supports` a function's
+  supports input, and `fixed` a value the tables fix. `absent` is a point
+  nothing serves. This column is settled when the outstation is built.
+- **Quality** is what the point's source said when the report was made, in the
+  words of [`Quality`](reference/profile.md#binding). Anything but `good` is a
+  point that is served with its ONLINE flag clear, so a point bound to a source
+  that has nothing behind it yet shows as bound and not good. This column is a
+  snapshot: the report asks each source once.
+
+The summary says how far the map is from one `strict` would accept, and names
+the mandatory points still to serve. `report.conformant` is the same test.
+
+The report is data. `report.entries` holds an `Entry` per point, and
+`served`, `absent`, `offline` and `missing` select from it. To see what a new
+binding changed, keep the earlier report:
+
+```python
+for entry in outstation.coverage().changed_since(earlier):
+    print(entry.address, entry.source.value)
+```
+
+Binding one more point and rebuilding is the whole of the change: the point is
+answered, and the [Device Profile document](#the-device-profile-document)
+generated from the rebuilt outstation lists it. Binding an output may bring an
+input with it, and the report shows both.
+
+`py1815-der points --coverage` prints the report for the simulated DER.
+
+A report is not part of what a master is answered with. Taking one buffers no
+event and changes no output.
+
 ## What the builder does with a binding
 
 | | |

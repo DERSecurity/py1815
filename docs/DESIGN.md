@@ -842,6 +842,28 @@ known in every one of these cases, so the indication is the parameter one and no
 *Trade-off:* a master probing for which indices exist gets a refusal instead of a partial
 answer, and has the range read for that.
 
+**D64 -- A master that is not known in advance is whoever speaks first on a connection.**
+`Session(master_address=None)` serves a master it was not configured for, which is the
+position of an outstation shipped to a site whose controller nobody has named. The first
+address to send a frame to this outstation on a connection is the master, replies go to
+that address, and it holds for as long as the connection does. A frame from a second
+address on the same connection is dropped, for the reason a configured master's check
+already gives: one association has one set of sequence numbers, one pending
+confirmation and one select awaiting its operate, and two masters would interleave over
+them. A new connection starts again, so a master that restarted under a different address
+is served, and what belongs to the association (the restart indication, buffered events)
+is there for whoever connects, as it is for a reconnecting master under **D7**. That
+answers the choice between refusing a second address and letting it displace the first:
+refused within a connection, where two masters can be alive at once, and displacing
+across connections, where the first is by definition gone. An address no master can have
+(reserved, a broadcast address, or the outstation's own) is not taken as one, and a
+broadcast names nobody, so it opens no conversation. The device profile document says
+source addresses are never validated and any data link address is expected.
+*Trade-off:* the address was never authorization, and without transport security this
+makes plain what was already true: any peer that can reach the listener can read, and can
+command if controls are bound. A deployment that needs to restrict that uses the
+listener's TLS allow-list, or the network.
+
 **D66 -- The event policy is data the caller hands over, and the library reads no file.**
 The tables give each point a default event class, and what a controlling station wants
 reported differs by deployment, so `DerOutstation` takes an `event_policy`: an
@@ -875,6 +897,33 @@ for the whole profile ahead of a binding that grows. The device profile document
 class and the deadband in force, read from the outstation and not from the tables.
 *Trade-off:* a caller wanting a policy file writes the three lines that load one, against a
 library that would otherwise own a format, a parser choice and a dependency for it.
+
+**D67 -- Coverage is a report read from the built outstation, and no part of what it
+answers.** `DerOutstation.coverage()` lists every point of the resolved map with where its
+value comes from: bound by the caller, mirrored from a bound output, derived as a
+"supports" input, fixed by the tables, or absent. These are the builder's own cases and
+are recorded as it resolves them, so the report cannot disagree with the wire about which
+points exist, and `conformant` is the test `strict` applies. Absent means what **D43**
+means by it: nothing serves the point, a class 0 read does not carry it and a read of its
+index is refused.
+
+Offline is a different thing and is kept apart. A point that is offline is served, and is
+sent with its ONLINE flag clear: its source cannot be reached, it has never been read or
+written, its function is disabled (**D57**), or its source called it good and handed over a
+value with no number, which goes out as zero with a reference error. That is a fact about a
+moment and not about the binding, so the report asks each source once when it is made and
+records the quality beside the source, and whether ONLINE went out is read from what the
+wire carries and not inferred from the quality. Two reports of one outstation agree on every source and may differ in
+quality. A deployment tracking growth compares sources; one asking why a master sees a
+point flagged reads the quality.
+
+Nothing that answers a master reads the report, and taking one buffers no event and
+changes no output. Its text is for people and is not a format to parse: the dataclasses
+are the interface.
+*Trade-off:* a report costs one call to every source, and a source that is slow or counts
+its reads will notice; a report that did not ask could not say which bound points are
+dark, which is the half of the question a growing deployment cannot answer from its own
+configuration.
 
 ## Layering
 

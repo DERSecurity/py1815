@@ -9,10 +9,11 @@ layouts out of the tests.
 from __future__ import annotations
 
 import dataclasses
+import re
 import struct
 
 import pytest
-from profile_fixtures import analog, document, small, units
+from profile_fixtures import analog, document, row, small, units
 
 from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
 from py1815.control import (
@@ -25,6 +26,7 @@ from py1815.control import (
 from py1815.events import EventClass
 from py1815.profile import load
 from py1815.profile.binding import Binding, Quality, Reading
+from py1815.profile.coverage import Source
 from py1815.profile.model import Kind, MapError
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.policy import EventPolicy, EventRule
@@ -1134,3 +1136,268 @@ class TestTheSessionItWires:
         binding.output(AO, 0, status=lambda: 33.3)
         session = DerOutstation(point_map, binding, strict=False).session()
         assert _values(_read(session, bytes([40, 0, ALL])))[(40, 0)] == 333
+
+
+def _partial(*extra: tuple[Kind, int], **kwargs) -> DerOutstation:
+    """A monitor of the two mandatory points, and whatever else is named."""
+    binding = Binding()
+    binding.read(BI, 0, lambda: False)
+    binding.read(AI, 1, lambda: 1500.0)
+    for kind, index in extra:
+        if kind.is_output:
+            binding.output(kind, index, initial=0)
+        else:
+            binding.read(kind, index, lambda: 240.0)
+    return DerOutstation(load.resolve(small(), units(0)), binding, strict=False, **kwargs)
+
+
+#: A line of the report's text that is about one point.
+_POINT_LINE = re.compile(r"(AI|AO|BI|BO|CTR)\d+ ")
+
+
+def _sources(report) -> dict[tuple[Kind, int], Source]:
+    return {entry.point.address: entry.source for entry in report.entries}
+
+
+class TestTheCoverageReport:
+    """What a built outstation says about how much of the profile it serves."""
+
+    def test_a_value_with_no_number_is_reported_offline_as_the_wire_has_it(self):
+        """A source can be good and hand over NaN, which goes out with ONLINE clear."""
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.read(AI, 1, lambda: float("nan"))
+        binding.read(AI, 2, lambda: 240.0)
+        outstation = DerOutstation(point_map, binding, strict=False)
+        report = outstation.coverage()
+        nan, fine = report.entry(AI, 1), report.entry(AI, 2)
+        assert nan.quality is Quality.GOOD, "the source said nothing was wrong"
+        assert not nan.online and nan in report.offline
+        assert fine.online and fine not in report.offline
+        flags = _flags(_read(outstation.session(), bytes([30, 1, 0x00, 1, 2])))
+        assert not flags[(30, 1)] & 0x01 and flags[(30, 2)] & 0x01, "and the wire agrees"
+
+    def test_so_is_an_output_whose_status_has_no_number(self):
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.output(AO, 0, status=lambda: float("nan"))
+        outstation = DerOutstation(point_map, binding, strict=False)
+        entry = outstation.coverage().entry(AO, 0)
+        assert entry.quality is Quality.GOOD and not entry.online
+        flags = _flags(_read(outstation.session(), bytes([40, 0, ALL])))
+        assert not flags[(40, 0)] & 0x01
+
+    def test_every_point_of_the_map_is_in_it_once(self):
+        outstation, _ = _built()
+        addresses = [entry.point.address for entry in outstation.coverage().entries]
+        assert sorted(addresses) == sorted(outstation.point_map.points)
+        assert len(addresses) == len(set(addresses))
+
+    def test_each_point_is_put_down_to_where_its_value_comes_from(self):
+        outstation, _ = _built()
+        sources = _sources(outstation.coverage())
+        assert sources[(AI, 1)] is Source.BOUND
+        assert sources[(AO, 0)] is Source.BOUND
+        assert sources[(AI, 3)] is Source.MIRROR, "it reads back the bound AO0"
+        assert sources[(BI, 2)] is Source.MIRROR
+        assert sources[(BI, 1)] is Source.SUPPORTS
+        assert sources[(AI, 0)] is Source.FIXED
+        assert sources[(AI, 65000)] is Source.FIXED
+        assert sources[(BI, 9)] is Source.ABSENT
+        assert sources[(BO, 1)] is Source.ABSENT
+
+    def test_a_reader_wins_over_the_output_an_input_would_mirror(self):
+        outstation = _partial((AO, 0), (AI, 3))
+        assert _sources(outstation.coverage())[(AI, 3)] is Source.BOUND
+
+    @pytest.mark.parametrize("kind", list(Kind))
+    def test_what_it_calls_served_is_what_the_outstation_serves(self, kind):
+        """The report is read from the builder's own resolution, not worked out again."""
+        outstation, _ = _built()
+        served = [e.point for e in outstation.coverage().served if e.point.kind is kind]
+        assert served == outstation.served(kind)
+
+    def test_mandatory_points_are_told_apart_from_optional_ones(self):
+        point_map = load.resolve(small(), units(0))
+        report = DerOutstation(point_map, Binding(), strict=False).coverage()
+        assert [entry.point.address for entry in report.missing] == [(BI, 0), (AI, 1)]
+        assert not report.conformant
+        absent_optional = [e for e in report.absent if not e.point.mandatory]
+        assert absent_optional, "optional points are absent too, and are not what is missing"
+        assert _partial().coverage().missing == ()
+        assert _partial().coverage().conformant
+
+    @pytest.mark.parametrize("bound", [[], [(BI, 0)], [(AI, 1)], [(BI, 0), (AI, 1)]])
+    def test_conformant_is_what_a_strict_build_accepts(self, bound):
+        point_map = load.resolve(small(), units(0))
+
+        def binding() -> Binding:
+            made = Binding()
+            for kind, index in bound:
+                made.read(kind, index, lambda: 0)
+            return made
+
+        report = DerOutstation(point_map, binding(), strict=False).coverage()
+        if report.conformant:
+            DerOutstation(point_map, binding())
+        else:
+            with pytest.raises(MapError, match="mandatory"):
+                DerOutstation(point_map, binding())
+
+    def test_a_served_point_whose_source_is_not_good_is_offline(self):
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.read(AI, 1, lambda: 1.0)
+        binding.read(AI, 2, lambda: Reading(240.0, Quality.COMM_LOST))
+        binding.read(AI, 4, lambda: Reading(0.0, Quality.OFFLINE))
+        binding.output(AO, 0)
+        report = DerOutstation(point_map, binding, strict=False).coverage()
+        offline = {entry.point.address: entry.quality for entry in report.offline}
+        assert offline == {
+            (AI, 2): Quality.COMM_LOST,
+            (AI, 4): Quality.OFFLINE,
+            (AI, 3): Quality.NEVER_READ,
+            (AO, 0): Quality.NEVER_READ,
+        }, "an output never written, and the input that mirrors it, have nothing to report"
+        assert report.entry(AI, 1).quality is Quality.GOOD
+        assert report.entry(AI, 1).online
+        assert all(entry.served for entry in report.offline)
+
+    def test_an_absent_point_has_no_quality_and_is_not_offline(self):
+        report = _partial().coverage()
+        lone = report.entry(BI, 9)
+        assert lone.quality is None and not lone.served and not lone.online
+        assert lone not in report.offline
+
+    def test_offline_is_how_the_point_stood_when_the_report_was_made(self):
+        device = {"reachable": False}
+
+        def voltage() -> Reading:
+            return Reading(240.0, Quality.GOOD if device["reachable"] else Quality.COMM_LOST)
+
+        binding = Binding()
+        binding.read(AI, 2, voltage)
+        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        before = outstation.coverage()
+        device["reachable"] = True
+        after = outstation.coverage()
+        assert before.entry(AI, 2).quality is Quality.COMM_LOST
+        assert after.entry(AI, 2).quality is Quality.GOOD
+        assert before.entry(AI, 2).source is after.entry(AI, 2).source is Source.BOUND
+
+    def test_a_source_that_raises_is_reported_and_does_not_stop_the_report(self):
+        def broken() -> float:
+            raise OSError("unreachable")
+
+        binding = Binding()
+        binding.read(AI, 2, broken)
+        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        assert outstation.coverage().entry(AI, 2).quality is Quality.COMM_LOST
+
+    def test_the_inputs_of_a_disabled_function_are_offline(self):
+        tables = document(
+            {
+                "BO": [row("Enable Gadget", 0, purpose="Gadget", associated="BI0")],
+                "BI": [
+                    row("Gadget enabled", 0, event_class=1, purpose="Gadget", associated="BO0"),
+                    row("Supports Gadget", 1, event_class=0, purpose="Gadget"),
+                ],
+                "AI": [analog("Gadget output", 0, event_class=2, purpose="Gadget")],
+            }
+        )
+        binding = Binding()
+        binding.output(BO, 0, initial=False)
+        binding.read(AI, 0, lambda: 42.0)
+        outstation = DerOutstation(load.resolve(tables, units(0)), binding)
+        report = outstation.coverage()
+        assert [entry.point.address for entry in report.offline] == [(AI, 0)]
+        assert report.entry(AI, 0).quality is Quality.OFFLINE
+        latch_on = ControlRelayOutputBlock.build(OperationType.LATCH_ON)
+        assert _operate(outstation.session(), _crob(0, latch_on)) is CommandStatus.SUCCESS
+        assert outstation.coverage().offline == ()
+
+    def test_taking_the_report_changes_nothing_a_master_sees(self):
+        outstation, device = _built()
+        session = outstation.session()
+        outstation.poll()
+        before = _read(session, CLASS_0)
+        device.power = 1600.0
+        outstation.coverage()
+        assert outstation.events.total == 0, "a report is not a poll: it buffers no event"
+        device.power = 1500.0
+        assert _read(session, CLASS_0, sequence=1)[2:] == before[2:]
+        assert device.applied == []
+
+    def test_its_text_has_one_line_for_each_point(self):
+        report = _partial().coverage()
+        text = report.render()
+        assert str(report) == text
+        lines = text.splitlines()
+        for entry in report.entries:
+            address = f"{entry.point.kind.value}{entry.point.index}"
+            (line,) = [line for line in lines if line.split()[:1] == [address]]
+            assert entry.source.value in line and entry.point.name in line
+        (power,) = [line for line in lines if line.startswith("AI1 ")]
+        (lone,) = [line for line in lines if line.startswith("BI9 ")]
+        assert " M " in power and " M " not in lone
+
+    def test_its_text_says_how_far_the_map_is_from_a_conformant_one(self):
+        point_map = load.resolve(small(), units(0))
+        short = DerOutstation(point_map, Binding(), strict=False).coverage().render()
+        assert "0 of 2 mandatory" in short
+        assert "BI0, AI1" in short, "the mandatory points still to bind are named"
+        whole = _partial().coverage().render()
+        assert "2 of 2 mandatory" in whole
+        assert "BI0, AI1" not in whole and "not conformant" not in whole
+
+
+class TestAPartialMapThatGrows:
+    """Adding a binding entry is the whole of the change."""
+
+    def test_one_more_reader_moves_exactly_that_point(self):
+        before = _partial().coverage()
+        after = _partial((AI, 2)).coverage()
+        changed = after.changed_since(before)
+        assert [entry.point.address for entry in changed] == [(AI, 2)]
+        assert before.entry(AI, 2).source is Source.ABSENT
+        assert changed[0].source is Source.BOUND
+        assert len(after.served) == len(before.served) + 1
+        assert len(after.absent) == len(before.absent) - 1
+
+    def test_and_exactly_that_line_of_the_text(self):
+        before = _partial().coverage().render().splitlines()
+        after = _partial((AI, 2)).coverage().render().splitlines()
+        moved = [line for line in set(before) ^ set(after) if _POINT_LINE.match(line)]
+        assert sorted(line.split()[1] for line in moved) == ["absent", "bound"]
+        assert {line.split()[0] for line in moved} == {"AI2"}
+
+    def test_and_the_point_is_on_the_wire(self):
+        assert (30, 2) not in _values(_read(_partial().session(), CLASS_0))
+        grown = _partial((AI, 2)).session()
+        assert _values(_read(grown, CLASS_0))[(30, 2)] == 2400
+        assert _values(_read(grown, bytes([30, 0, 0x00, 2, 2]), sequence=1)) == {(30, 2): 2400}
+
+    def test_and_nothing_else_on_the_wire_moves(self):
+        before = _values(_read(_partial().session(), CLASS_0))
+        after = _values(_read(_partial((AI, 2)).session(), CLASS_0))
+        assert {key: value for key, value in after.items() if key != (30, 2)} == before
+
+    def test_two_builds_of_one_binding_report_alike(self):
+        assert _partial((AI, 2)).coverage() == _partial((AI, 2)).coverage()
+        assert _partial((AI, 2)).coverage().changed_since(_partial((AI, 2)).coverage()) == ()
+
+    def test_an_output_brings_the_input_that_reads_it_back(self):
+        """One entry may serve more than one point, and the report says which."""
+        before = _partial().coverage()
+        after = _partial((AO, 0)).coverage()
+        changed = {e.point.address: e.source for e in after.changed_since(before)}
+        assert changed == {(AO, 0): Source.BOUND, (AI, 3): Source.MIRROR}
+
+    def test_growing_to_the_last_mandatory_point_is_what_makes_it_conformant(self):
+        binding = Binding()
+        binding.read(BI, 0, lambda: False)
+        point_map = load.resolve(small(), units(0))
+        short = DerOutstation(point_map, binding, strict=False).coverage()
+        assert [entry.point.address for entry in short.missing] == [(AI, 1)]
+        binding.read(AI, 1, lambda: 0.0)
+        assert DerOutstation(point_map, binding).coverage().conformant

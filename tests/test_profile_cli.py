@@ -9,7 +9,7 @@ import threading
 import zipfile
 
 import pytest
-from profile_fixtures import REAL_TABLES, for_reference_der
+from profile_fixtures import REAL_TABLES, analog, for_reference_der, row
 
 from py1815.profile import cli, der, extract, load
 from py1815.profile.model import Composition
@@ -45,6 +45,33 @@ class TestPoints:
     ):
         monkeypatch.setenv(load.TABLES_VARIABLE, str(tmp_path / "absent.json"))
         assert cli.main(["points", "--tables", str(tables)]) == 0
+
+    @pytest.fixture
+    def wider_tables(self, tables):
+        """The tables with two optional points the simulated DER does not bind."""
+        document = for_reference_der()
+        document["points"]["AI"].append(analog("Not simulated", 64000, event_class=2))
+        document["points"]["BI"].append(row("Also not simulated", 64001, event_class=1))
+        tables.write_text(json.dumps(document), encoding="utf-8")
+        return tables
+
+    def test_coverage_reports_the_points_it_does_not_serve_as_well(self, wider_tables, capsys):
+        assert cli.main(["points"]) == 0
+        plain = capsys.readouterr().out
+        assert "Not simulated" not in plain, "the plain listing is of what is served"
+        assert cli.main(["points", "--coverage"]) == 0
+        report = capsys.readouterr().out.splitlines()
+        (missing,) = [line for line in report if line.startswith("AI64000 ")]
+        assert "absent" in missing
+        (output,) = [line for line in report if line.startswith("BO0 ")]
+        assert "bound" in output
+        assert any("mandatory" in line for line in report), "and how far it is from conformant"
+
+    def test_coverage_is_the_report_the_outstation_gives(self, wider_tables, capsys):
+        assert cli.main(["points", "--coverage"]) == 0
+        printed = capsys.readouterr().out
+        outstation = der.build(load.load(wider_tables)).outstation
+        assert printed == outstation.coverage().render() + "\n"
 
 
 class TestTablesBuild:

@@ -602,6 +602,38 @@ class TestThePointLists:
         analog = self._point(root, Kind.AO, 0)
         assert _text(analog, "d:minTransmittedValue") == "-1000"
 
+    def _listed(self, root, kind: Kind) -> list[int]:
+        path = "d:referenceDevice/d:dataPointsList/" + self.PATHS[kind]
+        return [int(point.find("d:index", NS).text) for point in root.findall(path, NS)]
+
+    def test_a_point_bound_later_is_listed_by_the_rebuild_and_nothing_else_moves(self):
+        """A map that grows: the binding entry is the whole of the change."""
+
+        def built(*extra: int) -> DerOutstation:
+            binding = Binding()
+            binding.read(Kind.BI, 0, lambda: False)
+            binding.read(Kind.AI, 1, lambda: 1.0)
+            for index in extra:
+                binding.read(Kind.AI, index, lambda: 240.0)
+            return DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+
+        today = datetime.date(2026, 1, 2)
+        before, after = built(), built(2)
+        first = device_profile.build(before, before.session(), today=today)
+        second = device_profile.build(after, after.session(), today=today)
+        assert 2 not in self._listed(first, Kind.AI)
+        assert self._listed(second, Kind.AI) == sorted([*self._listed(first, Kind.AI), 2])
+        assert _text(self._point(second, Kind.AI, 2), "d:scaleFactor") == "0.1"
+        for kind in set(Kind) - {Kind.AI}:
+            assert self._listed(second, kind) == self._listed(first, kind)
+        # The document and the coverage report are two readings of one outstation.
+        report = after.coverage()
+        for kind in (Kind.BI, Kind.AI):
+            served = [e.point.index for e in report.served if e.point.kind is kind]
+            assert self._listed(second, kind) == served
+        moved = [entry.point.address for entry in report.changed_since(before.coverage())]
+        assert moved == [(Kind.AI, 2)]
+
     def test_a_long_name_becomes_a_name_and_a_description(self):
         tables = small()
         tables["points"]["BI"][0]["name"] = "Alarm. Raised when the widget is out of range."
@@ -736,6 +768,11 @@ class TestTheCommand:
         assert output.startswith("<?xml")
         assert "<value>Example Co</value>" in output
 
+    def test_any_master_is_stated_in_the_document(self, tables, capsys):
+        assert cli.main(["profile", "--any-master"]) == 0
+        output = capsys.readouterr().out
+        assert "<anyDataLinkAddress" in output.split("<expectedSourceAddress>")[1][:200]
+
     def test_or_to_a_file_with_the_listener_it_was_told(self, tables, tmp_path, capsys):
         out = tmp_path / "made" / "profile.xml"
         assert cli.main(["profile", "--out", str(out), "--bind", "0.0.0.0:20001"]) == 0
@@ -785,3 +822,33 @@ class TestAReadByIndexIsDeclaredAndAnswered:
             response = sender.send(1, _read_header(simulation.outstation, row, qualifier))
             assert not _refused(response)
             assert response[6] == qualifier and qualifier in row.response[1]
+
+
+class TestTheMasterAddressEntry:
+    """What the document says a master's address has to be."""
+
+    BASE = "d:referenceDevice/d:configuration/d:linkConfig/"
+
+    def _link(self, root: ElementTree.Element, name: str) -> list[str]:
+        current = root.find(self.BASE + f"d:{name}/d:currentValue", NS)
+        assert current is not None, name
+        return [child.tag.split("}")[1] for child in current]
+
+    def test_a_configured_master_is_validated_and_named(self, simulation):
+        root = _document(simulation, master_address=9)
+        assert self._link(root, "sourceAddressValidation") == ["alwaysSingleAddress"]
+        assert self._link(root, "expectedSourceAddress") == ["value"]
+
+    def test_any_master_is_not_validated_and_no_address_is_expected(self, simulation):
+        root = _document(simulation, master_address=None)
+        assert self._link(root, "sourceAddressValidation") == ["never"]
+        assert self._link(root, "expectedSourceAddress") == ["anyDataLinkAddress"]
+
+    def test_both_documents_say_the_outstation_can_do_either(self, simulation):
+        for master in (9, None):
+            root = _document(simulation, master_address=master)
+            offered = root.find(self.BASE + "d:sourceAddressValidation/d:capabilities", NS)
+            assert [child.tag.split("}")[1] for child in offered] == [
+                "never",
+                "alwaysSingleAddress",
+            ]

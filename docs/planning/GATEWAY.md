@@ -61,30 +61,33 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   differ from what the master asked for.
 - **G5.** Event class and deadband set by the deployment, as data, per point. Built.
 - **G6.** A partial map that grows, with a report of what is bound against the profile.
+  Built.
 - **G10.** Static groups read by index, for a master that picks scattered points. Built.
 
 **In the outstation and the project:**
 
-- [ ] **G3. Nothing happens when the master goes quiet.** The outstation must hold no
-  timeout that changes an output and apply no fallback when requests stop. Today it has
-  none: nothing in the session or the builder changes an output because time has passed,
-  and the profile builder passes the profile's timing parameters through as point values
-  for the DER to honor. *Missing:* a
-  test that pins it, so later work cannot introduce a path from "no request for a while"
-  to "an output changed". Unsolicited responses bring the library's first timer, and that
-  timer retries a report; it must never touch an output.
-- [ ] **G4. A master that is not known in advance.** `Session` serves one configured
-  `master_address` and drops frames from any other source, for a stated reason: answering
+- [x] **G3. Nothing happens when the master goes quiet.** The outstation must hold no
+  timeout that changes an output and apply no fallback when requests stop. It has none:
+  nothing in the session or the builder changes an output because time has passed, and the
+  profile builder passes the profile's timing parameters through as point values for the
+  DER to honor. *Built:* `tests/test_master_silence.py` pins it. Each test commands an
+  output and then lets time pass with no request, in every way the library meets silence:
+  the session's clock moving on, the caller's loop still polling and freezing, a select
+  left to expire, and the listener closing a connection it has heard nothing on. The
+  binding has been called once and the output stands where the master left it.
+  Unsolicited responses bring the library's first timer, and that timer retries a report;
+  these tests are what it must leave passing.
+- [x] **G4. A master that is not known in advance.** `Session` served one configured
+  `master_address` and dropped frames from any other source, for a stated reason: answering
   an unexpected address would interleave two conversations over one set of sequence
-  numbers. This deployment cannot name its master. *Missing:* an option to accept any
-  source address and reply to the address that asked, with the rule for a second address
-  arriving mid-conversation stated and tested. One association still owns one set of
-  sequence numbers, one pending confirmation and one select awaiting its operate, so a
-  new address must either be refused while another is active or reset that state, and it
-  must never interleave. The device profile document's master address entry has to say
-  which. Accepting any address is not authorization, and without transport security it
-  means any peer that can reach the port can command; the option's documentation should
-  say so plainly.
+  numbers. This deployment cannot name its master. *Built:* `Session(master_address=None)`
+  serves whichever address speaks first on a connection and replies to it. A second
+  address on the same connection is dropped, so nothing interleaves, and a new connection
+  starts again, so a master that restarted under another address is served. The device
+  profile document says source addresses are not validated and any address is expected.
+  Accepting any address is not authorization, and the option's documentation says so:
+  without transport security, any peer that can reach the port can command (D64 in
+  [DESIGN.md](../DESIGN.md)).
 - [ ] **G7. Unsolicited responses, when a master asks.** An unknown master may send
   `ENABLE_UNSOLICITED`. It is refused today, which stays the honest answer until the
   roadmap entry in [DESIGN.md](../DESIGN.md) lands. *Missing:* that entry, which this
@@ -113,9 +116,6 @@ closes. G7 follows the roadmap and is not gated on the rest.
 
 - **The status a read-only outstation refuses a control with** (G1). It has to tell a
   master "not through this interface" and not "this point cannot be controlled".
-- **A second master address while one is active** (G4): refuse it, or let it displace the
-  first. Displacing is friendlier to a master that restarted with a different address;
-  refusing is safer when two masters are both alive.
 - **Whether the event policy file is the library's format or the caller's** (G5).
   Settled: the caller's. The library takes the policy as a mapping it validates and
   reads no file, so the gateway keeps the policy in its own configuration and hands

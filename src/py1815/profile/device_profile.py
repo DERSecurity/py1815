@@ -448,11 +448,20 @@ def _link(facts: SessionFacts) -> Items:
             [("range", [("minimum", 0), ("maximum", 65519)])],
             [("value", facts.outstation_address)],
         ),
-        _both("sourceAddressValidation", ["alwaysSingleAddress"]),
+        # Either is offered; which is in force is the session's. A session
+        # built for one master validates every frame against it, and one
+        # built for any master validates none.
+        _setting(
+            "sourceAddressValidation",
+            ["never", "alwaysSingleAddress"],
+            ["never" if facts.master_address is None else "alwaysSingleAddress"],
+        ),
         _setting(
             "expectedSourceAddress",
-            [("range", [("minimum", 0), ("maximum", 65519)])],
-            [("value", facts.master_address)],
+            ["anyDataLinkAddress", ("range", [("minimum", 0), ("maximum", 65519)])],
+            ["anyDataLinkAddress"]
+            if facts.master_address is None
+            else [("value", facts.master_address)],
         ),
         _both("selfAddressSupport", ["no"]),
         _both("sendsConfirmedUserDataFrames", ["never"]),
