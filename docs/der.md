@@ -183,12 +183,14 @@ status reader on a read-only outstation: without one it can only report the
 initial value you bound, or that it has nothing to report.
 
 `outstation.read_only` may be changed while the outstation runs, for a device
-whose control interface is reassigned. A change withdraws any select granted
-before it, so the master has to select again, and forgets the writes the
+whose control interface is reassigned. A change forgets the writes the
 outstation had accepted: an output without a `status=` reader reports nothing
-until it is written again. A `Session` you build yourself instead of through
-`outstation.session()` is not told; call its `abandon_select()` when you change
-the role.
+until it is written again. An operate that arrives after the outstation became
+read-only is refused like any other control, with the same status, even when
+its select was granted before the change. Giving control back withdraws any
+select granted before the outstation was read-only, so the master has to select
+again. A `Session` you build yourself instead of through `outstation.session()`
+is not told; call its `abandon_select()` when you give control back.
 
 ## Curves
 

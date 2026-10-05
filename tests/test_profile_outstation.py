@@ -807,6 +807,35 @@ class TestAReadOnlyOutstation:
         assert CommandStatus(operated[-1]) is CommandStatus.NO_SELECT
         assert device.applied == []
 
+    def test_an_operate_after_it_became_read_only_is_refused_as_read_only(self):
+        """The select was good. What changed is who may command, and the answer says so."""
+        outstation, device = _built(read_only_status=CommandStatus.BLOCKED_OTHER_MASTER)
+        session = outstation.session()
+        selected = session._handle_fragment(
+            _control(FunctionCode.SELECT, _analog_command(0, 125), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.SUCCESS
+        outstation.read_only = True
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 1)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.BLOCKED_OTHER_MASTER
+        assert device.applied == []
+
+    def test_and_that_refusal_spends_the_select(self):
+        """Refused once as read-only, the select is not there to operate on afterwards."""
+        outstation, device = _built()
+        session = outstation.session()
+        session._handle_fragment(_control(FunctionCode.SELECT, _analog_command(0, 125), 0))
+        outstation.read_only = True
+        session._handle_fragment(_control(FunctionCode.OPERATE, _analog_command(0, 125), 1))
+        outstation.read_only = False
+        operated = session._handle_fragment(
+            _control(FunctionCode.OPERATE, _analog_command(0, 125), 2)
+        )
+        assert CommandStatus(operated[-1]) is CommandStatus.NO_SELECT
+        assert device.applied == []
+
     def test_setting_the_role_it_already_has_spends_nothing(self):
         """The control for the test above: no change of role, and the select stands."""
         outstation, device = _built()

@@ -869,13 +869,17 @@ A read-only outstation still reports what its outputs stand at, from the status 
 does not vouch for a write it accepted before it became read-only, since another interface
 may have changed the value since, so without a reader it reports the binding's initial
 value or that it has nothing to report. The role is an attribute and may change while the
-outstation runs. A change in either direction does two more things. It withdraws any select
-granted under the old role, in every session the outstation wired, so an operate arriving
-afterwards finds none and has to select again: a select is permission given under the
-conditions of the moment. And it forgets the writes the outstation accepted, so an output
-with no status reader reports nothing until it is written under the new role, instead of
-reporting a value another interface may since have changed. The device profile document for a read-only outstation lists no control
-requests and still lists output status.
+outstation runs. A change in either direction forgets the writes the outstation accepted,
+so an output with no status reader reports nothing until it is written under the new role,
+instead of reporting a value another interface may since have changed. A select is
+permission given under the conditions of the moment, and each direction ends one
+differently. Becoming read-only leaves a select armed, so the operate it was granted for is
+refused with the read-only status like every other control: `NO_SELECT` would tell the
+master to select again when the truth is that this interface may no longer command. Giving
+control back withdraws, in every session the outstation wired, a select granted before the
+outstation was read-only, so an operate arriving afterwards finds none and has to select
+again. The device profile document for a read-only outstation lists no control requests
+and still lists output status.
 *Trade-off:* a master that commands a read-only outstation gets a refusal per point and
 not the unsupported-function indication, so it has to read a status code to learn why.
 

@@ -383,8 +383,15 @@ class DerOutstation:
         # of them. Without a status reader, an output reports nothing until it
         # is written again under the new role.
         self._state.clear()
-        # And a select granted under the old role is not permission under the
-        # new one, in either direction.
+        if self._read_only:
+            # A select granted while it commanded is left armed, so the operate
+            # it was granted for reaches the refusal every other control gets
+            # and is answered with the read-only status. Withdrawing it here
+            # would answer NO_SELECT, which tells a master to select again when
+            # the truth is that this interface may no longer command.
+            return
+        # Given control back. A select from before it only reported is not
+        # permission now: another interface held the device in between.
         for session in list(self._sessions):
             session.abandon_select()
 
