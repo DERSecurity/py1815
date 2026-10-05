@@ -153,7 +153,7 @@ async def _serve(args: argparse.Namespace, point_map: PointMap) -> None:
     simulation = der.build(point_map, seed=args.seed)
     outstation = simulation.outstation
     session = outstation.session(
-        outstation_address=args.outstation_address, master_address=args.master_address
+        outstation_address=args.outstation_address, master_address=_served_master(args)
     )
     server = OutstationServer(session, bind=args.bind)
     await server.start()
@@ -161,7 +161,8 @@ async def _serve(args: argparse.Namespace, point_map: PointMap) -> None:
     print(
         f"IEEE 1815.2 DER outstation (profile version {point_map.profile_version}) "
         f"listening on {args.bind}\n"
-        f"  link address {args.outstation_address}, master {args.master_address}; "
+        f"  link address {args.outstation_address}, "
+        f"master {'any' if args.any_master else args.master_address}; "
         f"serving {served}",
         flush=True,
     )
@@ -277,7 +278,7 @@ def _profile(args: argparse.Namespace) -> int:
         return 1
     outstation = der.build(point_map, seed=args.seed).outstation
     session = outstation.session(
-        outstation_address=args.outstation_address, master_address=args.master_address
+        outstation_address=args.outstation_address, master_address=_served_master(args)
     )
     host, _, port = args.bind.rpartition(":")
     identity = device_profile.Identity(
@@ -355,6 +356,21 @@ def _add_link_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--master-address", type=int, default=1)
 
 
+def _add_any_master_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--any-master",
+        action="store_true",
+        help="serve whichever master address speaks first on a connection, "
+        "instead of --master-address; with no transport security, any peer "
+        "that can reach the listener can then read and command",
+    )
+
+
+def _served_master(args: argparse.Namespace) -> int | None:
+    """The master address the session is built for, or None for any."""
+    return None if args.any_master else args.master_address
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="py1815-der", description="An IEEE 1815.2 DER outstation over DNP3."
@@ -376,6 +392,7 @@ def _parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="serve a simulated DER")
     _add_map_options(run)
     _add_link_options(run)
+    _add_any_master_option(run)
     run.add_argument(
         "--bind",
         default=f"127.0.0.1:{DEFAULT_PORT}",
@@ -398,6 +415,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_map_options(profile)
     _add_link_options(profile)
+    _add_any_master_option(profile)
     profile.add_argument(
         "--bind", default=f"127.0.0.1:{DEFAULT_PORT}", help="host:port it listens on"
     )

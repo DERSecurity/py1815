@@ -697,6 +697,11 @@ class TestTheCommand:
         assert output.startswith("<?xml")
         assert "<value>Example Co</value>" in output
 
+    def test_any_master_is_stated_in_the_document(self, tables, capsys):
+        assert cli.main(["profile", "--any-master"]) == 0
+        output = capsys.readouterr().out
+        assert "<anyDataLinkAddress" in output.split("<expectedSourceAddress>")[1][:200]
+
     def test_or_to_a_file_with_the_listener_it_was_told(self, tables, tmp_path, capsys):
         out = tmp_path / "made" / "profile.xml"
         assert cli.main(["profile", "--out", str(out), "--bind", "0.0.0.0:20001"]) == 0
@@ -746,3 +751,33 @@ class TestAReadByIndexIsDeclaredAndAnswered:
             response = sender.send(1, _read_header(simulation.outstation, row, qualifier))
             assert not _refused(response)
             assert response[6] == qualifier and qualifier in row.response[1]
+
+
+class TestTheMasterAddressEntry:
+    """What the document says a master's address has to be."""
+
+    BASE = "d:referenceDevice/d:configuration/d:linkConfig/"
+
+    def _link(self, root: ElementTree.Element, name: str) -> list[str]:
+        current = root.find(self.BASE + f"d:{name}/d:currentValue", NS)
+        assert current is not None, name
+        return [child.tag.split("}")[1] for child in current]
+
+    def test_a_configured_master_is_validated_and_named(self, simulation):
+        root = _document(simulation, master_address=9)
+        assert self._link(root, "sourceAddressValidation") == ["alwaysSingleAddress"]
+        assert self._link(root, "expectedSourceAddress") == ["value"]
+
+    def test_any_master_is_not_validated_and_no_address_is_expected(self, simulation):
+        root = _document(simulation, master_address=None)
+        assert self._link(root, "sourceAddressValidation") == ["never"]
+        assert self._link(root, "expectedSourceAddress") == ["anyDataLinkAddress"]
+
+    def test_both_documents_say_the_outstation_can_do_either(self, simulation):
+        for master in (9, None):
+            root = _document(simulation, master_address=master)
+            offered = root.find(self.BASE + "d:sourceAddressValidation/d:capabilities", NS)
+            assert [child.tag.split("}")[1] for child in offered] == [
+                "never",
+                "alwaysSingleAddress",
+            ]
