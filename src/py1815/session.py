@@ -462,7 +462,9 @@ class SessionFacts:
     """
 
     outstation_address: int
-    master_address: int
+    #: The one master this session serves, or None when it serves whichever
+    #: master speaks first on a connection.
+    master_address: int | None
     #: The largest request fragment that will be reassembled, in octets.
     max_request: int
     #: The largest response fragment that will be sent, in octets.
@@ -715,7 +717,7 @@ class Session:
         control_provider: ControlProvider | None = None,
         events: EventBuffers | None = None,
         outstation_address: int = 1024,
-        master_address: int = 1,
+        master_address: int | None = 1,
         max_fragment: int = 2048,
         max_response: int = 2048,
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
@@ -741,7 +743,12 @@ class Session:
             master_address: The master this association serves. A frame from any
                 other source is dropped: the address is not authorization, but
                 answering an unexpected one would interleave two conversations
-                over one set of sequence numbers.
+                over one set of sequence numbers. None serves a master that is
+                not known in advance: the first address to speak on a
+                connection is the master for as long as that connection
+                lasts, and a new connection may bring another (D64). Without
+                transport security that means any peer able to reach the
+                listener can read, and command if controls are bound.
             max_fragment: Reassembly ceiling for a received fragment.
             max_response: Ceiling for a response this outstation builds. A
                 separate number from ``max_fragment`` because they are separate
@@ -861,6 +868,8 @@ class Session:
             ("outstation_address", outstation_address),
             ("master_address", master_address),
         ):
+            if address is None:
+                continue
             if not 0 <= address <= link.MAX_ADDRESS:
                 # The addresses above this are the protocol's own: the
                 # broadcast addresses, the self-address and a reserved
@@ -876,6 +885,9 @@ class Session:
             )
         self._outstation_address = outstation_address
         self._master_address = master_address
+        #: The master being served now: the configured one, or the address
+        #: that spoke first on this connection, or nobody yet.
+        self._peer: int | None = master_address
         self._frames = link.FrameReader()
         self._reassembler = Reassembler(max_fragment=max_fragment)
         self._max_fragment = max_fragment
@@ -926,6 +938,10 @@ class Session:
         #: response has told the master so.
         self._broadcast: link.Broadcast | None = None
         self._broadcast_reassembler = Reassembler(max_fragment=max_fragment)
+        #: Who sent the broadcast segments being reassembled. Segments from two
+        #: sources are not one fragment, which matters once any address may be
+        #: heard: half a request from one and half from another must not run.
+        self._broadcast_source: int | None = None
         #: The last request that acted, and its answer, for a retry (D49).
         self._acted: tuple[bytes, bytes] | None = None
         #: A select being repeated, held across the reset every request makes.
@@ -1000,7 +1016,12 @@ class Session:
         null response, and no class is enabled until a master enables it:
         what was enabled before the restart is not carried across it.
         """
+        # A restart forgets what was in flight on the connection, and not who
+        # is on it: a master that commanded the restart is owed the answer,
+        # and goes on being served on the connection it is still using.
+        peer = self._peer
         self.connection_reset()
+        self._peer = peer
         self._enabled.clear()
         self._announced = False
         self._restart = True
@@ -1088,10 +1109,15 @@ class Session:
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._broadcast_reassembler.reset()
+        self._broadcast_source = None
         self._select = None
         self._outstanding = None
         self._conversation = None
         self._acted = None
+        # A master taken from the first frame belonged to the connection that
+        # carried it. The next connection may be a different master, or the
+        # same one restarted under another address.
+        self._peer = self._master_address
         # A new connection is a new data link: the master resets it before
         # sending anything that counts frames.
         self._link_reset = False
@@ -1157,9 +1183,9 @@ class Session:
         asked for. A response to a request can always go back to whoever
         asked. An unsolicited response has no request to take an address
         from, so with no master known there is nowhere to send it and
-        nothing is sent. Today the master is the one configured, and this is
-        never None; a session that learns its master from the first frame of
-        a connection answers here with nobody until that frame arrives.
+        nothing is sent. The master is the one configured. A session built to
+        serve any master has none configured, so it answers here with nobody
+        and sends nothing unsolicited, whoever has spoken on the connection.
         """
         return self._master_address
 
@@ -1505,6 +1531,15 @@ class Session:
 
     def _receive_broadcast(self, frame: link.LinkFrame) -> None:
         """Act on a broadcast request, and remember to say one was received (D50)."""
+        if frame.source != self._broadcast_source:
+            if self._broadcast_source is not None:
+                logger.info(
+                    "dnp3: broadcast from %d abandons one in progress from %d",
+                    frame.source,
+                    self._broadcast_source,
+                )
+            self._broadcast_reassembler.reset()
+            self._broadcast_source = frame.source
         try:
             fragment = self._broadcast_reassembler.add(frame.payload)
         except TransportError as exc:
@@ -1548,16 +1583,46 @@ class Session:
         if frame.destination != self._outstation_address and not frame.is_broadcast:
             logger.debug("dnp3: frame for %d is not ours", frame.destination)
             return False
-        if frame.source != self._master_address:
-            logger.warning("dnp3: dropping frame from unexpected master address %d", frame.source)
+        if self._peer is not None:
+            if frame.source != self._peer:
+                logger.warning(
+                    "dnp3: dropping frame from unexpected master address %d", frame.source
+                )
+                return False
+            return True
+        # No master yet, and none configured: the first to speak is the one.
+        # It still has to be an address a master could have.
+        if not link.is_valid_address(frame.source) or frame.source == self._outstation_address:
+            logger.warning(
+                "dnp3: dropping frame from address %d, which no master has", frame.source
+            )
             return False
+        if not frame.is_broadcast:
+            # A broadcast is addressed to everyone and answered by no one, so
+            # it opens no conversation and settles nothing about who is here.
+            self._peer = frame.source
+            logger.info("dnp3: serving master address %d on this connection", frame.source)
         return True
+
+    @property
+    def master_address(self) -> int | None:
+        """The master being served: the configured one, or the one on this connection.
+
+        None while a session that takes any master has not yet heard from one.
+        """
+        return self._peer
+
+    def _destination(self) -> int:
+        """Where a frame this outstation sends is addressed."""
+        if self._peer is None:
+            # Everything sent answers something received, and what is received
+            # from a master names it first. Reaching here is a defect.
+            raise RuntimeError("the session has a frame to send and no master to send it to")
+        return self._peer
 
     def _link_reply(self, function: link.SecondaryFunction) -> bytes:
         control = link.control_byte(from_master=False, primary=False, function=function)
-        return link.build(
-            control, destination=self._master_address, source=self._outstation_address
-        )
+        return link.build(control, destination=self._destination(), source=self._outstation_address)
 
     def _send(self, fragment: bytes) -> bytes:
         """Wrap an application fragment in transport segments and link frames."""
@@ -1570,7 +1635,7 @@ class Session:
         for tpdu in segment(fragment):
             out += link.build(
                 control,
-                destination=self._master_address,
+                destination=self._destination(),
                 source=self._outstation_address,
                 payload=tpdu,
             )

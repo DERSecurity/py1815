@@ -111,10 +111,11 @@ was followed and the disagreement is recorded:
 - **UDP.** Unsolicited responses go over the TCP connection the master opened. The
   listener does not open connections of its own, which the standard allows an
   outstation not to.
-- **A master address learned from the connection.** Today the destination is the
-  configured master. `_unsolicited_destination` is the one place that would change when
-  a session can learn its master from the first frame, and it already sends nothing when
-  there is no master to send to.
+- **A master address learned from the connection.** The destination is the configured
+  master. A session built with `master_address=None` learns its master from the first
+  frame of a connection and has none configured, so it sends nothing unsolicited.
+  `_unsolicited_destination` is the one place that would change for it to report to the
+  master it learned.
 
 ## Sequencing
 

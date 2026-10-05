@@ -1330,6 +1330,24 @@ class TestWithNobodyToSendTo:
 
         assert session._unsolicited_destination() == 42
 
+    def test_a_session_that_takes_any_master_has_none_configured_and_sends_none(self):
+        """Not even once a master has spoken and enabled every class."""
+        session, buffers, clock = _built(outstation_address=OUTSTATION, master_address=None)
+        control = link.control_byte(
+            from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+        )
+        enable = _request(FunctionCode.ENABLE_UNSOLICITED, CLASSES)
+        answered = session.receive(link.build(control, OUTSTATION, 7, b"\xc0" + enable))
+        (frame,) = link.FrameReader().feed(answered)
+        assert frame.destination == session.master_address == 7
+        _analog(buffers, 0)
+
+        for _ in range(3):
+            assert session.initiate() == b""
+            assert session.initiate_after() is None
+            clock.now += TIMEOUT
+        assert buffers.total == 1, "the event waits for a poll"
+
 
 class TestThroughTheLinkLayer:
     """The same exchange, entering through `receive` as octets from a socket do."""

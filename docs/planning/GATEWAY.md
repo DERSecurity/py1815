@@ -59,8 +59,9 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   outstation refusing every control and still reporting the value in force.
 - **G2.** In the commanding role, the outstation reports what the unit applied, which may
   differ from what the master asked for.
-- **G5.** Event class and deadband set by the deployment, as data, per point.
+- **G5.** Event class and deadband set by the deployment, as data, per point. Built.
 - **G6.** A partial map that grows, with a report of what is bound against the profile.
+  Built.
 - **G10.** Static groups read by index, for a master that picks scattered points. Built.
 
 **In the outstation and the project:**
@@ -79,18 +80,17 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   their session tests again with unsolicited responses on and retrying, and counts the
   calls to a binding through hours of unconfirmed retries, over a session and over a
   listener: one each time.
-- [ ] **G4. A master that is not known in advance.** `Session` serves one configured
-  `master_address` and drops frames from any other source, for a stated reason: answering
+- [x] **G4. A master that is not known in advance.** `Session` served one configured
+  `master_address` and dropped frames from any other source, for a stated reason: answering
   an unexpected address would interleave two conversations over one set of sequence
-  numbers. This deployment cannot name its master. *Missing:* an option to accept any
-  source address and reply to the address that asked, with the rule for a second address
-  arriving mid-conversation stated and tested. One association still owns one set of
-  sequence numbers, one pending confirmation and one select awaiting its operate, so a
-  new address must either be refused while another is active or reset that state, and it
-  must never interleave. The device profile document's master address entry has to say
-  which. Accepting any address is not authorization, and without transport security it
-  means any peer that can reach the port can command; the option's documentation should
-  say so plainly.
+  numbers. This deployment cannot name its master. *Built:* `Session(master_address=None)`
+  serves whichever address speaks first on a connection and replies to it. A second
+  address on the same connection is dropped, so nothing interleaves, and a new connection
+  starts again, so a master that restarted under another address is served. The device
+  profile document says source addresses are not validated and any address is expected.
+  Accepting any address is not authorization, and the option's documentation says so:
+  without transport security, any peer that can reach the port can command (D64 in
+  [DESIGN.md](../DESIGN.md)).
 - [x] **G7. Unsolicited responses, when a master asks.** *Built:* a session constructed
   with `unsolicited=True`, which the profile builder passes through, announces a restart
   with a null response and takes `ENABLE_UNSOLICITED` and `DISABLE_UNSOLICITED` by class.
@@ -101,9 +101,10 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   `OutstationServer` drives it, and `notify()` reports a new event at once. Off by default,
   and off answers as before, refusing `ENABLE_UNSOLICITED`. D69 to D71 in
   [DESIGN.md](../DESIGN.md) and [UNSOLICITED.md](UNSOLICITED.md) record it. The
-  destination is asked of one helper, which says nowhere while no master is known, so a
-  master learned from the connection (G4) composes with it: nothing is sent until that
-  master has spoken.
+  destination is asked of one helper, which names the configured master and says nowhere
+  when there is none. A session that takes any master (G4) has none configured, so it
+  sends nothing unsolicited and its events are read by polling. *Missing:* that helper
+  answering with the master learned from the connection.
 - [ ] **G8. Small ARM controllers.** The gateway runs in a container on 32-bit and 64-bit
   ARM Linux controllers with little memory. No runtime dependencies and pure Python
   already make that possible. *Missing:* the test suite run on a 32-bit target at least
@@ -126,12 +127,10 @@ closes. G7 follows the roadmap and is not gated on the rest.
 
 - **The status a read-only outstation refuses a control with** (G1). It has to tell a
   master "not through this interface" and not "this point cannot be controlled".
-- **A second master address while one is active** (G4): refuse it, or let it displace the
-  first. Displacing is friendlier to a master that restarted with a different address;
-  refusing is safer when two masters are both alive.
-- **Whether the event policy file is the library's format or the caller's** (G5). The
-  library needs the policy as data either way; the question is whether it also defines
-  and validates a file form, or takes a mapping and leaves the file to the gateway.
+- **Whether the event policy file is the library's format or the caller's** (G5).
+  Settled: the caller's. The library takes the policy as a mapping it validates and
+  reads no file, so the gateway keeps the policy in its own configuration and hands
+  over what that loads to (D66 in [DESIGN.md](../DESIGN.md)).
 
 ## References
 

@@ -8,10 +8,12 @@ layouts out of the tests.
 
 from __future__ import annotations
 
+import dataclasses
+import re
 import struct
 
 import pytest
-from profile_fixtures import analog, document, small, units
+from profile_fixtures import analog, document, row, small, units
 
 from py1815 import link
 from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
@@ -25,8 +27,10 @@ from py1815.control import (
 from py1815.events import EventClass
 from py1815.profile import load
 from py1815.profile.binding import Binding, Quality, Reading
+from py1815.profile.coverage import Source
 from py1815.profile.model import Kind, MapError
 from py1815.profile.outstation import DerOutstation
+from py1815.profile.policy import EventPolicy, EventRule
 from py1815.profile.probe import parse_objects
 from py1815.transport import Reassembler
 
@@ -471,6 +475,162 @@ class TestWhatABuildRefuses:
             Binding().read(BI, 0, lambda: False, deadband=1.0)
 
 
+def _with_policy(policy, binding: Binding | None = None) -> DerOutstation:
+    """An outstation over the small map, built under an event policy."""
+    point_map = load.resolve(small(), units(0))
+    if binding is None:
+        binding = Device().binding()
+    return DerOutstation(point_map, binding, strict=False, event_policy=policy)
+
+
+class TestWhatAnEventPolicyIsRefusedFor:
+    """A bad policy stops the build, so it is found at startup and not in service."""
+
+    def test_a_point_the_map_does_not_hold(self):
+        with pytest.raises(MapError, match="AI4040"):
+            _with_policy({"points": {"AI4040": {"class": 1}}})
+
+    @pytest.mark.parametrize("event_class", [1.0, 2.0, 3.0])
+    def test_a_class_that_is_a_float_even_a_whole_one(self, event_class):
+        """``1.0 == 1``, and a float in force would break event_class()'s contract."""
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            _with_policy({"points": {"AI2": {"class": event_class}}})
+
+    @pytest.mark.parametrize("section", ["defaults", "points"])
+    def test_a_section_that_is_present_and_null(self, section):
+        """An empty value where a mapping belongs is a mistake, not an omission."""
+        with pytest.raises(ValueError, match=section):
+            _with_policy({section: None})
+
+    def test_a_section_left_out_is_no_rules(self):
+        """The control for the test above: leaving a section out is allowed."""
+        outstation = _with_policy({"points": {"AI2": {"class": 1}}})
+        assert outstation.event_class(AI, 2) == 1
+
+    def _counter_left_out_of_class_0(self):
+        """The small map with its first counter left out of class 0 by hand.
+
+        The loader never does this to a counter, so the map is built here: the
+        point is what the builder does if a map arrives that way.
+        """
+        base = load.resolve(small(), units(0))
+        points = dict(base.points)
+        points[(CTR, 0)] = dataclasses.replace(points[(CTR, 0)], event_class=None)
+        return dataclasses.replace(base, points=points)
+
+    def test_events_for_a_counter_left_out_of_class_0(self):
+        point_map = self._counter_left_out_of_class_0()
+        with pytest.raises(MapError, match="class 0"):
+            DerOutstation(
+                point_map,
+                Device().binding(),
+                strict=False,
+                event_policy={"points": {"CTR0": {"class": 1}}},
+            )
+
+    def test_and_a_counter_default_leaves_such_a_counter_alone(self):
+        point_map = self._counter_left_out_of_class_0()
+        outstation = DerOutstation(
+            point_map,
+            Device().binding(),
+            strict=False,
+            event_policy={"defaults": {"CTR": {"class": 1}}},
+        )
+        assert outstation.event_class(CTR, 0) == 0
+        assert outstation.event_class(CTR, 1) == 1, "the counter beside it still follows"
+
+    @pytest.mark.parametrize("event_class", [0, 4, -1, "2", 2.5, True])
+    def test_a_class_outside_one_to_three(self, event_class):
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            _with_policy({"points": {"AI2": {"class": event_class}}})
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            _with_policy({"defaults": {"BI": {"class": event_class}}})
+
+    @pytest.mark.parametrize("deadband", [-0.5, float("nan"), float("inf"), "1", True])
+    def test_a_deadband_that_is_not_zero_or_more(self, deadband):
+        with pytest.raises(ValueError, match="deadband"):
+            _with_policy({"points": {"AI2": {"deadband": deadband}}})
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"BI0": {"deadband": 1.0}}}, id="a binary input"),
+            pytest.param({"points": {"CTR0": {"deadband": 1.0}}}, id="a counter"),
+            pytest.param({"defaults": {"BI": {"deadband": 1.0}}}, id="every binary input"),
+        ],
+    )
+    def test_a_deadband_on_anything_but_an_analog_input(self, policy):
+        with pytest.raises(ValueError, match="only an analog input"):
+            _with_policy(policy)
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"AO0": {"class": 1}}}, id="a point"),
+            pytest.param({"defaults": {"BO": {"class": 1}}}, id="a kind"),
+        ],
+    )
+    def test_an_event_class_for_an_output(self, policy):
+        with pytest.raises(ValueError, match="output"):
+            _with_policy(policy)
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"AI2": {"clas": 1}}}, id="in a rule"),
+            pytest.param({"default": {"AI": {"class": 1}}}, id="in the policy"),
+            pytest.param({"points": {"XX2": {"class": 1}}}, id="a kind that is not one"),
+            pytest.param({"points": {"AI": {"class": 1}}}, id="a point with no index"),
+            pytest.param({"defaults": {"AI2": {"class": 1}}}, id="a point where a kind goes"),
+            pytest.param({"points": {"AI2": 1}}, id="a rule that is not a mapping"),
+        ],
+    )
+    def test_a_key_it_does_not_know(self, policy):
+        """A misspelled key would otherwise be a rule that silently does nothing."""
+        with pytest.raises(ValueError):
+            _with_policy(policy)
+
+    def test_a_rule_that_turns_events_off_and_names_a_class(self):
+        with pytest.raises(ValueError, match="turned off"):
+            _with_policy({"points": {"AI2": {"events": False, "class": 2}}})
+
+    def test_a_class_for_a_point_left_out_of_class_0(self):
+        """An event would report a change to a value the integrity poll never gave."""
+        with pytest.raises(MapError, match="AI65000"):
+            _with_policy({"points": {"AI65000": {"class": 3}}})
+
+    def test_a_class_for_a_counter_with_no_frozen_twin(self):
+        with pytest.raises(MapError, match="CTR5"):
+            _with_policy({"points": {"CTR5": {"class": 3}}})
+
+    def test_events_turned_on_for_a_point_nothing_gives_a_class(self):
+        with pytest.raises(MapError, match="AI4"):
+            _with_policy({"points": {"AI4": {"events": True}}})
+
+    def test_a_deadband_for_a_point_that_reports_no_events(self):
+        with pytest.raises(MapError, match="AI4"):
+            _with_policy({"points": {"AI4": {"deadband": 1.0}}})
+        off = {"defaults": {"AI": {"events": False}}, "points": {"AI2": {"deadband": 1}}}
+        with pytest.raises(MapError, match="AI2"):
+            _with_policy(off)
+
+    def test_the_dataclasses_refuse_what_the_plain_form_does(self):
+        with pytest.raises(ValueError, match="1, 2 or 3"):
+            EventRule(event_class=4)
+        with pytest.raises(ValueError, match="deadband"):
+            EventRule(deadband=-1.0)
+        with pytest.raises(ValueError, match="only an analog input"):
+            EventPolicy(points={(BI, 0): EventRule(deadband=1.0)})
+        with pytest.raises(ValueError, match="output"):
+            EventPolicy(defaults={AO: EventRule(event_class=1)})
+
+    def test_a_point_the_map_holds_and_nothing_serves_is_not_an_error(self):
+        """A policy may run ahead of a binding that is still growing."""
+        binding = Binding()
+        binding.read(AI, 2, lambda: 240.0)
+        _with_policy({"points": {"BI9": {"class": 3}, "AI1": {"deadband": 5}}}, binding)
+
+
 def _control(function: FunctionCode, body: bytes, sequence: int) -> bytes:
     return bytes([0xC0 | sequence, function]) + body
 
@@ -676,6 +836,217 @@ class TestEvents:
         assert response[2] & IINBit.CLASS_2_EVENTS
 
 
+def _reported(session, event_class: int, sequence: int = 0) -> list[tuple[int, int]]:
+    """The events a read of one class is answered with, as group and index."""
+    response = _read(session, bytes([60, event_class + 1, ALL]), sequence=sequence)
+    _, events = parse_objects(response[4:])
+    return [(event.group, event.index) for event in events]
+
+
+def _moved(policy, **kwargs) -> tuple[DerOutstation, Device]:
+    """An outstation under a policy whose alarm, power and voltage have all changed."""
+    device = Device()
+    point_map = load.resolve(small(), units(0))
+    outstation = DerOutstation(point_map, device.binding(), event_policy=policy, **kwargs)
+    outstation.poll()
+    device.alarm = True
+    device.power = 1600.0
+    device.voltage = 250.0
+    outstation.poll()
+    return outstation, device
+
+
+class TestAnEventPolicy:
+    """The class and deadband a deployment sets, seen from the master's side."""
+
+    def test_without_one_the_tables_decide(self):
+        outstation, _ = _moved(None)
+        session = outstation.session()
+        assert _reported(session, 1) == [(2, 0)]
+        assert _reported(session, 2, sequence=1) == [(32, 2)]
+        assert _reported(session, 3, sequence=2) == [(32, 1)]
+
+    def test_an_empty_one_changes_nothing(self):
+        outstation, _ = _moved({})
+        session = outstation.session()
+        assert _reported(session, 1) == [(2, 0)]
+        assert _reported(session, 2, sequence=1) == [(32, 2)]
+        assert _reported(session, 3, sequence=2) == [(32, 1)]
+
+    def test_a_point_reports_in_the_class_it_is_given(self):
+        outstation, _ = _moved({"points": {"AI2": {"class": 1}, "BI0": {"class": 3}}})
+        session = outstation.session()
+        assert _reported(session, 1) == [(32, 2)]
+        assert _reported(session, 2, sequence=1) == []
+        assert sorted(_reported(session, 3, sequence=2)) == [(2, 0), (32, 1)]
+
+    def test_a_kind_reports_in_the_class_its_default_gives(self):
+        outstation, _ = _moved({"defaults": {"AI": {"class": 1}}})
+        session = outstation.session()
+        assert sorted(_reported(session, 1)) == [(2, 0), (32, 1), (32, 2)]
+        assert _reported(session, 2, sequence=1) == []
+        assert _reported(session, 3, sequence=2) == []
+
+    def test_a_point_named_is_an_exception_to_its_kinds_default(self):
+        policy = {"defaults": {"AI": {"class": 1}}, "points": {"AI1": {"class": 2}}}
+        outstation, _ = _moved(policy)
+        session = outstation.session()
+        assert sorted(_reported(session, 1)) == [(2, 0), (32, 2)]
+        assert _reported(session, 2, sequence=1) == [(32, 1)]
+
+    def test_events_turned_off_for_a_point_leave_it_static_only(self):
+        outstation, _ = _moved({"points": {"BI0": {"events": False}}})
+        session = outstation.session()
+        assert _reported(session, 1) == []
+        assert _reported(session, 2, sequence=1) == [(32, 2)], "the others still report"
+        assert _values(_read(session, CLASS_0, sequence=2))[(1, 0)] == 1, "and it is still read"
+
+    def test_events_turned_off_for_a_kind_and_back_on_for_one_point(self):
+        policy = {
+            "defaults": {"AI": {"events": False}},
+            "points": {"AI2": {"events": True}, "AI1": {"class": 1}},
+        }
+        outstation, _ = _moved(policy)
+        session = outstation.session()
+        assert sorted(_reported(session, 1)) == [(2, 0), (32, 1)]
+        assert _reported(session, 2, sequence=1) == [(32, 2)], "in the class the tables gave it"
+        assert _reported(session, 3, sequence=2) == []
+
+    def test_a_kinds_default_leaves_a_static_point_static(self):
+        """What the tables give no events is given none by a rule for its whole kind."""
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 1, lambda: device.power)
+        binding.read(AI, 4, lambda: device.power)
+        outstation = _with_policy({"defaults": {"AI": {"class": 1}}}, binding)
+        outstation.poll()
+        device.power = 1600.0
+        assert outstation.poll() == 1
+        assert _reported(outstation.session(), 1) == [(32, 1)]
+
+    def test_and_naming_the_point_gives_it_events(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 4, lambda: device.power)
+        outstation = _with_policy({"points": {"AI4": {"class": 2}}}, binding)
+        outstation.poll()
+        device.power = 1600.0
+        outstation.poll()
+        assert _reported(outstation.session(), 2) == [(32, 4)]
+
+    def test_a_deadband_is_stated_in_engineering_units(self):
+        """Two volts, at a multiplier of 0.1, is twenty counts on the wire."""
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 2, lambda: device.voltage)
+        outstation = _with_policy({"points": {"AI2": {"deadband": 2.0}}}, binding)
+        outstation.poll()
+        device.voltage = 241.0
+        assert outstation.poll() == 0, "one volt, inside a deadband of two"
+        device.voltage = 243.0
+        assert outstation.poll() == 1
+        assert _reported(outstation.session(), 2) == [(32, 2)]
+
+    def test_a_kinds_deadband_is_converted_by_each_points_own_scaling(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 1, lambda: device.power)
+        binding.read(AI, 2, lambda: device.voltage)
+        outstation = _with_policy({"defaults": {"AI": {"deadband": 5}}}, binding)
+        outstation.poll()
+        device.power, device.voltage = 1504.0, 244.0
+        assert outstation.poll() == 0, "four watts and four volts, each inside five"
+        device.voltage = 246.0
+        assert outstation.poll() == 1
+        device.power = 1506.0
+        assert outstation.poll() == 1
+
+    def test_a_deadband_given_when_binding_still_holds_and_outranks_the_kinds(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 2, lambda: device.voltage, deadband=20)
+        outstation = _with_policy({"defaults": {"AI": {"deadband": 0.5}}}, binding)
+        outstation.poll()
+        device.voltage = 241.0
+        assert outstation.poll() == 0, "ten counts, inside the twenty the binding gave"
+        device.voltage = 243.0
+        assert outstation.poll() == 1
+
+    def test_and_a_deadband_for_the_point_by_name_outranks_the_bindings(self):
+        device = Device()
+        binding = Binding()
+        binding.read(AI, 2, lambda: device.voltage, deadband=20)
+        outstation = _with_policy({"points": {"AI2": {"deadband": 0.5}}}, binding)
+        outstation.poll()
+        device.voltage = 241.0
+        assert outstation.poll() == 1, "ten counts, past the five the policy gave"
+
+    def test_a_change_of_quality_is_reported_whatever_the_deadband(self):
+        quality = [Quality.GOOD]
+        binding = Binding()
+        binding.read(AI, 2, lambda: Reading(240.0, quality[0]))
+        outstation = _with_policy({"points": {"AI2": {"deadband": 100.0}}}, binding)
+        outstation.poll()
+        quality[0] = Quality.COMM_LOST
+        assert outstation.poll() == 1
+
+    def test_a_counters_class_is_the_one_its_freezes_are_logged_in(self):
+        outstation, _ = _built(event_policy={"points": {"CTR0": {"class": 1}}})
+        session = outstation.session()
+        outstation.freeze_all()
+        assert _reported(session, 1) == [(23, 0)]
+        assert _reported(session, 3, sequence=1) == [(23, 1)]
+
+    def test_a_counter_with_events_off_freezes_and_logs_nothing(self):
+        outstation, _ = _built(event_policy={"points": {"CTR1": {"events": False}}})
+        session = outstation.session()
+        outstation.freeze_all()
+        assert _reported(session, 3) == [(23, 0)]
+        values = _values(_read(session, CLASS_0, sequence=1))
+        assert values[(21, 0)] == 10 and values[(21, 1)] == 20, "both are frozen all the same"
+
+    def test_a_control_reports_its_mirror_in_the_class_the_policy_gives(self):
+        outstation, _ = _built(event_policy={"points": {"AI3": {"class": 1}}})
+        session = outstation.session()
+        outstation.poll()
+        response = session._handle_fragment(
+            _control(FunctionCode.DIRECT_OPERATE, _analog_command(0, 125), 0)
+        )
+        assert response[2] & IINBit.CLASS_1_EVENTS
+        assert not response[2] & IINBit.CLASS_2_EVENTS
+
+    def test_the_plain_form_and_the_dataclasses_are_one_policy(self):
+        plain = EventPolicy.from_mapping(
+            {
+                "defaults": {"AI": {"class": 2, "deadband": 0.5}, "BI": {"events": False}},
+                "points": {"AI2": {"class": 1}, "ctr0": {"class": 2}},
+            }
+        )
+        assert plain == EventPolicy(
+            defaults={
+                AI: EventRule(event_class=2, deadband=0.5),
+                BI: EventRule(events=False),
+            },
+            points={(AI, 2): EventRule(event_class=1), (CTR, 0): EventRule(event_class=2)},
+        )
+
+    def test_the_builder_takes_either(self):
+        policy = EventPolicy(points={(AI, 2): EventRule(event_class=1)})
+        outstation, _ = _moved(policy)
+        assert sorted(_reported(outstation.session(), 1)) == [(2, 0), (32, 2)]
+
+    def test_the_outstation_says_what_is_in_force(self):
+        policy = {"defaults": {"BI": {"events": False}}, "points": {"AI2": {"deadband": 2.0}}}
+        outstation = _with_policy(policy)
+        assert outstation.event_class(BI, 0) == 0
+        assert outstation.event_class(AI, 2) == 2
+        assert outstation.event_class(AI, 4) == 0, "the tables gave it none"
+        assert outstation.event_class(CTR, 0) == 3
+        assert outstation.event_class(AO, 0) == 0
+        assert outstation.deadband(2) == 20
+        assert outstation.deadband(1) == 0
+
+
 class TestFreezing:
     def _freeze(self, session, function: FunctionCode, header: bytes) -> bytes:
         return session._handle_fragment(bytes([0xC0, function]) + header)
@@ -767,6 +1138,271 @@ class TestTheSessionItWires:
         binding.output(AO, 0, status=lambda: 33.3)
         session = DerOutstation(point_map, binding, strict=False).session()
         assert _values(_read(session, bytes([40, 0, ALL])))[(40, 0)] == 333
+
+
+def _partial(*extra: tuple[Kind, int], **kwargs) -> DerOutstation:
+    """A monitor of the two mandatory points, and whatever else is named."""
+    binding = Binding()
+    binding.read(BI, 0, lambda: False)
+    binding.read(AI, 1, lambda: 1500.0)
+    for kind, index in extra:
+        if kind.is_output:
+            binding.output(kind, index, initial=0)
+        else:
+            binding.read(kind, index, lambda: 240.0)
+    return DerOutstation(load.resolve(small(), units(0)), binding, strict=False, **kwargs)
+
+
+#: A line of the report's text that is about one point.
+_POINT_LINE = re.compile(r"(AI|AO|BI|BO|CTR)\d+ ")
+
+
+def _sources(report) -> dict[tuple[Kind, int], Source]:
+    return {entry.point.address: entry.source for entry in report.entries}
+
+
+class TestTheCoverageReport:
+    """What a built outstation says about how much of the profile it serves."""
+
+    def test_a_value_with_no_number_is_reported_offline_as_the_wire_has_it(self):
+        """A source can be good and hand over NaN, which goes out with ONLINE clear."""
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.read(AI, 1, lambda: float("nan"))
+        binding.read(AI, 2, lambda: 240.0)
+        outstation = DerOutstation(point_map, binding, strict=False)
+        report = outstation.coverage()
+        nan, fine = report.entry(AI, 1), report.entry(AI, 2)
+        assert nan.quality is Quality.GOOD, "the source said nothing was wrong"
+        assert not nan.online and nan in report.offline
+        assert fine.online and fine not in report.offline
+        flags = _flags(_read(outstation.session(), bytes([30, 1, 0x00, 1, 2])))
+        assert not flags[(30, 1)] & 0x01 and flags[(30, 2)] & 0x01, "and the wire agrees"
+
+    def test_so_is_an_output_whose_status_has_no_number(self):
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.output(AO, 0, status=lambda: float("nan"))
+        outstation = DerOutstation(point_map, binding, strict=False)
+        entry = outstation.coverage().entry(AO, 0)
+        assert entry.quality is Quality.GOOD and not entry.online
+        flags = _flags(_read(outstation.session(), bytes([40, 0, ALL])))
+        assert not flags[(40, 0)] & 0x01
+
+    def test_every_point_of_the_map_is_in_it_once(self):
+        outstation, _ = _built()
+        addresses = [entry.point.address for entry in outstation.coverage().entries]
+        assert sorted(addresses) == sorted(outstation.point_map.points)
+        assert len(addresses) == len(set(addresses))
+
+    def test_each_point_is_put_down_to_where_its_value_comes_from(self):
+        outstation, _ = _built()
+        sources = _sources(outstation.coverage())
+        assert sources[(AI, 1)] is Source.BOUND
+        assert sources[(AO, 0)] is Source.BOUND
+        assert sources[(AI, 3)] is Source.MIRROR, "it reads back the bound AO0"
+        assert sources[(BI, 2)] is Source.MIRROR
+        assert sources[(BI, 1)] is Source.SUPPORTS
+        assert sources[(AI, 0)] is Source.FIXED
+        assert sources[(AI, 65000)] is Source.FIXED
+        assert sources[(BI, 9)] is Source.ABSENT
+        assert sources[(BO, 1)] is Source.ABSENT
+
+    def test_a_reader_wins_over_the_output_an_input_would_mirror(self):
+        outstation = _partial((AO, 0), (AI, 3))
+        assert _sources(outstation.coverage())[(AI, 3)] is Source.BOUND
+
+    @pytest.mark.parametrize("kind", list(Kind))
+    def test_what_it_calls_served_is_what_the_outstation_serves(self, kind):
+        """The report is read from the builder's own resolution, not worked out again."""
+        outstation, _ = _built()
+        served = [e.point for e in outstation.coverage().served if e.point.kind is kind]
+        assert served == outstation.served(kind)
+
+    def test_mandatory_points_are_told_apart_from_optional_ones(self):
+        point_map = load.resolve(small(), units(0))
+        report = DerOutstation(point_map, Binding(), strict=False).coverage()
+        assert [entry.point.address for entry in report.missing] == [(BI, 0), (AI, 1)]
+        assert not report.conformant
+        absent_optional = [e for e in report.absent if not e.point.mandatory]
+        assert absent_optional, "optional points are absent too, and are not what is missing"
+        assert _partial().coverage().missing == ()
+        assert _partial().coverage().conformant
+
+    @pytest.mark.parametrize("bound", [[], [(BI, 0)], [(AI, 1)], [(BI, 0), (AI, 1)]])
+    def test_conformant_is_what_a_strict_build_accepts(self, bound):
+        point_map = load.resolve(small(), units(0))
+
+        def binding() -> Binding:
+            made = Binding()
+            for kind, index in bound:
+                made.read(kind, index, lambda: 0)
+            return made
+
+        report = DerOutstation(point_map, binding(), strict=False).coverage()
+        if report.conformant:
+            DerOutstation(point_map, binding())
+        else:
+            with pytest.raises(MapError, match="mandatory"):
+                DerOutstation(point_map, binding())
+
+    def test_a_served_point_whose_source_is_not_good_is_offline(self):
+        point_map = load.resolve(small(), units(0))
+        binding = Binding()
+        binding.read(AI, 1, lambda: 1.0)
+        binding.read(AI, 2, lambda: Reading(240.0, Quality.COMM_LOST))
+        binding.read(AI, 4, lambda: Reading(0.0, Quality.OFFLINE))
+        binding.output(AO, 0)
+        report = DerOutstation(point_map, binding, strict=False).coverage()
+        offline = {entry.point.address: entry.quality for entry in report.offline}
+        assert offline == {
+            (AI, 2): Quality.COMM_LOST,
+            (AI, 4): Quality.OFFLINE,
+            (AI, 3): Quality.NEVER_READ,
+            (AO, 0): Quality.NEVER_READ,
+        }, "an output never written, and the input that mirrors it, have nothing to report"
+        assert report.entry(AI, 1).quality is Quality.GOOD
+        assert report.entry(AI, 1).online
+        assert all(entry.served for entry in report.offline)
+
+    def test_an_absent_point_has_no_quality_and_is_not_offline(self):
+        report = _partial().coverage()
+        lone = report.entry(BI, 9)
+        assert lone.quality is None and not lone.served and not lone.online
+        assert lone not in report.offline
+
+    def test_offline_is_how_the_point_stood_when_the_report_was_made(self):
+        device = {"reachable": False}
+
+        def voltage() -> Reading:
+            return Reading(240.0, Quality.GOOD if device["reachable"] else Quality.COMM_LOST)
+
+        binding = Binding()
+        binding.read(AI, 2, voltage)
+        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        before = outstation.coverage()
+        device["reachable"] = True
+        after = outstation.coverage()
+        assert before.entry(AI, 2).quality is Quality.COMM_LOST
+        assert after.entry(AI, 2).quality is Quality.GOOD
+        assert before.entry(AI, 2).source is after.entry(AI, 2).source is Source.BOUND
+
+    def test_a_source_that_raises_is_reported_and_does_not_stop_the_report(self):
+        def broken() -> float:
+            raise OSError("unreachable")
+
+        binding = Binding()
+        binding.read(AI, 2, broken)
+        outstation = DerOutstation(load.resolve(small(), units(0)), binding, strict=False)
+        assert outstation.coverage().entry(AI, 2).quality is Quality.COMM_LOST
+
+    def test_the_inputs_of_a_disabled_function_are_offline(self):
+        tables = document(
+            {
+                "BO": [row("Enable Gadget", 0, purpose="Gadget", associated="BI0")],
+                "BI": [
+                    row("Gadget enabled", 0, event_class=1, purpose="Gadget", associated="BO0"),
+                    row("Supports Gadget", 1, event_class=0, purpose="Gadget"),
+                ],
+                "AI": [analog("Gadget output", 0, event_class=2, purpose="Gadget")],
+            }
+        )
+        binding = Binding()
+        binding.output(BO, 0, initial=False)
+        binding.read(AI, 0, lambda: 42.0)
+        outstation = DerOutstation(load.resolve(tables, units(0)), binding)
+        report = outstation.coverage()
+        assert [entry.point.address for entry in report.offline] == [(AI, 0)]
+        assert report.entry(AI, 0).quality is Quality.OFFLINE
+        latch_on = ControlRelayOutputBlock.build(OperationType.LATCH_ON)
+        assert _operate(outstation.session(), _crob(0, latch_on)) is CommandStatus.SUCCESS
+        assert outstation.coverage().offline == ()
+
+    def test_taking_the_report_changes_nothing_a_master_sees(self):
+        outstation, device = _built()
+        session = outstation.session()
+        outstation.poll()
+        before = _read(session, CLASS_0)
+        device.power = 1600.0
+        outstation.coverage()
+        assert outstation.events.total == 0, "a report is not a poll: it buffers no event"
+        device.power = 1500.0
+        assert _read(session, CLASS_0, sequence=1)[2:] == before[2:]
+        assert device.applied == []
+
+    def test_its_text_has_one_line_for_each_point(self):
+        report = _partial().coverage()
+        text = report.render()
+        assert str(report) == text
+        lines = text.splitlines()
+        for entry in report.entries:
+            address = f"{entry.point.kind.value}{entry.point.index}"
+            (line,) = [line for line in lines if line.split()[:1] == [address]]
+            assert entry.source.value in line and entry.point.name in line
+        (power,) = [line for line in lines if line.startswith("AI1 ")]
+        (lone,) = [line for line in lines if line.startswith("BI9 ")]
+        assert " M " in power and " M " not in lone
+
+    def test_its_text_says_how_far_the_map_is_from_a_conformant_one(self):
+        point_map = load.resolve(small(), units(0))
+        short = DerOutstation(point_map, Binding(), strict=False).coverage().render()
+        assert "0 of 2 mandatory" in short
+        assert "BI0, AI1" in short, "the mandatory points still to bind are named"
+        whole = _partial().coverage().render()
+        assert "2 of 2 mandatory" in whole
+        assert "BI0, AI1" not in whole and "not conformant" not in whole
+
+
+class TestAPartialMapThatGrows:
+    """Adding a binding entry is the whole of the change."""
+
+    def test_one_more_reader_moves_exactly_that_point(self):
+        before = _partial().coverage()
+        after = _partial((AI, 2)).coverage()
+        changed = after.changed_since(before)
+        assert [entry.point.address for entry in changed] == [(AI, 2)]
+        assert before.entry(AI, 2).source is Source.ABSENT
+        assert changed[0].source is Source.BOUND
+        assert len(after.served) == len(before.served) + 1
+        assert len(after.absent) == len(before.absent) - 1
+
+    def test_and_exactly_that_line_of_the_text(self):
+        before = _partial().coverage().render().splitlines()
+        after = _partial((AI, 2)).coverage().render().splitlines()
+        moved = [line for line in set(before) ^ set(after) if _POINT_LINE.match(line)]
+        assert sorted(line.split()[1] for line in moved) == ["absent", "bound"]
+        assert {line.split()[0] for line in moved} == {"AI2"}
+
+    def test_and_the_point_is_on_the_wire(self):
+        assert (30, 2) not in _values(_read(_partial().session(), CLASS_0))
+        grown = _partial((AI, 2)).session()
+        assert _values(_read(grown, CLASS_0))[(30, 2)] == 2400
+        assert _values(_read(grown, bytes([30, 0, 0x00, 2, 2]), sequence=1)) == {(30, 2): 2400}
+
+    def test_and_nothing_else_on_the_wire_moves(self):
+        before = _values(_read(_partial().session(), CLASS_0))
+        after = _values(_read(_partial((AI, 2)).session(), CLASS_0))
+        assert {key: value for key, value in after.items() if key != (30, 2)} == before
+
+    def test_two_builds_of_one_binding_report_alike(self):
+        assert _partial((AI, 2)).coverage() == _partial((AI, 2)).coverage()
+        assert _partial((AI, 2)).coverage().changed_since(_partial((AI, 2)).coverage()) == ()
+
+    def test_an_output_brings_the_input_that_reads_it_back(self):
+        """One entry may serve more than one point, and the report says which."""
+        before = _partial().coverage()
+        after = _partial((AO, 0)).coverage()
+        changed = {e.point.address: e.source for e in after.changed_since(before)}
+        assert changed == {(AO, 0): Source.BOUND, (AI, 3): Source.MIRROR}
+
+    def test_growing_to_the_last_mandatory_point_is_what_makes_it_conformant(self):
+        binding = Binding()
+        binding.read(BI, 0, lambda: False)
+        point_map = load.resolve(small(), units(0))
+        short = DerOutstation(point_map, binding, strict=False).coverage()
+        assert [entry.point.address for entry in short.missing] == [(AI, 1)]
+        binding.read(AI, 1, lambda: 0.0)
+        assert DerOutstation(point_map, binding).coverage().conformant
 
 
 class TestUnsolicitedResponses:

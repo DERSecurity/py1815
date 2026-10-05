@@ -176,6 +176,41 @@ The timer that drives the retries only reports. Nothing on that path operates
 a control or changes an output, however long the master is silent. See
 [D69 to D71](DESIGN.md).
 
+## A master you cannot name in advance
+
+A session serves one master address, and drops frames from any other:
+
+```python
+session = Session(Provider(), outstation_address=1024, master_address=1)
+```
+
+An outstation shipped to a site whose controller has not been chosen cannot be
+configured that way. Pass `None` and the session serves whichever master
+speaks first on a connection:
+
+```python
+session = Session(Provider(), outstation_address=1024, master_address=None)
+```
+
+Replies go to the address that asked. That address is the master for as long
+as the connection lasts: a frame from a second address on the same connection
+is dropped, because two masters would interleave over one set of sequence
+numbers. A new connection starts again, so a master that comes back under a
+different address is served. `session.master_address` says who is being served
+now, and is `None` until someone has spoken.
+
+A session built this way sends no unsolicited responses, whatever a master
+enables: they go to a configured master address, and there is none. Its events
+are read by polling.
+
+!!! warning
+    A link address is not authorization, and this makes that plain. With no
+    transport security, any peer that can reach the listener can read from an
+    outstation built this way, and command it if controls are bound. Restrict
+    who can connect with the TLS allow-list below, or with the network.
+
+See [D64](DESIGN.md).
+
 ## TLS
 
 ```python
