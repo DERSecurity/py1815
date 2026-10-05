@@ -55,3 +55,68 @@ jobs:
           found=$(docker run --rm --entrypoint sh py1815-der -c \
             'find / -xdev \( -name "*.xlsx" -o -name "ieee-1815-2-*.json" \) 2>/dev/null || true')
           test -z "$found" || { echo "the image carries: $found"; exit 1; }
+
+  test-arm32:
+    # The library is meant to run on small ARM controllers, and some of those
+    # are 32-bit. Every other job here runs where a native integer and a
+    # pointer are 64 bits, so a width assumption in a `struct` format, an
+    # integer, or a timestamp would pass all of them. This one runs the unit
+    # suite where they are 32.
+    #
+    # What runs: the whole suite, `pytest -q -x`, on Python 3.12 for
+    # `linux/arm/v7` under QEMU user-mode emulation, then the event buffer
+    # memory measurement so the log carries the 32-bit figure.
+    #
+    # What does not: ruff, mypy and the changelog check, which read the source
+    # and answer the same on any machine. So the job installs the package,
+    # `pytest` and `pytest-asyncio`, and not the dev extra, whose tools may
+    # have no wheel for this platform. The tests that validate a Device
+    # Profile against the Users Group schema skip here as they do in `test`,
+    # for want of the schema. One Python version, because emulation is slow
+    # and the question is the platform, not the interpreter.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+      - name: The unit suite passes where a native integer is 32 bits
+        # The first command is the check that this is the platform it claims
+        # to be. Without it, an image that resolved to the runner's own
+        # architecture would run the suite at 64 bits and pass, and the job
+        # would be green for a reason that has nothing to do with its name.
+        #
+        # Mounted read-only: the suite has no business writing to a checkout,
+        # and a container running as root would leave files the runner's user
+        # cannot remove.
+        run: |
+          docker run --rm --platform linux/arm/v7 \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD":/src:ro -w /src \
+            python:3.12-slim sh -ec '
+              python -c "import platform, struct, sys; print(platform.machine(), sys.maxsize); assert struct.calcsize(\"P\") == 4 and sys.maxsize == 2**31 - 1, \"this is not a 32-bit interpreter\""
+              pip install --no-cache-dir --root-user-action=ignore -q . pytest pytest-asyncio
+              pytest -q -x -p no:cacheprovider
+              python scripts/measure_event_memory.py
+            '
+
+  image-arm:
+    # The image is what runs on the controller, so it is built for the two ARM
+    # targets as well as for the runner's own. Emulated, like `test-arm32`.
+    # Only that it builds and that the command starts: what the image holds is
+    # checked once, in `image`, and does not depend on the architecture.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/arm64, linux/arm/v7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,arm
+      - run: docker build --platform ${{ matrix.platform }} -t py1815-der .
+      - name: The command runs
+        run: docker run --rm --platform ${{ matrix.platform }} py1815-der --help

@@ -250,6 +250,13 @@ class TestTimeEncoding:
         stamp = 1_700_000_000_000
         assert int.from_bytes(encode_time(stamp), "little") == stamp
 
+    def test_a_time_past_2038_is_encoded_whole(self):
+        """Seconds since the epoch stop fitting 32 signed bits in January 2038,
+        and a DNP3 time is in milliseconds, which never did. The first
+        millisecond of 2040, in literal octets, so the answer cannot depend on
+        the width of an integer on the machine that computed it."""
+        assert encode_time(2_208_988_800_000) == bytes.fromhex("0024fe510202")
+
     def test_a_time_past_the_range_is_clamped_rather_than_truncated(self):
         """The low 48 bits of a nonsense clock reading are a plausible-looking
         time in the recent past, which is worse than an obviously pinned one."""
