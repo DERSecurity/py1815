@@ -131,6 +131,57 @@ async function ask(label, op, params = {}) {
   }
 }
 
+// A point's name as it is shown. An enumerated point's values are written
+// into its name in the profile's tables; here the name stands alone, with a
+// mark beside it that lists the values when pointed at.
+function nameNodes(type, index, name) {
+  const point = state.profile?.[type]?.get(index);
+  if (!point || !point.enumeration) return [point ? point.label : (name || "")];
+  const values = point.enumeration.map((entry) => `${entry.value}: ${entry.name}`).join("\n");
+  return [point.label, el("span", {
+    class: "info",
+    tabindex: "0",
+    role: "img",
+    "aria-label": `Values: ${point.enumeration.map((entry) => `${entry.value} ${entry.name}`).join(", ")}`,
+    "data-tip": values,
+    onmouseenter: (event) => showTip(event.currentTarget),
+    onmouseleave: hideTip,
+    onfocus: (event) => showTip(event.currentTarget),
+    onblur: hideTip,
+  }, "i")];
+}
+
+// One tooltip for the whole page, placed against the screen and not inside
+// the table, so the table's own scrolling cannot cut it off.
+const tip = el("div", { class: "tip", role: "tooltip", hidden: true });
+let tipOwner = null;
+
+function showTip(target) {
+  tipOwner = target;
+  tip.textContent = target.dataset.tip;
+  tip.hidden = false;
+  const mark = target.getBoundingClientRect();
+  const box = tip.getBoundingClientRect();
+  const left = Math.min(mark.left, window.innerWidth - box.width - 12);
+  const below = mark.bottom + 8;
+  const top = below + box.height > window.innerHeight - 8 ? mark.top - box.height - 8 : below;
+  tip.style.left = `${Math.max(12, left)}px`;
+  tip.style.top = `${Math.max(8, Math.min(top, window.innerHeight - box.height - 8))}px`;
+}
+
+function hideTip() {
+  tipOwner = null;
+  tip.hidden = true;
+}
+
+// The list follows its mark when the table scrolls under it. Reaching a mark
+// with the keyboard scrolls it into view, and that must not put the list away.
+function followTip() {
+  if (!tipOwner) return;
+  if (tipOwner.isConnected) showTip(tipOwner);
+  else hideTip();
+}
+
 function current() {
   return state.outstations.find((outstation) => outstation.name === state.selected) || null;
 }
@@ -323,7 +374,7 @@ let pointHead = null;
 function unreportedRow(point) {
   return el("tr", { class: "unreported" },
     el("td", { class: "num", text: point.index }),
-    el("td", { class: "name" }, point.name,
+    el("td", { class: "name" }, nameNodes(state.pointType, point.index, point.name),
       point.mandatory && el("span", { class: "flag alarm mandatory", text: "MANDATORY", title: "The profile requires every outstation to implement this point" })),
     el("td", { class: "num value" }),
     el("td", { class: "flags" }, el("span", { class: "flag none", text: "NOT REPORTED" })),
@@ -388,7 +439,7 @@ function renderPoints() {
         drawn,
         node: el("tr", {},
           el("td", { class: "num", text: row.index }),
-          named && el("td", { class: "name", text: row.name || "" }),
+          named && el("td", { class: "name" }, nameNodes(state.pointType, row.index, row.name)),
           el("td", { class: `num value ${row.value === true ? "on" : ""}`, text: formatValue(row.value) }),
           el("td", { class: "flags" }, flagChips(row.flags)),
           el("td", { text: stationTime(row.time_ms) }),
@@ -465,7 +516,7 @@ function renderEvents() {
       el("td", { class: "mono", text: event.received ? clockTime(event.received) : "" }),
       el("td", { text: TYPE_LABELS[event.type] || "" }),
       el("td", { class: "num", text: event.index }),
-      el("td", { class: "name", text: event.name || "" }),
+      el("td", { class: "name" }, nameNodes(event.type, event.index, event.name)),
       el("td", { class: "num value", text: formatValue(event.value) }),
       el("td", { class: "flags" }, flagChips(event.flags)),
       el("td", { text: stationTime(event.time_ms) }),
@@ -612,7 +663,7 @@ function renderResult(exchange) {
         el("tbody", {}, rows.map((row) => el("tr", {},
           el("td", { text: TYPE_LABELS[row.type] }),
           el("td", { class: "num", text: row.index }),
-          named && el("td", { class: "name", text: row.name || "" }),
+          named && el("td", { class: "name" }, nameNodes(row.type, row.index, row.name)),
           el("td", { class: "num value", text: formatValue(row.value) }),
           el("td", {}, flagChips(row.flags)),
           el("td", { class: "mono", text: `g${row.group}v${row.variation}${row.event ? " event" : ""}` })))))) : null);
@@ -828,6 +879,8 @@ function wire() {
   $("#log-clear").addEventListener("click", () => { state.log = []; renderLog(); });
 }
 
+document.body.append(tip);
+document.addEventListener("scroll", followTip, true);
 wire();
 if (TABS.includes(location.hash.slice(1))) showTab(location.hash.slice(1));
 listen();

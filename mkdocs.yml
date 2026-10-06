@@ -69,7 +69,9 @@ nav:
   - How DNP3 works: dnp3.md
   - Serving an outstation: outstation.md
   - Serving a DER: der.md
-  - Reading an outstation: master.md
+  - The master: master.md
+  - The console: console.md
+  - The master's API: master-api.md
   - Design decisions: DESIGN.md
   - Testing: testing.md
   - Reference:

@@ -24,7 +24,16 @@ jobs:
       # Validates changelog.d/, so a malformed entry fails here rather
       # than at release, when whoever is cutting it has the least context.
       - run: python scripts/build_changelog.py --check
+      # The master's API document is built from a description of its
+      # operations. This fails when the one committed is not the one built.
+      - run: python -m py1815.master.openapi --check
       - run: pytest -q
+        env:
+          # The console is tested in a browser, and a machine without one skips
+          # those tests. This runner has one, so on one version of Python a
+          # skip is a failure: a test that silently never ran is the outcome
+          # the skip would otherwise allow.
+          PY1815_REQUIRE_BROWSER: ${{ matrix.python-version == '3.12' && '1' || '' }}
 
   image:
     # The Dockerfile is what the README tells people to build, so it is built

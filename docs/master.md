@@ -1,7 +1,9 @@
-# Reading an outstation
+# The master
 
 `py1815.master` is a DNP3 master, the side that asks. It is here to exercise
-outstations: this library's, in tests, and any other, on a bench.
+outstations: this library's, in tests, and any other, on a bench. This page is
+the master from Python; [the console](console.md) and [the API](master-api.md)
+are the same master from a browser and from another process.
 
 !!! note "A first version"
     It reads. It polls by class, reads named points, confirms what asks to be
@@ -157,109 +159,15 @@ for entry in lab.trace.since():
 # rx RESPONSE seq 0 CON [NEED_TIME, DEVICE_RESTART]: g1v2 x49, g30v1 x283
 ```
 
-## The console
+## From a browser, or from another process
 
-```bash
-py1815-master console --demo
-```
+The same master can be driven without writing Python:
 
-serves a web console on `http://127.0.0.1:8815/` and, with `--demo`, starts a
-simulated IEEE 1815.2 DER beside it and connects to it. The demonstration
-needs the profile's point tables, which `py1815-der tables fetch` obtains; see
-[Serving a DER](der.md).
-
-To watch a device of your own:
-
-```bash
-py1815-master console --outstation lab=192.0.2.10:20000 \
-    --integrity-interval 30 --event-interval 2
-```
-
-| Tab | Shows |
-|---|---|
-| **Overview** | Addresses, connection state, counts, and every internal indication of the last response |
-| **Points** | A table for each point type: index, value, flags by name, the outstation's time, the object that carried it, and whether a poll or an event reported it. With a profile, the points of the profile the outstation has not reported can be shown beside the ones it has |
-| **Commands** | Scans by class, a read of named points, enabling and disabling unsolicited responses, any request by function code, and the result of each |
-| **Events** | Events as they arrive, polled or unsolicited |
-| **Traffic** | Each frame with its time and direction, and the selected one read layer by layer beside its octets |
-| **Log** | What the console asked for, and what came of it |
-
-For an IEEE 1815.2 DER, `--profile` gives the console the profile's whole
-point map, from the same tables `--demo` uses:
-
-```bash
-py1815-master console --outstation lab=192.0.2.10:20000 --profile --integrity-interval 30
-```
-
-Points are then shown by name, and "Show points not reported" on the Points
-tab lists the points of the profile the outstation has not reported, with the
-ones the profile makes mandatory marked. A point is not reported either
-because the outstation does not implement it or because nobody has read it:
-a master cannot tell which from silence. Output status and the few inputs the
-profile leaves out of class 0 are in the second group until they are read.
-
-The console listens on this machine only. To reach it from another, give it a
-token, which every request then has to carry:
-
-```bash
-py1815-master console --bind 0.0.0.0:8815 --token "$(openssl rand -hex 16)"
-```
-
-It refuses a request that comes from a page it did not serve, since a browser
-will carry a request from any site to a port on your own machine. It loads
-nothing from the network: no fonts, no scripts, no styles.
-
-## The service
-
-The console holds no logic. It speaks to a service whose operations are JSON,
-and anything it does a script can do with the same messages.
-
-```bash
-py1815-master serve --bind 127.0.0.1:8816
-```
-
-A request is one JSON object on one line, and so is its answer:
-
-```json
-{"id": 1, "op": "add", "params": {"name": "lab", "host": "192.0.2.10", "port": 20000}}
-{"id": 2, "op": "scan", "outstation": "lab", "params": {"kind": "integrity"}}
-{"id": 3, "op": "read", "outstation": "lab", "params": {"points": {"ai": [4, 6, 8], "bi": "all"}}}
-```
-
-```json
-{"id": 3, "ok": true, "result": {"function": "READ", "outcome": "complete", "fragments": 1,
-  "indications": ["NEED_TIME", "DEVICE_RESTART"], "object_count": 52, "elapsed_ms": 14.2,
-  "objects": [{"type": "ai", "index": 4, "value": 50000, "flags": ["ONLINE"], "...": "..."}]}}
-```
-
-| Operation | Does |
-|---|---|
-| `status` | Each outstation: connection, addresses, indications, counts |
-| `add`, `remove` | An outstation, by name. `add` takes `host`, `port`, both link addresses, `integrity_interval`, `event_interval` and `output_interval`. Output status is read as often as the integrity poll unless `output_interval` says otherwise, or is `null` |
-| `connect`, `disconnect` | Its connection |
-| `scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3`, `outputs` |
-| `read` | Named points by type: `bi`, `bo`, `counter`, `frozen`, `ai`, `ao`, each a list of indices or `"all"` |
-| `values` | What the store holds, with no traffic |
-| `profile` | Every point of the profile an outstation was started with, reported or not: index, name, whether it is mandatory, and its section |
-| `events` | The events received |
-| `request` | Any request: `function` by name or number, `body` in hexadecimal |
-| `enable_unsolicited`, `disable_unsolicited` | By `classes` |
-| `repeat` | A scan of `kind` every `interval` seconds, or `null` to stop |
-| `trace` | The frames recorded, optionally `after` an id |
-| `clear` | The `trace` or the `events` |
-| `stop` | Ends the service |
-
-An answer has `"ok": false` and an `error` with a `message` when the message
-could not be acted on (`"kind": "request"`) or there was no connection
-(`"kind": "connection"`). An outstation that did not answer is not an error:
-the result's `outcome` is `timeout`.
-
-Send `{"op": "subscribe"}` and the same connection is also sent what happens
-unasked, one line each, with an `event` field: `frame`, `exchange`,
-`unsolicited`, `connection`, `outstations`.
-
-The console uses the same messages over HTTP: `POST /api` with a message as
-`application/json`, and `GET /events` for the stream as server-sent events.
+- [The console](console.md) is a web page that shows an outstation's points,
+  events and traffic. `py1815-master console --demo` starts it beside a
+  simulated DER.
+- [The master's API](master-api.md) is every operation as JSON, over HTTP or a
+  line at a time over a local socket, described in an OpenAPI document.
 
 ## In one process, with no socket
 

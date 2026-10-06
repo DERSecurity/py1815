@@ -17,6 +17,7 @@ from py1815.master.service import (
     LineServer,
     Service,
     flag_names,
+    split_enumeration,
 )
 from py1815.profile import der, load
 from py1815.profile.model import Composition, Kind
@@ -72,6 +73,65 @@ class TestFlagNames:
     def test_no_flag_octet_is_not_the_same_as_none_set(self):
         assert flag_names(PointType.ANALOG_INPUT, None) is None
         assert flag_names(PointType.ANALOG_INPUT, 0) == []
+
+
+class TestEnumerations:
+    """The profile writes an enumerated point's values into its name, several ways."""
+
+    def test_a_name_that_lists_its_values_is_taken_apart(self):
+        label, values = split_enumeration(
+            "Curve Type. Enumeration: <0> Curve is not defined <1> Not applicable / Unknown "
+            "<2> Volt-Var"
+        )
+        assert label == "Curve Type"
+        assert values == [
+            {"value": "0", "name": "Curve is not defined"},
+            {"value": "1", "name": "Not applicable / Unknown"},
+            {"value": "2", "name": "Volt-Var"},
+        ]
+
+    def test_values_listed_without_the_word_are_an_enumeration_too(self):
+        label, values = split_enumeration(
+            "Islanded Mode. Determines how the DER behaves. <0> Isochronous Mode. It leads. "
+            "<1> Droop Mode. It follows."
+        )
+        assert label == "Islanded Mode. Determines how the DER behaves"
+        assert values == [
+            {"value": "0", "name": "Isochronous Mode. It leads"},
+            {"value": "1", "name": "Droop Mode. It follows"},
+        ]
+
+    def test_a_value_may_be_a_range_or_a_number_and_up(self):
+        _, values = split_enumeration("Kind. Enumeration: <1> One <11-255> Reserved <300+> Vendor")
+        assert [entry["value"] for entry in values] == ["1", "11-255", "300+"]
+
+    def test_an_equals_sign_before_a_value_name_is_not_part_of_it(self):
+        _, values = split_enumeration("Units. Enumeration: <0> = No Repeat <1> = Seconds")
+        assert [entry["name"] for entry in values] == ["No Repeat", "Seconds"]
+
+    def test_a_value_mentioned_in_passing_stays_in_the_name_without_its_brackets(self):
+        label, values = split_enumeration(
+            "Reference for Setpoints. Default is <3>. <0> Unknown <1> Percent of WMax "
+            "<3> Percent of VArAval"
+        )
+        assert label == "Reference for Setpoints. Default is 3"
+        assert [entry["value"] for entry in values] == ["0", "1", "3"]
+
+    def test_trailing_punctuation_is_dropped_from_a_value_name(self):
+        _, values = split_enumeration("Point. <0> unknown, <1> DER to local EPS.")
+        assert [entry["name"] for entry in values] == ["unknown", "DER to local EPS"]
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "System Meter Active Power",
+            "Limit, where <1> is the only value named",
+            "Angle brackets around <words> are not values",
+            "",
+        ],
+    )
+    def test_a_name_that_lists_fewer_than_two_values_is_left_whole(self, name):
+        assert split_enumeration(name) == (name, None)
 
 
 class TestOperations:
@@ -140,7 +200,8 @@ class TestOperations:
         assert counts["ai"] == in_map >= len(simulation.outstation.served(Kind.AI))
         assert counts["counter"] == counts["frozen"], "a frozen counter is its counter, frozen"
         first = profile["ai"][0]
-        assert set(first) == {"index", "name", "mandatory", "section"}
+        assert set(first) == {"index", "name", "label", "enumeration", "mandatory", "section"}
+        assert first["label"] == first["name"] and first["enumeration"] is None
         assert [point["index"] for point in profile["ai"]] == sorted(
             point["index"] for point in profile["ai"]
         )

@@ -21,6 +21,7 @@ import json
 import logging
 import mimetypes
 import pathlib
+import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -71,6 +72,42 @@ _KIND_TYPES: dict[Kind, tuple[PointType, ...]] = {
 }
 
 Names = Mapping[PointType, Mapping[int, str]]
+
+
+#: A value an enumeration names: a number, a range of them, or a number and up.
+_ENUMERATED = re.compile(r"<\s*(\d+(?:\s*-\s*\d+)?\+?)\s*>")
+
+#: What a name says before it starts listing values, which is not part of it.
+_ENUMERATION_LEAD = re.compile(r"[\s.:;,-]*(?:enumeration)?[\s.:;,-]*$", re.IGNORECASE)
+
+
+def split_enumeration(name: str) -> tuple[str, list[dict[str, str]] | None]:
+    """A point's name without the values it lists, and the values apart.
+
+    The profile's tables write an enumerated point's values into its name:
+    ``Curve Type. Enumeration: <0> Curve is not defined <2> Volt-Var``. That
+    is the right thing to have and the wrong thing to print in a column, so
+    this takes it apart: ``("Curve Type", [{"value": "0", "name": "Curve is
+    not defined"}, ...])``. A value may be a number, a range (``11-255``) or
+    a number and up (``99+``), as the tables have them.
+
+    A name that lists fewer than two values is returned whole, with None. A
+    value written in passing, as in ``Default is <3>``, names nothing after
+    it and is not an entry: it is left in the name, without its brackets.
+    """
+    found = list(_ENUMERATED.finditer(name))
+    entries: list[tuple[int, str, str]] = []
+    for position, token in enumerate(found):
+        end = found[position + 1].start() if position + 1 < len(found) else len(name)
+        text = name[token.end() : end].strip().lstrip("=:-").strip()
+        if text.strip(" .,;:"):
+            entries.append((token.start(), "".join(token.group(1).split()), text))
+    if len(entries) < 2:
+        return name, None
+    label = _ENUMERATED.sub(lambda token: token.group(1), name[: entries[0][0]])
+    label = _ENUMERATION_LEAD.sub("", label).strip()
+    values = [{"value": value, "name": text.rstrip(" .,;")} for _start, value, text in entries]
+    return label or name, values
 
 
 class BadRequest(ValueError):
@@ -367,11 +404,14 @@ class Service:
         for (kind, index), point in sorted(
             point_map.points.items(), key=lambda item: (item[0][0].value, item[0][1])
         ):
+            label, enumeration = split_enumeration(point.name)
             for point_type in _KIND_TYPES[kind]:
                 points[point_type.value].append(
                     {
                         "index": index,
                         "name": point.name,
+                        "label": label,
+                        "enumeration": enumeration,
                         "mandatory": point.mandatory,
                         "section": point.section,
                     }
@@ -674,8 +714,11 @@ _REASONS = {
 class HttpServer:
     """The service over HTTP, and the console's files.
 
-    ``POST /api`` takes a message and returns its answer. ``GET /events`` is a
-    stream of server-sent events. Everything else is a file of the console.
+    ``POST /api/<operation>`` takes an operation's parameters and returns its
+    answer, and ``POST /api`` takes a whole message that names its operation.
+    ``GET /events`` is a stream of server-sent events. Everything else is a
+    file of the console, among them ``/openapi.json``, which describes the
+    routes.
 
     It listens on this machine unless told otherwise, and told otherwise it
     requires a token on every request. A request is refused unless it comes
@@ -768,7 +811,7 @@ class HttpServer:
         if refusal is not None:
             return await self._respond(writer, *refusal)
 
-        if url.path == "/api":
+        if url.path == "/api" or url.path.startswith("/api/"):
             if method != "POST":
                 return await self._respond(writer, 405, "the service is asked with POST")
             if headers.get("content-type", "").split(";")[0].strip() != "application/json":
@@ -778,9 +821,20 @@ class HttpServer:
                 return await self._respond(writer, 413, "the message is too large")
             body = await reader.readexactly(length)
             try:
-                message = json.loads(body)
+                sent = json.loads(body) if body.strip() else None
             except ValueError:
                 return await self._respond(writer, 400, "the message is not JSON")
+            if url.path == "/api":
+                # One message, naming its operation: the form the line service takes.
+                message = sent
+            else:
+                # A route for each operation, whose body is its parameters.
+                operation = url.path.removeprefix("/api/")
+                if operation not in self._service.operations:
+                    return await self._respond(writer, 404, "there is no such operation")
+                if sent is not None and not isinstance(sent, dict):
+                    return await self._respond(writer, 400, "parameters are a JSON object")
+                message = {"op": operation, "params": sent or {}}
             answer = await self._service.handle(message)
             return await self._respond_json(writer, answer)
 

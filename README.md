@@ -74,6 +74,75 @@ docker exec der py1815-der poll     # Docker
   ...
 ```
 
+## Quickstart: a master and a console on the simulated DER
+
+`py1815-master` is a DNP3 master for testing outstations, with a web console. To see one
+reading the simulated DER, with the point tables fetched as above:
+
+```
+py1815-master console --demo --open
+```
+
+That starts a simulated IEEE 1815.2 DER, a master connected to it, and the console at
+<http://127.0.0.1:8815/>, in one process.
+
+To connect a master to a simulated DER that is already running, as you would to a real
+outstation, use two terminals:
+
+```
+py1815-der run                      # terminal 1: the outstation, on 127.0.0.1:20000
+```
+
+```
+py1815-master console --outstation der=127.0.0.1:20000 --profile \
+    --integrity-interval 30 --event-interval 2 --open          # terminal 2
+```
+
+`--outstation` names the outstation and says where it listens. `--profile` says it is an
+IEEE 1815.2 DER, so its points are shown by name and the console can list the profile's points
+it has not reported. The two intervals repeat an integrity poll and an event poll; without
+them the master sends only what you ask for from the Commands tab. The link addresses default
+to the simulated DER's (`--outstation-address 1024 --master-address 1`).
+
+In the console:
+
+- **Overview** shows the connection and the internal indications of the last response.
+- **Points** shows every point by type, with its value, flags and age.
+- **Commands** sends a scan, a read or any other request, and shows what came back.
+- **Events** lists changes as they are reported, and **Traffic** every frame, read layer by
+  layer.
+
+The same master answers a script. Over HTTP, while the console is running:
+
+```
+curl -s http://127.0.0.1:8815/api/scan -H 'Content-Type: application/json' \
+     -d '{"outstation": "der", "kind": "integrity"}'
+```
+
+And from Python, with no console at all:
+
+```python
+import asyncio
+from py1815.master import Master
+
+async def main():
+    async with Master() as master:
+        der = await master.add("der", host="127.0.0.1", port=20000)
+        poll = await der.integrity_poll()
+        print(poll.outcome.value, len(poll.objects), "objects")
+        print(der.store.analog_input(537))      # System Meter Active Power
+
+asyncio.run(main())
+```
+
+This first version reads: it polls, reads named points and takes unsolicited responses, and
+does not yet operate an output. See [The console](https://dersecurity.github.io/py1815/console/),
+[The master's API](https://dersecurity.github.io/py1815/master-api/), whose routes are
+described in an [OpenAPI document](src/py1815/master/console/openapi.json), and
+[The master](https://dersecurity.github.io/py1815/master/) for the Python interface.
+
+## More about the simulated DER
+
 Any DNP3 master can connect in place of `poll`. The outstation's link address is 1024 and it
 expects master address 1 (`--outstation-address`, `--master-address`), or serves whichever
 master address speaks first with `--any-master`. The native command listens

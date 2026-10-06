@@ -534,7 +534,9 @@ done means.
    the command line, `--allow-control`. *Done when* the workload in *What a test
    rig asks of a master* runs as a test over the socket. *Built,* for what the
    master can do so far: every reading operation, over a line socket and over
-   HTTP. *Left:* the operations that command, and `--allow-control` with them.
+   HTTP with a route for each, described in an OpenAPI document the tests hold
+   the service to. *Left:* the operations that command, and `--allow-control`
+   with them.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.
    *Built:* recording, reading layer by layer, subscription. *Left:* the
@@ -550,8 +552,9 @@ done means.
     *Done when* a person can add an outstation, watch its points, operate an
     output, enable a function and read the traffic without a terminal.
     *Built:* adding an outstation, its points, scans and reads, events, and
-    the traffic, with `console --demo`. *Left:* everything that commands, the
-    DER and Evaluate tabs, the saved requests, the image, the browser test.
+    the traffic, with `console --demo`; the profile's points an outstation has
+    not reported; and tests that load it in a browser. *Left:* everything that
+    commands, the DER and Evaluate tabs, the saved requests, the image.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say.
