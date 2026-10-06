@@ -63,7 +63,15 @@ AO_START_STOP_FIRST, AO_START_STOP_LAST = 6, 17
 AO_FREEZE_INTERVAL = 20
 AO_FREEZE_INTERVAL_UNITS = 21
 AO_POWER_LIMIT_FIRST, AO_POWER_LIMIT_LAST = 82, 88
-AO_POWER_LIMIT_MAXIMUM = 87
+# The two limits of the function as a percentage. The tables name them the
+# maximum and the minimum, which reads as though the first caps generation.
+# Clause 6.4.2.2 defines them: the first is a percentage of maximum charging
+# power and the second of maximum generation power. Seen from the power
+# system, where generation is the negative direction, the minimum is the
+# limit on generation. The application note the profile grew from numbered
+# them the same way, as the charge and the discharge setpoint.
+AO_POWER_LIMIT_CHARGING = 87
+AO_POWER_LIMIT_GENERATION = 88
 AO_CHARGE_DISCHARGE_FIRST, AO_CHARGE_DISCHARGE_LAST = 89, 101
 AO_CHARGE_DISCHARGE_TARGET = 93
 AO_VOLT_WATT_FIRST, AO_VOLT_WATT_LAST = 168, 180
@@ -323,7 +331,9 @@ class ReferenceDer:
             if (watts < 0 and full) or (watts > 0 and empty):
                 watts = 0.0
         if self._on(BO_ENABLE_POWER_LIMIT):
-            watts = min(watts, self._setting(AO_POWER_LIMIT_MAXIMUM) / 100.0 * ratings.watts)
+            generating = self._setting(AO_POWER_LIMIT_GENERATION) / 100.0 * ratings.watts
+            charging = self._setting(AO_POWER_LIMIT_CHARGING) / 100.0 * ratings.watts
+            watts = max(-charging, min(watts, generating))
         limit = self.volt_watt_limit()
         if limit is not None:
             watts = min(watts, limit)
@@ -587,7 +597,8 @@ class ReferenceDer:
         self._output(binding, BO, BO_ENABLE_VOLT_VAR, False)
 
         defaults = {
-            AO_POWER_LIMIT_MAXIMUM: 100.0,
+            AO_POWER_LIMIT_CHARGING: 100.0,
+            AO_POWER_LIMIT_GENERATION: 100.0,
             AO_CONSTANT_PF_GENERATING: 1.0,
             AO_CONSTANT_PF_CHARGING: 1.0,
         }
