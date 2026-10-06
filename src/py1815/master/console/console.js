@@ -39,6 +39,8 @@ const KEPT_FRAMES = 600;
 const KEPT_EVENTS = 1000;
 const KEPT_LOG = 300;
 const FRESH_SECONDS = 10;
+// How long a value that just changed stays marked.
+const FRESH_MARK_SECONDS = 3;
 
 const state = {
   outstations: [],
@@ -159,7 +161,7 @@ function renderOutstations() {
       el("span", { class: `lamp ${outstation.connected ? "on" : "off"}`, title: outstation.connected ? "Connected" : "Not connected" }),
       el("div", {},
         el("div", { class: "name", text: outstation.name }),
-        el("div", { class: "where", text: `${outstation.host}:${outstation.port} · address ${outstation.outstation_address}` }))));
+        el("div", { class: "where", text: `${outstation.host}:${outstation.port} · addr ${outstation.outstation_address}` }))));
   }
 }
 
@@ -182,7 +184,7 @@ async function select(name) {
   if (state.selected !== name) return;
   const loaded = performance.now() / 1000;
   for (const [type, rows] of Object.entries(values.points)) {
-    state.points[type] = new Map(rows.map((row) => [row.index, { ...row, seen: loaded - row.age }]));
+    state.points[type] = new Map(rows.map((row) => [row.index, { ...row, seen: loaded - row.age, changed: null }]));
   }
   state.events = events.events.map((event) => ({ ...event, received: null, unsolicited: null })).reverse();
   state.frames = trace.frames;
@@ -255,6 +257,13 @@ function applyObjects(objects, unsolicited) {
   for (const object of objects) {
     if (object.type === null || object.index === null) continue;
     if (!state.points[object.type]) state.points[object.type] = new Map();
+    // A value reported again unchanged has not changed, and a point seen for
+    // the first time has nothing to have changed from. Only a different value
+    // or different flags mark the row.
+    const before = state.points[object.type].get(object.index);
+    const same = before && before.value === object.value
+      && JSON.stringify(before.flags) === JSON.stringify(object.flags);
+    const changed = before ? (same ? before.changed : now) : null;
     state.points[object.type].set(object.index, {
       index: object.index,
       name: object.name,
@@ -265,6 +274,7 @@ function applyObjects(objects, unsolicited) {
       group: object.group,
       variation: object.variation,
       seen: now,
+      changed,
     });
     if (object.event) state.events.unshift({ ...object, received, unsolicited });
   }
@@ -283,6 +293,12 @@ function renderPointTypes() {
   }
 }
 
+// The rows on screen, by point, with what each was drawn from. A row whose
+// point has not changed is left exactly where it is: a poll that reports the
+// same value again must not disturb a table somebody is reading.
+let pointRows = new Map();
+let pointHead = null;
+
 function renderPoints() {
   renderPointTypes();
   const rows = [...(state.points[state.pointType]?.values() || [])].sort((a, b) => a.index - b.index);
@@ -291,41 +307,87 @@ function renderPoints() {
   const changedOnly = $("#point-changed").checked;
   const now = performance.now() / 1000;
 
-  const head = $("#points-table thead");
-  head.replaceChildren(el("tr", {},
-    el("th", { class: "num", text: "Index" }),
-    named && el("th", { text: "Name" }),
-    el("th", { class: "num", text: "Value" }),
-    el("th", { text: "Flags" }),
-    el("th", { text: "Outstation time" }),
-    el("th", { text: "Object" }),
-    el("th", { text: "Reported by" }),
-    el("th", { class: "num", text: "Age" })));
+  if (pointHead !== named) {
+    pointHead = named;
+    $("#points-table thead").replaceChildren(el("tr", {},
+      el("th", { class: "num w-index", text: "Index" }),
+      named && el("th", { text: "Name" }),
+      el("th", { class: "num w-value", text: "Value" }),
+      el("th", { class: "w-flags", text: "Flags" }),
+      el("th", { class: "w-time", text: "Outstation time" }),
+      el("th", { class: "w-object", text: "Object" }),
+      el("th", { class: "w-source", text: "Reported by" }),
+      el("th", { class: "num w-age", text: "Age" })));
+  }
 
-  const body = $("#points-table tbody");
-  body.replaceChildren();
-  let shown = 0;
+  const kept = new Map();
+  const nodes = [];
   for (const row of rows) {
     const age = now - row.seen;
-    if (changedOnly && age > FRESH_SECONDS) continue;
+    const sinceChange = row.changed === null ? Infinity : now - row.changed;
+    if (changedOnly && sinceChange > FRESH_SECONDS) continue;
     if (filter) {
       const haystack = `${row.index} ${row.name || ""} ${(row.flags || []).join(" ")}`.toLowerCase();
       if (!haystack.includes(filter)) continue;
     }
-    shown += 1;
-    body.append(el("tr", { class: age < 2 ? "fresh" : "" },
-      el("td", { class: "num", text: row.index }),
-      named && el("td", { class: "name", text: row.name || "" }),
-      el("td", { class: `num value ${row.value === true ? "on" : ""}`, text: formatValue(row.value) }),
-      el("td", {}, flagChips(row.flags)),
-      el("td", { text: stationTime(row.time_ms) }),
-      el("td", { class: "mono", text: `g${row.group}v${row.variation}` }),
-      el("td", {}, el("span", { class: `source ${row.from_event ? "event" : ""}`, text: row.from_event ? "Event" : "Static" })),
-      el("td", { class: "num", text: age < 1 ? "now" : `${Math.round(age)} s` })));
+    const key = `${state.pointType}:${row.index}:${named}`;
+    const drawn = JSON.stringify([row.name, row.value, row.flags, row.time_ms, row.group, row.variation, row.from_event]);
+    let entry = pointRows.get(key);
+    if (!entry || entry.drawn !== drawn) {
+      entry = {
+        drawn,
+        node: el("tr", {},
+          el("td", { class: "num", text: row.index }),
+          named && el("td", { class: "name", text: row.name || "" }),
+          el("td", { class: `num value ${row.value === true ? "on" : ""}`, text: formatValue(row.value) }),
+          el("td", { class: "flags" }, flagChips(row.flags)),
+          el("td", { text: stationTime(row.time_ms) }),
+          el("td", { class: "mono", text: `g${row.group}v${row.variation}` }),
+          el("td", {}, el("span", { class: `source ${row.from_event ? "event" : ""}`, text: row.from_event ? "Event" : "Static" })),
+          el("td", { class: "num age" })),
+      };
+    }
+    entry.node.dataset.seen = row.seen;
+    entry.node.dataset.changed = row.changed === null ? "" : row.changed;
+    entry.node.classList.toggle("fresh", sinceChange < FRESH_MARK_SECONDS);
+    entry.node.lastElementChild.textContent = ageText(age);
+    kept.set(key, entry);
+    nodes.push(entry.node);
+  }
+  pointRows = kept;
+  const shown = nodes.length;
+
+  const body = $("#points-table tbody");
+  const current = [...body.children];
+  if (current.length === nodes.length) {
+    nodes.forEach((node, position) => { if (current[position] !== node) current[position].replaceWith(node); });
+  } else {
+    body.replaceChildren(...nodes);
   }
   $("#point-summary").textContent = rows.length
     ? `${shown} of ${rows.length} ${TYPE_LABELS[state.pointType].toLowerCase()}`
     : `No ${TYPE_LABELS[state.pointType].toLowerCase()} reported. Run an integrity poll, or read the group.`;
+}
+
+function ageText(age) {
+  return age < 1 ? "now" : `${Math.round(age)} s`;
+}
+
+// Once a second the ages move on. Only the age cells are touched: rebuilding
+// the table for it would make the whole thing shift under the reader's eye.
+function tickAges() {
+  if ($("#point-changed").checked) {
+    // Rows leave this view as they age, so it has to be drawn again.
+    renderPoints();
+    return;
+  }
+  const now = performance.now() / 1000;
+  for (const row of document.querySelectorAll("#points-table tbody tr")) {
+    const age = now - Number(row.dataset.seen);
+    const fresh = row.dataset.changed !== "" && now - Number(row.dataset.changed) < FRESH_MARK_SECONDS;
+    row.classList.toggle("fresh", fresh);
+    row.lastElementChild.textContent = ageText(age);
+  }
 }
 
 // ------------------------------------------------------------------ events
@@ -342,7 +404,7 @@ function renderEvents() {
       el("td", { class: "num", text: event.index }),
       el("td", { class: "name", text: event.name || "" }),
       el("td", { class: "num value", text: formatValue(event.value) }),
-      el("td", {}, flagChips(event.flags)),
+      el("td", { class: "flags" }, flagChips(event.flags)),
       el("td", { text: stationTime(event.time_ms) }),
       el("td", { text: event.unsolicited === null ? "" : event.unsolicited ? "Unsolicited" : "Polled" })));
   }
@@ -707,4 +769,4 @@ if (TABS.includes(location.hash.slice(1))) showTab(location.hash.slice(1));
 listen();
 refreshStatus().catch((error) => note(error.message, true));
 setInterval(() => refreshStatus().catch(() => {}), 2000);
-setInterval(() => { if (state.tab === "points") renderPoints(); }, 1000);
+setInterval(() => { if (state.tab === "points") tickAges(); }, 1000);

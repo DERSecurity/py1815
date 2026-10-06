@@ -144,7 +144,8 @@ main { flex: 1; min-width: 0; padding: 24px 28px; overflow-y: auto; }
 .outstations li:hover { background: var(--paper-2); }
 .outstations li[aria-selected="true"] { background: var(--paper-2); box-shadow: inset 2px 0 0 var(--teal); }
 .outstations .name { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
-.outstations .where { color: var(--muted); font: 11.5px var(--mono); }
+.outstations li > div { min-width: 0; }
+.outstations .where { color: var(--muted); font: 11.5px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .outstations .none { cursor: default; color: var(--muted); }
 .lamp { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--rule); }
 .lamp.on { background: var(--teal); }
@@ -275,6 +276,28 @@ thead th {
   color: var(--muted);
 }
 tbody tr { border-bottom: 1px solid var(--rule); }
+
+/* The live tables have columns of fixed width. A value that gains a digit, or
+   an age that ticks from "9 s" to "10 s", must not move anything else: a table
+   that resizes itself while it is being read cannot be read. The one column
+   with no width, the name or the frame, takes what is left. */
+#points-table, #events-table, #traffic-table { table-layout: fixed; }
+#points-table, #events-table { min-width: 1040px; }
+#points-table td, #events-table td { overflow: hidden; text-overflow: ellipsis; }
+th.w-index { width: 72px; }
+th.w-value { width: 118px; }
+th.w-flags { width: 150px; }
+th.w-time { width: 214px; }
+th.w-object { width: 78px; }
+th.w-source { width: 116px; }
+th.w-age { width: 68px; }
+th.w-received { width: 128px; }
+th.w-type { width: 132px; }
+th.w-direction { width: 40px; }
+th.w-octets { width: 78px; }
+td.flags { white-space: normal; }
+td.flags .flag { margin-bottom: 2px; margin-top: 2px; }
+td.age { color: var(--muted); }
 tbody tr:last-child { border-bottom: none; }
 tbody tr:hover { background: var(--paper); }
 td.name { white-space: normal; min-width: 240px; color: var(--ink); }
