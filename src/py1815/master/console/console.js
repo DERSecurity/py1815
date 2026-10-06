@@ -48,6 +48,7 @@ const state = {
   tab: "overview",
   pointType: "ai",
   points: {},        // type -> Map(index -> row)
+  profile: null,     // type -> Map(index -> point of the profile), when one is known
   events: [],
   frames: [],
   frame: null,       // the frame shown in detail
@@ -168,20 +169,28 @@ function renderOutstations() {
 async function select(name) {
   state.selected = name;
   state.points = {};
+  state.profile = null;
   state.events = [];
   state.frames = [];
   state.frame = null;
+  $("#point-unreported-label").hidden = true;
   $("#workspace").hidden = name === null;
   $("#empty").hidden = name !== null;
   renderOutstations();
   if (name === null) return;
   renderHeader();
-  const [values, events, trace] = await Promise.all([
+  const [values, events, trace, profile] = await Promise.all([
     api("values", {}, name),
     api("events", { limit: KEPT_EVENTS }, name),
     api("trace", { limit: KEPT_FRAMES }, name),
+    api("profile", {}, name),
   ]);
   if (state.selected !== name) return;
+  if (profile.points) {
+    state.profile = Object.fromEntries(Object.entries(profile.points)
+      .map(([type, points]) => [type, new Map(points.map((point) => [point.index, point]))]));
+  }
+  $("#point-unreported-label").hidden = !state.profile;
   const loaded = performance.now() / 1000;
   for (const [type, rows] of Object.entries(values.points)) {
     state.points[type] = new Map(rows.map((row) => [row.index, { ...row, seen: loaded - row.age, changed: null }]));
@@ -282,15 +291,26 @@ function applyObjects(objects, unsolicited) {
   state.events.length = Math.min(state.events.length, KEPT_EVENTS);
 }
 
+// The points of the profile, by type, when the service knows which profile
+// the outstation is meant to serve.
+function profileOf(type) {
+  return state.profile ? state.profile[type] : null;
+}
+
+function showingUnreported() {
+  return Boolean(state.profile) && $("#point-unreported").checked;
+}
+
 function renderPointTypes() {
   const bar = $("#point-types");
   bar.replaceChildren();
   for (const [type, label] of POINT_TYPES) {
     const count = state.points[type]?.size || 0;
+    const whole = showingUnreported() ? ` of ${profileOf(type).size}` : "";
     bar.append(el("button", {
       "aria-pressed": String(type === state.pointType),
       onclick: () => { state.pointType = type; renderPoints(); },
-    }, `${label} `, el("span", { class: "count", text: count })));
+    }, `${label} `, el("span", { class: "count", text: `${count}${whole}` })));
   }
 }
 
@@ -300,10 +320,29 @@ function renderPointTypes() {
 let pointRows = new Map();
 let pointHead = null;
 
+function unreportedRow(point) {
+  return el("tr", { class: "unreported" },
+    el("td", { class: "num", text: point.index }),
+    el("td", { class: "name" }, point.name,
+      point.mandatory && el("span", { class: "flag alarm mandatory", text: "MANDATORY", title: "The profile requires every outstation to implement this point" })),
+    el("td", { class: "num value" }),
+    el("td", { class: "flags" }, el("span", { class: "flag none", text: "NOT REPORTED" })),
+    el("td", {}),
+    el("td", {}),
+    el("td", {}),
+    el("td", { class: "num age" }));
+}
+
 function renderPoints() {
   renderPointTypes();
-  const rows = [...(state.points[state.pointType]?.values() || [])].sort((a, b) => a.index - b.index);
-  const named = rows.some((row) => row.name);
+  const reported = state.points[state.pointType] || new Map();
+  const profile = profileOf(state.pointType);
+  const unreported = showingUnreported()
+    ? [...profile.values()].filter((point) => !reported.has(point.index))
+    : [];
+  const rows = [...reported.values(), ...unreported.map((point) => ({ ...point, unreported: true }))]
+    .sort((a, b) => a.index - b.index);
+  const named = Boolean(profile) || rows.some((row) => row.name);
   const filter = $("#point-filter").value.trim().toLowerCase();
   const changedOnly = $("#point-changed").checked;
   const now = performance.now() / 1000;
@@ -323,14 +362,24 @@ function renderPoints() {
 
   const kept = new Map();
   const nodes = [];
+  let shownReported = 0;
   for (const row of rows) {
+    if (filter) {
+      const haystack = `${row.index} ${row.name || ""} ${(row.flags || []).join(" ")} ${row.unreported ? "not reported" : ""} ${row.unreported && row.mandatory ? "mandatory" : ""}`.toLowerCase();
+      if (!haystack.includes(filter)) continue;
+    }
+    if (row.unreported) {
+      if (changedOnly) continue;
+      const key = `${state.pointType}:${row.index}:unreported`;
+      const entry = pointRows.get(key) || { drawn: "", node: unreportedRow(row) };
+      entry.node.dataset.seen = "";
+      kept.set(key, entry);
+      nodes.push(entry.node);
+      continue;
+    }
     const age = now - row.seen;
     const sinceChange = row.changed === null ? Infinity : now - row.changed;
     if (changedOnly && sinceChange > FRESH_SECONDS) continue;
-    if (filter) {
-      const haystack = `${row.index} ${row.name || ""} ${(row.flags || []).join(" ")}`.toLowerCase();
-      if (!haystack.includes(filter)) continue;
-    }
     const key = `${state.pointType}:${row.index}:${named}`;
     const drawn = JSON.stringify([row.name, row.value, row.flags, row.time_ms, row.group, row.variation, row.from_event]);
     let entry = pointRows.get(key);
@@ -354,9 +403,9 @@ function renderPoints() {
     entry.node.lastElementChild.textContent = ageText(age);
     kept.set(key, entry);
     nodes.push(entry.node);
+    shownReported += 1;
   }
   pointRows = kept;
-  const shown = nodes.length;
 
   const body = $("#points-table tbody");
   const current = [...body.children];
@@ -365,11 +414,21 @@ function renderPoints() {
   } else {
     body.replaceChildren(...nodes);
   }
-  $("#point-summary").textContent = rows.length
-    ? `${shown} of ${rows.length} ${TYPE_LABELS[state.pointType].toLowerCase()}`
-    : ["bo", "ao"].includes(state.pointType)
-      ? "None reported. Output status is not part of an integrity poll: read it from Commands, or repeat it there."
-      : `No ${TYPE_LABELS[state.pointType].toLowerCase()} reported. Run an integrity poll, or read the group.`;
+
+  const label = TYPE_LABELS[state.pointType].toLowerCase();
+  let summary;
+  if (showingUnreported()) {
+    const mandatory = unreported.filter((point) => point.mandatory).length;
+    summary = `${reported.size} reported and ${unreported.length} not, of ${profile.size} ${label} in the profile`
+      + (mandatory ? `; ${mandatory} of those not reported are mandatory` : "");
+  } else if (reported.size) {
+    summary = `${shownReported} of ${reported.size} ${label}`;
+  } else if (["bo", "ao"].includes(state.pointType)) {
+    summary = "None reported. Output status is not part of an integrity poll: read it from Commands, or repeat it there.";
+  } else {
+    summary = `No ${label} reported. Run an integrity poll, or read the group.`;
+  }
+  $("#point-summary").textContent = summary;
 }
 
 function ageText(age) {
@@ -386,6 +445,7 @@ function tickAges() {
   }
   const now = performance.now() / 1000;
   for (const row of document.querySelectorAll("#points-table tbody tr")) {
+    if (row.dataset.seen === "") continue;
     const age = now - Number(row.dataset.seen);
     const fresh = row.dataset.changed !== "" && now - Number(row.dataset.changed) < FRESH_MARK_SECONDS;
     row.classList.toggle("fresh", fresh);
@@ -742,6 +802,7 @@ function wire() {
 
   $("#point-filter").addEventListener("input", renderPoints);
   $("#point-changed").addEventListener("change", renderPoints);
+  $("#point-unreported").addEventListener("change", renderPoints);
 
   for (const button of document.querySelectorAll("#traffic-direction button")) {
     button.addEventListener("click", () => {

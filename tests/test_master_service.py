@@ -119,6 +119,51 @@ class TestOperations:
         assert [o["name"] for o in scan["objects"]] == ["The first one", None]
 
     @pytest.mark.asyncio
+    async def test_a_profile_is_the_whole_map_and_not_only_what_was_reported(
+        self, service, outstation, point_map
+    ):
+        """So a caller can see which of the profile's points an outstation never reports."""
+        simulation, server = outstation
+        await _added(service, server)
+        assert (await _ask(service, "profile", "lab"))["result"] == {
+            "version": None,
+            "points": None,
+        }
+        assert (await _ask(service, "status"))["result"]["outstations"][0]["profile"] is None
+
+        service.set_profile("lab", point_map)
+
+        profile = (await _ask(service, "profile", "lab"))["result"]["points"]
+        counts = (await _ask(service, "status"))["result"]["outstations"][0]["profile"]
+        assert counts == {kind: len(points) for kind, points in profile.items()}
+        in_map = sum(1 for kind, _ in point_map.points if kind is Kind.AI)
+        assert counts["ai"] == in_map >= len(simulation.outstation.served(Kind.AI))
+        assert counts["counter"] == counts["frozen"], "a frozen counter is its counter, frozen"
+        first = profile["ai"][0]
+        assert set(first) == {"index", "name", "mandatory", "section"}
+        assert [point["index"] for point in profile["ai"]] == sorted(
+            point["index"] for point in profile["ai"]
+        )
+        for kind, name in ((Kind.AI, "ai"), (Kind.BI, "bi")):
+            required = {
+                index for (k, index), p in point_map.points.items() if k is kind and p.mandatory
+            }
+            assert {point["index"] for point in profile[name] if point["mandatory"]} == required
+
+    @pytest.mark.asyncio
+    async def test_a_profile_names_the_points_that_are_reported(
+        self, service, outstation, point_map
+    ):
+        _, server = outstation
+        await _added(service, server)
+        service.set_profile("lab", point_map)
+        scan = (await _ask(service, "scan", "lab", kind="class0"))["result"]
+        named = [o for o in scan["objects"] if o["type"] is not None]
+        assert named and all(o["name"] for o in named)
+        expected = point_map.point(Kind.BI, 0).name
+        assert next(o for o in named if o["type"] == "bi" and o["index"] == 0)["name"] == expected
+
+    @pytest.mark.asyncio
     async def test_events_are_kept_and_can_be_cleared(self, service, outstation):
         simulation, server = outstation
         await _added(service, server)
@@ -549,6 +594,9 @@ class TestTheCommand:
             (added,) = (await _ask(service, "status"))["result"]["outstations"]
             assert added["name"] == cli.DEMO_NAME and added["connected"] and added["named"]
             assert added["repeat"] == {"integrity": 30.0, "events": 2.0, "outputs": 30.0}
+            assert added["profile"]["ai"] == sum(
+                1 for kind, _ in point_map.points if kind is Kind.AI
+            )
             scan = (await _ask(service, "scan", cli.DEMO_NAME, kind="class0"))["result"]
             assert all(o["name"] for o in scan["objects"] if o["type"] is not None)
         finally:
@@ -565,6 +613,14 @@ class TestTheCommand:
         assert args.outstation == [("lab", "10.0.0.5", 20000)]
         with pytest.raises(SystemExit):
             cli._parser().parse_args(["serve", "--outstation", "lab"])
+
+    def test_outstations_can_be_said_to_be_profile_devices(self, tmp_path, capsys):
+        args = cli._parser().parse_args(["serve", "--profile", "--tables", "x.json"])
+        assert args.profile and args.tables == "x.json"
+        assert not cli._parser().parse_args(["console"]).profile
+        missing = tmp_path / "none.json"
+        assert cli.main(["serve", "--profile", "--tables", str(missing)]) == 1
+        assert capsys.readouterr().err.strip()
 
     def test_a_demonstration_with_no_tables_says_how_to_get_them(self, tmp_path, capsys):
         missing = tmp_path / "none.json"

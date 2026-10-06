@@ -34,6 +34,7 @@ from py1815.master.association import Exchange, Unsolicited
 from py1815.master.store import PointValue
 from py1815.master.trace import Entry, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
+from py1815.profile.model import Kind, PointMap
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,16 @@ _FLAGS: dict[PointType, type[BinaryQuality] | type[AnalogQuality] | type[Counter
 }
 
 _POINT_TYPES = {point.value: point for point in PointType}
+
+#: The point types each kind of profile point is read as.
+_KIND_TYPES: dict[Kind, tuple[PointType, ...]] = {
+    Kind.BI: (PointType.BINARY_INPUT,),
+    Kind.BO: (PointType.BINARY_OUTPUT,),
+    Kind.AI: (PointType.ANALOG_INPUT,),
+    Kind.AO: (PointType.ANALOG_OUTPUT,),
+    # A frozen counter is the counter of the same index, as it stood at a freeze.
+    Kind.CTR: (PointType.COUNTER, PointType.FROZEN_COUNTER),
+}
 
 Names = Mapping[PointType, Mapping[int, str]]
 
@@ -138,10 +149,12 @@ class Service:
     def __init__(self, master: Master | None = None) -> None:
         self.master = Master() if master is None else master
         self._names: dict[str, dict[PointType, dict[int, str]]] = {}
+        self._profiles: dict[str, PointMap] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.stopped = asyncio.Event()
         self._operations: dict[str, Callable[[Mapping[str, Any]], Awaitable[Any]]] = {
             "status": self._status,
+            "profile": self._profile,
             "add": self._add,
             "remove": self._remove,
             "connect": self._connect,
@@ -220,10 +233,35 @@ class Service:
         """Give an outstation's points names, for a caller that knows its map."""
         self._names[outstation] = {point: dict(indexed) for point, indexed in names.items()}
 
+    def set_profile(self, outstation: str, point_map: PointMap) -> None:
+        """Give an outstation the profile it is meant to serve.
+
+        The whole map, and not only the points the outstation reports. That
+        is what lets a caller see the difference: a point of the profile the
+        outstation has never reported is one it does not implement, or one
+        nobody has read yet, and a master cannot tell which from silence.
+        """
+        self._profiles[outstation] = point_map
+        names: dict[PointType, dict[int, str]] = {point: {} for point in PointType}
+        for (kind, index), point in point_map.points.items():
+            for point_type in _KIND_TYPES[kind]:
+                names[point_type][index] = point.name
+        self._names[outstation] = names
+
     def _name(self, outstation: str, point: PointType | None, index: int | None) -> str | None:
         if point is None or index is None:
             return None
         return self._names.get(outstation, {}).get(point, {}).get(index)
+
+    def _profile_counts(self, outstation: str) -> dict[str, int] | None:
+        point_map = self._profiles.get(outstation)
+        if point_map is None:
+            return None
+        counts = {point.value: 0 for point in PointType}
+        for kind, _index in point_map.points:
+            for point_type in _KIND_TYPES[kind]:
+                counts[point_type.value] += 1
+        return counts
 
     def _outstation(self, params: Mapping[str, Any]) -> Outstation:
         name = params.get("outstation")
@@ -252,6 +290,7 @@ class Service:
             "frames": len(outstation.trace),
             "repeat": outstation.scan_intervals,
             "named": bool(self._names.get(outstation.name)),
+            "profile": self._profile_counts(outstation.name),
         }
 
     def _describe_exchange(self, outstation: Outstation, exchange: Exchange) -> dict[str, Any]:
@@ -318,6 +357,27 @@ class Service:
             ]
         }
 
+    async def _profile(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Every point of the profile an outstation was given, reported or not."""
+        outstation = self._outstation(params)
+        point_map = self._profiles.get(outstation.name)
+        if point_map is None:
+            return {"version": None, "points": None}
+        points: dict[str, list[dict[str, Any]]] = {point.value: [] for point in PointType}
+        for (kind, index), point in sorted(
+            point_map.points.items(), key=lambda item: (item[0][0].value, item[0][1])
+        ):
+            for point_type in _KIND_TYPES[kind]:
+                points[point_type.value].append(
+                    {
+                        "index": index,
+                        "name": point.name,
+                        "mandatory": point.mandatory,
+                        "section": point.section,
+                    }
+                )
+        return {"version": point_map.profile_version, "points": points}
+
     async def _add(self, params: Mapping[str, Any]) -> dict[str, Any]:
         name = params.get("name")
         if not name or not isinstance(name, str):
@@ -363,6 +423,7 @@ class Service:
         outstation = self._outstation(params)
         await self.master.remove(outstation.name)
         self._names.pop(outstation.name, None)
+        self._profiles.pop(outstation.name, None)
         self.publish({"event": "outstations"})
         return {"removed": outstation.name}
 

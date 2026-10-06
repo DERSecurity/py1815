@@ -21,32 +21,12 @@ import time
 import webbrowser
 from collections.abc import Sequence
 
-from py1815.decode import PointType
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
 from py1815.profile import der, load
-from py1815.profile.model import Composition, Kind, MapError, PointMap
+from py1815.profile.model import Composition, MapError, PointMap
 from py1815.server import OutstationServer
 
 DEMO_NAME = "simulated-der"
-
-_KINDS = {
-    Kind.BI: (PointType.BINARY_INPUT,),
-    Kind.BO: (PointType.BINARY_OUTPUT,),
-    Kind.AI: (PointType.ANALOG_INPUT,),
-    Kind.AO: (PointType.ANALOG_OUTPUT,),
-    # A frozen counter is the counter of the same index, as it stood at a freeze.
-    Kind.CTR: (PointType.COUNTER, PointType.FROZEN_COUNTER),
-}
-
-
-def point_names(simulation: der.Simulation) -> dict[PointType, dict[int, str]]:
-    """The names the profile gives the points a simulated DER serves."""
-    names: dict[PointType, dict[int, str]] = {point: {} for point in PointType}
-    for kind, points in _KINDS.items():
-        for served in simulation.outstation.served(kind):
-            for point in points:
-                names[point][served.index] = served.name
-    return names
 
 
 class Demo:
@@ -66,7 +46,7 @@ class Demo:
     async def start(self) -> None:
         await self._server.start()
         self._running = asyncio.create_task(self._advance(), name="dnp3-master-demo")
-        self._service.set_names(DEMO_NAME, point_names(self.simulation))
+        self._service.set_profile(DEMO_NAME, self.simulation.outstation.point_map)
         await self._service.handle(
             {
                 "op": "add",
@@ -108,8 +88,12 @@ def _outstation(text: str) -> tuple[str, str, int]:
         raise argparse.ArgumentTypeError(f"{port!r} is not a port") from None
 
 
-async def _add_named(service: Service, args: argparse.Namespace) -> bool:
+async def _add_named(
+    service: Service, args: argparse.Namespace, point_map: PointMap | None = None
+) -> bool:
     for name, host, port in args.outstation:
+        if point_map is not None and args.profile:
+            service.set_profile(name, point_map)
         answer = await service.handle(
             {
                 "op": "add",
@@ -137,8 +121,17 @@ async def _add_named(service: Service, args: argparse.Namespace) -> bool:
     return True
 
 
-async def run_console(args: argparse.Namespace, point_map: PointMap | None = None) -> int:
-    """Serve the console until interrupted or told to stop."""
+async def run_console(
+    args: argparse.Namespace,
+    point_map: PointMap | None = None,
+    profile_map: PointMap | None = None,
+) -> int:
+    """Serve the console until interrupted or told to stop.
+
+    ``point_map`` is the map a simulated DER is built from, for the
+    demonstration. ``profile_map`` is the profile the outstations named on
+    the command line are meant to serve.
+    """
     service = Service()
     try:
         server = HttpServer(service, bind=args.bind, token=args.token)
@@ -146,11 +139,12 @@ async def run_console(args: argparse.Namespace, point_map: PointMap | None = Non
         print(str(error), file=sys.stderr)
         return 2
     demo = Demo(service, point_map, tick=args.tick) if point_map is not None else None
+    profile = point_map if point_map is not None else profile_map
     await server.start()
     try:
         if demo is not None:
             await demo.start()
-        if not await _add_named(service, args):
+        if not await _add_named(service, args, profile):
             return 2
         print(f"Satori DNP3 master console at {server.url}", flush=True)
         if demo is not None:
@@ -170,7 +164,7 @@ async def run_console(args: argparse.Namespace, point_map: PointMap | None = Non
     return 0
 
 
-async def run_service(args: argparse.Namespace) -> int:
+async def run_service(args: argparse.Namespace, profile_map: PointMap | None = None) -> int:
     """Serve the line service until interrupted or told to stop."""
     service = Service()
     try:
@@ -180,7 +174,7 @@ async def run_service(args: argparse.Namespace) -> int:
         return 2
     await server.start()
     try:
-        if not await _add_named(service, args):
+        if not await _add_named(service, args, profile_map):
             return 2
         print(
             f"DNP3 master service listening on {args.bind.rpartition(':')[0]}:{server.port}",
@@ -201,6 +195,18 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         type=_outstation,
         metavar="NAME=HOST:PORT",
         help="an outstation to add and connect to at startup; may be given more than once",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="the outstations given are IEEE 1815.2 DER: name their points from the profile "
+        "tables, and let the console show the points of the profile they have not reported",
+    )
+    parser.add_argument(
+        "--tables",
+        default=None,
+        help=f"the profile tables file, for --profile and --demo (default: "
+        f"${load.TABLES_VARIABLE}, else ~/.py1815/{load.TABLES_NAME})",
     )
     parser.add_argument("--outstation-address", type=int, default=1024)
     parser.add_argument("--master-address", type=int, default=1)
@@ -253,12 +259,6 @@ def _parser() -> argparse.ArgumentParser:
         help="also start a simulated IEEE 1815.2 DER and connect to it",
     )
     console.add_argument(
-        "--tables",
-        default=None,
-        help=f"the profile tables file for --demo (default: ${load.TABLES_VARIABLE}, else "
-        f"~/.py1815/{load.TABLES_NAME})",
-    )
-    console.add_argument(
         "--tick", type=float, default=1.0, help="seconds between steps of the simulated DER"
     )
     _add_outstation_options(console)
@@ -282,17 +282,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     point_map: PointMap | None = None
-    if args.command == "console" and args.demo:
+    demo = args.command == "console" and args.demo
+    if demo or args.profile:
         try:
             point_map = load.load(args.tables, Composition())
         except (MapError, ValueError, OSError) as error:
             print(str(error), file=sys.stderr)
             return 1
+    profile_map = point_map if args.profile else None
     signal.signal(signal.SIGTERM, _interrupt)
     try:
         if args.command == "console":
-            return asyncio.run(run_console(args, point_map))
-        return asyncio.run(run_service(args))
+            return asyncio.run(run_console(args, point_map if demo else None, profile_map))
+        return asyncio.run(run_service(args, profile_map))
     except KeyboardInterrupt:
         return 0
 

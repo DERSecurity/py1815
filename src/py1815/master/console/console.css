@@ -298,6 +298,12 @@ th.w-octets { width: 78px; }
 td.flags { white-space: normal; }
 td.flags .flag { margin-bottom: 2px; margin-top: 2px; }
 td.age { color: var(--muted); }
+
+/* A point of the profile the outstation has not reported: there, and set back. */
+tr.unreported td { color: var(--muted); }
+tr.unreported td.name { color: var(--muted); }
+tr.unreported { background: repeating-linear-gradient(135deg, transparent 0 10px, rgba(226, 219, 205, 0.35) 10px 11px); }
+.flag.mandatory { margin-left: 10px; }
 tbody tr:last-child { border-bottom: none; }
 tbody tr:hover { background: var(--paper); }
 td.name { white-space: normal; min-width: 240px; color: var(--ink); }

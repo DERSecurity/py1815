@@ -178,11 +178,25 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | Tab | Shows |
 |---|---|
 | **Overview** | Addresses, connection state, counts, and every internal indication of the last response |
-| **Points** | A table for each point type: index, value, flags by name, the outstation's time, the object that carried it, and whether a poll or an event reported it |
+| **Points** | A table for each point type: index, value, flags by name, the outstation's time, the object that carried it, and whether a poll or an event reported it. With a profile, the points of the profile the outstation has not reported can be shown beside the ones it has |
 | **Commands** | Scans by class, a read of named points, enabling and disabling unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, polled or unsolicited |
 | **Traffic** | Each frame with its time and direction, and the selected one read layer by layer beside its octets |
 | **Log** | What the console asked for, and what came of it |
+
+For an IEEE 1815.2 DER, `--profile` gives the console the profile's whole
+point map, from the same tables `--demo` uses:
+
+```bash
+py1815-master console --outstation lab=192.0.2.10:20000 --profile --integrity-interval 30
+```
+
+Points are then shown by name, and "Show points not reported" on the Points
+tab lists the points of the profile the outstation has not reported, with the
+ones the profile makes mandatory marked. A point is not reported either
+because the outstation does not implement it or because nobody has read it:
+a master cannot tell which from silence. Output status and the few inputs the
+profile leaves out of class 0 are in the second group until they are read.
 
 The console listens on this machine only. To reach it from another, give it a
 token, which every request then has to carry:
@@ -226,6 +240,7 @@ A request is one JSON object on one line, and so is its answer:
 | `scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3`, `outputs` |
 | `read` | Named points by type: `bi`, `bo`, `counter`, `frozen`, `ai`, `ao`, each a list of indices or `"all"` |
 | `values` | What the store holds, with no traffic |
+| `profile` | Every point of the profile an outstation was started with, reported or not: index, name, whether it is mandatory, and its section |
 | `events` | The events received |
 | `request` | Any request: `function` by name or number, `body` in hexadecimal |
 | `enable_unsolicited`, `disable_unsolicited` | By `classes` |
