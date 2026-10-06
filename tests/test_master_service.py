@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 import pytest
@@ -625,21 +626,66 @@ class TestListeningToOtherMachines:
             HttpServer(service, bind="0.0.0.0:0")
 
     @pytest.mark.asyncio
-    async def test_and_then_every_request_needs_it(self, service):
+    async def test_and_then_every_request_to_the_service_needs_it(self, service):
+        server = HttpServer(service, bind="127.0.0.1:0", token="s3cret")
+        await server.start()
+        body = json.dumps({"op": "status"}).encode()
+        try:
+            for path in ("/api", "/api/status"):
+                status, _, _ = await _http(server.port, "POST", path, body=body, headers=JSON)
+                assert status == 401, path
+                wrong = {**JSON, "Authorization": "Bearer wrong"}
+                status, _, _ = await _http(server.port, "POST", path, body=body, headers=wrong)
+                assert status == 401, path
+                bearer = {**JSON, "Authorization": "Bearer s3cret"}
+                status, _, _ = await _http(server.port, "POST", path, body=body, headers=bearer)
+                assert status == 200, path
+            status, _, _ = await _http(server.port, "GET", "/events")
+            assert status == 401
+            status, _, _ = await _http(server.port, "GET", "/events?token=wrong")
+            assert status == 401
+            assert server.url.endswith("/?token=s3cret")
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_the_consoles_own_files_need_none(self, service):
+        """A page cannot put a token on the stylesheet and script it links to, and
+        they say nothing about any outstation."""
         server = HttpServer(service, bind="127.0.0.1:0", token="s3cret")
         await server.start()
         try:
-            status, _, _ = await _http(server.port, "GET", "/")
-            assert status == 401
-            status, _, _ = await _http(server.port, "GET", "/?token=wrong")
-            assert status == 401
-            status, _, _ = await _http(server.port, "GET", "/?token=s3cret")
+            for path in ("/", "/console.js", "/console.css", "/satori.png", "/openapi.json"):
+                status, _, _ = await _http(server.port, "GET", path)
+                assert status == 200, path
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_a_container_may_listen_widely_with_no_token_when_told_to(self, service):
+        """Its port is published by whoever runs it, and that is what limits who reaches it.
+        A request still has to name this machine, so a page elsewhere cannot be aimed at it."""
+        server = HttpServer(service, bind="0.0.0.0:0", without_token=True)
+        await server.start()
+        body = json.dumps({"op": "status"}).encode()
+        try:
+            assert server.url == f"http://localhost:{server.port}/"
+            status, _, _ = await _http(server.port, "POST", "/api", body=body, headers=JSON)
             assert status == 200
-            bearer = {**JSON, "Authorization": "Bearer s3cret"}
-            body = json.dumps({"op": "status"}).encode()
-            status, _, _ = await _http(server.port, "POST", "/api", body=body, headers=bearer)
-            assert status == 200
-            assert server.url.endswith("/?token=s3cret")
+            elsewhere = {**JSON, "Host": "console.example:8815"}
+            status, _, _ = await _http(server.port, "POST", "/api", body=body, headers=elsewhere)
+            assert status == 403
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_a_token_still_counts_where_none_was_required(self, service):
+        server = HttpServer(service, bind="0.0.0.0:0", token="s3cret", without_token=True)
+        await server.start()
+        body = json.dumps({"op": "status"}).encode()
+        try:
+            status, _, _ = await _http(server.port, "POST", "/api", body=body, headers=JSON)
+            assert status == 401
         finally:
             await server.stop()
 
@@ -688,6 +734,94 @@ class TestTheCommand:
         assert cli.main(["console", "--demo", "--tables", str(missing)]) == 1
         assert capsys.readouterr().err.strip()
 
-    def test_listening_to_other_machines_without_a_token_is_refused(self, capsys):
+    def test_listening_to_other_machines_without_a_token_is_refused(self, capsys, monkeypatch):
+        monkeypatch.delenv(cli.TOKEN_VARIABLE, raising=False)
         assert cli.main(["console", "--bind", "0.0.0.0:0"]) == 2
         assert "needs a token" in capsys.readouterr().err
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("arguments", "environment", "expected"),
+        [
+            (["--token", "given"], {}, "/?token=given"),
+            ([], {"PY1815_MASTER_TOKEN": "from-env"}, "/?token=from-env"),
+            (["--token", "given"], {"PY1815_MASTER_TOKEN": "from-env"}, "/?token=given"),
+            (["--new-token"], {"PY1815_MASTER_TOKEN": "from-env"}, "/?token=from-env"),
+            (["--no-token"], {}, "/"),
+            (["--no-token"], {"PY1815_MASTER_TOKEN": "from-env"}, "/?token=from-env"),
+        ],
+    )
+    async def test_where_the_consoles_token_comes_from(
+        self, arguments, environment, expected, monkeypatch, capsys
+    ):
+        """The command line, then the environment, then one made for the run if asked."""
+        monkeypatch.delenv(cli.TOKEN_VARIABLE, raising=False)
+        for name, value in environment.items():
+            monkeypatch.setenv(name, value)
+        args = cli._parser().parse_args(["console", "--bind", "0.0.0.0:0", *arguments])
+        running = asyncio.create_task(cli.run_console(args))
+        try:
+            async with asyncio.timeout(10):
+                while "console at" not in (printed := capsys.readouterr().out):
+                    await asyncio.sleep(0.05)
+        finally:
+            running.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await running
+        address = printed.split("console at ")[1].split()[0]
+        assert address.startswith("http://localhost:") and address.endswith(expected)
+
+    @pytest.mark.asyncio
+    async def test_a_token_is_made_for_the_run_when_asked_for(self, monkeypatch, capsys):
+        monkeypatch.delenv(cli.TOKEN_VARIABLE, raising=False)
+        seen = []
+        for _ in range(2):
+            args = cli._parser().parse_args(["console", "--bind", "0.0.0.0:0", "--new-token"])
+            running = asyncio.create_task(cli.run_console(args))
+            try:
+                async with asyncio.timeout(10):
+                    while "console at" not in (printed := capsys.readouterr().out):
+                        await asyncio.sleep(0.05)
+            finally:
+                running.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await running
+            seen.append(printed.split("?token=")[1].split()[0])
+        assert all(len(token) >= 16 for token in seen) and seen[0] != seen[1]
+
+    @pytest.mark.asyncio
+    async def test_an_outstation_that_starts_later_is_connected_to_when_it_does(
+        self, service, point_map, capsys
+    ):
+        """A master started beside its outstation may be the first of the two to be ready."""
+        closed = await asyncio.start_server(lambda reader, writer: None, "127.0.0.1", 0)
+        port = closed.sockets[0].getsockname()[1]
+        closed.close()
+        await closed.wait_closed()
+        args = cli._parser().parse_args(
+            ["serve", "--outstation", f"late=127.0.0.1:{port}", "--connect-wait", "20"]
+        )
+        waiting: list[asyncio.Task[None]] = []
+
+        assert await cli._add_named(service, args, None, waiting)
+        (late,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert not late["connected"] and len(waiting) == 1
+
+        simulation = der.build(point_map)
+        server = OutstationServer(simulation.outstation.session(), bind=f"127.0.0.1:{port}")
+        await server.start()
+        try:
+            async with asyncio.timeout(15):
+                await waiting[0]
+            (late,) = (await _ask(service, "status"))["result"]["outstations"]
+            assert late["connected"]
+            assert "late: connected" in capsys.readouterr().out
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_and_is_tried_once_unless_asked_to_wait(self, service):
+        args = cli._parser().parse_args(["serve", "--outstation", "gone=127.0.0.1:1"])
+        waiting: list[asyncio.Task[None]] = []
+        assert await cli._add_named(service, args, None, waiting)
+        assert waiting == []

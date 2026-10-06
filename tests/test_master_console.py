@@ -476,6 +476,57 @@ class TestEventsAndTraffic:
         assert page.errors == []
 
 
+class TestWithAToken:
+    """Started with a token, the page still has to load, and then to carry it."""
+
+    @pytest_asyncio.fixture
+    async def guarded(self):
+        point_map = load.resolve(for_reference_der(), Composition())
+        simulation = der.build(point_map)
+        outstation = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        service = Service()
+        http = HttpServer(service, bind="127.0.0.1:0", token="s3cret")
+        await outstation.start()
+        await http.start()
+        try:
+            added = await service.handle(
+                {
+                    "op": "add",
+                    "params": {"name": "lab", "host": "127.0.0.1", "port": outstation.port},
+                }
+            )
+            assert added["ok"], added
+            await service.handle({"op": "scan", "outstation": "lab"})
+            async with open_page() as page:
+                yield page, http
+        finally:
+            await service.close()
+            await http.stop()
+            await outstation.stop()
+
+    @pytest.mark.asyncio
+    async def test_opened_at_the_address_it_printed_it_works(self, guarded):
+        page, http = guarded
+        await page.goto(http.url)
+        await page.wait_for("document.querySelector('#title')?.textContent === 'lab'")
+        await page.wait_for("document.querySelector('#service-state').classList.contains('good')")
+        # Styled, which it is not if the stylesheet was refused for want of a token.
+        assert (
+            await page.evaluate("getComputedStyle(document.querySelector('.masthead')).display")
+            == "flex"
+        )
+        assert await page.evaluate("(state.points.ai || new Map()).size") > 0
+        assert page.errors == []
+
+    @pytest.mark.asyncio
+    async def test_opened_without_the_token_it_shows_nothing_of_the_outstation(self, guarded):
+        page, http = guarded
+        await page.goto(http.url.split("?")[0])
+        await page.wait_for("document.querySelector('#service-state').classList.contains('bad')")
+        assert await page.count("#outstations .name") == 0
+        assert await page.evaluate("document.querySelector('#workspace').hidden")
+
+
 class TestWhatItWillNotDo:
     @pytest.mark.asyncio
     async def test_a_name_is_shown_as_text_and_never_run(self, console):

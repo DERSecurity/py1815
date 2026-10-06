@@ -721,7 +721,8 @@ class HttpServer:
     routes.
 
     It listens on this machine unless told otherwise, and told otherwise it
-    requires a token on every request. A request is refused unless it comes
+    requires a token of every request to the service. A request is refused
+    unless it comes
     from a page this server served: a browser will carry a request from any
     page to a local port, and a tool pointed at real equipment must not take
     one.
@@ -733,11 +734,25 @@ class HttpServer:
         *,
         bind: str = DEFAULT_HTTP_BIND,
         token: str | None = None,
+        without_token: bool = False,
         directory: pathlib.Path = CONSOLE_DIRECTORY,
     ) -> None:
+        """
+        Args:
+            service: The service to serve.
+            bind: The address and port to listen on.
+            token: Required of every request to the service, when given.
+            without_token: Listen beyond this machine with no token. For a
+                container, whose own network is not the one it is published
+                on: there, what decides who can reach the port is how it was
+                published, and the caller is saying that it was published
+                narrowly. A request still has to name this machine as its
+                host, so a page elsewhere cannot be pointed at it.
+            directory: Where the console's files are.
+        """
         self._service = service
         self._host, self._port = _split_bind(bind)
-        if not _is_loopback(self._host) and not token:
+        if not _is_loopback(self._host) and not token and not without_token:
             raise ValueError(
                 f"listening on {self._host} is listening to other machines, and needs a token"
             )
@@ -753,7 +768,13 @@ class HttpServer:
 
     @property
     def url(self) -> str:
-        host = f"[{self._host}]" if ":" in self._host else self._host
+        """Where to open the console, with the token when there is one.
+
+        An address that means "every interface" is not one a browser can go
+        to, so this machine's own name stands in for it.
+        """
+        host = "localhost" if self._host in ("0.0.0.0", "::") else self._host
+        host = f"[{host}]" if ":" in host else host
         suffix = f"/?token={self._token}" if self._token else "/"
         return f"http://{host}:{self.port}{suffix}"
 
@@ -807,7 +828,7 @@ class HttpServer:
         url = urlsplit(target)
         query = parse_qs(url.query)
 
-        refusal = self._refusal(headers, query)
+        refusal = self._refusal(headers, query, url.path)
         if refusal is not None:
             return await self._respond(writer, *refusal)
 
@@ -847,7 +868,7 @@ class HttpServer:
         return await self._file(writer, url.path)
 
     def _refusal(
-        self, headers: Mapping[str, str], query: Mapping[str, list[str]]
+        self, headers: Mapping[str, str], query: Mapping[str, list[str]], path: str
     ) -> tuple[int, str] | None:
         host = headers.get("host", "")
         origin = headers.get("origin")
@@ -859,6 +880,12 @@ class HttpServer:
             name = host.rsplit(":", 1)[0].strip("[]")
             if not _is_loopback(name):
                 return 403, "the request names a host this server is not"
+            return None
+        if not (path == "/api" or path.startswith("/api/") or path == "/events"):
+            # The console's own files. They are the same for everyone and say
+            # nothing about any outstation, and a page cannot put a token on
+            # the stylesheet and script it links to. What the token guards is
+            # the service: every operation, and the stream of what happens.
             return None
         offered = headers.get("authorization", "").removeprefix("Bearer ").strip()
         offered = offered or (query.get("token") or [""])[0]

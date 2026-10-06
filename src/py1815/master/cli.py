@@ -15,6 +15,8 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
+import secrets
 import signal
 import sys
 import time
@@ -27,6 +29,10 @@ from py1815.profile.model import Composition, MapError, PointMap
 from py1815.server import OutstationServer
 
 DEMO_NAME = "simulated-der"
+
+#: Where the console's token is read from when it is not given on the command
+#: line, so a container can be handed one without it appearing in its command.
+TOKEN_VARIABLE = "PY1815_MASTER_TOKEN"
 
 
 class Demo:
@@ -88,8 +94,27 @@ def _outstation(text: str) -> tuple[str, str, int]:
         raise argparse.ArgumentTypeError(f"{port!r} is not a port") from None
 
 
+async def _keep_trying(service: Service, name: str, seconds: float) -> None:
+    """Connect to an outstation that was not there yet, for as long as was allowed.
+
+    For a master started beside its outstation, which may be the first of the
+    two to be ready. It tries once a second and stops at the first success.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        await asyncio.sleep(1.0)
+        answer = await service.handle({"op": "connect", "outstation": name})
+        if answer["ok"]:
+            print(f"{name}: connected", flush=True)
+            return
+    print(f"{name}: still not reachable after {seconds:g} s", file=sys.stderr)
+
+
 async def _add_named(
-    service: Service, args: argparse.Namespace, point_map: PointMap | None = None
+    service: Service,
+    args: argparse.Namespace,
+    point_map: PointMap | None = None,
+    waiting: list[asyncio.Task[None]] | None = None,
 ) -> bool:
     for name, host, port in args.outstation:
         if point_map is not None and args.profile:
@@ -118,6 +143,8 @@ async def _add_named(
             print(f"{name}: {answer['error']['message']}", file=sys.stderr)
             if answer["error"]["kind"] != "connection":
                 return False
+            if args.connect_wait > 0 and waiting is not None:
+                waiting.append(asyncio.create_task(_keep_trying(service, name, args.connect_wait)))
     return True
 
 
@@ -133,8 +160,12 @@ async def run_console(
     the command line are meant to serve.
     """
     service = Service()
+    token = args.token or os.environ.get(TOKEN_VARIABLE) or None
+    if token is None and args.new_token:
+        token = secrets.token_urlsafe(16)
+    waiting: list[asyncio.Task[None]] = []
     try:
-        server = HttpServer(service, bind=args.bind, token=args.token)
+        server = HttpServer(service, bind=args.bind, token=token, without_token=args.no_token)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -144,7 +175,7 @@ async def run_console(
     try:
         if demo is not None:
             await demo.start()
-        if not await _add_named(service, args, profile):
+        if not await _add_named(service, args, profile, waiting):
             return 2
         print(f"Satori DNP3 master console at {server.url}", flush=True)
         if demo is not None:
@@ -157,6 +188,8 @@ async def run_console(
             webbrowser.open(server.url)
         await service.stopped.wait()
     finally:
+        for task in waiting:
+            task.cancel()
         if demo is not None:
             await demo.stop()
         await server.stop()
@@ -167,6 +200,7 @@ async def run_console(
 async def run_service(args: argparse.Namespace, profile_map: PointMap | None = None) -> int:
     """Serve the line service until interrupted or told to stop."""
     service = Service()
+    waiting: list[asyncio.Task[None]] = []
     try:
         server = LineServer(service, bind=args.bind)
     except ValueError as error:
@@ -174,7 +208,7 @@ async def run_service(args: argparse.Namespace, profile_map: PointMap | None = N
         return 2
     await server.start()
     try:
-        if not await _add_named(service, args, profile_map):
+        if not await _add_named(service, args, profile_map, waiting):
             return 2
         print(
             f"DNP3 master service listening on {args.bind.rpartition(':')[0]}:{server.port}",
@@ -182,6 +216,8 @@ async def run_service(args: argparse.Namespace, profile_map: PointMap | None = N
         )
         await service.stopped.wait()
     finally:
+        for task in waiting:
+            task.cancel()
         await server.stop()
         await service.close()
     return 0
@@ -207,6 +243,14 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=f"the profile tables file, for --profile and --demo (default: "
         f"${load.TABLES_VARIABLE}, else ~/.py1815/{load.TABLES_NAME})",
+    )
+    parser.add_argument(
+        "--connect-wait",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="keep trying, for this long, to connect to an outstation that is not there "
+        "yet at startup (default: try once)",
     )
     parser.add_argument("--outstation-address", type=int, default=1024)
     parser.add_argument("--master-address", type=int, default=1)
@@ -250,7 +294,19 @@ def _parser() -> argparse.ArgumentParser:
     console.add_argument(
         "--token",
         default=None,
-        help="required of every request; needed to listen on anything but this machine",
+        help="required of every request to the service; needed to listen on anything but "
+        f"this machine (default: ${TOKEN_VARIABLE})",
+    )
+    console.add_argument(
+        "--new-token",
+        action="store_true",
+        help="when no token is given, make one for this run and print the address that carries it",
+    )
+    console.add_argument(
+        "--no-token",
+        action="store_true",
+        help="listen beyond this machine with no token. For a container whose port is "
+        "published to this machine only: anyone who can reach the port can use the console",
     )
     console.add_argument("--open", action="store_true", help="open the console in a browser")
     console.add_argument(

@@ -169,7 +169,8 @@ above, one to a line. The line service listens on this machine only.
 
 ## A token
 
-Started with `--token`, the service requires it of every request, as
-`Authorization: Bearer <token>`, or as a `token` query parameter where a header
-cannot be set, as on the event stream. See
+Started with a token, the service requires it of every request to `/api` and
+`/events`, as `Authorization: Bearer <token>`, or as a `token` query parameter
+where a header cannot be set, as on the event stream. The console's own files,
+and `/openapi.json`, need none. See
 [Who can reach it](console.md#who-can-reach-it).

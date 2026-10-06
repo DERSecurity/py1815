@@ -104,6 +104,27 @@ it has not reported. The two intervals repeat an integrity poll and an event pol
 them the master sends only what you ask for from the Commands tab. The link addresses default
 to the simulated DER's (`--outstation-address 1024 --master-address 1`).
 
+Or with Docker, which needs nothing installed but Docker:
+
+```
+git clone https://github.com/DERSecurity/py1815 && cd py1815
+docker compose up
+```
+
+and open <http://localhost:8815/>. That fetches the point tables from IEEE into a volume the
+first time, starts the simulated DER as an outstation in one container, and starts the master
+with its API and console in another, connected to it. `compose.yaml` says what each part
+does and how to reach the console from another machine. To run the master's image by itself
+against an outstation of your own:
+
+```
+docker build --target master -t py1815-master .
+docker run --rm -p 127.0.0.1:8815:8815 py1815-master \
+    console --bind 0.0.0.0:8815 --new-token --outstation lab=192.0.2.10:20000
+```
+
+It prints the address to open, with a token made for that run.
+
 In the console:
 
 - **Overview** shows the connection and the internal indications of the last response.

@@ -1177,7 +1177,13 @@ is not enough by itself, because a browser will carry a request from any site to
 on the machine it runs on. So a request is refused when its `Origin` is another site,
 when it names a host that is not this machine, and when its body is not sent as
 `application/json`, which a page elsewhere cannot send without asking first and being
-refused. The console's own page loads nothing from the network, so it works on a lab
+refused. The token is asked of the service, which is every operation and the stream of
+what happens, and not of the console's own files: a page cannot put a token on the
+stylesheet and script it links to, and those say nothing about any outstation. A container
+is the one place the console listens widely by design, since its own network is not the
+one its port is published on; there a token is made for the run, or taken from the
+environment, or done without when the caller says the port is published to this machine
+alone. The console's own page loads nothing from the network, so it works on a lab
 network that reaches nothing, and tells nobody that it is running.
 *Trade-off:* the fonts of the project's site are named and not fetched, so the console
 is set in whatever the machine has when they are not installed.

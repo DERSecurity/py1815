@@ -44,10 +44,50 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
 | `--bind HOST:PORT` | Where the console listens. `127.0.0.1:8815` unless given |
-| `--token TOKEN` | Required of every request. Needed to listen on anything but this machine |
+| `--token TOKEN` | Required of every request to the service. Needed to listen on anything but this machine. Read from `PY1815_MASTER_TOKEN` when not given |
+| `--new-token` | With no token given, makes one for this run and prints the address that carries it |
+| `--no-token` | Listens beyond this machine with no token, for a container whose port is published to this machine only |
+| `--connect-wait SECONDS` | Keeps trying, for this long, to connect to an outstation that is not there yet at startup |
 | `--open` | Opens the console in a browser |
 
 Outstations can also be added from the page, under **Add outstation**.
+
+### In Docker
+
+From a checkout, with nothing installed but Docker:
+
+```bash
+docker compose up
+```
+
+and open `http://localhost:8815/`. Three things run:
+
+| Service | Does |
+|---|---|
+| `tables` | Fetches the profile's point tables from IEEE into a volume, the first time only. They may not be redistributed, so each machine gets its own copy |
+| `der` | A simulated IEEE 1815.2 DER, listening as an outstation |
+| `master` | The master, connected to `der`, serving its API and the console |
+
+The master's image can also be run by itself, against any outstation:
+
+```bash
+docker build --target master -t py1815-master .
+docker run --rm -p 127.0.0.1:8815:8815 py1815-master \
+    console --bind 0.0.0.0:8815 --new-token --outstation lab=192.0.2.10:20000
+```
+
+Inside a container the console listens on every interface, and publishing the
+port is what decides who can reach it. Listening that widely needs a token, so:
+
+- `--new-token` makes one for the run and prints the address that carries it.
+- `PY1815_MASTER_TOKEN` gives one that stays the same from run to run.
+- `--no-token` does without, for a port published to this machine only, as
+  `compose.yaml` publishes it. A request then still has to name this machine
+  as its host.
+
+For a profile's point names in the image, mount the volume the tables were
+fetched into at `/data` and add `--profile`. `--connect-wait 60` keeps trying
+for a minute to connect to an outstation that starts after the master does.
 
 ## What it shows
 
@@ -153,8 +193,9 @@ reach it matters.
   py1815-master console --bind 0.0.0.0:8815 --token "$(openssl rand -hex 16)"
   ```
 
-  It prints an address that carries the token, and refuses any request
-  without it. It speaks plain HTTP, so put it behind something that speaks TLS
+  It prints an address that carries the token, and refuses any request to
+  the service without it. The page's own files need none: they are the same
+  for everyone and say nothing about any outstation. It speaks plain HTTP, so put it behind something that speaks TLS
   if the network between is not yours.
 
 - It takes a request only from its own page. A browser will carry a request
