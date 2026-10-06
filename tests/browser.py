@@ -187,7 +187,16 @@ class Page:
         )
 
     async def goto(self, url: str) -> None:
+        """Go to a page, and return when it has loaded.
+
+        Navigating only starts the load. A test that looked at once would be
+        looking at the page before, or at one with no body yet.
+        """
         await self.call("Page.navigate", url=url)
+        origin = url.split("#")[0].split("?")[0]
+        await self.wait_for(
+            f"location.href.startsWith({origin!r}) && document.readyState === 'complete'"
+        )
 
     async def evaluate(self, expression: str) -> Any:
         """Run an expression in the page and return its value, which must be JSON."""
@@ -202,12 +211,27 @@ class Page:
 
     async def wait_for(self, expression: str, *, timeout: float = 20.0) -> Any:
         """Wait until an expression is truthy in the page, and return its value."""
-        async with asyncio.timeout(timeout):
-            while True:
-                value = await self.evaluate(expression)
-                if value:
-                    return value
-                await asyncio.sleep(0.1)
+        problem: AssertionError | None = None
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    # An expression that cannot be evaluated yet, because what
+                    # it looks at is not there yet, is one that is not yet true.
+                    try:
+                        value = await self.evaluate(expression)
+                    except AssertionError as error:
+                        problem = error
+                    else:
+                        problem = None
+                        if value:
+                            return value
+                    await asyncio.sleep(0.1)
+        except TimeoutError:
+            if problem is not None:
+                raise problem from None
+            raise AssertionError(
+                f"after {timeout} s this was still not true in the page: {expression}"
+            ) from None
 
     async def text(self, selector: str) -> str:
         return str(await self.evaluate(f"document.querySelector({selector!r}).textContent"))
@@ -229,46 +253,53 @@ async def open_page() -> AsyncIterator[Page]:
     with tempfile.TemporaryDirectory(
         prefix="py1815-browser-", ignore_cleanup_errors=True
     ) as profile:
-        process = subprocess.Popen(
-            [
-                browser,
-                "--headless=new",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-default-browser-check",
-                # A hosted runner does not let the browser build its sandbox, and
-                # the only page loaded is this suite's own, from this machine.
-                "--no-sandbox",
-                "--remote-debugging-port=0",
-                f"--user-data-dir={profile}",
-                "about:blank",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            process = subprocess.Popen(
+                [
+                    browser,
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    # A hosted runner does not let the browser build its sandbox, and
+                    # the only page loaded is this suite's own, from this machine.
+                    "--no-sandbox",
+                    "--remote-debugging-port=0",
+                    f"--user-data-dir={profile}",
+                    "about:blank",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            unavailable(f"the browser at {browser} could not be run: {error}")
+            raise  # Not reached: the line above skips or fails.
         socket: _WebSocket | None = None
         try:
             # The browser writes the port it chose to a file in its profile.
             chosen = pathlib.Path(profile) / "DevToolsActivePort"
             try:
                 async with asyncio.timeout(30):
-                    while not chosen.is_file() or not chosen.read_text().strip():
+                    port: int | None = None
+                    while port is None:
                         if process.poll() is not None:
                             raise OSError(f"it exited with status {process.returncode}")
-                        await asyncio.sleep(0.1)
-                    port = int(chosen.read_text().splitlines()[0])
-                    while True:
-                        try:
+                        # The file may not be there yet, may be empty, or may
+                        # be held by the browser while it writes it.
+                        with contextlib.suppress(OSError, ValueError, IndexError):
+                            port = int(chosen.read_text().splitlines()[0])
+                        if port is None:
+                            await asyncio.sleep(0.1)
+                    pages: list[dict[str, Any]] = []
+                    while not pages:
+                        with contextlib.suppress(OSError, ValueError):
                             with urllib.request.urlopen(
                                 f"http://127.0.0.1:{port}/json/list", timeout=5
                             ) as listed:
                                 targets = json.load(listed)
                             pages = [target for target in targets if target["type"] == "page"]
-                            if pages:
-                                break
-                        except OSError:
-                            pass
-                        await asyncio.sleep(0.1)
+                        if not pages:
+                            await asyncio.sleep(0.1)
                 socket = await _WebSocket.connect(pages[0]["webSocketDebuggerUrl"])
             except (OSError, TimeoutError) as error:
                 unavailable(f"the browser at {browser} could not be started: {error}")
