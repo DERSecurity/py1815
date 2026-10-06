@@ -9,7 +9,7 @@ says so explicitly.
 
 Nothing yet.
 
-## [0.2.0] - 2026-10-05
+## [0.2.0] - 2026-10-06
 
 The IEEE 1815.2 DER outstation. A builder assembles one from the profile's point tables
 and a binding to the device, and generates its Device Profile document. With it come
