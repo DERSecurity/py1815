@@ -44,12 +44,17 @@ returns an `Outstation`, which is where the requests are:
 | Request | Asks for |
 |---|---|
 | `integrity_poll()` | Classes 1, 2 and 3, then class 0: every event, then every static value |
-| `scan(kind)` | `"integrity"`, `"events"`, or one class: `"class0"` to `"class3"` |
+| `scan(kind)` | `"integrity"`, `"events"`, one class: `"class0"` to `"class3"`, or `"outputs"` |
 | `read(...)` | Named points, by type and index, or `ALL` of a type, in one request |
 | `request(function, body)` | Any function code, with the octets that follow it |
 
 Requests made at the same time take turns, in the order they were made. An
 outstation carries one request at a time.
+
+An integrity poll does not return what the outputs stand at. The IEEE 1815.2
+profile leaves output status out of class 0, so it is read by naming its
+groups: `scan("outputs")` reads binary and analog output status, and
+`read(analog_outputs=ALL)` reads one of them.
 
 ## What comes back
 
@@ -132,6 +137,7 @@ Nothing is sent on a schedule unless you ask for it:
 
 ```python
 lab.repeat_scan("integrity", 30)   # every thirty seconds
+lab.repeat_scan("outputs", 30)     # output status, which the integrity poll leaves out
 lab.repeat_scan("events", 2)
 lab.repeat_scan("events", None)    # stop
 ```
@@ -215,9 +221,9 @@ A request is one JSON object on one line, and so is its answer:
 | Operation | Does |
 |---|---|
 | `status` | Each outstation: connection, addresses, indications, counts |
-| `add`, `remove` | An outstation, by name. `add` takes `host`, `port`, both link addresses, `integrity_interval` and `event_interval` |
+| `add`, `remove` | An outstation, by name. `add` takes `host`, `port`, both link addresses, `integrity_interval`, `event_interval` and `output_interval`. Output status is read as often as the integrity poll unless `output_interval` says otherwise, or is `null` |
 | `connect`, `disconnect` | Its connection |
-| `scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3` |
+| `scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3`, `outputs` |
 | `read` | Named points by type: `bi`, `bo`, `counter`, `frozen`, `ai`, `ao`, each a list of indices or `"all"` |
 | `values` | What the store holds, with no traffic |
 | `events` | The events received |

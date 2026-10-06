@@ -121,6 +121,11 @@ async def _add_named(service: Service, args: argparse.Namespace) -> bool:
                     "master_address": args.master_address,
                     "integrity_interval": args.integrity_interval,
                     "event_interval": args.event_interval,
+                    **(
+                        {}
+                        if args.output_interval is None
+                        else {"output_interval": args.output_interval or None}
+                    ),
                 },
             }
         )
@@ -205,6 +210,14 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="SECONDS",
         help="repeat an integrity poll of each outstation this often (default: do not)",
+    )
+    parser.add_argument(
+        "--output-interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="repeat a read of output status this often (default: as often as the integrity "
+        "poll, which does not include it; 0 for never)",
     )
     parser.add_argument(
         "--event-interval",

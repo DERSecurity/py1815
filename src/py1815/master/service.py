@@ -338,9 +338,17 @@ class Service:
             options["confirm"] = bool(params["confirm"])
         outstation = await self.master.add(name, connect=False, **options)
         self.attach(outstation)
-        for kind_name, key in (("integrity", "integrity_interval"), ("events", "event_interval")):
-            if params.get(key) is not None:
-                outstation.repeat_scan(kind_name, float(params[key]))
+        intervals = {
+            "integrity": params.get("integrity_interval"),
+            "events": params.get("event_interval"),
+            # Output status is not in an integrity poll, so one that is repeated
+            # would leave the outputs unread. They are read as often, unless
+            # the caller says how often, or says not to with null.
+            "outputs": params.get("output_interval", params.get("integrity_interval")),
+        }
+        for kind_name, interval in intervals.items():
+            if interval is not None:
+                outstation.repeat_scan(kind_name, float(interval))
         self.publish({"event": "outstations"})
         if params.get("connect", True):
             try:

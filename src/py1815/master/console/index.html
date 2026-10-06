@@ -30,6 +30,7 @@
         <label>Master address <input name="master_address" type="number" min="0" max="65519" value="1"></label>
         <label>Integrity poll every (s) <input name="integrity_interval" type="number" min="1" step="any" placeholder="off"></label>
         <label>Event poll every (s) <input name="event_interval" type="number" min="0.2" step="any" placeholder="off"></label>
+        <label>Output status every (s) <input name="output_interval" type="number" min="1" step="any" placeholder="with the integrity poll"></label>
         <button type="submit" class="primary">Add and connect</button>
         <p id="add-error" class="error" role="alert"></p>
       </form>
@@ -108,11 +109,13 @@
               <button data-scan="class1">Class 1</button>
               <button data-scan="class2">Class 2</button>
               <button data-scan="class3">Class 3</button>
+              <button data-scan="outputs" title="Output status is not part of an integrity poll">Output status (groups 10, 40)</button>
             </div>
             <h4>Repeat</h4>
             <form id="repeat-form" class="inline">
               <label>Integrity poll every <input name="integrity" type="number" min="1" step="any" placeholder="off"> s</label>
               <label>Event poll every <input name="events" type="number" min="0.2" step="any" placeholder="off"> s</label>
+              <label>Output status every <input name="outputs" type="number" min="1" step="any" placeholder="off"> s</label>
               <button type="submit">Apply</button>
             </form>
           </div>

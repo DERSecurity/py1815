@@ -39,6 +39,15 @@ SCANS: dict[str, tuple[int, ...]] = {
 }
 
 
+#: The scan that reads what the outputs stand at. Named apart from the scans by
+#: class because it is not one: the IEEE 1815.2 profile leaves output status out
+#: of class 0, so an integrity poll never returns it and it is read by its groups.
+OUTPUTS = "outputs"
+
+#: Every scan a master can be asked for by name.
+SCAN_KINDS: tuple[str, ...] = (*SCANS, OUTPUTS)
+
+
 def class_scan(*classes: int) -> bytes:
     """The headers of a read of the named classes, in the order named."""
     if not classes:
@@ -47,11 +56,13 @@ def class_scan(*classes: int) -> bytes:
 
 
 def scan(kind: str) -> bytes:
-    """The headers of a scan by name: integrity, events, or class0 to class3."""
+    """The headers of a scan by name: integrity, events, class0 to class3, or outputs."""
+    if kind == OUTPUTS:
+        return read_points({PointType.BINARY_OUTPUT: None, PointType.ANALOG_OUTPUT: None})
     try:
         return class_scan(*SCANS[kind])
     except KeyError:
-        raise ValueError(f"{kind!r} is not a scan; one of {', '.join(SCANS)}") from None
+        raise ValueError(f"{kind!r} is not a scan; one of {', '.join(SCAN_KINDS)}") from None
 
 
 def read_points(points: Mapping[PointType, Sequence[int] | None]) -> bytes:

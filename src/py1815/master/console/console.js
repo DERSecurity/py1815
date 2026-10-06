@@ -246,6 +246,7 @@ function renderOverview() {
   if (document.activeElement?.form !== form) {
     form.elements.integrity.value = outstation.repeat.integrity ?? "";
     form.elements.events.value = outstation.repeat.events ?? "";
+    form.elements.outputs.value = outstation.repeat.outputs ?? "";
   }
 }
 
@@ -366,7 +367,9 @@ function renderPoints() {
   }
   $("#point-summary").textContent = rows.length
     ? `${shown} of ${rows.length} ${TYPE_LABELS[state.pointType].toLowerCase()}`
-    : `No ${TYPE_LABELS[state.pointType].toLowerCase()} reported. Run an integrity poll, or read the group.`;
+    : ["bo", "ao"].includes(state.pointType)
+      ? "None reported. Output status is not part of an integrity poll: read it from Commands, or repeat it there."
+      : `No ${TYPE_LABELS[state.pointType].toLowerCase()} reported. Run an integrity poll, or read the group.`;
 }
 
 function ageText(age) {
@@ -700,7 +703,7 @@ function wire() {
   $("#repeat-form").addEventListener("submit", async (submitted) => {
     submitted.preventDefault();
     const form = submitted.target;
-    for (const kind of ["integrity", "events"]) {
+    for (const kind of ["integrity", "events", "outputs"]) {
       const value = form.elements[kind].value;
       try {
         await ask(value === "" ? `${kind} scan no longer repeated` : `${kind} scan every ${value} s`,

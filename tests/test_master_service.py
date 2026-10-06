@@ -19,7 +19,7 @@ from py1815.master.service import (
     flag_names,
 )
 from py1815.profile import der, load
-from py1815.profile.model import Composition
+from py1815.profile.model import Composition, Kind
 from py1815.server import OutstationServer
 
 
@@ -202,6 +202,44 @@ class TestOperations:
                     break
                 await asyncio.sleep(0.02)
         assert status["repeat"] == {"events": 0.05}
+
+    @pytest.mark.asyncio
+    async def test_output_status_is_read_as_often_as_the_integrity_poll(self, service, outstation):
+        """An integrity poll does not return it, so one repeated alone leaves the outputs unread."""
+        simulation, server = outstation
+        await _added(service, server, integrity_interval=30)
+
+        async with asyncio.timeout(5):
+            while True:
+                (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+                if lab["points"]["ao"] and lab["points"]["bo"]:
+                    break
+                await asyncio.sleep(0.02)
+
+        assert lab["repeat"] == {"integrity": 30.0, "outputs": 30.0}
+        assert lab["points"]["ao"] == len(simulation.outstation.served(Kind.AO))
+        assert lab["points"]["bo"] == len(simulation.outstation.served(Kind.BO))
+
+    @pytest.mark.asyncio
+    async def test_unless_the_caller_says_how_often_or_not_at_all(self, service, outstation):
+        _, server = outstation
+        await _added(service, server, integrity_interval=30, output_interval=7)
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["repeat"] == {"integrity": 30.0, "outputs": 7.0}
+        await _ask(service, "remove", "lab")
+
+        await _added(service, server, integrity_interval=30, output_interval=None)
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["repeat"] == {"integrity": 30.0}
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_repeated_for_an_outstation_added_with_no_interval(
+        self, service, outstation
+    ):
+        _, server = outstation
+        await _added(service, server)
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["repeat"] == {} and lab["counts"] == {}
 
     @pytest.mark.asyncio
     async def test_disconnect_connect_and_remove(self, service, outstation):
@@ -510,11 +548,17 @@ class TestTheCommand:
         try:
             (added,) = (await _ask(service, "status"))["result"]["outstations"]
             assert added["name"] == cli.DEMO_NAME and added["connected"] and added["named"]
-            assert added["repeat"] == {"integrity": 30.0, "events": 2.0}
+            assert added["repeat"] == {"integrity": 30.0, "events": 2.0, "outputs": 30.0}
             scan = (await _ask(service, "scan", cli.DEMO_NAME, kind="class0"))["result"]
             assert all(o["name"] for o in scan["objects"] if o["type"] is not None)
         finally:
             await demo.stop()
+
+    def test_output_status_is_read_with_the_integrity_poll_unless_told_otherwise(self):
+        parser = cli._parser()
+        assert parser.parse_args(["serve"]).output_interval is None
+        assert parser.parse_args(["serve", "--output-interval", "0"]).output_interval == 0
+        assert parser.parse_args(["serve", "--output-interval", "5"]).output_interval == 5
 
     def test_an_outstation_is_named_on_the_command_line_as_name_host_port(self):
         args = cli._parser().parse_args(["serve", "--outstation", "lab=10.0.0.5:20000"])

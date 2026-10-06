@@ -69,6 +69,17 @@ class TestAnIntegrityPoll:
         assert len(master.store.points(PointType.ANALOG_OUTPUT)) == _served(simulation, Kind.AO)
         assert len(master.store.points(PointType.BINARY_OUTPUT)) == _served(simulation, Kind.BO)
 
+    def test_the_outputs_scan_reads_both_kinds_of_output_status(self, simulation):
+        master = Loopback(simulation.outstation.session())
+
+        scan = master.scan("outputs")
+
+        assert scan.complete
+        assert scan.request == bytes.fromhex("C0 01 0A 00 06 28 00 06")
+        assert len(master.store.points(PointType.BINARY_OUTPUT)) == _served(simulation, Kind.BO)
+        assert len(master.store.points(PointType.ANALOG_OUTPUT)) == _served(simulation, Kind.AO)
+        assert master.store.points(PointType.ANALOG_INPUT) == {}
+
     def test_a_response_of_many_fragments_is_confirmed_through_to_the_end(self):
         point_map = load.resolve(for_reference_der(), Composition())
         device = der.ReferenceDer()

@@ -50,7 +50,12 @@ class Operations(Generic[ResultT]):
         return self._exchange(function, body)
 
     def scan(self, kind: str) -> ResultT:
-        """Read by class: ``integrity``, ``events``, or ``class0`` to ``class3``."""
+        """Read by name: ``integrity``, ``events``, ``class0`` to ``class3``, or ``outputs``.
+
+        ``outputs`` reads binary and analog output status by their groups. It
+        is not part of an integrity poll: the IEEE 1815.2 profile leaves
+        output status out of class 0.
+        """
         return self._exchange(FunctionCode.READ, requests.scan(kind))
 
     def integrity_poll(self) -> ResultT:
