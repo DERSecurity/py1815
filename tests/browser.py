@@ -37,6 +37,10 @@ import pytest
 BROWSER_VARIABLE = "PY1815_BROWSER"
 REQUIRE_VARIABLE = "PY1815_REQUIRE_BROWSER"
 
+#: How long a browser is given to start. A first start on a machine that has
+#: just been made, as a CI runner has, was seen to take more than half a minute.
+START_SECONDS = 120
+
 _NAMES = (
     "google-chrome",
     "google-chrome-stable",
@@ -279,7 +283,7 @@ async def open_page() -> AsyncIterator[Page]:
             # The browser writes the port it chose to a file in its profile.
             chosen = pathlib.Path(profile) / "DevToolsActivePort"
             try:
-                async with asyncio.timeout(30):
+                async with asyncio.timeout(START_SECONDS):
                     port: int | None = None
                     while port is None:
                         if process.poll() is not None:
@@ -301,7 +305,9 @@ async def open_page() -> AsyncIterator[Page]:
                         if not pages:
                             await asyncio.sleep(0.1)
                 socket = await _WebSocket.connect(pages[0]["webSocketDebuggerUrl"])
-            except (OSError, TimeoutError) as error:
+            except TimeoutError:
+                unavailable(f"the browser at {browser} had not started after {START_SECONDS} s")
+            except OSError as error:
                 unavailable(f"the browser at {browser} could not be started: {error}")
             assert socket is not None
             page = Page(socket)
