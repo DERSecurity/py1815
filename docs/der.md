@@ -22,6 +22,11 @@ enable (active power limit, charge/discharge, constant vars, constant power
 factor, volt-var and volt-watt). The repository's `Dockerfile` runs the same thing in a container;
 the README has the commands.
 
+The simulation exists to make the points mean something, so that a master, a
+test or a demonstration has values that move and controls that answer. It is
+not a model of a DER, and it will not become one: see
+[What is out of scope](#what-is-out-of-scope).
+
 `py1815-der points` lists every point it serves. `py1815-der run --help` has
 the link addresses, the bind address, and options for resolving equipment
 blocks (`--inverters 2`, and so on). `py1815-der run --unsolicited` serves it
@@ -494,11 +499,30 @@ A session built without the profile takes its buffers from
 `EventBuffers(capacity=...)`, which has its own default and the same cost per
 event.
 
+## What is out of scope
+
+This package is the protocol and the profile's point map. It is not the DER.
+
+- **DER functions (IEEE 1815.2 clause 6).** The points of every function are
+  served, and what the profile says about the points is done here: support
+  is derived from what you bind, and a disabled function's inputs go out
+  without `ONLINE`. What a DER does once a function is enabled (limit its
+  power, hold a power factor, ride through a disturbance, ramp, revert
+  after a timeout) is the device's. You bind the function's outputs to
+  whatever carries it out.
+- **Curves (clause 6.1.3).** `CurveStore` holds the curves and enforces the
+  rules on the curve block. Following a curve, with its units, reference,
+  response time and hysteresis, is the device's.
+- **Schedules.** The schedule blocks are ordinary points to the builder, and
+  nothing here runs a schedule.
+
+For DER behavior worth testing a master against, bind a DER simulator or the
+device itself behind the outstation. The simulated DER in this package
+answers to six functions and follows two curves by straight lines, which is
+enough to show the points working and is the whole of what it will do.
+
 ## What is not there yet
 
-- **Schedules as objects.** The schedule blocks are ordinary points to the
-  builder, and nothing runs a schedule. Curves have a store (see above);
-  hysteresis, where a curve doubles back, is not followed.
 - **Floating-point variations.** Inputs are served as integers, scaled by the
   tables, which is the profile's baseline. A floating-point setpoint is
   accepted and taken as engineering units.

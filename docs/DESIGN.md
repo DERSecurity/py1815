@@ -16,6 +16,15 @@ requiring them. Control objects are sharper still: 32-bit analog outputs exceed 
 once controls are in scope. Level 2 is therefore the floor, and every object served above it
 belongs in the device profile document as an agreed extension.
 
+**The DER is out of scope.** The library carries the profile's points and what the profile
+says of the points themselves. What a DER does with them is not here: the DER functions of
+IEEE 1815.2 clause 6, the following of a curve (6.1.3), schedules, ramps, reversion timeouts
+and ride-through are the behavior of a device, and a caller binds the points to whatever has
+that behavior, a DER simulator or the device itself. The simulated DER shipped here answers
+to a few functions so that the points can be seen working, and is deliberately no more than
+that. Growing it into a model of a DER would put a second, weaker implementation of DER
+behavior beside every real one this library is bound to.
+
 ## Decisions
 
 **D1 -- Pure Python, standard library only.** No native extension, no bindings, no compiled
