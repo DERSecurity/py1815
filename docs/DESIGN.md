@@ -1188,6 +1188,21 @@ network that reaches nothing, and tells nobody that it is running.
 *Trade-off:* the fonts of the project's site are named and not fetched, so the console
 is set in whatever the machine has when they are not installed.
 
+**D80 -- A control is sent once, and a service commands only when started to.** The
+master never repeats a control and no task of its own sends one. After a select it sends
+the operate only if the outstation echoed every control unchanged and accepted each; a
+response that does not arrive is reported as not known, which is not a refusal, and the
+caller decides what follows, because only the caller knows whether operating twice is
+harmless. A select and its operate hold the association's turn together, so a scan on a
+schedule cannot fall between them and void the select. The service refuses every
+operation that changes an outstation unless it was started with `--allow-control`:
+outputs, counters, the clock, the restart indication, and a request by any function
+code that is not a read. The last is the one that matters, since a way to send any
+fragment is a way to send an operate. A master is pointed at real equipment in a lab,
+and the default has to be the one nobody regrets.
+*Trade-off:* a caller who wants a retry writes it, and a demonstration has to be
+started with a flag before it can show a control.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

@@ -51,6 +51,16 @@ async def service():
         await made.close()
 
 
+@pytest_asyncio.fixture
+async def commanding():
+    """A service started to command, as ``--allow-control`` starts it."""
+    made = Service(allow_control=True)
+    try:
+        yield made
+    finally:
+        await made.close()
+
+
 async def _ask(service: Service, op: str, outstation: str | None = None, **params):
     message = {"id": 7, "op": op, "params": params}
     if outstation is not None:
@@ -358,7 +368,10 @@ class TestOperations:
         assert (await _ask(service, "connect", "lab"))["result"]["connected"]
         assert (await _ask(service, "scan", "lab", kind="class0"))["ok"]
         assert (await _ask(service, "remove", "lab"))["result"] == {"removed": "lab"}
-        assert (await _ask(service, "status"))["result"] == {"outstations": []}
+        assert (await _ask(service, "status"))["result"] == {
+            "allow_control": False,
+            "outstations": [],
+        }
 
 
 class TestWhatGoesWrongIsAnAnswer:
@@ -454,6 +467,212 @@ class TestWhatHappensUnasked:
         service.unsubscribe(queue)
         await _added(service, server)
         assert queue.empty()
+
+
+COMMANDS = [
+    ("operate", {"points": {"ao": {"87": 20}}}),
+    ("write_time", {}),
+    ("clear_restart", {}),
+    ("freeze", {}),
+    ("restart", {}),
+    ("request", {"function": "DIRECT_OPERATE", "body": "2902170157140000"}),
+    ("request", {"function": "WRITE", "body": "500100070700"}),
+    ("request", {"function": 13}),
+]
+
+
+class TestCommandingIsOffUntilTurnedOn:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("op", "params"), COMMANDS)
+    async def test_an_operation_that_commands_is_refused_and_nothing_is_sent(
+        self, service, outstation, op, params
+    ):
+        simulation, server = outstation
+        await _added(service, server)
+        frames = (await _ask(service, "status"))["result"]["outstations"][0]["frames"]
+
+        refused = await _ask(service, op, "lab", **params)
+
+        assert not refused["ok"] and refused["error"]["kind"] == "not_allowed"
+        assert "--allow-control" in refused["error"]["message"]
+        assert (await _ask(service, "status"))["result"]["outstations"][0]["frames"] == frames
+        assert simulation.outstation.value(Kind.AO, 87) == 100.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "function", ["READ", "ENABLE_UNSOLICITED", "DISABLE_UNSOLICITED", "DELAY_MEASURE"]
+    )
+    async def test_a_request_that_only_reads_is_still_sent(self, service, outstation, function):
+        await _added(service, outstation[1])
+        body = "" if function == "DELAY_MEASURE" else "3c0206"
+        answer = await _ask(service, "request", "lab", function=function, body=body)
+        assert answer["ok"], answer
+
+    @pytest.mark.asyncio
+    async def test_what_is_wrong_with_a_request_is_said_before_that_it_is_not_allowed(
+        self, service, outstation
+    ):
+        await _added(service, outstation[1])
+        answer = await _ask(service, "operate", "lab", points={"ao": {"87": "seven"}})
+        assert answer["error"]["kind"] == "request"
+        assert "takes a number" in answer["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_the_service_says_whether_it_commands(self, service, commanding):
+        assert (await _ask(service, "status"))["result"]["allow_control"] is False
+        assert (await _ask(commanding, "status"))["result"]["allow_control"] is True
+
+    def test_the_command_line_turns_it_on(self):
+        parser = cli._parser()
+        for command in ("console", "serve"):
+            assert parser.parse_args([command]).allow_control is False
+            assert parser.parse_args([command, "--allow-control"]).allow_control is True
+
+    @pytest.mark.asyncio
+    async def test_a_console_started_to_command_says_so(self, capsys, monkeypatch):
+        monkeypatch.delenv(cli.TOKEN_VARIABLE, raising=False)
+        args = cli._parser().parse_args(["console", "--bind", "127.0.0.1:0", "--allow-control"])
+        running = asyncio.create_task(cli.run_console(args))
+        try:
+            async with asyncio.timeout(10):
+                while "console at" not in (printed := capsys.readouterr().out):
+                    await asyncio.sleep(0.05)
+                printed += capsys.readouterr().out
+        finally:
+            running.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await running
+        assert "commanding is on" in printed
+
+
+class TestCommands:
+    @pytest.mark.asyncio
+    async def test_an_operate_reports_each_control(self, commanding, outstation):
+        simulation, server = outstation
+        await _added(commanding, server)
+
+        answer = await _ask(
+            commanding, "operate", "lab", points={"bo": {"17": True}, "ao": {"87": 20}}
+        )
+
+        assert answer["ok"], answer
+        result = answer["result"]
+        assert (result["mode"], result["operated"], result["accepted"]) == ("direct", True, True)
+        assert [exchange["function"] for exchange in result["exchanges"]] == ["DIRECT_OPERATE"]
+        assert result["statuses"] == [
+            {
+                "type": "bo",
+                "index": 17,
+                "name": None,
+                "variation": 1,
+                "value": 3,
+                "status": "SUCCESS",
+                "echoed": True,
+            },
+            {
+                "type": "ao",
+                "index": 87,
+                "name": None,
+                "variation": 2,
+                "value": 20,
+                "status": "SUCCESS",
+                "echoed": True,
+            },
+        ]
+        assert simulation.outstation.value(Kind.AO, 87) == 20
+
+    @pytest.mark.asyncio
+    async def test_a_select_and_operate_is_two_exchanges(self, commanding, outstation):
+        await _added(commanding, outstation[1])
+        result = (
+            await _ask(commanding, "operate", "lab", points={"ao": {"87": 30}}, mode="select")
+        )["result"]
+        assert [exchange["function"] for exchange in result["exchanges"]] == ["SELECT", "OPERATE"]
+        assert result["accepted"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_is_an_answer_and_not_an_error(self, commanding, outstation):
+        await _added(commanding, outstation[1])
+        await _ask(commanding, "operate", "lab", points={"bo": {"0": True}})
+        answer = await _ask(commanding, "operate", "lab", points={"ao": {"87": 30}}, mode="select")
+        assert answer["ok"]
+        result = answer["result"]
+        assert (result["operated"], result["accepted"]) == (False, False)
+        assert result["statuses"][0]["status"] == "BLOCKED"
+
+    @pytest.mark.asyncio
+    async def test_no_acknowledgment_leaves_the_outcome_unknown(self, commanding, outstation):
+        simulation, server = outstation
+        await _added(commanding, server)
+        result = (
+            await _ask(
+                commanding, "operate", "lab", points={"ao": {"87": 40}}, mode="direct_no_ack"
+            )
+        )["result"]
+        assert result["accepted"] is None and result["statuses"][0]["status"] is None
+        assert result["exchanges"][0]["outcome"] == "sent"
+        await asyncio.sleep(0.2)
+        assert simulation.outstation.value(Kind.AO, 87) == 40
+
+    @pytest.mark.asyncio
+    async def test_a_control_is_named_when_the_outstation_has_a_profile(
+        self, commanding, outstation, point_map
+    ):
+        await _added(commanding, outstation[1])
+        commanding.set_profile("lab", point_map)
+        result = (await _ask(commanding, "operate", "lab", points={"ao": {"87": 20}}))["result"]
+        assert result["statuses"][0]["name"] == point_map.point(Kind.AO, 87).name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("params", "message"),
+        [
+            ({}, "names outputs"),
+            ({"points": {"ai": {"1": 2}}}, "not an output"),
+            ({"points": {"ao": [1, 2]}}, "values by index"),
+            ({"points": {"ao": {"87": 1}}, "mode": "twice"}, "not a way to operate"),
+            ({"points": {"bo": {"1": "sideways"}}}, "binary output can be told"),
+        ],
+    )
+    async def test_an_operate_that_cannot_be_made_is_refused(
+        self, commanding, outstation, params, message
+    ):
+        await _added(commanding, outstation[1])
+        answer = await _ask(commanding, "operate", "lab", **params)
+        assert answer["error"]["kind"] == "request" and message in answer["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_the_time_the_restart_indication_and_a_freeze(self, commanding, outstation):
+        await _added(commanding, outstation[1])
+        written = (await _ask(commanding, "write_time", "lab", time_ms=1_700_000_000_000))["result"]
+        assert written["function"] == "WRITE" and "NEED_TIME" not in written["indications"]
+        cleared = (await _ask(commanding, "clear_restart", "lab"))["result"]
+        assert "DEVICE_RESTART" not in cleared["indications"]
+        frozen = (await _ask(commanding, "freeze", "lab", clear=True))["result"]
+        assert frozen["function"] == "FREEZE_CLEAR" and frozen["outcome"] == "complete"
+        unanswered = (await _ask(commanding, "freeze", "lab", respond=False))["result"]
+        assert unanswered["outcome"] == "sent"
+        bad = await _ask(commanding, "write_time", "lab", time_ms="noon")
+        assert bad["error"]["kind"] == "request"
+
+    @pytest.mark.asyncio
+    async def test_a_restart_the_outstation_declines_is_an_answer(self, commanding, outstation):
+        await _added(commanding, outstation[1])
+        answer = await _ask(commanding, "restart", "lab", kind="warm")
+        assert answer["ok"] and "FUNC_NOT_SUPPORTED" in answer["result"]["indications"]
+        assert (await _ask(commanding, "restart", "lab", kind="tepid"))["error"][
+            "kind"
+        ] == "request"
+
+    @pytest.mark.asyncio
+    async def test_any_request_can_be_sent_by_function_code(self, commanding, outstation):
+        simulation, server = outstation
+        await _added(commanding, server)
+        answer = await _ask(
+            commanding, "request", "lab", function="DIRECT_OPERATE", body="2902170157140000"
+        )
+        assert answer["ok"]
+        assert simulation.outstation.value(Kind.AO, 87) == 20
 
 
 class TestTheLineService:
@@ -573,7 +792,11 @@ class TestOverHttp:
         body = json.dumps({"id": 3, "op": "status"}).encode()
         status, headers, content = await _http(http.port, "POST", "/api", body=body, headers=JSON)
         assert status == 200 and headers["Content-Type"] == "application/json"
-        assert json.loads(content) == {"id": 3, "ok": True, "result": {"outstations": []}}
+        assert json.loads(content) == {
+            "id": 3,
+            "ok": True,
+            "result": {"allow_control": False, "outstations": []},
+        }
 
     @pytest.mark.asyncio
     async def test_a_request_from_another_site_is_refused(self, http):

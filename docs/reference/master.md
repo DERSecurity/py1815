@@ -12,6 +12,10 @@ guides; this is the reference.
 
 ::: py1815.master.operations
 
+## Commands
+
+::: py1815.master.controls
+
 ## In one process
 
 ::: py1815.master.loopback

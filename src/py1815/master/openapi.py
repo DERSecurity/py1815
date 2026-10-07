@@ -26,6 +26,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+from py1815.master.controls import OPERATIONS as OPERATIONS_BY_NAME
 from py1815.master.requests import SCAN_KINDS
 
 #: Where the document is committed, and served from.
@@ -161,6 +162,54 @@ SCHEMAS: dict[str, Schema] = {
         required=["group", "variation", "index", "value", "flags", "event"],
         description="One object out of a response, decoded.",
     ),
+    "ControlStatus": _object(
+        {
+            "type": {"type": "string", "enum": ["bo", "ao"]},
+            "index": _INDEX,
+            "name": _nullable(_STRING),
+            "variation": _INTEGER,
+            "value": {
+                "description": "An analog output's value as sent, or a binary output's "
+                "control code.",
+            },
+            "status": {
+                **_nullable(_STRING),
+                "description": "The status the outstation answered with, by name, as in "
+                "SUCCESS or NOT_SUPPORTED. Null if the response did not carry this control.",
+            },
+            "echoed": {
+                "type": "boolean",
+                "description": "Whether what came back was the control as sent, apart from "
+                "its status.",
+            },
+        },
+        required=["type", "index", "variation", "value", "status", "echoed"],
+        description="What an outstation said about one control.",
+    ),
+    "Operated": _object(
+        {
+            "mode": {"type": "string", "enum": ["direct", "select", "direct_no_ack"]},
+            "operated": {
+                "type": "boolean",
+                "description": "Whether a request that operates was sent. False for a select "
+                "the outstation refused, after which no operate is sent.",
+            },
+            "accepted": {
+                **_nullable(_BOOLEAN),
+                "description": "Whether the outstation accepted every control. Null when it "
+                "never said: the request takes no acknowledgment, or the response did not "
+                "arrive. That is not a refusal, and the output may have been operated.",
+            },
+            "statuses": {"type": "array", "items": _ref("ControlStatus")},
+            "exchanges": {
+                "type": "array",
+                "items": _ref("Exchange"),
+                "description": "Each request made, in order: one, or a select and an operate.",
+            },
+        },
+        required=["mode", "operated", "accepted", "statuses", "exchanges"],
+        description="A control request, or the two of a select and operate, and what came of them.",
+    ),
     "Exchange": _object(
         {
             "function": {"type": "string", "description": "The request's function code."},
@@ -280,7 +329,7 @@ SCHEMAS: dict[str, Schema] = {
         {
             "kind": {
                 "type": "string",
-                "enum": ["request", "connection"],
+                "enum": ["request", "connection", "not_allowed"],
                 "description": "`request`: the message could not be acted on. `connection`: "
                 "there was no connection to ask over.",
             },
@@ -334,8 +383,15 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "tag": "Outstations",
         "params": _object({}),
         "result": _object(
-            {"outstations": {"type": "array", "items": _ref("Outstation")}},
-            required=["outstations"],
+            {
+                "allow_control": {
+                    "type": "boolean",
+                    "description": "Whether this service carries out the operations that "
+                    "command an outstation. When false they are refused as `not_allowed`.",
+                },
+                "outstations": {"type": "array", "items": _ref("Outstation")},
+            },
+            required=["allow_control", "outstations"],
         ),
         "example": {},
     },
@@ -485,6 +541,9 @@ OPERATIONS: dict[str, dict[str, Any]] = {
     },
     "request": {
         "summary": "Send any request, by function code",
+        "description": "READ, ENABLE_UNSOLICITED, DISABLE_UNSOLICITED and DELAY_MEASURE are "
+        "always sent. Any other function code commands the outstation, and is refused as "
+        "`not_allowed` unless the service was started to command.",
         "tag": "Reading",
         "params": _outstation(
             {
@@ -502,6 +561,124 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         ),
         "result": _ref("Exchange"),
         "example": {"outstation": "lab", "function": "DELAY_MEASURE"},
+    },
+    "operate": {
+        "summary": "Command outputs, by type and index, in one request",
+        "description": "Binary outputs are sent first, and each in the order given. Nothing "
+        "is sent twice: a response that does not arrive is reported, with `accepted` null, "
+        "and whether to try again is the caller's to decide.",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "points": _object(
+                    {
+                        "bo": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "oneOf": [
+                                    _BOOLEAN,
+                                    {"type": "string", "enum": list(OPERATIONS_BY_NAME)},
+                                    _object(
+                                        {
+                                            "operation": {
+                                                "type": "string",
+                                                "enum": list(OPERATIONS_BY_NAME),
+                                            },
+                                            "count": {"type": "integer", "minimum": 0},
+                                            "on_time_ms": {"type": "integer", "minimum": 0},
+                                            "off_time_ms": {"type": "integer", "minimum": 0},
+                                        },
+                                        required=["operation"],
+                                    ),
+                                ]
+                            },
+                            "description": "By index: true or false for a latch on or off, "
+                            "an operation by name, or an operation with its count and times.",
+                        },
+                        "ao": {
+                            "type": "object",
+                            "additionalProperties": {"oneOf": [_NUMBER, _STRING]},
+                            "description": "By index: a number, or a numeric string.",
+                        },
+                    },
+                    description="The outputs to command. At least one.",
+                ),
+                "mode": {
+                    "type": "string",
+                    "enum": ["direct", "select", "direct_no_ack"],
+                    "default": "direct",
+                    "description": "`direct` is a direct operate. `select` is a select "
+                    "followed by an operate, sent only if the outstation echoed every control "
+                    "unchanged and accepted each one. `direct_no_ack` is a direct operate the "
+                    "outstation does not answer.",
+                },
+                "variation": {
+                    **_nullable({"type": "integer", "enum": [1, 2, 3, 4]}),
+                    "description": "The analog output variation: 1 or 2 for a 32- or 16-bit "
+                    "integer, 3 or 4 for a single or double float. Left out, a whole number "
+                    "is sent as an integer and anything else as a float. An outstation that "
+                    "scales its points takes an integer as the transmitted value and a float "
+                    "as the engineering one.",
+                },
+            },
+            required=["points"],
+        ),
+        "result": _ref("Operated"),
+        "example": {
+            "outstation": "lab",
+            "points": {"ao": {"88": 500}, "bo": {"17": True}},
+            "mode": "select",
+        },
+    },
+    "write_time": {
+        "summary": "Set an outstation's clock",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "time_ms": {
+                    **_nullable({"type": "integer", "minimum": 0}),
+                    "description": "Milliseconds since the epoch, UTC. Now, when left out.",
+                }
+            }
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab"},
+    },
+    "clear_restart": {
+        "summary": "Clear an outstation's restart indication",
+        "tag": "Commanding",
+        "params": _outstation(),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab"},
+    },
+    "freeze": {
+        "summary": "Freeze an outstation's counters",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "clear": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Clear each counter as it is frozen.",
+                },
+                "respond": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "False for the request an outstation does not answer.",
+                },
+            }
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "clear": False},
+    },
+    "restart": {
+        "summary": "Ask an outstation to restart",
+        "tag": "Commanding",
+        "params": _outstation(
+            {"kind": {"type": "string", "enum": ["cold", "warm"], "default": "cold"}}
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "kind": "cold"},
     },
     "enable_unsolicited": {
         "summary": "Ask an outstation to report event classes without being polled",
@@ -571,6 +748,11 @@ OPERATIONS: dict[str, dict[str, Any]] = {
 _TAGS = [
     ("Outstations", "The outstations a master speaks to, and their connections."),
     ("Reading", "Polls, reads, and what has been read."),
+    (
+        "Commanding",
+        "Operations that change an outstation. Refused as `not_allowed` unless the service "
+        "was started with `--allow-control`.",
+    ),
     ("Unsolicited responses", "Reporting an outstation does without being polled."),
     ("Traffic", "The frames that crossed the wire."),
     ("Service", "The service itself."),

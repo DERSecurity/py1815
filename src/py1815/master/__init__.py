@@ -30,6 +30,7 @@ from py1815.master.association import (
     Outcome,
     Unsolicited,
 )
+from py1815.master.controls import Command, Mode, Operated, PointStatus
 from py1815.master.loopback import Loopback
 from py1815.master.operations import ALL
 from py1815.master.store import PointValue, Store
@@ -37,15 +38,19 @@ from py1815.master.store import PointValue, Store
 __all__ = [
     "ALL",
     "Busy",
+    "Command",
     "Decoded",
     "DecodedObject",
     "Exchange",
     "Loopback",
     "Master",
     "MasterAssociation",
+    "Mode",
     "NotConnected",
+    "Operated",
     "Outcome",
     "Outstation",
+    "PointStatus",
     "PointType",
     "PointValue",
     "Store",

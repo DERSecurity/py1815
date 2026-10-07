@@ -11,7 +11,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from py1815.application import all_objects_header, class_header, index_list_header
+from py1815.application import (
+    FunctionCode,
+    QualifierCode,
+    all_objects_header,
+    class_header,
+    index_list_header,
+)
 from py1815.decode import PointType
 
 #: The group that holds each point type's present value.
@@ -46,6 +52,41 @@ OUTPUTS = "outputs"
 
 #: Every scan a master can be asked for by name.
 SCAN_KINDS: tuple[str, ...] = (*SCANS, OUTPUTS)
+
+
+#: Requests that change nothing at the outstation but what it reports and
+#: when. Every other function code commands it in some way: an output, a
+#: counter, its clock, its restart indication, or the device itself.
+READING_FUNCTIONS = frozenset(
+    {
+        FunctionCode.READ,
+        FunctionCode.ENABLE_UNSOLICITED,
+        FunctionCode.DISABLE_UNSOLICITED,
+        FunctionCode.DELAY_MEASURE,
+    }
+)
+
+#: The internal indication a master clears once it has seen a restart.
+DEVICE_RESTART_INDEX = 7
+
+
+def write_time(milliseconds: int) -> bytes:
+    """The object of a time write: milliseconds since the epoch, UTC, in 48 bits."""
+    if not 0 <= milliseconds < 1 << 48:
+        raise ValueError("a time is milliseconds since the epoch, in 48 bits")
+    return bytes([50, 1, QualifierCode.UINT8_COUNT, 1]) + milliseconds.to_bytes(6, "little")
+
+
+def clear_restart() -> bytes:
+    """The object that clears the restart indication: bit 7 of the indications, written as 0."""
+    return bytes(
+        [80, 1, QualifierCode.UINT8_START_STOP, DEVICE_RESTART_INDEX, DEVICE_RESTART_INDEX, 0]
+    )
+
+
+def freeze_counters() -> bytes:
+    """The header of a freeze: every counter."""
+    return all_objects_header(STATIC_GROUPS[PointType.COUNTER], DEFAULT_VARIATION)
 
 
 def class_scan(*classes: int) -> bytes:

@@ -53,6 +53,10 @@ disagree.
 | `POST /api/values` | What has been read, with no traffic |
 | `POST /api/events` | The events received |
 | `POST /api/request` | Any request, by function code |
+| `POST /api/operate` | Outputs commanded, by type and index |
+| `POST /api/write_time`, `POST /api/clear_restart` | The clock, and the restart indication |
+| `POST /api/freeze` | Counters frozen |
+| `POST /api/restart` | A cold or a warm restart |
 | `POST /api/enable_unsolicited`, `POST /api/disable_unsolicited` | Reporting by event class |
 | `POST /api/repeat` | A scan on a schedule, or an end to one |
 | `POST /api/trace` | The frames sent and received |
@@ -73,12 +77,13 @@ else's.
 {"id": null, "ok": false, "error": {"kind": "request", "message": "there is no outstation named 'lab'"}}
 ```
 
-`ok` says whether the operation was carried out. It is false in two cases:
+`ok` says whether the operation was carried out. It is false in three cases:
 
 | `error.kind` | Means |
 |---|---|
 | `request` | The message could not be acted on: an operation that does not exist, an outstation nobody added, a parameter of the wrong kind |
 | `connection` | There was no connection to ask over, or one could not be made |
+| `not_allowed` | The operation commands the outstation, and the service was not started to. See [Commanding](#commanding) |
 
 An outstation that did not answer is neither. The operation was carried out,
 `ok` is true, and the result's `outcome` is `timeout`. The same goes for a
@@ -91,6 +96,56 @@ names what it refused with.
 | `timeout` | Nothing more arrived in time. What did arrive is in the result |
 | `sent` | The request takes no response, and was sent |
 | `abandoned` | The connection ended while the request was outstanding |
+
+## Commanding
+
+A service reads unless it is started to command:
+
+```bash
+py1815-master console --allow-control
+py1815-master serve --allow-control
+```
+
+Without that, every operation that changes an outstation is refused with
+`not_allowed` and nothing is sent: `operate`, `write_time`, `clear_restart`,
+`freeze`, `restart`, and a `request` by any function code other than `READ`,
+`ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE`. `status` says
+which it is, in `allow_control`.
+
+```bash
+curl -s http://127.0.0.1:8815/api/operate -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab", "points": {"bo": {"17": true}, "ao": {"88": 500}}, "mode": "select"}'
+```
+
+```json
+{"id": null, "ok": true, "result": {
+  "mode": "select", "operated": true, "accepted": true,
+  "statuses": [
+    {"type": "bo", "index": 17, "name": null, "variation": 1, "value": 3,
+     "status": "SUCCESS", "echoed": true},
+    {"type": "ao", "index": 88, "name": null, "variation": 2, "value": 500,
+     "status": "SUCCESS", "echoed": true}],
+  "exchanges": [{"function": "SELECT", "outcome": "complete"},
+                {"function": "OPERATE", "outcome": "complete"}]}}
+```
+
+| Field | Holds |
+|---|---|
+| `points` | The outputs: `bo` and `ao`, each an object of values by index. A binary output takes `true` or `false` for a latch, or an operation by name; an analog output takes a number |
+| `mode` | `direct`, `select` for a select and then an operate, or `direct_no_ack` |
+| `operated` | Whether a request that operates was sent. False after a select the outstation refused |
+| `accepted` | True when every control was accepted, false when one was refused, null when the outstation never said |
+| `statuses` | For each control, the status the outstation answered with, by name, and whether it echoed the control as sent |
+| `exchanges` | Each request made, as any other exchange is described |
+
+A refused control is an answer, with `ok` true: the operation was carried out
+and the outstation said no. `accepted` is null when the request takes no
+acknowledgment or the response did not arrive. The service never sends a
+control twice.
+
+A whole number is sent as an integer and anything else as a float, unless
+`variation` says which. An outstation that scales its points takes an integer
+as the transmitted value and a float as the engineering one.
 
 ## Values
 

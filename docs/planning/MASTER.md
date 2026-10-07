@@ -193,7 +193,8 @@ through the association:
 Numbered M here. Each takes the next number in [DESIGN.md](../DESIGN.md) when
 the phase that builds it lands, so two plans in flight do not claim one number.
 M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
-M10 as D77, and the listening half of M9 as D78.
+M10 as D77, the listening half of M9 as D78, and M5 with the commanding half
+of M9 as D80.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -527,6 +528,11 @@ done means.
 4. **Controls and the rest of the requests.** Select and operate, direct
    operate, freezes, the time, the restart indication, restart. *Done when*
    every request in *Scope* has a test against a `Session` and a pinned frame.
+   *Built:* `operate` in its three modes, with the rule for when a select is
+   followed and a status for each control, the time write, clearing the restart
+   indication, the freezes and restart, each against a session and with its
+   frame pinned. *Left:* broadcast, and the delay measurement before a time
+   write.
 5. **Tasks and unsolicited responses.** The table in *The association*, and
    `manual=True`. *Done when* a master left alone keeps a store current through
    a restart of the outstation, and a manual one sends nothing unasked.
@@ -535,8 +541,9 @@ done means.
    rig asks of a master* runs as a test over the socket. *Built,* for what the
    master can do so far: every reading operation, over a line socket and over
    HTTP with a route for each, described in an OpenAPI document the tests hold
-   the service to. *Left:* the operations that command, and `--allow-control`
-   with them.
+   the service to; and the operations that command, refused unless the service
+   is started with `--allow-control`. *Left:* `wait_for`, and the synchronous
+   counterparts.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.
    *Built:* recording, reading layer by layer, subscription. *Left:* the

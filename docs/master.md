@@ -6,10 +6,11 @@ the master from Python; [the console](console.md) and [the API](master-api.md)
 are the same master from a browser and from another process.
 
 !!! note "A first version"
-    It reads. It polls by class, reads named points, confirms what asks to be
+    It polls by class, reads named points, confirms what asks to be
     confirmed, takes unsolicited responses and keeps the last value of every
-    point, from Python, from a JSON service, or from a web console. It does
-    not command an output, does not reconnect by itself, and has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    point. It operates outputs, sets the clock, clears the restart indication
+    and freezes counters. All of it from Python, from a JSON service, or from a
+    web console. It does not reconnect by itself, and has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -48,6 +49,11 @@ returns an `Outstation`, which is where the requests are:
 | `integrity_poll()` | Classes 1, 2 and 3, then class 0: every event, then every static value |
 | `scan(kind)` | `"integrity"`, `"events"`, one class: `"class0"` to `"class3"`, or `"outputs"` |
 | `read(...)` | Named points, by type and index, or `ALL` of a type, in one request |
+| `operate(...)` | Outputs commanded, by type and index. See [Commanding outputs](#commanding-outputs) |
+| `write_time(ms)` | The outstation's clock, in milliseconds since the epoch, or now |
+| `clear_restart()` | The restart indication, cleared |
+| `freeze(clear=, respond=)` | Every counter frozen, and cleared as it is if asked |
+| `restart(kind)` | A `"cold"` or a `"warm"` restart |
 | `request(function, body)` | Any function code, with the octets that follow it |
 
 Requests made at the same time take turns, in the order they were made. An
@@ -122,6 +128,57 @@ from py1815.application import FunctionCode, class_header
 
 await lab.request(FunctionCode.ENABLE_UNSOLICITED, class_header(1) + class_header(2))
 ```
+
+## Commanding outputs
+
+```python
+result = await lab.operate(
+    binary_outputs={17: True},        # a latch on
+    analog_outputs={88: 500},         # a setpoint
+    mode="select",
+)
+print(result.accepted)                             # True, False, or None
+for status in result.statuses:
+    print(status.command.point.value, status.command.index, status.status)
+```
+
+A binary output is given `True` or `False` for a latch on or off, or an
+operation by name: `"pulse_on"`, `"pulse_off"`, `"trip"`, `"close"`. An analog
+output is given a number. Binary outputs are sent first, and each in the order
+given, all in one request.
+
+| `mode` | Sends |
+|---|---|
+| `"direct"` | A direct operate. The outstation answers with a status for each control |
+| `"select"` | A select, and then an operate, with nothing allowed between them |
+| `"direct_no_ack"` | A direct operate the outstation does not answer |
+
+After a select, the operate is sent only if the outstation echoed every
+control back unchanged and accepted each one. One refusal stops them all.
+
+The result says what happened and does not raise for it:
+
+| | |
+|---|---|
+| `result.exchanges` | Each request made: one, or the select and the operate |
+| `result.statuses` | For each control, the status the outstation answered with, and whether it echoed the control as sent |
+| `result.operated` | Whether a request that operates was sent at all. False after a select that was refused |
+| `result.accepted` | `True` when the outstation accepted every control, `False` when it refused one, and `None` when it never said |
+
+`accepted` is `None` for a request that takes no acknowledgment, and for one
+whose response did not arrive. That is not a refusal: the output may have been
+operated. **Nothing is ever sent twice.** Whether to try again is yours to
+decide, because only you know whether operating twice is harmless.
+
+A whole number is sent as an integer, in 16 bits when it fits and 32 when it
+does not, and anything else as a float. `variation=` says which outright.
+The difference matters to an outstation that scales its points, as an
+IEEE 1815.2 DER does: an integer is the value as transmitted, so 500 on a point
+in tenths of a percent is 50 percent, and a float is the engineering value.
+
+What cannot be carried is refused with a `ValueError` before anything is sent:
+an output that is not a number, a value that does not fit the variation named,
+an operation that is not one.
 
 ## Driving an outstation by hand
 
