@@ -51,8 +51,13 @@ class Console:
         return len(self.simulation.outstation.served(kind))
 
 
+#: For a test of the console over a service started to command, as
+#: ``--allow-control`` starts it. Every other test has one that only reads.
+commanding = pytest.mark.parametrize("console", [True], indirect=True)
+
+
 @pytest_asyncio.fixture
-async def console():
+async def console(request):
     """The console in a browser, with one simulated DER added and connected.
 
     Its integrity poll is repeated and its output status is deliberately not,
@@ -70,7 +75,7 @@ async def console():
     )
     simulation = der.build(point_map)
     outstation = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
-    service = Service()
+    service = Service(allow_control=getattr(request, "param", False))
     http = HttpServer(service, bind="127.0.0.1:0")
     await outstation.start()
     await http.start()
@@ -365,7 +370,14 @@ class TestPointsNotReported:
         await page.wait_for("document.querySelectorAll('#outstations li').length === 2")
         await page.evaluate("select('plain')")
         await page.wait_for("document.querySelector('#title').textContent === 'plain'")
-        assert await page.evaluate("document.querySelector('#point-unreported-label').hidden")
+        # Not on the page, which is more than being marked hidden: a stylesheet
+        # that gives its kind of element a display can leave a hidden one showing.
+        assert (
+            await page.evaluate(
+                "getComputedStyle(document.querySelector('#point-unreported-label')).display"
+            )
+            == "none"
+        )
 
 
 class TestCommands:
@@ -416,6 +428,189 @@ class TestCommands:
         await page.wait_for("(state.points.ao || new Map()).size > 0")
         (lab,) = (await console.service.handle({"op": "status"}))["result"]["outstations"]
         assert lab["repeat"]["outputs"] == 5.0
+
+
+def _operate(output: str, index: int, value, mode: str = "select") -> str:
+    """The script that fills the operate form in as a person would, and submits it."""
+    field = "operation" if output == "bo" else "value"
+    return (
+        "(() => { const form = document.querySelector('#operate-form');"
+        f" form.elements.type.value = '{output}';"
+        " form.elements.type.dispatchEvent(new Event('change'));"
+        f" form.elements.index.value = '{index}'; form.elements.{field}.value = '{value}';"
+        f" form.elements.mode.value = '{mode}'; form.requestSubmit(); }})()"
+    )
+
+
+class TestReadOnly:
+    """A console over a service that was not started to command."""
+
+    @pytest.mark.asyncio
+    async def test_it_says_so_and_offers_no_way_to_operate(self, console):
+        page = console.page
+        assert await page.text("#control-state") == "Read only"
+        await console.tab("commands")
+        assert await page.evaluate("document.querySelector('#operate-fields').disabled")
+        assert "--allow-control" in await page.text("#control-off")
+        assert await page.evaluate(
+            "[...document.querySelectorAll('#write-buttons button')].every((b) => b.disabled)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_outputs_row_has_no_button(self, console):
+        page = console.page
+        await console.tab("commands")
+        await page.click("[data-scan='outputs']")
+        await page.wait_for("(state.points.ao || new Map()).size > 0")
+        await console.tab("points")
+        await console.point_type("ao")
+        assert await page.count("#points-table tbody tr") > 0
+        assert await page.count("#points-table td.act") == 0
+
+    @pytest.mark.asyncio
+    async def test_the_service_refuses_even_if_the_page_is_made_to_ask(self, console):
+        """The page hiding a control is a courtesy. The refusal is the service's."""
+        page = console.page
+        await console.tab("commands")
+        await page.evaluate("document.querySelector('#operate-fields').disabled = false")
+        await page.evaluate(_operate("ao", 87, 20, "direct"))
+        await page.wait_for("document.querySelector('#result .error') !== null")
+        assert "--allow-control" in await page.text("#result .error")
+        assert console.simulation.outstation.value(Kind.AO, 87) == 100.0
+
+
+@commanding
+class TestCommanding:
+    """A console over a service started with --allow-control."""
+
+    @pytest.mark.asyncio
+    async def test_it_says_that_it_can_command(self, console):
+        page = console.page
+        assert await page.text("#control-state") == "Commanding on"
+        await console.tab("commands")
+        assert not await page.evaluate("document.querySelector('#operate-fields').disabled")
+        assert await page.evaluate("document.querySelector('#control-off').hidden")
+
+    @pytest.mark.asyncio
+    async def test_a_select_and_operate_shows_both_requests_and_each_status(self, console):
+        page = console.page
+        await console.tab("commands")
+        await page.evaluate(_operate("ao", 87, 20))
+        await page.wait_for("document.querySelector('#result .verdict') !== null")
+
+        assert await page.text("#result .verdict") == "Accepted"
+        requests = await page.text("#result .facts")
+        assert "SELECT" in requests and "OPERATE" in requests
+        assert await page.count("#operated-table tbody tr") == 1
+        row = await page.text("#operated-table tbody tr")
+        assert "Analog output" in row and "87" in row and "SUCCESS" in row and "Yes" in row
+        assert console.simulation.outstation.value(Kind.AO, 87) == 20
+
+    @pytest.mark.asyncio
+    async def test_the_outputs_status_is_read_back_into_the_points_table(self, console):
+        page = console.page
+        # Output status is in no scan this console repeats, so it is not there yet.
+        assert await page.evaluate("(state.points.ao || new Map()).has(87)") is False
+        await console.tab("commands")
+        await page.evaluate(_operate("ao", 87, 20, "direct"))
+        await page.wait_for("(state.points.ao || new Map()).has(87)")
+        assert await page.evaluate("state.points.ao.get(87).value") == 20
+
+    @pytest.mark.asyncio
+    async def test_a_binary_output_is_latched(self, console):
+        page = console.page
+        await console.tab("commands")
+        await page.evaluate(_operate("bo", 17, "latch_on", "direct"))
+        await page.wait_for("document.querySelector('#result .verdict') !== null")
+        assert await page.text("#result .verdict") == "Accepted"
+        assert "Latch on" in await page.text("#operated-table tbody tr")
+        assert console.simulation.outstation.value(Kind.BO, 17) is True
+
+    @pytest.mark.asyncio
+    async def test_the_fields_shown_are_the_ones_the_output_takes(self, console):
+        page = console.page
+        await console.tab("commands")
+        shown = (
+            "[...document.querySelectorAll('#operate-form [data-for]')]"
+            ".filter((label) => getComputedStyle(label).display !== 'none')"
+            ".map((label) => label.dataset.for)"
+        )
+        assert set(await page.evaluate(shown)) == {"ao"}
+        await page.evaluate(
+            "(() => { const type = document.querySelector('#operate-form').elements.type;"
+            " type.value = 'bo'; type.dispatchEvent(new Event('change')); })()"
+        )
+        assert set(await page.evaluate(shown)) == {"bo"}
+
+    @pytest.mark.asyncio
+    async def test_a_refused_select_is_shown_as_not_operated(self, console):
+        page = console.page
+        locked = await console.service.handle(
+            {"op": "operate", "outstation": "lab", "params": {"points": {"bo": {"0": True}}}}
+        )
+        assert locked["result"]["accepted"]
+        await console.tab("commands")
+        await page.evaluate(_operate("ao", 87, 20))
+        await page.wait_for("document.querySelector('#result .verdict') !== null")
+
+        assert await page.text("#result .verdict") == "Not operated"
+        result = await page.text("#result")
+        assert "BLOCKED" in result and "no operate was sent" in result
+        assert "OPERATE" not in await page.text("#result .facts")
+        assert console.simulation.outstation.value(Kind.AO, 87) == 100.0
+
+    @pytest.mark.asyncio
+    async def test_no_acknowledgment_is_shown_as_not_known_and_not_as_refused(self, console):
+        page = console.page
+        await console.tab("commands")
+        await page.evaluate(_operate("ao", 87, 40, "direct_no_ack"))
+        await page.wait_for("document.querySelector('#result .verdict') !== null")
+        assert await page.text("#result .verdict") == "Not known"
+        assert "may have been operated" in await page.text("#result")
+        assert "no answer" in await page.text("#operated-table tbody tr")
+
+    @pytest.mark.asyncio
+    async def test_the_time_is_written_and_the_restart_indication_cleared(self, console):
+        page = console.page
+        await console.tab("commands")
+        await page.click("[data-write='write_time']")
+        await page.wait_for("document.querySelector('#result').textContent.includes('WRITE')")
+        assert "NEED_TIME" not in await page.text("#result")
+        await page.click("[data-write='clear_restart']")
+        await page.wait_for("!document.querySelector('#result').textContent.includes('NEED_TIME')")
+        await page.wait_for(
+            "!document.querySelector('#result').textContent.includes('DEVICE_RESTART')"
+        )
+        await page.click("[data-write='freeze_clear']")
+        await page.wait_for(
+            "document.querySelector('#result').textContent.includes('FREEZE_CLEAR')"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_outputs_row_leads_to_the_form_filled_in(self, console):
+        page = console.page
+        await console.tab("commands")
+        await page.click("[data-scan='outputs']")
+        await page.wait_for("(state.points.ao || new Map()).size > 0")
+        await console.tab("points")
+        await console.point_type("ao")
+        rows = await page.count("#points-table tbody tr")
+        assert rows > 0 and await page.count("#points-table td.act button") == rows
+        index = await page.evaluate(
+            "Number(document.querySelector('#points-table tbody tr td').textContent)"
+        )
+
+        await page.click("#points-table tbody tr td.act button")
+
+        assert await page.evaluate("state.tab") == "commands"
+        form = "document.querySelector('#operate-form').elements"
+        assert await page.evaluate(f"{form}.type.value") == "ao"
+        assert await page.evaluate(f"Number({form}.index.value)") == index
+        # The age is still the cell that ticks, with the button after it.
+        await console.tab("points")
+        assert await page.evaluate(
+            "document.querySelector('#points-table tbody tr td.age').textContent.length > 0"
+        )
 
 
 class TestEventsAndTraffic:

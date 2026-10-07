@@ -560,8 +560,9 @@ done means.
     output, enable a function and read the traffic without a terminal.
     *Built:* adding an outstation, its points, scans and reads, events, and
     the traffic, with `console --demo`; the profile's points an outstation has
-    not reported; and tests that load it in a browser. *Left:* everything that
-    commands, the DER and Evaluate tabs, the saved requests, the image.
+    not reported; operating an output, the time, the restart indication and
+    the freezes, when started to command; the image; and tests that load it in
+    a browser. *Left:* the DER and Evaluate tabs, and the saved requests.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say.

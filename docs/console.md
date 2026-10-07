@@ -12,11 +12,12 @@ That starts three things in one process and opens the page: a simulated
 IEEE 1815.2 DER listening as an outstation, a master connected to it, and the
 console at `http://127.0.0.1:8815/`.
 
-!!! note
-    The page reads. It polls, reads named points, takes unsolicited
-    responses and shows the traffic. The service behind it can operate
-    outputs when started with `--allow-control`, through
-    [its API](master-api.md#commanding); the page has no control for one yet.
+!!! note "It reads unless told otherwise"
+    Started as above, the console polls, reads named points, takes
+    unsolicited responses and shows the traffic, and can change nothing. Add
+    `--allow-control` and it can operate outputs, write the time, clear the
+    restart indication and freeze counters. The top of the page says which:
+    **Read only** or **Commanding on**. See [Commanding](#commanding).
 
 ## Starting it
 
@@ -49,7 +50,7 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | `--new-token` | With no token given, makes one for this run and prints the address that carries it |
 | `--no-token` | Listens beyond this machine with no token, for a container whose port is published to this machine only |
 | `--connect-wait SECONDS` | Keeps trying, for this long, to connect to an outstation that is not there yet at startup |
-| `--allow-control` | Lets the service behind the console command an outstation. Without it every such operation is refused |
+| `--allow-control` | Lets the console command an outstation. Without it the controls are greyed out and the service refuses every such operation |
 | `--open` | Opens the console in a browser |
 
 Outstations can also be added from the page, under **Add outstation**.
@@ -100,7 +101,7 @@ one selected has six tabs.
 |---|---|
 | **Overview** | Addresses, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, and every internal indication of the last response as a lamp |
 | **Points** | A table for each point type |
-| **Commands** | Scans, reads, unsolicited responses, any request by function code, and the result of each |
+| **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
 | **Traffic** | Every frame, and the one selected read layer by layer |
 | **Log** | What the console asked for, and what came of it |
@@ -160,6 +161,8 @@ and the values are listed one to a line:
 |---|---|
 | **Scan** | An integrity poll, an event poll, one class, or output status. **Repeat** sets how often each is made unasked, and an empty field stops it |
 | **Read points** | One point type, by a list of indices or `all` |
+| **Operate outputs** | Commands one binary or analog output. See [Commanding](#commanding) |
+| **Clock, restart and counters** | Writes the time, clears the restart indication, freezes the counters, or freezes and clears them |
 | **Unsolicited responses** | Asks the outstation to report the classes ticked without being polled, or to stop |
 | **Request by function code** | Any request: a function, and the object headers after it in hexadecimal |
 
@@ -167,6 +170,46 @@ Each shows its result: the request, how it ended, how many fragments and
 objects came back, the indications, how long it took, and the objects. An
 outstation that does not answer is shown as a timeout, and one that refuses
 shows the indication it refused with.
+
+### Commanding
+
+With `--allow-control`, **Operate outputs** commands one output:
+
+| Field | Is |
+|---|---|
+| Output | A binary output or an analog output |
+| Index | The point |
+| Operation | For a binary output: latch on, latch off, pulse on, pulse off, trip or close |
+| Value | For an analog output: the number to send |
+| Sent as | The variation: a 16- or 32-bit integer, or a float. Left alone, a whole number goes as an integer and anything else as a float |
+| Mode | Select and then operate, direct operate, or direct operate with no acknowledgment |
+
+An outstation that scales its points, as an IEEE 1815.2 DER does, reads an
+integer as the value transmitted and a float as the engineering value: 500 as
+an integer on a point in tenths of a percent is 50 percent.
+
+The result says what came of it:
+
+| Outcome | Means |
+|---|---|
+| **Accepted** | The outstation accepted every control |
+| **Refused** | It answered, and refused. The table gives its status for the control |
+| **Not operated** | A select was not accepted, so no operate was sent |
+| **Not known** | It did not say: the request takes no acknowledgment, or the response did not arrive. The output may have been operated |
+
+Nothing is sent twice. After a select, the operate is sent only if the
+outstation echoed the control back unchanged and accepted it, and a scan the
+console repeats cannot fall between the two.
+
+An integrity poll does not return what an output stands at, so with **Read the
+output's status back afterwards** ticked the console reads that one output
+once the request has gone, and the Points table shows what it now is.
+
+In the Points tab, each row of the binary and analog output tables has an
+**Operate** button that opens the form filled in for that output.
+
+Without `--allow-control` the form and the buttons are greyed out, and the
+service behind the page refuses the operations whoever asks.
 
 ### Traffic
 

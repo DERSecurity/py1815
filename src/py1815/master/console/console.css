@@ -117,6 +117,16 @@ h4 { margin: 16px 0 8px; color: var(--muted); }
 .chip.good::before { background: var(--teal); }
 .chip.bad { color: var(--coral); border-color: var(--coral); }
 .chip.bad::before { background: var(--coral); }
+.chip.armed { color: var(--coral); border-color: var(--coral); }
+.chip.armed::before { background: var(--coral); }
+.masthead .chip + .chip { margin-left: 8px; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset:disabled { opacity: 0.55; }
+th.w-act { width: 96px; }
+td.act button { padding: 2px 10px; font-size: 12px; }
+.verdict { font: 500 12px var(--mono); letter-spacing: 0.6px; text-transform: uppercase; }
+.verdict.accepted { color: var(--teal-ink); }
+.verdict.refused, .verdict.unknown { color: var(--coral); }
 
 /* ------------------------------------------------------------------ layout */
 
@@ -160,6 +170,9 @@ main { flex: 1; min-width: 0; padding: 24px 28px; overflow-y: auto; }
 .add form { display: grid; gap: 10px; margin-top: 10px; }
 
 label { display: grid; gap: 4px; font: 12.5px var(--sans); color: var(--muted); }
+/* An element marked hidden is not shown, whatever display its kind is given
+   above: a label is a grid here, and would otherwise stay on the page. */
+[hidden] { display: none !important; }
 label.check { display: inline-flex; align-items: center; gap: 7px; color: var(--body); font-size: 13px; }
 
 input, select, button {
