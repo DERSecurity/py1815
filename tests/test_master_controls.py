@@ -162,12 +162,12 @@ class TestDirectOperate:
     def test_it_operates_and_reports_each_status(self, simulation, master):
         result = master.operate(
             binary_outputs={der.BO_ENABLE_POWER_LIMIT: True},
-            analog_outputs={der.AO_POWER_LIMIT_MAXIMUM: 20},
+            analog_outputs={der.AO_POWER_LIMIT_GENERATION: 20},
         )
         assert [exchange.function for exchange in result.exchanges] == [FunctionCode.DIRECT_OPERATE]
         assert result.operated and result.accepted is True
         assert [status.status for status in result.statuses] == [CommandStatus.SUCCESS] * 2
-        assert result.status("ao", der.AO_POWER_LIMIT_MAXIMUM) is CommandStatus.SUCCESS
+        assert result.status("ao", der.AO_POWER_LIMIT_GENERATION) is CommandStatus.SUCCESS
         _settle(simulation)
         assert simulation.der.watts == pytest.approx(0.2 * simulation.der.ratings.watts, rel=0.01)
 
@@ -175,10 +175,10 @@ class TestDirectOperate:
         master.operate(binary_outputs={der.BO_LOCKOUT: True})
         result = master.operate(
             binary_outputs={der.BO_ENABLE_POWER_LIMIT: True},
-            analog_outputs={der.AO_POWER_LIMIT_MAXIMUM: 20},
+            analog_outputs={der.AO_POWER_LIMIT_GENERATION: 20},
         )
         assert result.operated and result.accepted is False
-        assert result.status(PointType.ANALOG_OUTPUT, der.AO_POWER_LIMIT_MAXIMUM) is (
+        assert result.status(PointType.ANALOG_OUTPUT, der.AO_POWER_LIMIT_GENERATION) is (
             CommandStatus.BLOCKED
         )
 
@@ -191,23 +191,25 @@ class TestDirectOperate:
 
 class TestSelectThenOperate:
     def test_a_select_the_outstation_accepts_is_followed_by_the_operate(self, simulation, master):
-        result = master.operate(analog_outputs={der.AO_POWER_LIMIT_MAXIMUM: 30}, mode="select")
+        result = master.operate(analog_outputs={der.AO_POWER_LIMIT_GENERATION: 30}, mode="select")
         select, operate = result.exchanges
         assert (select.function, operate.function) == (FunctionCode.SELECT, FunctionCode.OPERATE)
         # The operate carries the objects of the select, and the next sequence number.
         assert operate.request[2:] == select.request[2:]
         assert operate.sequence == (select.sequence + 1) % 16
         assert result.accepted is True
-        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_MAXIMUM) == 30
+        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_GENERATION) == 30
 
     def test_a_select_the_outstation_refuses_is_not_followed_by_anything(self, simulation, master):
         master.operate(binary_outputs={der.BO_LOCKOUT: True})
-        before = simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_MAXIMUM)
-        result = master.operate(analog_outputs={der.AO_POWER_LIMIT_MAXIMUM: 30}, mode=Mode.SELECT)
+        before = simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_GENERATION)
+        result = master.operate(
+            analog_outputs={der.AO_POWER_LIMIT_GENERATION: 30}, mode=Mode.SELECT
+        )
         assert [exchange.function for exchange in result.exchanges] == [FunctionCode.SELECT]
         assert not result.operated and result.accepted is False
         assert result.statuses[0].status is CommandStatus.BLOCKED
-        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_MAXIMUM) == before
+        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_GENERATION) == before
 
     def test_one_refusal_among_several_stops_them_all(self, simulation, master):
         result = master.operate(analog_outputs={87: 30, 60000: 1}, mode="select")
@@ -272,7 +274,7 @@ class TestSelectThenOperate:
 
 class TestWithNoAcknowledgment:
     def test_it_is_sent_once_and_nothing_is_known_of_it(self, simulation, master):
-        limit = der.AO_POWER_LIMIT_MAXIMUM
+        limit = der.AO_POWER_LIMIT_GENERATION
         result = master.operate(analog_outputs={limit: 40}, mode="direct_no_ack")
         (exchange,) = result.exchanges
         assert exchange.function is FunctionCode.DIRECT_OPERATE_NR
@@ -280,7 +282,7 @@ class TestWithNoAcknowledgment:
         assert result.operated and result.accepted is None
         assert result.statuses[0].status is None
         # The outstation acted on it all the same.
-        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_MAXIMUM) == 40
+        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_GENERATION) == 40
 
 
 class TestTheOtherWrites:
