@@ -82,7 +82,7 @@ class Sender:
 def _index(outstation: DerOutstation, group: int) -> int:
     kind = GROUP_KIND[group]
     if kind is Kind.AO:
-        return der.AO_POWER_LIMIT_MAXIMUM
+        return der.AO_POWER_LIMIT_GENERATION
     if kind is Kind.BO:
         return der.BO_PERMIT_STOP
     return outstation.served(kind)[0].index
@@ -187,7 +187,7 @@ class TestEveryRequestTheTableListsIsAnswered:
         sender, _ = self._rows(simulation, {device_profile.DIRECT_NR})
         row = Row(41, 1, "", request=(device_profile.DIRECT_NR, (0x17,)))
         sender.send(device_profile.DIRECT_NR, _command(simulation.outstation, row, 0x17))
-        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_MAXIMUM) == 50
+        assert simulation.outstation.value(Kind.AO, der.AO_POWER_LIMIT_GENERATION) == 50
 
     def test_freezes(self, simulation):
         sender, rows = self._rows(simulation, {device_profile.FREEZE, device_profile.FREEZE_CLEAR})

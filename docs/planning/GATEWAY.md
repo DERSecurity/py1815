@@ -116,9 +116,13 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   memory a full event buffer costs is measured by `scripts/measure_event_memory.py` and
   stated, with how to size `event_capacity` down, in
   [Serving a DER](../der.md#memory-on-a-small-controller).
-- [ ] **G9. A release the gateway can pin.** With G1 through G5 in it. The API is not
+- [x] **G9. A release the gateway can pin.** With G1 through G5 in it. The API is not
   stable below `1.0`, so the gateway pins an exact version, and the release notes say
-  which of these items it carries.
+  which of these items it carries. *Built:* `0.2.0` carries G1 through G8 and G10. Its
+  section of the [changelog](https://github.com/DERSecurity/py1815/blob/main/CHANGELOG.md)
+  has an entry for each under the pull request that built it: G1 and G2 (#64), G3 (#66,
+  tests only, so it has no entry), G4 (#61), G5 (#65), G6 (#63), G7 (#67 and #68), G8
+  (#62) and G10 (#59).
 
 ## Sequencing
 
