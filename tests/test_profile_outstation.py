@@ -1031,6 +1031,121 @@ class TestAReadOnlyOutstation:
         assert (21, 0) in _values(_read(session, bytes([21, 0, ALL]), sequence=1))
 
 
+class TestWhenAnEventHappened:
+    """A reading may say when it was measured, and an event then carries that time.
+
+    A caller that reads a device on its own schedule and hands the readings
+    over later knows when each value was taken. The time the outstation
+    noticed the change is a different time, later by the length of a read and
+    of whatever queue sits between the two.
+    """
+
+    NOW = 5_000_000
+    MEASURED = 4_990_000
+
+    def _outstation(self, kind, index, reader):
+        binding = Binding()
+        binding.read(kind, index, reader)
+        return DerOutstation(
+            load.resolve(small(), units(0)), binding, strict=False, clock_ms=lambda: self.NOW
+        )
+
+    def _event_after(self, outstation, change, event_class):
+        outstation.poll()
+        change()
+        outstation.poll()
+        (event,) = outstation.events.peek(event_class)
+        return event
+
+    def test_a_binary_event_carries_the_time_its_reading_gives(self):
+        state = {"on": False}
+        outstation = self._outstation(
+            BI, 0, lambda: Reading(state["on"], timestamp_ms=self.MEASURED)
+        )
+
+        event = self._event_after(outstation, lambda: state.update(on=True), EventClass.CLASS_1)
+
+        assert event.timestamp_ms == self.MEASURED
+
+    def test_an_analog_event_carries_it_too(self):
+        state = {"volts": 240.0}
+        outstation = self._outstation(
+            AI, 2, lambda: Reading(state["volts"], timestamp_ms=self.MEASURED)
+        )
+
+        event = self._event_after(outstation, lambda: state.update(volts=250.0), EventClass.CLASS_2)
+
+        assert event.timestamp_ms == self.MEASURED
+
+    @pytest.mark.parametrize("bare", [True, False])
+    def test_a_reading_that_gives_no_time_is_timed_by_the_outstation(self, bare):
+        """A bare value, or a reading whose time is None: both mean now."""
+        state = {"on": False}
+        outstation = self._outstation(
+            BI, 0, (lambda: state["on"]) if bare else (lambda: Reading(state["on"]))
+        )
+
+        event = self._event_after(outstation, lambda: state.update(on=True), EventClass.CLASS_1)
+
+        assert event.timestamp_ms == self.NOW
+
+    def test_a_readings_time_is_put_on_the_clock_a_master_set(self):
+        """A master's time write moves the outstation's clock, and every time it
+        reports with it. A reading taken ten seconds ago is ten seconds before
+        the outstation's now, whichever clock that is."""
+        state = {"on": False}
+        outstation = self._outstation(
+            BI, 0, lambda: Reading(state["on"], timestamp_ms=self.MEASURED)
+        )
+        written = 1_700_000_000_000
+        outstation.set_time(written)
+
+        event = self._event_after(outstation, lambda: state.update(on=True), EventClass.CLASS_1)
+
+        assert outstation.now_ms() == written
+        assert event.timestamp_ms == written - (self.NOW - self.MEASURED)
+
+    def test_a_master_reads_that_time_on_the_wire(self):
+        """Through a session, as a master gets it: a binary event with its time.
+
+        The master has written the time, so the event travels with an absolute
+        one: six octets after the flags.
+        """
+        state = {"on": False}
+        outstation = self._outstation(
+            BI, 0, lambda: Reading(state["on"], timestamp_ms=self.MEASURED)
+        )
+        session = outstation.session()
+        written = 1_700_000_000_000
+        outstation.set_time(written)
+        outstation.events.synchronized = True
+        outstation.poll()
+        state["on"] = True
+        outstation.poll()
+
+        response = _read(session, bytes([2, 2, ALL]))
+
+        assert response[4:6] == bytes([2, 2]), "binary input events with absolute time"
+        stamped = int.from_bytes(response[-6:], "little")
+        assert stamped == written - (self.NOW - self.MEASURED)
+
+    @pytest.mark.parametrize("quality", [Quality.COMM_LOST, Quality.NEVER_READ, Quality.OFFLINE])
+    def test_a_reading_that_is_not_a_measurement_is_timed_by_the_outstation(self, quality):
+        """A value retained from a source that has gone away still has the time
+        it was last measured. The event is that it went away, which happened
+        now and not then."""
+        state = {"quality": Quality.GOOD}
+        outstation = self._outstation(
+            BI, 0, lambda: Reading(True, state["quality"], timestamp_ms=self.MEASURED)
+        )
+
+        event = self._event_after(
+            outstation, lambda: state.update(quality=quality), EventClass.CLASS_1
+        )
+
+        assert event.timestamp_ms == self.NOW
+
+
 class TestEvents:
     def test_the_first_poll_reports_nothing(self):
         """A master learns initial values from its integrity poll."""
