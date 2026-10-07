@@ -97,9 +97,10 @@ Two properties are deliberate and documented rather than defects:
 | Version | Supported |
 |---|---|
 | `main` | yes |
-| anything else | no -- this library has not had a release yet |
+| the latest release on PyPI | yes, by a new release |
+| earlier releases | no |
 
-There is no published release: the version is `0.1.0.dev0` and nothing has been
-uploaded to PyPI. Fixes land on `main`, and until the first release there is
-nothing to backport to. Reports against a commit rather than a version are
-expected and welcome; please name the commit.
+Fixes land on `main` and reach PyPI in the next release. Earlier releases are
+not patched: while the major version is `0` there is one line of development,
+and the fix for an older version is to upgrade. Reports against a release or
+against a commit are both welcome; please name which.

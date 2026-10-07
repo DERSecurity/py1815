@@ -80,16 +80,34 @@ class TestTheDeviceOnItsOwn:
 class TestFunctionsTakeEffect:
     def test_the_active_power_limit_caps_output(self, simulation):
         session = simulation.outstation.session()
-        assert _setpoint(session, der.AO_POWER_LIMIT_MAXIMUM, 20) is CommandStatus.SUCCESS
+        assert _setpoint(session, der.AO_POWER_LIMIT_GENERATION, 20) is CommandStatus.SUCCESS
         assert _latch(session, der.BO_ENABLE_POWER_LIMIT, True, 1) is CommandStatus.SUCCESS
         _settle(simulation)
         assert simulation.der.watts == pytest.approx(0.2 * simulation.der.ratings.watts, rel=0.01)
 
     def test_and_does_nothing_until_enabled(self, simulation):
         """The control: the setting alone does not limit anything."""
-        _setpoint(simulation.outstation.session(), der.AO_POWER_LIMIT_MAXIMUM, 20)
+        _setpoint(simulation.outstation.session(), der.AO_POWER_LIMIT_GENERATION, 20)
         _settle(simulation)
         assert simulation.der.watts > 0.5 * simulation.der.ratings.watts
+
+    def test_the_limit_on_generation_is_the_second_of_the_two_setpoints(self, simulation):
+        """AO88, not AO87: the profile's equations make the first a share of charging power."""
+        assert (der.AO_POWER_LIMIT_CHARGING, der.AO_POWER_LIMIT_GENERATION) == (87, 88)
+        session = simulation.outstation.session()
+        _setpoint(session, der.AO_POWER_LIMIT_CHARGING, 20)
+        _latch(session, der.BO_ENABLE_POWER_LIMIT, True, 1)
+        _settle(simulation)
+        assert simulation.der.watts > 0.5 * simulation.der.ratings.watts
+
+    def test_the_limit_on_charging_caps_what_the_storage_draws(self, simulation):
+        session = simulation.outstation.session()
+        _setpoint(session, der.AO_CHARGE_DISCHARGE_TARGET, -50)
+        _latch(session, der.BO_ENABLE_CHARGE_DISCHARGE, True, 1)
+        _setpoint(session, der.AO_POWER_LIMIT_CHARGING, 20, 2)
+        _latch(session, der.BO_ENABLE_POWER_LIMIT, True, 3)
+        _settle(simulation, 120)
+        assert simulation.der.watts == pytest.approx(-0.2 * simulation.der.ratings.watts, rel=0.01)
 
     def test_charging_draws_power_and_raises_the_state_of_charge(self, simulation):
         session = simulation.outstation.session()
@@ -173,7 +191,7 @@ class TestStateCommands:
         session = simulation.outstation.session()
         assert _latch(session, der.BO_LOCKOUT, True) is CommandStatus.SUCCESS
         assert _latch(session, der.BO_STOP, True, 1) is CommandStatus.BLOCKED
-        assert _setpoint(session, der.AO_POWER_LIMIT_MAXIMUM, 10, 2) is CommandStatus.BLOCKED
+        assert _setpoint(session, der.AO_POWER_LIMIT_GENERATION, 10, 2) is CommandStatus.BLOCKED
         assert simulation.der.started, "the blocked stop did not happen"
         assert _latch(session, der.BO_LOCKOUT, False, 3) is CommandStatus.SUCCESS
         assert _latch(session, der.BO_STOP, True, 4) is CommandStatus.SUCCESS
