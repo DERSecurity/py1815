@@ -29,9 +29,12 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from py1815.application import FunctionCode
+from py1815.control import AnalogOutput
 from py1815.decode import DecodedObject, PointType
+from py1815.master import requests
 from py1815.master.api import Master, Outstation
 from py1815.master.association import Exchange, Unsolicited
+from py1815.master.controls import Mode, Operated, Plan, commands
 from py1815.master.store import PointValue
 from py1815.master.trace import Entry, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
@@ -110,6 +113,10 @@ def split_enumeration(name: str) -> tuple[str, list[dict[str, str]] | None]:
     return label or name, values
 
 
+class ControlNotAllowed(Exception):
+    """The operation commands an outstation, and this service was not started to."""
+
+
 class BadRequest(ValueError):
     """A message that does not name an operation, or gives it the wrong things."""
 
@@ -183,8 +190,18 @@ def describe_entry(entry: Entry) -> dict[str, Any]:
 class Service:
     """A master, and the operations it answers as JSON."""
 
-    def __init__(self, master: Master | None = None) -> None:
+    def __init__(self, master: Master | None = None, *, allow_control: bool = False) -> None:
+        """
+        Args:
+            master: The master to serve. A new one when not given.
+            allow_control: Carry out the operations that command an
+                outstation: its outputs, its counters, its clock, its restart
+                indication, and any request by function code other than a
+                read. Off unless asked for. A master that is pointed at real
+                equipment should have to be told before it can change it.
+        """
         self.master = Master() if master is None else master
+        self.allow_control = allow_control
         self._names: dict[str, dict[PointType, dict[int, str]]] = {}
         self._profiles: dict[str, PointMap] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -201,6 +218,11 @@ class Service:
             "values": self._values,
             "events": self._events,
             "request": self._request,
+            "operate": self._operate,
+            "write_time": self._write_time,
+            "clear_restart": self._clear_restart,
+            "freeze": self._freeze,
+            "restart": self._restart,
             "enable_unsolicited": self._enable_unsolicited,
             "disable_unsolicited": self._disable_unsolicited,
             "repeat": self._repeat,
@@ -234,6 +256,12 @@ class Service:
             if "outstation" in message and "outstation" not in params:
                 params = {**params, "outstation": message["outstation"]}
             result = await operation(params)
+        except ControlNotAllowed as error:
+            return {
+                "id": identifier,
+                "ok": False,
+                "error": {"kind": "not_allowed", "message": str(error)},
+            }
         # Busy, which the association raises for a second request while one is
         # outstanding, is deliberately not caught. An outstation takes its
         # requests one at a time through a lock, so no message can cause it; if
@@ -392,10 +420,11 @@ class Service:
 
     async def _status(self, _params: Mapping[str, Any]) -> dict[str, Any]:
         return {
+            "allow_control": self.allow_control,
             "outstations": [
                 self._describe_outstation(outstation)
                 for outstation in self.master.outstations.values()
-            ]
+            ],
         }
 
     async def _profile(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -551,8 +580,108 @@ class Service:
             body = bytes.fromhex(str(params.get("body", "")))
         except ValueError:
             raise BadRequest("body is the octets after the function code, in hexadecimal") from None
+        if code not in requests.READING_FUNCTIONS:
+            # Any other function code changes the outstation, and this is the
+            # one operation that would otherwise send it unasked-about.
+            self._commanding(f"a {code.name} request")
         exchange = await outstation.request(code, body)
         return self._describe_exchange(outstation, exchange)
+
+    # ------------------------------------------------------------- commands
+
+    def _commanding(self, what: str) -> None:
+        if not self.allow_control:
+            raise ControlNotAllowed(
+                f"{what} commands the outstation, and commanding is off. "
+                "Start the service with --allow-control to turn it on."
+            )
+
+    def _describe_operated(self, outstation: Outstation, operated: Operated) -> dict[str, Any]:
+        statuses = []
+        for status in operated.statuses:
+            command = status.command
+            control = command.control
+            if isinstance(control, AnalogOutput):
+                value: Any = _number(control.value)
+            else:
+                value = control.control_code
+            statuses.append(
+                {
+                    "type": command.point.value,
+                    "index": command.index,
+                    "name": self._name(outstation.name, command.point, command.index),
+                    "variation": command.variation,
+                    "value": value,
+                    "status": None if status.status is None else status.status.name,
+                    "echoed": status.echoed,
+                }
+            )
+        return {
+            "mode": operated.mode.value,
+            "operated": operated.operated,
+            "accepted": operated.accepted,
+            "statuses": statuses,
+            "exchanges": [
+                self._describe_exchange(outstation, exchange) for exchange in operated.exchanges
+            ],
+        }
+
+    async def _operate(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        points = params.get("points")
+        if not isinstance(points, Mapping) or not points:
+            raise BadRequest("an operate names outputs, by type: bo and ao")
+        unknown = set(points) - {"bo", "ao"}
+        if unknown:
+            raise BadRequest(f"{sorted(unknown)[0]!r} is not an output; bo or ao")
+        for kind, named in points.items():
+            if not isinstance(named, Mapping):
+                raise BadRequest(f"{kind} is an object of values by index")
+        variation = params.get("variation")
+        # Refused for what is wrong with it before it is refused for not
+        # being allowed, so the two are told apart.
+        plan = Plan(
+            commands(
+                points.get("bo"),
+                points.get("ao"),
+                variation=None if variation is None else int(variation),
+            ),
+            str(params.get("mode", Mode.DIRECT.value)),
+        )
+        self._commanding("an operate")
+        # Through the outstation's own method, so the plan is carried out in
+        # one turn exactly as a caller in Python has it carried out.
+        operated = await outstation._carry_out(plan)  # pylint: disable=protected-access
+        return self._describe_operated(outstation, operated)
+
+    async def _write_time(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        when = params.get("time_ms")
+        if when is not None and (isinstance(when, bool) or not isinstance(when, int)):
+            raise BadRequest("time_ms is milliseconds since the epoch, a whole number")
+        self._commanding("a time write")
+        return self._describe_exchange(outstation, await outstation.write_time(when))
+
+    async def _clear_restart(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        self._commanding("clearing the restart indication")
+        return self._describe_exchange(outstation, await outstation.clear_restart())
+
+    async def _freeze(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        self._commanding("a freeze")
+        exchange = await outstation.freeze(
+            clear=bool(params.get("clear", False)), respond=bool(params.get("respond", True))
+        )
+        return self._describe_exchange(outstation, exchange)
+
+    async def _restart(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        kind = str(params.get("kind", "cold"))
+        if kind not in ("cold", "warm"):
+            raise BadRequest(f"{kind!r} is not a restart; cold or warm")
+        self._commanding("a restart")
+        return self._describe_exchange(outstation, await outstation.restart(kind))
 
     @staticmethod
     def _classes(params: Mapping[str, Any]) -> list[int]:

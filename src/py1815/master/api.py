@@ -29,6 +29,7 @@ from py1815.master.association import (
     MasterAssociation,
     Unsolicited,
 )
+from py1815.master.controls import Operated, Plan
 from py1815.master.operations import Operations
 from py1815.master.store import Store
 from py1815.master.trace import RECEIVED, SENT, Trace
@@ -48,7 +49,7 @@ class NotConnected(ConnectionError):
     """A request was made of an outstation that has no connection."""
 
 
-class Outstation(Operations[Awaitable[Exchange]]):
+class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     """One outstation, as a master sees it: a connection, an association, a store."""
 
     def __init__(
@@ -221,37 +222,50 @@ class Outstation(Operations[Awaitable[Exchange]]):
 
     async def _exchange(self, function: FunctionCode, body: bytes) -> Exchange:
         async with self._turn:
-            writer = self._writer
-            if writer is None or writer.is_closing():
-                raise NotConnected(f"{self.name} is not connected")
+            return await self._exchange_in_turn(function, body)
+
+    async def _carry_out(self, plan: Plan) -> Operated:
+        # One turn for the whole plan: an operate has to follow its select
+        # with no other request between them, and a scan on a schedule would
+        # otherwise be free to take the gap.
+        async with self._turn:
+            done: list[Exchange] = []
+            while (step := plan.next(done)) is not None:
+                done.append(await self._exchange_in_turn(*step))
+            return plan.result(done)
+
+    async def _exchange_in_turn(self, function: FunctionCode, body: bytes) -> Exchange:
+        writer = self._writer
+        if writer is None or writer.is_closing():
+            raise NotConnected(f"{self.name} is not connected")
+        self._progress.clear()
+        octets = self.association.request(function, body)
+        self.trace.record(SENT, octets)
+        writer.write(octets)
+        # A write that fails is seen by the receive loop as well, which
+        # ends the exchange as abandoned.
+        with contextlib.suppress(OSError):
+            await writer.drain()
+        while True:
+            exchange = self.association.take()
+            if exchange is not None:
+                self._finished(exchange)
+                return exchange
+            wait = self.association.expires_after()
+            if wait is None:
+                # Neither outstanding nor finished: the connection was
+                # closed and reopened underneath this request.
+                raise NotConnected(f"the connection to {self.name} was reset")
+            if wait <= 0:
+                self.association.expire()
+                continue
             self._progress.clear()
-            octets = self.association.request(function, body)
-            self.trace.record(SENT, octets)
-            writer.write(octets)
-            # A write that fails is seen by the receive loop as well, which
-            # ends the exchange as abandoned.
-            with contextlib.suppress(OSError):
-                await writer.drain()
-            while True:
-                exchange = self.association.take()
-                if exchange is not None:
-                    self._finished(exchange)
-                    return exchange
-                wait = self.association.expires_after()
-                if wait is None:
-                    # Neither outstanding nor finished: the connection was
-                    # closed and reopened underneath this request.
-                    raise NotConnected(f"the connection to {self.name} was reset")
-                if wait <= 0:
-                    self.association.expire()
-                    continue
-                self._progress.clear()
-                # Looked at again before waiting: something may have arrived
-                # between taking and clearing.
-                if not self.association.busy:
-                    continue
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._progress.wait(), wait)
+            # Looked at again before waiting: something may have arrived
+            # between taking and clearing.
+            if not self.association.busy:
+                continue
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._progress.wait(), wait)
 
     def _finished(self, exchange: Exchange) -> None:
         self.store.apply(exchange.objects, now=time.monotonic())

@@ -229,7 +229,7 @@ variations are served and named in the device profile.
 | Events | `events` | Class 1 to 3 buffers, deadbands and confirmation |
 | Session | `session` | One master association: octets in, octets out |
 | DER profile | `profile` | The IEEE 1815.2 point map, a builder that turns a map and a binding into an outstation, and a simulated DER |
-| Master | `master`, `decode` | A master for exercising outstations: it polls, reads named points, takes unsolicited responses and keeps what it was told, from Python, a JSON service, or a web console (`py1815-master console`). A first version, which reads and does not command |
+| Master | `master`, `decode` | A master for exercising outstations: it polls, reads named points, takes unsolicited responses and keeps what it was told, and operates outputs by direct operate or by select and operate, from Python, a JSON service, or a web console (`py1815-master console`). The service commands only when started with `--allow-control`. A first version |
 
 Each layer is testable without the ones above it. The session does no I/O at all -- it takes
 the bytes that arrived and returns the bytes to send -- so protocol behavior is pinned against

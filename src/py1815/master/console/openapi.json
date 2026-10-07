@@ -26,6 +26,10 @@
       "description": "Polls, reads, and what has been read."
     },
     {
+      "name": "Commanding",
+      "description": "Operations that change an outstation. Refused as `not_allowed` unless the service was started with `--allow-control`."
+    },
+    {
       "name": "Unsolicited responses",
       "description": "Reporting an outstation does without being polled."
     },
@@ -77,6 +81,10 @@
                         "result": {
                           "type": "object",
                           "properties": {
+                            "allow_control": {
+                              "type": "boolean",
+                              "description": "Whether this service carries out the operations that command an outstation. When false they are refused as `not_allowed`."
+                            },
                             "outstations": {
                               "type": "array",
                               "items": {
@@ -85,6 +93,7 @@
                             }
                           },
                           "required": [
+                            "allow_control",
                             "outstations"
                           ]
                         }
@@ -1465,6 +1474,625 @@
               }
             }
           }
+        },
+        "description": "READ, ENABLE_UNSOLICITED, DISABLE_UNSOLICITED and DELAY_MEASURE are always sent. Any other function code commands the outstation, and is refused as `not_allowed` unless the service was started to command."
+      }
+    },
+    "/api/operate": {
+      "post": {
+        "operationId": "operate",
+        "summary": "Command outputs, by type and index, in one request",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "points": {
+                    "type": "object",
+                    "properties": {
+                      "bo": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "string",
+                              "enum": [
+                                "latch_on",
+                                "latch_off",
+                                "pulse_on",
+                                "pulse_off",
+                                "trip",
+                                "close"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "operation": {
+                                  "type": "string",
+                                  "enum": [
+                                    "latch_on",
+                                    "latch_off",
+                                    "pulse_on",
+                                    "pulse_off",
+                                    "trip",
+                                    "close"
+                                  ]
+                                },
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "on_time_ms": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "off_time_ms": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": [
+                                "operation"
+                              ]
+                            }
+                          ]
+                        },
+                        "description": "By index: true or false for a latch on or off, an operation by name, or an operation with its count and times."
+                      },
+                      "ao": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "description": "By index: a number, or a numeric string."
+                      }
+                    },
+                    "description": "The outputs to command. At least one."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "select",
+                      "direct_no_ack"
+                    ],
+                    "default": "direct",
+                    "description": "`direct` is a direct operate. `select` is a select followed by an operate, sent only if the outstation echoed every control unchanged and accepted each one. `direct_no_ack` is a direct operate the outstation does not answer."
+                  },
+                  "variation": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "enum": [
+                          1,
+                          2,
+                          3,
+                          4
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The analog output variation: 1 or 2 for a 32- or 16-bit integer, 3 or 4 for a single or double float. Left out, a whole number is sent as an integer and anything else as a float. An outstation that scales its points takes an integer as the transmitted value and a float as the engineering one."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "points"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "points": {
+                  "ao": {
+                    "88": 500
+                  },
+                  "bo": {
+                    "17": true
+                  }
+                },
+                "mode": "select"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Operated"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Binary outputs are sent first, and each in the order given. Nothing is sent twice: a response that does not arrive is reported, with `accepted` null, and whether to try again is the caller's to decide."
+      }
+    },
+    "/api/write_time": {
+      "post": {
+        "operationId": "write_time",
+        "summary": "Set an outstation's clock",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "time_ms": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Milliseconds since the epoch, UTC. Now, when left out."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clear_restart": {
+      "post": {
+        "operationId": "clear_restart",
+        "summary": "Clear an outstation's restart indication",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/freeze": {
+      "post": {
+        "operationId": "freeze",
+        "summary": "Freeze an outstation's counters",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "clear": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Clear each counter as it is frozen."
+                  },
+                  "respond": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "False for the request an outstation does not answer."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "clear": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/restart": {
+      "post": {
+        "operationId": "restart",
+        "summary": "Ask an outstation to restart",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "cold",
+                      "warm"
+                    ],
+                    "default": "cold"
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "kind": "cold"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -2180,6 +2808,11 @@
                       "values",
                       "events",
                       "request",
+                      "operate",
+                      "write_time",
+                      "clear_restart",
+                      "freeze",
+                      "restart",
                       "enable_unsolicited",
                       "disable_unsolicited",
                       "repeat",
@@ -2566,6 +3199,112 @@
         ],
         "description": "One object out of a response, decoded."
       },
+      "ControlStatus": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "bo",
+              "ao"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "name": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "variation": {
+            "type": "integer"
+          },
+          "value": {
+            "description": "An analog output's value as sent, or a binary output's control code."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The status the outstation answered with, by name, as in SUCCESS or NOT_SUPPORTED. Null if the response did not carry this control."
+          },
+          "echoed": {
+            "type": "boolean",
+            "description": "Whether what came back was the control as sent, apart from its status."
+          }
+        },
+        "required": [
+          "type",
+          "index",
+          "variation",
+          "value",
+          "status",
+          "echoed"
+        ],
+        "description": "What an outstation said about one control."
+      },
+      "Operated": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "direct",
+              "select",
+              "direct_no_ack"
+            ]
+          },
+          "operated": {
+            "type": "boolean",
+            "description": "Whether a request that operates was sent. False for a select the outstation refused, after which no operate is sent."
+          },
+          "accepted": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the outstation accepted every control. Null when it never said: the request takes no acknowledgment, or the response did not arrive. That is not a refusal, and the output may have been operated."
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ControlStatus"
+            }
+          },
+          "exchanges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exchange"
+            },
+            "description": "Each request made, in order: one, or a select and an operate."
+          }
+        },
+        "required": [
+          "mode",
+          "operated",
+          "accepted",
+          "statuses",
+          "exchanges"
+        ],
+        "description": "A control request, or the two of a select and operate, and what came of them."
+      },
       "Exchange": {
         "type": "object",
         "properties": {
@@ -2880,7 +3619,8 @@
             "type": "string",
             "enum": [
               "request",
-              "connection"
+              "connection",
+              "not_allowed"
             ],
             "description": "`request`: the message could not be acted on. `connection`: there was no connection to ask over."
           },

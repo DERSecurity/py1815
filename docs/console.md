@@ -13,9 +13,10 @@ IEEE 1815.2 DER listening as an outstation, a master connected to it, and the
 console at `http://127.0.0.1:8815/`.
 
 !!! note
-    The console reads. It polls, reads named points, takes unsolicited
-    responses and shows the traffic. It has no control for an output, because
-    the master does not command one yet.
+    The page reads. It polls, reads named points, takes unsolicited
+    responses and shows the traffic. The service behind it can operate
+    outputs when started with `--allow-control`, through
+    [its API](master-api.md#commanding); the page has no control for one yet.
 
 ## Starting it
 
@@ -48,6 +49,7 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | `--new-token` | With no token given, makes one for this run and prints the address that carries it |
 | `--no-token` | Listens beyond this machine with no token, for a container whose port is published to this machine only |
 | `--connect-wait SECONDS` | Keeps trying, for this long, to connect to an outstation that is not there yet at startup |
+| `--allow-control` | Lets the service behind the console command an outstation. Without it every such operation is refused |
 | `--open` | Opens the console in a browser |
 
 Outstations can also be added from the page, under **Add outstation**.

@@ -196,7 +196,8 @@ async def live():
     point_map = load.resolve(for_reference_der(), Composition())
     simulation = der.build(point_map)
     outstation = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
-    service = Service()
+    # Started to command, so that every operation's example is carried out.
+    service = Service(allow_control=True)
     http = HttpServer(service, bind="127.0.0.1:0")
     await outstation.start()
     await http.start()
@@ -231,6 +232,11 @@ ORDER = [
     "values",
     "events",
     "request",
+    "operate",
+    "write_time",
+    "clear_restart",
+    "freeze",
+    "restart",
     "enable_unsolicited",
     "disable_unsolicited",
     "repeat",
@@ -301,7 +307,8 @@ class TestTheRoutes:
         _, http, _, _ = live
         _, by_route = await _post(http, "/api/status")
         _, by_message = await _post(http, "/api", {"id": 4, "op": "status"})
-        assert by_route["result"] == by_message["result"] == {"outstations": []}
+        assert by_route["result"] == by_message["result"]
+        assert by_route["result"] == {"allow_control": True, "outstations": []}
         assert by_route["id"] is None and by_message["id"] == 4
 
     @pytest.mark.asyncio

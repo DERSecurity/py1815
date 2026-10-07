@@ -159,7 +159,7 @@ async def run_console(
     demonstration. ``profile_map`` is the profile the outstations named on
     the command line are meant to serve.
     """
-    service = Service()
+    service = Service(allow_control=args.allow_control)
     token = args.token or os.environ.get(TOKEN_VARIABLE) or None
     if token is None and args.new_token:
         token = secrets.token_urlsafe(16)
@@ -178,6 +178,8 @@ async def run_console(
         if not await _add_named(service, args, profile, waiting):
             return 2
         print(f"Satori DNP3 master console at {server.url}", flush=True)
+        if args.allow_control:
+            print("  commanding is on: this console can operate outputs", flush=True)
         if demo is not None:
             print(
                 f"  a simulated DER is listening on 127.0.0.1:{demo.port} "
@@ -199,7 +201,7 @@ async def run_console(
 
 async def run_service(args: argparse.Namespace, profile_map: PointMap | None = None) -> int:
     """Serve the line service until interrupted or told to stop."""
-    service = Service()
+    service = Service(allow_control=args.allow_control)
     waiting: list[asyncio.Task[None]] = []
     try:
         server = LineServer(service, bind=args.bind)
@@ -224,6 +226,12 @@ async def run_service(args: argparse.Namespace, profile_map: PointMap | None = N
 
 
 def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--allow-control",
+        action="store_true",
+        help="carry out the operations that command an outstation: its outputs, counters, "
+        "clock and restart indication (default: read only, and refuse them)",
+    )
     parser.add_argument(
         "--outstation",
         action="append",

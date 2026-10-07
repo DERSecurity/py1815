@@ -19,6 +19,7 @@ from collections.abc import Callable
 
 from py1815.application import FunctionCode
 from py1815.master.association import Exchange, MasterAssociation, Unsolicited
+from py1815.master.controls import Operated, Plan
 from py1815.master.operations import Operations
 from py1815.master.store import Store
 from py1815.session import Session
@@ -27,7 +28,7 @@ from py1815.session import Session
 _MAX_PASSES = 10_000
 
 
-class Loopback(Operations[Exchange]):
+class Loopback(Operations[Exchange, Operated]):
     """A master association and a session, each handed what the other sent."""
 
     def __init__(
@@ -69,6 +70,12 @@ class Loopback(Operations[Exchange]):
         self.store.apply(exchange.objects, now=self._clock())
         self._collect()
         return exchange
+
+    def _carry_out(self, plan: Plan) -> Operated:
+        done: list[Exchange] = []
+        while (step := plan.next(done)) is not None:
+            done.append(self._exchange(*step))
+        return plan.result(done)
 
     def listen(self) -> list[Unsolicited]:
         """Ask the session for what it would send unasked, and take it.
