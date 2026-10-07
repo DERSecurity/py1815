@@ -331,6 +331,10 @@ class ReferenceDer:
             if (watts < 0 and full) or (watts > 0 and empty):
                 watts = 0.0
         if self._on(BO_ENABLE_POWER_LIMIT):
+            # The profile takes the two percentages of different things: of
+            # maximum generation power, and of maximum charging power. This DER
+            # has one rating for both. Give it a charging rating of its own and
+            # the second line has to use it.
             generating = self._setting(AO_POWER_LIMIT_GENERATION) / 100.0 * ratings.watts
             charging = self._setting(AO_POWER_LIMIT_CHARGING) / 100.0 * ratings.watts
             watts = max(-charging, min(watts, generating))
