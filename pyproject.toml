@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py1815"
-version = "0.1.0"
+version = "0.2.0"
 description = "A DNP3 (IEEE 1815) outstation in pure Python"
 readme = "README.md"
 requires-python = ">=3.11"
