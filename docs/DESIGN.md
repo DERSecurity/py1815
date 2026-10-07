@@ -1166,6 +1166,37 @@ ask over. A caller evaluating an outstation is asking what it does, and "it did 
 answer" is as much an answer as any other.
 *Trade-off:* a failure is not loud by itself, so a caller has to check `outcome`.
 
+**D77 -- The master's service is one table of operations, and the console speaks only
+that.** `Service.handle` takes a JSON object naming an operation and returns one. A line
+socket carries those messages for a test rig, and HTTP carries the same ones for a
+browser. The web console holds no logic: it renders what the service reports and sends
+what a person asks, so nothing it does is out of reach of a script, and its behavior is
+tested at the service with no browser. A request over HTTP is a POST and what happens
+unasked arrives as server-sent events, which between them need nothing the standard
+library lacks; a WebSocket would have needed a dependency or a protocol implementation
+owned here, to carry what two plain HTTP exchanges already carry.
+*Trade-off:* the stream is one way, so a request and its answer never share a connection
+with the events around them, and a client correlates the two by `id`.
+
+**D78 -- The console listens on this machine, and takes a request only from its own
+page.** A master is pointed at real equipment, and a service that drives one is a way
+into that equipment. It binds the loopback address unless told otherwise, and told
+otherwise it refuses to start without a token that every request then has to carry. That
+is not enough by itself, because a browser will carry a request from any site to a port
+on the machine it runs on. So a request is refused when its `Origin` is another site,
+when it names a host that is not this machine, and when its body is not sent as
+`application/json`, which a page elsewhere cannot send without asking first and being
+refused. The token is asked of the service, which is every operation and the stream of
+what happens, and not of the console's own files: a page cannot put a token on the
+stylesheet and script it links to, and those say nothing about any outstation. A container
+is the one place the console listens widely by design, since its own network is not the
+one its port is published on; there a token is made for the run, or taken from the
+environment, or done without when the caller says the port is published to this machine
+alone. The console's own page loads nothing from the network, so it works on a lab
+network that reaches nothing, and tells nobody that it is running.
+*Trade-off:* the fonts of the project's site are named and not fetched, so the console
+is set in whatever the machine has when they are not installed.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1186,6 +1217,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
 - `master.association` is the session's mirror: what is true of a conversation, from the end
   that asks. Like the session it does no I/O. `master.api` owns the socket, and
   `master.loopback` stands in for one by handing octets straight to a session.
+- `master.service` is the master's operations as JSON, and knows nothing of who is asking.
+  The line socket, the HTTP server and the console are each a way to reach it.
 
 ## Testing
 

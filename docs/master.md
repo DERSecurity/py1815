@@ -1,13 +1,15 @@
-# Reading an outstation
+# The master
 
 `py1815.master` is a DNP3 master, the side that asks. It is here to exercise
-outstations: this library's, in tests, and any other, on a bench.
+outstations: this library's, in tests, and any other, on a bench. This page is
+the master from Python; [the console](console.md) and [the API](master-api.md)
+are the same master from a browser and from another process.
 
 !!! note "A first version"
     It reads. It polls by class, reads named points, confirms what asks to be
     confirmed, takes unsolicited responses and keeps the last value of every
-    point. It does not command an output, does not reconnect by itself, and
-    has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    point, from Python, from a JSON service, or from a web console. It does
+    not command an output, does not reconnect by itself, and has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -44,12 +46,17 @@ returns an `Outstation`, which is where the requests are:
 | Request | Asks for |
 |---|---|
 | `integrity_poll()` | Classes 1, 2 and 3, then class 0: every event, then every static value |
-| `scan(kind)` | `"integrity"`, `"events"`, or one class: `"class0"` to `"class3"` |
+| `scan(kind)` | `"integrity"`, `"events"`, one class: `"class0"` to `"class3"`, or `"outputs"` |
 | `read(...)` | Named points, by type and index, or `ALL` of a type, in one request |
 | `request(function, body)` | Any function code, with the octets that follow it |
 
 Requests made at the same time take turns, in the order they were made. An
 outstation carries one request at a time.
+
+An integrity poll does not return what the outputs stand at. The IEEE 1815.2
+profile leaves output status out of class 0, so it is read by naming its
+groups: `scan("outputs")` reads binary and analog output status, and
+`read(analog_outputs=ALL)` reads one of them.
 
 ## What comes back
 
@@ -125,6 +132,42 @@ needs: events left unconfirmed are still there on the next scan.
 ```python
 lab = await master.add("lab", host="192.0.2.10", confirm=False)
 ```
+
+## Repeating a scan
+
+Nothing is sent on a schedule unless you ask for it:
+
+```python
+lab.repeat_scan("integrity", 30)   # every thirty seconds
+lab.repeat_scan("outputs", 30)     # output status, which the integrity poll leaves out
+lab.repeat_scan("events", 2)
+lab.repeat_scan("events", None)    # stop
+```
+
+A repeated scan takes its turn with every other request, stops when the
+connection ends, and starts again when `connect()` makes it again.
+
+## The traffic
+
+Each outstation keeps a `trace`: every frame sent and received, with its time,
+its octets and a reading of them one layer at a time.
+
+```python
+for entry in lab.trace.since():
+    print(entry.direction, entry.summary)
+# tx READ seq 0: class 1, class 2, class 3, class 0
+# rx RESPONSE seq 0 CON [NEED_TIME, DEVICE_RESTART]: g1v2 x49, g30v1 x283
+```
+
+## From a browser, or from another process
+
+The same master can be driven without writing Python:
+
+- [The console](console.md) is a web page that shows an outstation's points,
+  events and traffic. `py1815-master console --demo` starts it beside a
+  simulated DER.
+- [The master's API](master-api.md) is every operation as JSON, over HTTP or a
+  line at a time over a local socket, described in an OpenAPI document.
 
 ## In one process, with no socket
 

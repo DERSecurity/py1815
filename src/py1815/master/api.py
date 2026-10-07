@@ -22,6 +22,7 @@ from types import TracebackType
 from typing import Any
 
 from py1815.application import FunctionCode
+from py1815.master import requests
 from py1815.master.association import (
     DEFAULT_RESPONSE_TIMEOUT,
     Exchange,
@@ -30,6 +31,7 @@ from py1815.master.association import (
 )
 from py1815.master.operations import Operations
 from py1815.master.store import Store
+from py1815.master.trace import RECEIVED, SENT, Trace
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,8 @@ class Outstation(Operations[Awaitable[Exchange]]):
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
         confirm: bool = True,
         on_unsolicited: Callable[[Unsolicited], None] | None = None,
+        on_exchange: Callable[[Exchange], None] | None = None,
+        on_connection: Callable[[bool], None] | None = None,
     ) -> None:
         """
         Args:
@@ -76,6 +80,10 @@ class Outstation(Operations[Awaitable[Exchange]]):
                 :class:`~py1815.master.association.MasterAssociation`.
             on_unsolicited: Called with each unsolicited response as it
                 arrives, after it has been confirmed and stored.
+            on_exchange: Called with each exchange as it ends, after its
+                objects have been stored.
+            on_connection: Called with True when the connection is made and
+                False when it ends.
         """
         self.name = name
         self.host = host
@@ -87,7 +95,17 @@ class Outstation(Operations[Awaitable[Exchange]]):
             confirm=confirm,
         )
         self.store = Store()
+        self.trace = Trace()
         self.on_unsolicited = on_unsolicited
+        self.on_exchange = on_exchange
+        self.on_connection = on_connection
+        #: How the exchanges so far ended, by outcome.
+        self.counts: dict[str, int] = {}
+        #: The last exchange that received anything, and when it ended.
+        self.last_response: Exchange | None = None
+        self.last_response_at: float | None = None
+        self._scanning: dict[str, asyncio.Task[None]] = {}
+        self._scan_intervals: dict[str, float] = {}
         self._connect_timeout = connect_timeout
         self._unsolicited: deque[Unsolicited] = deque(maxlen=_UNSOLICITED_KEPT)
         self._reader: asyncio.StreamReader | None = None
@@ -124,10 +142,17 @@ class Outstation(Operations[Awaitable[Exchange]]):
             ) from exc
         self.association.connection_reset()
         self.association.take()
+        self.trace.reset()
         self._receiving = asyncio.create_task(self._receive(), name=f"dnp3-master-{self.name}")
+        self._notify_connection(True)
+        for kind, interval in self._scan_intervals.items():
+            self._start_scan(kind, interval)
 
     async def close(self) -> None:
         """Close the connection. The store and the association's counters stay."""
+        for task in self._scanning.values():
+            task.cancel()
+        self._scanning.clear()
         receiving, self._receiving = self._receiving, None
         writer, self._writer = self._writer, None
         self._reader = None
@@ -151,8 +176,10 @@ class Outstation(Operations[Awaitable[Exchange]]):
                 if not data:
                     logger.info("dnp3 master: %s closed the connection", self.name)
                     return
+                self.trace.record(RECEIVED, data)
                 reply = self.association.receive(data)
                 if reply:
+                    self.trace.record(SENT, reply)
                     writer.write(reply)
                     await writer.drain()
                 self._deliver_unsolicited()
@@ -166,7 +193,15 @@ class Outstation(Operations[Awaitable[Exchange]]):
             if self._writer is writer:
                 self._writer = None
                 writer.close()
+                self._notify_connection(False)
             self._progress.set()
+
+    def _notify_connection(self, connected: bool) -> None:
+        if self.on_connection is not None:
+            try:
+                self.on_connection(connected)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("dnp3 master: the connection handler for %s failed", self.name)
 
     def _deliver_unsolicited(self) -> None:
         for unsolicited in self.association.take_unsolicited():
@@ -190,7 +225,9 @@ class Outstation(Operations[Awaitable[Exchange]]):
             if writer is None or writer.is_closing():
                 raise NotConnected(f"{self.name} is not connected")
             self._progress.clear()
-            writer.write(self.association.request(function, body))
+            octets = self.association.request(function, body)
+            self.trace.record(SENT, octets)
+            writer.write(octets)
             # A write that fails is seen by the receive loop as well, which
             # ends the exchange as abandoned.
             with contextlib.suppress(OSError):
@@ -198,7 +235,7 @@ class Outstation(Operations[Awaitable[Exchange]]):
             while True:
                 exchange = self.association.take()
                 if exchange is not None:
-                    self.store.apply(exchange.objects, now=time.monotonic())
+                    self._finished(exchange)
                     return exchange
                 wait = self.association.expires_after()
                 if wait is None:
@@ -215,6 +252,62 @@ class Outstation(Operations[Awaitable[Exchange]]):
                     continue
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._progress.wait(), wait)
+
+    def _finished(self, exchange: Exchange) -> None:
+        self.store.apply(exchange.objects, now=time.monotonic())
+        outcome = exchange.outcome.value
+        self.counts[outcome] = self.counts.get(outcome, 0) + 1
+        if exchange.fragments:
+            self.last_response = exchange
+            self.last_response_at = time.time()
+        if self.on_exchange is not None:
+            try:
+                self.on_exchange(exchange)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("dnp3 master: the exchange handler for %s failed", self.name)
+
+    # ----------------------------------------------------------------- scans
+
+    @property
+    def scan_intervals(self) -> dict[str, float]:
+        """The scans being repeated, by kind, as seconds between them."""
+        return dict(self._scan_intervals)
+
+    def repeat_scan(self, kind: str, interval: float | None) -> None:
+        """Repeat a scan every ``interval`` seconds, or stop repeating it with None.
+
+        Nothing is repeated unless this is called: a master sends what it was
+        asked to send. A repeated scan waits its turn like any other request,
+        stops when the connection ends, and starts again when it is made again.
+        """
+        requests.scan(kind)  # Refuses a kind that is not a scan, before anything runs.
+        running = self._scanning.pop(kind, None)
+        if running is not None:
+            running.cancel()
+        if interval is None:
+            self._scan_intervals.pop(kind, None)
+            return
+        if not interval > 0:
+            raise ValueError(f"an interval of {interval} is not a wait between scans")
+        self._scan_intervals[kind] = interval
+        if self.connected:
+            self._start_scan(kind, interval)
+
+    def _start_scan(self, kind: str, interval: float) -> None:
+        running = self._scanning.pop(kind, None)
+        if running is not None:
+            running.cancel()
+        self._scanning[kind] = asyncio.create_task(
+            self._repeat(kind, interval), name=f"dnp3-master-{self.name}-{kind}"
+        )
+
+    async def _repeat(self, kind: str, interval: float) -> None:
+        try:
+            while True:
+                await self.scan(kind)
+                await asyncio.sleep(interval)
+        except NotConnected:
+            logger.info("dnp3 master: %s scan of %s stopped with the connection", kind, self.name)
 
 
 class Master:

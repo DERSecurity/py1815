@@ -1,7 +1,8 @@
 # Master
 
-A master for exercising outstations. [Reading an outstation](../master.md) is
-the guide; this is the reference.
+A master for exercising outstations. [The master](../master.md),
+[The console](../console.md) and [The master's API](../master-api.md) are the
+guides; this is the reference.
 
 ## Over a socket
 
@@ -24,6 +25,18 @@ One conversation with one outstation, with no I/O: octets in, octets out.
 ## The store
 
 ::: py1815.master.store
+
+## The trace
+
+::: py1815.master.trace
+
+## The service
+
+::: py1815.master.service
+
+## The description of the API
+
+::: py1815.master.openapi
 
 ## Requests
 

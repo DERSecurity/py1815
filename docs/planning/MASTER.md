@@ -141,14 +141,14 @@ interface.
 | `master.requests`, `master.operations` | The requests as object headers, and the one list of operations every carrier shares | Built, for reading |
 | `master.store` | The last value of every point, and the events in order | Built |
 | `master.loopback` | A master handed straight to a `Session`, with no socket | Built |
-| `master.api` | `Master` and `Outstation`: the Python interface, over TCP | Built, without TLS or reconnection |
+| `master.api` | `Master` and `Outstation`: the Python interface, over TCP, with scans repeated on request | Built, without TLS or reconnection |
 | `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | |
 | `master.deviations` | Misbehavior, applied between the association and the connection | |
-| `master.trace` | Every frame and fragment with its time and direction; the capture writer, moved from `interop/` | |
-| `master.service` | The JSON service: the same operations over a local socket and over WebSocket | |
+| `master.trace` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built, without the capture writer |
+| `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built, for reading |
 | `master.profile` | The DER profile: names, units, functions, curves | |
-| `master.cli` | `py1815-master` | |
-| `master.console` | The web console's files | |
+| `master.cli` | `py1815-master` | Built: `console` and `serve` |
+| `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, Log |
 
 ## The association
 
@@ -192,7 +192,8 @@ through the association:
 
 Numbered M here. Each takes the next number in [DESIGN.md](../DESIGN.md) when
 the phase that builds it lands, so two plans in flight do not claim one number.
-M1 and M2 are recorded there as D73, M3 as D74 and D75, and M8 as D76.
+M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
+M10 as D77, and the listening half of M9 as D78.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -309,8 +310,8 @@ refused before a frame is built.
 ### The JSON service
 
 For a caller that is not Python, or not in the same process. One JSON object
-per line over a local TCP socket; the same objects over WebSocket for the
-console.
+per line over a local TCP socket; the same objects over HTTP for the console,
+where a request is a POST and events arrive as server-sent events.
 
 ```json
 {"id": 12, "op": "read", "outstation": "lab-inverter",
@@ -418,9 +419,11 @@ active power limit, enter service, and the voltage and frequency trip curves.
 ## The web console
 
 For demonstrating the software and for working at a bench. It carries the
-Project Satori identity: the lockup and mark already in `docs/assets/`, in
-their light and dark forms, and the palette of the documentation site, so the
-console, the documentation and the project website read as one thing.
+Project Satori identity as the project's website has it: warm paper and
+charcoal ink, hairline rules and square corners, a serif for headings and a
+mono for anything read off the wire, teal for what is live and coral for what
+needs attention, and the dark "screen" panel the site shows a device on, used
+here for a frame read layer by layer. The lockup is the one in `docs/assets/`.
 
 ### Laid out the way DNP3 tools are
 
@@ -478,7 +481,9 @@ with the reason.
 
 - Static files with no build step, shipped inside the package, so a wheel is
   enough to run it and the repository needs no second toolchain.
-- It speaks the JSON service over WebSocket and nothing else (M7, M10).
+- It speaks the JSON service over HTTP and nothing else (M7, M10).
+- It loads nothing from the network. The site's fonts are named and not
+  fetched, so a console on a lab network asks the outside world for nothing.
 - `py1815-master console` serves it. `py1815-master console --demo` also starts
   a simulated DER in the same process and connects to it, so the demonstration
   is one command, and a container image runs that command.
@@ -527,9 +532,15 @@ done means.
    a restart of the outstation, and a manual one sends nothing unasked.
 6. **The API and the service.** The Python interface settled, the JSON service,
    the command line, `--allow-control`. *Done when* the workload in *What a test
-   rig asks of a master* runs as a test over the socket.
+   rig asks of a master* runs as a test over the socket. *Built,* for what the
+   master can do so far: every reading operation, over a line socket and over
+   HTTP with a route for each, described in an OpenAPI document the tests hold
+   the service to. *Left:* the operations that command, and `--allow-control`
+   with them.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.
+   *Built:* recording, reading layer by layer, subscription. *Left:* the
+   capture writer.
 8. **Interoperability.** The independent outstations in CI. *Done when* both
    are read and commanded on every pull request.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
@@ -540,6 +551,10 @@ done means.
 11. **The console.** The layout above, the demonstration command, the image.
     *Done when* a person can add an outstation, watch its points, operate an
     output, enable a function and read the traffic without a terminal.
+    *Built:* adding an outstation, its points, scans and reads, events, and
+    the traffic, with `console --demo`; the profile's points an outstation has
+    not reported; and tests that load it in a browser. *Left:* everything that
+    commands, the DER and Evaluate tabs, the saved requests, the image.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say.
@@ -584,10 +599,10 @@ is stable. 12 is last because it is built from all of them.
 
 ## Open
 
-- **What serves the console.** The standard library has no WebSocket server.
-  Either a small dependency behind the extra, or a WebSocket implementation
-  owned here. A dependency is the better trade unless it brings a framework
-  with it; the service over a plain socket needs neither.
+- **What serves the console.** Settled: HTTP, with server-sent events for what
+  happens unasked. The standard library has no WebSocket server, and a POST and
+  an event stream carry everything a WebSocket would have, with no dependency
+  and no protocol implementation to own (D77). So there is no extra to install.
 - **Master conformance procedures.** Whether the DNP Users Group publishes test
   procedures for a master that this project can carry out as it does the
   outstation's. If so they become a phase; if not, the deviations catalog and

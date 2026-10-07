@@ -55,6 +55,11 @@ socket.
 - **[Serving an outstation](outstation.md)** to get one answering a master.
 - **[Serving a DER](der.md)** to run an IEEE 1815.2 outstation, simulated or
   over your own device.
+- **[The master](master.md)** to read an outstation from Python, for testing
+  one.
+- **[The console](console.md)** to watch an outstation's points, events and
+  traffic in a browser, and **[The master's API](master-api.md)** to drive the
+  same master from another process.
 - **[Design decisions](DESIGN.md)** for why the library is shaped the way it
   is, numbered so they can be argued with.
 - **[Testing](testing.md)** for how the wire behavior is held to, and what is
