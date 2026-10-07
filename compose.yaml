@@ -70,6 +70,10 @@ services:
       # what decides who can reach it is `ports`, below, and that says this
       # machine alone.
       - --no-token
+      # Lets the console operate outputs. The only outstation it is given
+      # is the simulated DER beside it; take this out before pointing it
+      # at anything else.
+      - --allow-control
     environment:
       # Set a token before publishing the console any wider than that. With
       # one set, every request to the service has to carry it.

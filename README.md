@@ -80,7 +80,8 @@ docker exec der py1815-der poll     # Docker
 reading the simulated DER, with the point tables fetched as above:
 
 ```
-py1815-master console --demo --open
+py1815-master console --demo --open                   # reads
+py1815-master console --demo --open --allow-control   # and can operate outputs
 ```
 
 That starts a simulated IEEE 1815.2 DER, a master connected to it, and the console at

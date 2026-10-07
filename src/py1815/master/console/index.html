@@ -12,6 +12,7 @@
   <img src="satori.png" alt="Satori" class="lockup">
   <div class="product">DNP3 Master</div>
   <div class="spacer"></div>
+  <div id="control-state" class="chip" hidden></div>
   <div id="service-state" class="chip">connecting</div>
 </header>
 
@@ -137,6 +138,61 @@
               <label>Indices <input name="indices" placeholder="all, or 4, 6, 8"></label>
               <button type="submit">Read</button>
             </form>
+          </div>
+
+          <div class="card" id="operate-card">
+            <h3>Operate outputs</h3>
+            <p id="control-off" class="hint">Commanding is off. Start the console with <span class="mono">--allow-control</span> to operate outputs.</p>
+            <form id="operate-form">
+              <fieldset id="operate-fields" class="stack" disabled>
+                <label>Output
+                  <select name="type">
+                    <option value="bo">Binary output (group 12)</option>
+                    <option value="ao" selected>Analog output (group 41)</option>
+                  </select>
+                </label>
+                <label>Index <input name="index" type="number" min="0" max="65535" step="1" required></label>
+                <label data-for="bo" hidden>Operation
+                  <select name="operation">
+                    <option value="latch_on">Latch on</option>
+                    <option value="latch_off">Latch off</option>
+                    <option value="pulse_on">Pulse on</option>
+                    <option value="pulse_off">Pulse off</option>
+                    <option value="trip">Trip</option>
+                    <option value="close">Close</option>
+                  </select>
+                </label>
+                <label data-for="ao">Value <input name="value" type="number" step="any"></label>
+                <label data-for="ao">Sent as
+                  <select name="variation">
+                    <option value="">The narrowest that carries it</option>
+                    <option value="2">16-bit integer (variation 2)</option>
+                    <option value="1">32-bit integer (variation 1)</option>
+                    <option value="3">Single-precision float (variation 3)</option>
+                    <option value="4">Double-precision float (variation 4)</option>
+                  </select>
+                </label>
+                <label>Mode
+                  <select name="mode">
+                    <option value="select">Select, then operate</option>
+                    <option value="direct">Direct operate</option>
+                    <option value="direct_no_ack">Direct operate, no acknowledgment</option>
+                  </select>
+                </label>
+                <label class="check"><input type="checkbox" name="readback" checked> Read the output's status back afterwards</label>
+                <button type="submit" class="primary">Operate</button>
+              </fieldset>
+            </form>
+          </div>
+
+          <div class="card" id="writes-card">
+            <h3>Clock, restart and counters</h3>
+            <div class="buttons" id="write-buttons">
+              <button data-write="write_time" disabled>Write the time</button>
+              <button data-write="clear_restart" disabled>Clear restart indication</button>
+              <button data-write="freeze" disabled>Freeze counters</button>
+              <button data-write="freeze_clear" disabled>Freeze and clear counters</button>
+            </div>
           </div>
 
           <div class="card">

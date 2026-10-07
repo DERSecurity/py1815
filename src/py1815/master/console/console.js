@@ -53,7 +53,11 @@ const state = {
   frames: [],
   frame: null,       // the frame shown in detail
   log: [],
+  allowControl: false,  // whether the service behind this page commands outstations
 };
+
+// What a binary output was told, by the control code that told it.
+const OPERATIONS = { 3: "Latch on", 4: "Latch off", 1: "Pulse on", 2: "Pulse off", 129: "Trip", 65: "Close" };
 
 // --------------------------------------------------------------- utilities
 
@@ -191,6 +195,10 @@ function current() {
 async function refreshStatus() {
   const status = await api("status");
   state.outstations = status.outstations;
+  if (state.allowControl !== Boolean(status.allow_control) || $("#control-state").hidden) {
+    state.allowControl = Boolean(status.allow_control);
+    renderControl();
+  }
   if (state.selected && !current()) select(null);
   if (!state.selected && state.outstations.length) await select(state.outstations[0].name);
   renderOutstations();
@@ -259,6 +267,43 @@ function renderHeader() {
   chip.textContent = outstation.connected ? "Connected" : "Not connected";
   chip.className = `chip ${outstation.connected ? "good" : "bad"}`;
   $("#connect-button").textContent = outstation.connected ? "Disconnect" : "Connect";
+}
+
+// Whether this page can command is the service's to say, and is said plainly:
+// a master is pointed at real equipment.
+function renderControl() {
+  const chip = $("#control-state");
+  chip.hidden = false;
+  chip.textContent = state.allowControl ? "Commanding on" : "Read only";
+  chip.className = `chip ${state.allowControl ? "armed" : ""}`;
+  $("#operate-fields").disabled = !state.allowControl;
+  $("#control-off").hidden = state.allowControl;
+  for (const button of document.querySelectorAll("#write-buttons button")) {
+    button.disabled = !state.allowControl;
+  }
+  pointHead = null;
+  pointRows = new Map();
+  if (state.tab === "points") renderPoints();
+}
+
+function showOperateFields() {
+  const type = $("#operate-form").elements.type.value;
+  for (const label of document.querySelectorAll("#operate-form [data-for]")) {
+    label.hidden = label.dataset.for !== type;
+  }
+  $("#operate-form").elements.value.required = type === "ao";
+}
+
+// From an output's row to the form that operates it, filled in.
+function operatePoint(type, index, value) {
+  const form = $("#operate-form");
+  form.elements.type.value = type;
+  form.elements.index.value = index;
+  if (type === "ao" && typeof value === "number") form.elements.value.value = value;
+  if (type === "bo" && typeof value === "boolean") form.elements.operation.value = value ? "latch_off" : "latch_on";
+  showOperateFields();
+  showTab("commands");
+  (type === "ao" ? form.elements.value : form.elements.operation).focus();
 }
 
 // ---------------------------------------------------------------- overview
@@ -371,7 +416,12 @@ function renderPointTypes() {
 let pointRows = new Map();
 let pointHead = null;
 
-function unreportedRow(point) {
+function operateCell(type, index, value) {
+  return el("td", { class: "act" },
+    el("button", { class: "quiet", text: "Operate", onclick: () => operatePoint(type, index, value) }));
+}
+
+function unreportedRow(point, operable) {
   return el("tr", { class: "unreported" },
     el("td", { class: "num", text: point.index }),
     el("td", { class: "name" }, nameNodes(state.pointType, point.index, point.name),
@@ -381,7 +431,8 @@ function unreportedRow(point) {
     el("td", {}),
     el("td", {}),
     el("td", {}),
-    el("td", { class: "num age" }));
+    el("td", { class: "num age" }),
+    operable && operateCell(state.pointType, point.index, null));
 }
 
 function renderPoints() {
@@ -398,8 +449,11 @@ function renderPoints() {
   const changedOnly = $("#point-changed").checked;
   const now = performance.now() / 1000;
 
-  if (pointHead !== named) {
-    pointHead = named;
+  // An output's row carries the way to operate it, where this page can.
+  const operable = state.allowControl && (state.pointType === "bo" || state.pointType === "ao");
+  const head = `${named}:${operable}`;
+  if (pointHead !== head) {
+    pointHead = head;
     $("#points-table thead").replaceChildren(el("tr", {},
       el("th", { class: "num w-index", text: "Index" }),
       named && el("th", { text: "Name" }),
@@ -408,7 +462,8 @@ function renderPoints() {
       el("th", { class: "w-time", text: "Outstation time" }),
       el("th", { class: "w-object", text: "Object" }),
       el("th", { class: "w-source", text: "Reported by" }),
-      el("th", { class: "num w-age", text: "Age" })));
+      el("th", { class: "num w-age", text: "Age" }),
+      operable && el("th", { class: "w-act" })));
   }
 
   const kept = new Map();
@@ -421,8 +476,8 @@ function renderPoints() {
     }
     if (row.unreported) {
       if (changedOnly) continue;
-      const key = `${state.pointType}:${row.index}:unreported`;
-      const entry = pointRows.get(key) || { drawn: "", node: unreportedRow(row) };
+      const key = `${state.pointType}:${row.index}:unreported:${operable}`;
+      const entry = pointRows.get(key) || { drawn: "", node: unreportedRow(row, operable) };
       entry.node.dataset.seen = "";
       kept.set(key, entry);
       nodes.push(entry.node);
@@ -431,7 +486,7 @@ function renderPoints() {
     const age = now - row.seen;
     const sinceChange = row.changed === null ? Infinity : now - row.changed;
     if (changedOnly && sinceChange > FRESH_SECONDS) continue;
-    const key = `${state.pointType}:${row.index}:${named}`;
+    const key = `${state.pointType}:${row.index}:${named}:${operable}`;
     const drawn = JSON.stringify([row.name, row.value, row.flags, row.time_ms, row.group, row.variation, row.from_event]);
     let entry = pointRows.get(key);
     if (!entry || entry.drawn !== drawn) {
@@ -445,13 +500,14 @@ function renderPoints() {
           el("td", { text: stationTime(row.time_ms) }),
           el("td", { class: "mono", text: `g${row.group}v${row.variation}` }),
           el("td", {}, el("span", { class: `source ${row.from_event ? "event" : ""}`, text: row.from_event ? "Event" : "Static" })),
-          el("td", { class: "num age" })),
+          el("td", { class: "num age" }),
+          operable && operateCell(state.pointType, row.index, row.value)),
       };
     }
     entry.node.dataset.seen = row.seen;
     entry.node.dataset.changed = row.changed === null ? "" : row.changed;
     entry.node.classList.toggle("fresh", sinceChange < FRESH_MARK_SECONDS);
-    entry.node.lastElementChild.textContent = ageText(age);
+    entry.node.querySelector(".age").textContent = ageText(age);
     kept.set(key, entry);
     nodes.push(entry.node);
     shownReported += 1;
@@ -500,7 +556,7 @@ function tickAges() {
     const age = now - Number(row.dataset.seen);
     const fresh = row.dataset.changed !== "" && now - Number(row.dataset.changed) < FRESH_MARK_SECONDS;
     row.classList.toggle("fresh", fresh);
-    row.lastElementChild.textContent = ageText(age);
+    row.querySelector(".age").textContent = ageText(age);
   }
 }
 
@@ -669,6 +725,61 @@ function renderResult(exchange) {
           el("td", { class: "mono", text: `g${row.group}v${row.variation}${row.event ? " event" : ""}` })))))) : null);
 }
 
+// What came of an operate: whether the outstation accepted it, and what it
+// said about each control. "Not known" is its own answer and is not shown as
+// a refusal: the output may have been operated.
+function renderOperated(operated) {
+  $("#result-card").hidden = false;
+  let verdict = ["unknown", "Not known"];
+  let detail = "The outstation did not say. The output may have been operated, and nothing was sent again.";
+  if (operated.accepted === true) {
+    verdict = ["accepted", "Accepted"];
+    detail = "";
+  } else if (operated.accepted === false) {
+    verdict = ["refused", operated.operated ? "Refused" : "Not operated"];
+    detail = operated.operated ? "" : "The select was not accepted, so no operate was sent.";
+  }
+  const named = operated.statuses.some((status) => status.name);
+  $("#result").replaceChildren(
+    el("dl", { class: "facts" },
+      el("dt", { text: "Outcome" }), el("dd", {}, el("span", { class: `verdict ${verdict[0]}`, text: verdict[1] }), detail && el("span", { class: "hint", text: ` ${detail}` })),
+      el("dt", { text: "Requests" }), el("dd", {}, operated.exchanges.map((exchange, position) => [
+        position ? ", then " : "",
+        exchange.function, " ", el("span", { class: `outcome ${exchange.outcome}`, text: exchange.outcome })])),
+      el("dt", { text: "Indications" }), el("dd", { text: (operated.exchanges.at(-1).indications || []).join(", ") || "none set" }),
+      el("dt", { text: "Took" }), el("dd", { text: `${operated.exchanges.reduce((sum, exchange) => sum + exchange.elapsed_ms, 0).toFixed(1)} ms` })),
+    el("div", { class: "table-wrap", style: "margin-top:12px" },
+      el("table", { id: "operated-table" },
+        el("thead", {}, el("tr", {},
+          el("th", { text: "Output" }), el("th", { class: "num", text: "Index" }), named && el("th", { text: "Name" }),
+          el("th", { class: "num", text: "Sent" }), el("th", { text: "Status" }), el("th", { text: "Echoed as sent" }))),
+        el("tbody", {}, operated.statuses.map((status) => el("tr", {},
+          el("td", { text: status.type === "bo" ? "Binary output" : "Analog output" }),
+          el("td", { class: "num", text: status.index }),
+          named && el("td", { class: "name" }, nameNodes(status.type, status.index, status.name)),
+          el("td", { class: "num value", text: status.type === "bo" ? (OPERATIONS[status.value] || `code ${status.value}`) : formatValue(status.value) }),
+          el("td", {}, el("span", { class: `verdict ${status.status === "SUCCESS" ? "accepted" : "refused"}`, text: status.status === null ? "no answer" : status.status })),
+          el("td", { text: status.status === null ? "" : (status.echoed ? "Yes" : "No") })))))));
+}
+
+async function operate(type, index, value, mode, variation, readback) {
+  const sent = type === "bo" ? value.replace("_", " ") : value;
+  const label = `operate ${type === "bo" ? "binary" : "analog"} output ${index} (${sent}), ${mode.replace(/_/g, " ")}`;
+  const params = { points: { [type]: { [index]: value } }, mode };
+  if (variation) params.variation = Number(variation);
+  try {
+    const operated = await ask(label, "operate", params);
+    renderOperated(operated);
+    // The status of an output is not part of any scan by class, so it is
+    // asked for here, where a person expects to see what the output now is.
+    if (readback && operated.operated) await ask(`read back ${type === "bo" ? "binary" : "analog"} output ${index}`, "read", { points: { [type]: [index] } });
+  } catch (error) {
+    $("#result-card").hidden = false;
+    $("#result").replaceChildren(el("p", { class: "error", text: error.message }));
+  }
+  refreshStatus();
+}
+
 async function command(label, op, params) {
   try {
     renderResult(await ask(label, op, params));
@@ -834,6 +945,32 @@ function wire() {
     const type = form.elements.type.value;
     command(`read ${TYPE_LABELS[type].toLowerCase()}`, "read", { points: { [type]: indices } });
   });
+
+  $("#operate-form").elements.type.addEventListener("change", showOperateFields);
+  showOperateFields();
+  $("#operate-form").addEventListener("submit", (submitted) => {
+    submitted.preventDefault();
+    const fields = submitted.target.elements;
+    const type = fields.type.value;
+    operate(
+      type,
+      Number(fields.index.value),
+      type === "bo" ? fields.operation.value : Number(fields.value.value),
+      fields.mode.value,
+      type === "ao" ? fields.variation.value : "",
+      fields.readback.checked,
+    );
+  });
+
+  const writes = {
+    write_time: ["write the time", "write_time", {}],
+    clear_restart: ["clear the restart indication", "clear_restart", {}],
+    freeze: ["freeze counters", "freeze", { clear: false }],
+    freeze_clear: ["freeze and clear counters", "freeze", { clear: true }],
+  };
+  for (const button of document.querySelectorAll("#write-buttons button")) {
+    button.addEventListener("click", () => command(...writes[button.dataset.write]));
+  }
 
   $("#unsolicited-form").addEventListener("submit", (submitted) => {
     submitted.preventDefault();
