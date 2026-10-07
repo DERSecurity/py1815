@@ -38,8 +38,10 @@ breaking change.
 ## Run an IEEE 1815.2 DER outstation
 
 `py1815-der` serves a simulated DER as an IEEE 1815.2 outstation: the profile's own point map,
-measurements that move, energy counters that freeze, and four DER functions a master can enable
-and watch take effect.
+measurements that move, energy counters that freeze, and a few DER functions a master can enable
+and watch take effect. The simulation is there to exercise the points. It is not a model of a
+DER: how a DER carries out a function is out of scope for this package, and belongs to the
+device or simulator bound behind the outstation.
 
 Natively, with Python 3.11 or later:
 
@@ -101,8 +103,8 @@ certification body:
 | Event classes, class 0 membership and reporting modes (5.3, 5.6) | Implemented as the profile selects them |
 | Counter freezing (5.6.3): periodic from startup, period set by the master, never cleared, logged as timestamped events | Implemented |
 | Every point the tables mark mandatory | Served by the simulated DER |
-| DER functions (clause 6) | Active power limit, charge/discharge, constant vars, constant power factor, volt-var and volt-watt act on the simulation. Every other function reports "not supported" through its supports point, as 6.1.1 requires of a function that is not implemented. A disabled function's inputs are sent without the ONLINE flag |
-| Curves (6.1.3) | Ten curves behind the multiplexed block, with the selector, referenced-indicator, locking and curve-type rules. Volt-var and volt-watt follow theirs; hysteresis is not followed |
+| DER functions (clause 6) | Their points are served. Their behavior is out of scope: what a DER does when a function is enabled belongs to the device or simulator bound behind the outstation. What the profile says of the points themselves is implemented: a function with no enable output bound reports "not supported" through its supports point, as 6.1.1 requires, and a disabled function's inputs are sent without the ONLINE flag. The simulated DER answers to active power limit, charge/discharge, constant vars, constant power factor, volt-var and volt-watt, far enough to exercise those points and no further |
+| Curves (6.1.3) | The curve block is implemented: ten curves behind the multiplexed block, with the selector, referenced-indicator, locking and curve-type rules. Following a curve is out of scope, and belongs to the DER behind the outstation. The simulated DER follows volt-var and volt-watt by straight lines between points; hysteresis is not followed |
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
 | DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
@@ -114,8 +116,10 @@ certification body:
 2.12.00), generated from the running configuration: its point lists, limits and
 implementation table. See [Serving a DER](https://dersecurity.github.io/py1815/der/).
 
-To put a real device behind the same outstation, bind its values to the profile's points instead
-of the simulation's: see [Serving a DER](https://dersecurity.github.io/py1815/der/).
+To put a real device or a DER simulator behind the same outstation, bind its values to the
+profile's points instead of the simulation's: see
+[Serving a DER](https://dersecurity.github.io/py1815/der/). That is also where DER functions,
+curves and anything else a DER does come from.
 
 ## What it does
 

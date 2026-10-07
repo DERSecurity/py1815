@@ -8,9 +8,11 @@ and six DER functions a controlling station can enable and watch take effect
 -- active power limit, charge/discharge, constant vars, constant power
 factor, and two that follow a curve of voltage: volt-var and volt-watt.
 
-It is a stand-in, not a model of any product. What a real integration
-replaces is this module and nothing else: it binds the same points to its own
-device through the same :class:`~py1815.profile.binding.Binding`.
+It is a stand-in, not a model of any product, and it is not where DER
+behavior belongs: how a DER carries out a function or follows a curve is out
+of scope for this package. What a real integration replaces is this module
+and nothing else: it binds the same points to its own device or DER simulator
+through the same :class:`~py1815.profile.binding.Binding`.
 
 The indices below are the profile's fixed ones (IEEE 1815.2 clause 5.2 gives
 the configuration and system blocks absolute indices), named for what this
