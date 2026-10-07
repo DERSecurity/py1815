@@ -1,4 +1,13 @@
-"""The master over a real socket, against this library's listener."""
+"""The master over a real socket, against this library's listener.
+
+The same two halves of the library as ``test_master_loopback.py``, with a
+socket between them. What these tests show is what the socket adds: that the
+master connects, takes its turn, times out, notices a connection ending, and
+is told of what arrives unasked. Like the loopback tests they show that the
+two ends agree, and not that either reads the standard correctly, since both
+stand on the same layers. The interoperability jobs and the tests written from
+octets are what speak to that.
+"""
 
 from __future__ import annotations
 
