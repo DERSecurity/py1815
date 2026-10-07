@@ -234,6 +234,10 @@ class Service:
             if "outstation" in message and "outstation" not in params:
                 params = {**params, "outstation": message["outstation"]}
             result = await operation(params)
+        # Busy, which the association raises for a second request while one is
+        # outstanding, is deliberately not caught. An outstation takes its
+        # requests one at a time through a lock, so no message can cause it; if
+        # it is ever raised here the fault is in this library and should be seen.
         except (ValueError, KeyError, TypeError) as error:
             text = str(error.args[0]) if isinstance(error, KeyError) and error.args else str(error)
             return {"id": identifier, "ok": False, "error": {"kind": "request", "message": text}}
