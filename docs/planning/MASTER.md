@@ -199,7 +199,8 @@ Numbered M here. Each takes the next number in [DESIGN.md](../DESIGN.md) when
 the phase that builds it lands, so two plans in flight do not claim one number.
 M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
 M10 as D77, the listening half of M9 as D78, M5 with the commanding half
-of M9 as D80, and M4 as D81.
+of M9 as D80, and M4 as D81. D82, reading named points by range, came out of
+the interoperability work and has no M number.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -563,7 +564,14 @@ done means.
    *Built:* recording, reading layer by layer, subscription. *Left:* the
    capture writer.
 8. **Interoperability.** The independent outstations in CI. *Done when* both
-   are read and commanded on every pull request.
+   are read and commanded on every pull request. *Built:* an opendnp3
+   outstation and a `dnp3` crate outstation, read and commanded by
+   `interop/master_check.py` in two jobs of the interoperability workflow, with
+   each control and the time write checked against the outstation's own log.
+   It found the master reading named points with a qualifier opendnp3 rejects
+   (D82). *Left:* the dissectors reading a capture of what the master sends,
+   which waits on the capture writer in item 7; freezes, which neither
+   outstation's fixture serves; and TLS.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
    certification procedures have been reproduced through it over a socket.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*

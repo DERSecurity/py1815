@@ -1269,6 +1269,19 @@ read more slowly than it could be; a reading service leaves an outstation saying
 restarted; and a connection that could not be made in the first place is still the
 caller's to retry.
 
+**D82 -- The master reads named points as start-stop ranges.** A read of named points
+sends one range header (qualifier 0x00 or 0x01) for each run of consecutive indices,
+in ascending order. A Subset Level 2 outstation must accept ranges in a read. The
+index-list qualifiers (0x17 and 0x28) are optional at that level, and opendnp3
+rejects them: the master used them at first, and the first run against an
+independent outstation returned nothing for every such read. The master is tested
+against two outstations this project did not write on every pull request, because
+its tests against this library's own outstation could not have found this: that
+outstation accepts both forms.
+*Trade-off:* scattered indices cost one header each (5 or 7 octets) where an index
+list would cost 1 or 2 octets each, and the points come back in ascending order
+whatever order they were asked in.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

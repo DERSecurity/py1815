@@ -11,8 +11,9 @@ build/
 .coverage
 htmlcov/
 
-# Build output of the interoperability Rust master.
+# Build output of the interoperability Rust peers.
 interop/rust-master/target/
+interop/rust-outstation/target/
 
 # Artifacts the interoperability sweep writes.
 sweep.pcap

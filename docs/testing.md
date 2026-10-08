@@ -36,6 +36,38 @@ The masters answer "does it say the right thing". The dissectors answer "is what
 it emitted really DNP3". Those are different questions and neither subsumes the
 other.
 
+### The master is tested the same way
+
+The master is also tested against outstations this project did not write. Its
+tests against this library's own outstation cannot show that it reads the
+standard correctly, because the two share their protocol code and would agree
+with each other through any mistake they share.
+
+| Outstation | Built on |
+|---|---|
+| `interop/opendnp3_outstation.py` | [opendnp3](https://github.com/dnp3/opendnp3), C++, through its [Python bindings](https://pypi.org/project/dnp3-python/) |
+| `interop/rust-outstation` | [`dnp3`](https://github.com/stepfunc/dnp3) by Step Function I/O, Rust |
+
+Both serve the same fixed points and print every control and time write they
+receive. `interop/master_check.py` connects this library's master to each one
+and checks two things:
+
+- What the master decodes matches the points served: values, quality flags,
+  a response that spans several fragments, events, and unsolicited responses.
+- What the outstation printed matches what the master sent: each control with
+  its index, operation and value in every variation, and the time write. This
+  comes from the outstation's log, so it does not depend on this library's own
+  decoding.
+
+It also runs the master's automatic tasks against both: the startup sequence,
+clearing the restart indication, writing the time, enabling unsolicited
+reporting, and polling when events are indicated.
+
+The first run found a real fault. The master read named points with the
+index-list qualifiers (0x17 and 0x28), which a Subset Level 2 outstation is not
+required to accept, and opendnp3 rejected them. The master now reads named
+points as start-stop ranges (D82).
+
 ### The function code sweep
 
 A separate driver walks the function code space over a real connection and

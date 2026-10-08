@@ -1,0 +1,38 @@
+[package]
+name = "interop-rust-outstation"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Serves an outstation built on Step Function I/O's dnp3, an independently developed Rust stack, for the py1815 master to read and command"
+
+# NOTE ON THE DEPENDENCY BELOW, WHICH IS NOT OPEN SOURCE.
+#
+# `dnp3` (https://github.com/stepfunc/dnp3) is published by Step Function I/O
+# under their public license, which is not an open-source license. The license
+# is the authority on what it permits, so it is linked here and not summarized:
+#
+#   https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt
+#
+# Step Function I/O has said that using the crate for testing and
+# interoperability of py1815 in its public CI is in line with that license
+# (https://github.com/DERSecurity/py1815/issues/48). A fork or any other
+# downstream use should read the license for itself; commercial licensing is at
+# https://stepfunc.io/contact.
+#
+# It is here because it is the only mature Rust DNP3 implementation, and a
+# second implementation in a second language is worth more to this library than
+# a third interface onto the C++ one. It is used only to serve an outstation that
+# this library's master reads and commands in continuous integration; nothing it provides is linked into, distributed with,
+# or depended on by the library itself, and removing this directory removes it
+# entirely.
+#
+# The job that runs this is self-contained: delete this directory and its
+# workflow job, and the remaining peers carry on unchanged.
+[dependencies]
+dnp3 = "1.7"
+tokio = { version = "1", features = ["rt", "macros", "time", "net", "sync"] }
+
+[[bin]]
+name = "interop-rust-outstation"
+path = "src/main.rs"
