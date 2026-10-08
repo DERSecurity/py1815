@@ -109,6 +109,9 @@ says some are waiting, and otherwise sends what you ask for from the Commands ta
 `--manual` it sends only that. The link addresses default to the simulated DER's
 (`--outstation-address 1024 --master-address 1`).
 
+Every setting can also be kept in a JSON file. `py1815-master config` prints a complete one
+to edit, and `--config FILE` loads it. See `docs/master-config.md`.
+
 Or with Docker, which needs nothing installed but Docker:
 
 ```

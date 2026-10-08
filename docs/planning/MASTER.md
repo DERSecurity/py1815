@@ -555,7 +555,8 @@ done means.
    master can do so far: every reading operation, over a line socket and over
    HTTP with a route for each, described in an OpenAPI document the tests hold
    the service to; and the operations that command, refused unless the service
-   is started with `--allow-control`. *Left:* `wait_for`, and the synchronous
+   is started with `--allow-control`; and every setting in one JSON file, loaded
+   with `--config` and printed by `py1815-master config`. *Left:* `wait_for`, and the synchronous
    counterparts.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.

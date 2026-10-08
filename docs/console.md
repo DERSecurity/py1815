@@ -35,16 +35,21 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
     --integrity-interval 30 --event-interval 2
 ```
 
+Every option below except the token options and `--demo` can also be set in a
+JSON file and loaded with `--config`. See
+[Configuring the master](master-config.md).
+
 | Option | Does |
 |---|---|
+| `--config FILE` | Loads settings from a JSON file. Flags given on the command line override it |
 | `--demo` | Starts a simulated IEEE 1815.2 DER and connects to it |
 | `--outstation NAME=HOST:PORT` | Adds an outstation and connects to it. May be given more than once |
 | `--outstation-address`, `--master-address` | The link addresses, for the outstations named. 1024 and 1 unless given |
 | `--integrity-interval SECONDS` | Repeats an integrity poll of each outstation named |
 | `--event-interval SECONDS` | Repeats an event poll |
-| `--unsolicited CLASSES` | After startup, asks each outstation named to report these event classes without being polled, as in `1,2,3` |
-| `--manual` | Sends the outstations named nothing that was not asked for: no startup sequence, no event poll, no confirmation |
-| `--reconnect SECONDS` | Tries this often to make again a connection that was lost. Five by default, and 0 for never |
+| `--unsolicited CLASSES` | Enables unsolicited reporting for these event classes after startup, as in `1,2,3` |
+| `--manual` | Sends only what is asked for: no startup sequence, no event poll, no confirmation |
+| `--reconnect SECONDS` | Seconds between reconnection attempts after a lost connection. 5 by default, 0 for never |
 | `--output-interval SECONDS` | Repeats a read of output status. As often as the integrity poll unless given; 0 for never |
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
@@ -58,13 +63,17 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 
 Outstations can also be added from the page, under **Add outstation**.
 
-However it is added, an outstation is looked after once it is connected: the
-console stops its unsolicited reporting and reads everything, fetches events
-when a response says some are waiting, and connects again when the connection
-is lost. Started with `--allow-control` it also clears the restart indication
-and sets the clock when the outstation asks. The **Overview** tab says which
-of these it does, and the **Log** says each time it does one. **Manual**, on
-the form and on the command line, turns all of it off.
+Once an outstation is connected, the master runs its automatic tasks:
+
+- On connect, it disables unsolicited reporting and runs an integrity poll.
+- It polls for events when a response says some are waiting.
+- It reconnects when the connection is lost.
+- With `--allow-control`, it also clears the restart indication and writes the
+  time when the outstation asks.
+
+The **Overview** tab shows which tasks are enabled, and the **Log** records
+each time one runs. **Manual**, on the form and on the command line, disables
+them all.
 
 ### In Docker
 

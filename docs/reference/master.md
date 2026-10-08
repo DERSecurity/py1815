@@ -42,6 +42,10 @@ One conversation with one outstation, with no I/O: octets in, octets out.
 
 ::: py1815.master.service
 
+## Configuration
+
+::: py1815.master.config
+
 ## The description of the API
 
 ::: py1815.master.openapi

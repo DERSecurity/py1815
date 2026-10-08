@@ -532,8 +532,9 @@ class TestCommandingIsOffUntilTurnedOn:
     def test_the_command_line_turns_it_on(self):
         parser = cli._parser()
         for command in ("console", "serve"):
-            assert parser.parse_args([command]).allow_control is False
-            assert parser.parse_args([command, "--allow-control"]).allow_control is True
+            assert cli.configuration(parser.parse_args([command])).allow_control is False
+            given = parser.parse_args([command, "--allow-control"])
+            assert cli.configuration(given).allow_control is True
 
     @pytest.mark.asyncio
     async def test_a_console_started_to_command_says_so(self, capsys, monkeypatch):
@@ -710,12 +711,20 @@ class TestWhatIsDoneUnasked:
     def test_the_command_line_has_a_flag_for_each(self):
         parser = cli._parser()
         for command in ("console", "serve"):
-            plain = parser.parse_args([command])
-            assert (plain.manual, plain.unsolicited, plain.reconnect) == (False, None, 5.0)
-            given = parser.parse_args(
-                [command, "--manual", "--unsolicited", "1,3", "--reconnect", "0"]
+            plain = cli.configuration(parser.parse_args([command])).defaults
+            assert (plain.manual, plain.tasks.enable_unsolicited, plain.reconnect) == (
+                False,
+                (),
+                5.0,
             )
-            assert (given.manual, given.unsolicited, given.reconnect) == (True, [1, 3], 0.0)
+            given = cli.configuration(
+                parser.parse_args([command, "--manual", "--unsolicited", "1,3", "--reconnect", "0"])
+            ).defaults
+            assert (given.manual, given.tasks.enable_unsolicited, given.reconnect) == (
+                True,
+                (1, 3),
+                None,
+            )
         for wrong in ("0", "4", "1,,2", "all"):
             with pytest.raises(SystemExit):
                 parser.parse_args(["serve", "--unsolicited", wrong])
@@ -738,7 +747,7 @@ class TestWhatIsDoneUnasked:
         args = cli._parser().parse_args(
             ["serve", "--outstation", f"lab=127.0.0.1:{server.port}", *flags]
         )
-        assert await cli._add_named(service, args)
+        assert await cli._add_outstations(service, cli.configuration(args))
         (lab,) = (await _ask(service, "status"))["result"]["outstations"]
         assert lab["tasks"] == tasks and lab["reconnect"] == reconnect
 
@@ -1224,7 +1233,7 @@ class TestTheCommand:
         )
         waiting: list[asyncio.Task[None]] = []
 
-        assert await cli._add_named(service, args, None, waiting)
+        assert await cli._add_outstations(service, cli.configuration(args), None, waiting)
         (late,) = (await _ask(service, "status"))["result"]["outstations"]
         assert not late["connected"] and len(waiting) == 1
 
@@ -1244,5 +1253,5 @@ class TestTheCommand:
     async def test_and_is_tried_once_unless_asked_to_wait(self, service):
         args = cli._parser().parse_args(["serve", "--outstation", "gone=127.0.0.1:1"])
         waiting: list[asyncio.Task[None]] = []
-        assert await cli._add_named(service, args, None, waiting)
+        assert await cli._add_outstations(service, cli.configuration(args), None, waiting)
         assert waiting == []

@@ -9,9 +9,9 @@ py1815-master console      # the API over HTTP, and the console, on 127.0.0.1:88
 py1815-master serve        # the API a line of JSON at a time, on 127.0.0.1:8816
 ```
 
-Both take `--outstation`, `--profile`, `--manual`, `--unsolicited`,
-`--reconnect` and the interval options the [console](console.md#starting-it)
-takes.
+Both take the same outstation options as the [console](console.md#starting-it),
+and both can load every setting from a JSON file with `--config`. See
+[Configuring the master](master-config.md).
 
 ## Over HTTP
 

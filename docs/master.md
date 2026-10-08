@@ -309,6 +309,8 @@ The same master can be driven without writing Python:
   simulated DER.
 - [The master's API](master-api.md) is every operation as JSON, over HTTP or a
   line at a time over a local socket, described in an OpenAPI document.
+- [Configuring the master](master-config.md) lists every setting, as a JSON
+  file and as command-line flags.
 
 ## In one process, with no socket
 
