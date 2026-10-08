@@ -1,11 +1,9 @@
-"""What the master does without being asked.
+"""Tests for the master's automatic tasks.
 
-In three parts. The decisions, with no outstation at all: what is due, in what
-order, and that an indication which stays set is not acted on twice. Then the
-same against this library's own outstation in one process, and over a socket,
-where the plan's own statement of done is tested: a master left alone keeps
-its store current through a restart of the outstation, and a manual one sends
-nothing it was not asked for.
+Three levels: the Housekeeper's decisions with no outstation, the same tasks
+against this library's outstation in one process, and over TCP. The TCP tests
+cover the plan's acceptance criteria: the store stays current through an
+outstation restart, and a manual master sends nothing automatic.
 """
 
 from __future__ import annotations
@@ -46,7 +44,7 @@ WATTS = der.AI_METER_FIRST + 4
 
 
 def _drain(housekeeper: Housekeeper) -> list[str]:
-    """Every task due, in the order done, with no response to any of them."""
+    """Return the names of all pending tasks in order, without answering any."""
     names = []
     while (step := housekeeper.next()) is not None:
         names.append(step.task)
@@ -54,7 +52,7 @@ def _drain(housekeeper: Housekeeper) -> list[str]:
 
 
 def _answered(housekeeper: Housekeeper, *responses: IIN) -> list[str]:
-    """The tasks done when each is answered with the next of ``responses``."""
+    """Run pending tasks, answering each with the next IIN in ``responses``."""
     given = iter(responses)
     names = []
     while (step := housekeeper.next()) is not None:
@@ -71,8 +69,8 @@ def simulation() -> der.Simulation:
 # ---------------------------------------------------------------- decisions
 
 
-class TestTheChoices:
-    def test_everything_is_on_but_unsolicited_reporting(self):
+class TestTaskSettings:
+    def test_defaults_enable_everything_except_unsolicited(self):
         assert Tasks().describe() == {
             "startup": True,
             "clear_restart": True,
@@ -82,18 +80,18 @@ class TestTheChoices:
             "integrity_on_overflow": True,
         }
 
-    def test_none_is_every_one_off(self):
+    def test_none_disables_every_task(self):
         described = Tasks.none().describe()
         assert not any(described.values())
 
-    def test_reading_only_drops_the_two_that_write_and_nothing_else(self):
+    def test_reading_only_disables_only_the_writing_tasks(self):
         kept = Tasks(enable_unsolicited=(1, 2)).reading_only().describe()
         assert kept == Tasks(enable_unsolicited=(1, 2)).describe() | {
             "clear_restart": False,
             "write_time": False,
         }
 
-    def test_tasks_are_changed_by_name(self):
+    def test_changed_applies_named_settings(self):
         changed = Tasks().changed({"write_time": False, "enable_unsolicited": [3, 1]})
         assert not changed.write_time and changed.enable_unsolicited == (3, 1)
         assert changed.startup, "what was not named is left as it was"
@@ -110,13 +108,13 @@ class TestTheChoices:
             ({"enable_unsolicited": [4]}, "1, 2 or 3"),
         ],
     )
-    def test_a_choice_that_is_not_one_is_refused(self, given, says):
+    def test_changed_rejects_invalid_settings(self, given, says):
         with pytest.raises(ValueError, match=says):
             Tasks().changed(given)
 
 
 class TestStartup:
-    def test_connecting_stops_unsolicited_reporting_and_then_reads_everything(self):
+    def test_connect_queues_disable_unsolicited_then_integrity_poll(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
         assert housekeeper.due == ("disable_unsolicited", "integrity")
@@ -128,7 +126,7 @@ class TestStartup:
         assert (second.function, second.body.hex()) == (1, "3c02063c03063c04063c0106")
         assert housekeeper.next() is None
 
-    def test_a_restarted_outstation_that_wants_the_time_gets_all_of_it_in_order(self):
+    def test_startup_order_with_restart_and_need_time(self):
         housekeeper = Housekeeper(Tasks(enable_unsolicited=(1, 2, 3)), clock_ms=lambda: 1_000)
         housekeeper.connected()
 
@@ -143,7 +141,7 @@ class TestStartup:
         ]
         assert done == [name for name in ORDER if name in done]
 
-    def test_the_writes_are_these_octets(self):
+    def test_write_request_octets(self):
         housekeeper = Housekeeper(clock_ms=lambda: 1_700_000_000_000)
         housekeeper.saw(IIN(first=IINBit.DEVICE_RESTART | IINBit.NEED_TIME))
         steps = {step.task: step for step in iter(housekeeper.next, None)}
@@ -155,24 +153,24 @@ class TestStartup:
         assert steps["write_time"].function is FunctionCode.WRITE
         assert steps["write_time"].body.hex() == "320107010068e5cf8b01"
 
-    def test_unsolicited_reporting_is_enabled_for_the_classes_named_and_last(self):
+    def test_enable_unsolicited_runs_last_for_configured_classes(self):
         housekeeper = Housekeeper(Tasks(enable_unsolicited=(2, 3)))
         housekeeper.connected()
         *_, last = iter(housekeeper.next, None)
         assert (last.function, last.body.hex()) == (20, "3c03063c0406")
 
-    def test_and_is_enabled_on_connecting_even_with_no_startup(self):
+    def test_enable_unsolicited_runs_on_connect_without_startup(self):
         housekeeper = Housekeeper(Tasks.none().changed({"enable_unsolicited": [1]}))
         housekeeper.connected()
         assert _drain(housekeeper) == ["enable_unsolicited"]
 
-    def test_the_restart_that_startup_finds_is_not_a_second_one(self):
+    def test_restart_seen_during_startup_does_not_restart_startup(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
         done = _answered(housekeeper, RESTART, QUIET, QUIET)
         assert done == ["disable_unsolicited", "clear_restart", "integrity"]
 
-    def test_nor_is_one_first_seen_in_the_answer_to_its_poll(self):
+    def test_restart_first_seen_in_integrity_response_does_not_restart_startup(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
         # The first request went unanswered, so the poll is where it is seen.
@@ -180,7 +178,7 @@ class TestStartup:
         housekeeper.saw(None, answering=(first.function, first.body))
         assert _answered(housekeeper, RESTART) == ["integrity", "clear_restart"]
 
-    def test_a_restart_reported_later_is_settled_again(self):
+    def test_restart_after_startup_runs_startup_again(self):
         housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
         housekeeper.connected()
         _answered(housekeeper)
@@ -194,14 +192,14 @@ class TestStartup:
             "enable_unsolicited",
         ]
 
-    def test_so_is_one_announced_unasked(self):
+    def test_unsolicited_restart_runs_startup_again(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
         _answered(housekeeper)
         housekeeper.saw(RESTART)
         assert housekeeper.due == ("disable_unsolicited", "clear_restart", "integrity")
 
-    def test_a_poll_that_was_never_answered_still_ends_startup(self):
+    def test_unanswered_integrity_poll_still_ends_startup(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
         while (step := housekeeper.next()) is not None:
@@ -210,7 +208,7 @@ class TestStartup:
         housekeeper.saw(RESTART, answering=A_READ)
         assert "integrity" in housekeeper.due
 
-    def test_connecting_again_forgets_what_was_due_and_what_was_seen(self):
+    def test_reconnect_resets_pending_tasks_and_seen_bits(self):
         housekeeper = Housekeeper()
         housekeeper.saw(IIN(first=IINBit.DEVICE_RESTART | IINBit.NEED_TIME))
         housekeeper.connected()
@@ -219,10 +217,10 @@ class TestStartup:
         assert "clear_restart" in _answered(housekeeper, RESTART)
 
 
-class TestAnIndicationThatStaysSet:
-    """No task is made due by its own answer, so none is done in a stream."""
+class TestStuckIndications:
+    """A bit the outstation never clears must not cause a request loop."""
 
-    def test_a_restart_indication_nobody_clears_is_acted_on_once(self):
+    def test_stuck_restart_bit_is_handled_once(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
         done = _answered(housekeeper, *[RESTART] * 20)
@@ -230,7 +228,7 @@ class TestAnIndicationThatStaysSet:
         housekeeper.saw(RESTART, answering=A_READ)
         assert housekeeper.due == ()
 
-    def test_and_acted_on_again_once_it_has_cleared_and_come_back(self):
+    def test_restart_bit_is_handled_again_after_clearing(self):
         housekeeper = Housekeeper(Tasks.none().changed({"clear_restart": True}))
         housekeeper.saw(RESTART, answering=A_READ)
         assert _drain(housekeeper) == ["clear_restart"]
@@ -238,7 +236,7 @@ class TestAnIndicationThatStaysSet:
         housekeeper.saw(RESTART, answering=A_READ)
         assert _drain(housekeeper) == ["clear_restart"]
 
-    def test_the_time_is_written_once_for_one_asking(self):
+    def test_stuck_need_time_is_handled_once(self):
         housekeeper = Housekeeper()
         for _ in range(5):
             housekeeper.saw(NEED_TIME, answering=A_READ)
@@ -247,20 +245,20 @@ class TestAnIndicationThatStaysSet:
         housekeeper.saw(NEED_TIME, answering=A_READ)
         assert housekeeper.due == ("write_time",)
 
-    def test_an_overflow_is_one_integrity_poll(self):
+    def test_overflow_triggers_one_integrity_poll(self):
         housekeeper = Housekeeper()
         housekeeper.saw(OVERFLOW, answering=A_READ)
         assert _answered(housekeeper, *[OVERFLOW] * 5) == ["integrity"]
 
-    def test_and_another_when_a_later_response_reports_one(self):
-        """The poll's own answer carries it until its events are confirmed, so it cannot say."""
+    def test_overflow_in_a_later_response_triggers_another_poll(self):
+        """The poll's own response is ignored, so only a later one can trigger again."""
         housekeeper = Housekeeper()
         housekeeper.saw(OVERFLOW, answering=A_READ)
         _answered(housekeeper, OVERFLOW)
         housekeeper.saw(OVERFLOW, answering=EVENT_POLL)
         assert _answered(housekeeper, OVERFLOW) == ["integrity"]
 
-    def test_a_poll_that_leaves_events_indicated_is_not_followed_by_another(self):
+    def test_poll_response_does_not_trigger_another_event_poll(self):
         housekeeper = Housekeeper()
         housekeeper.saw(EVENTS, answering=A_READ)
         assert _answered(housekeeper, *[EVENTS] * 5) == ["events"]
@@ -272,46 +270,46 @@ class TestAnIndicationThatStaysSet:
         assert housekeeper.due == ("events",)
 
 
-class TestEvents:
+class TestEventPolls:
     @pytest.mark.parametrize(
         "bit", [IINBit.CLASS_1_EVENTS, IINBit.CLASS_2_EVENTS, IINBit.CLASS_3_EVENTS]
     )
-    def test_events_of_any_class_are_fetched_when_indicated(self, bit):
+    def test_any_class_events_bit_triggers_event_poll(self, bit):
         housekeeper = Housekeeper()
         housekeeper.saw(IIN(first=bit), answering=A_READ)
         step = housekeeper.next()
         assert (step.task, step.function, step.body.hex()) == ("events", 1, "3c02063c03063c0406")
 
-    def test_and_when_an_unsolicited_response_says_there_are_more(self):
+    def test_unsolicited_response_events_bit_triggers_event_poll(self):
         housekeeper = Housekeeper()
         housekeeper.saw(EVENTS)
         assert housekeeper.due == ("events",)
 
-    def test_an_integrity_poll_that_is_due_fetches_them_instead(self):
+    def test_pending_integrity_poll_replaces_event_poll(self):
         housekeeper = Housekeeper()
         housekeeper.saw(IIN(first=IINBit.CLASS_1_EVENTS, second=IIN2Bit.EVENT_BUFFER_OVERFLOW))
         assert _drain(housekeeper) == ["integrity"]
 
-    def test_and_one_that_comes_due_later_takes_the_place_of_the_event_poll(self):
+    def test_later_integrity_poll_replaces_pending_event_poll(self):
         housekeeper = Housekeeper()
         housekeeper.saw(EVENTS, answering=A_READ)
         assert housekeeper.due == ("events",)
         housekeeper.saw(OVERFLOW)
         assert _drain(housekeeper) == ["integrity"]
 
-    def test_no_response_is_nothing_to_act_on(self):
+    def test_no_response_queues_nothing(self):
         housekeeper = Housekeeper()
         housekeeper.saw(None, answering=A_READ)
         assert housekeeper.due == ()
 
 
-class TestWhatIsTurnedOff:
+class TestDisabledTasks:
     EVERYTHING = IIN(
         first=IINBit.DEVICE_RESTART | IINBit.NEED_TIME | IINBit.CLASS_1_EVENTS,
         second=IIN2Bit.EVENT_BUFFER_OVERFLOW,
     )
 
-    def test_with_none_nothing_is_ever_due(self):
+    def test_none_never_queues_anything(self):
         housekeeper = Housekeeper(Tasks.none())
         housekeeper.connected()
         housekeeper.saw(self.EVERYTHING)
@@ -327,7 +325,7 @@ class TestWhatIsTurnedOff:
             ("events_when_indicated", "events"),
         ],
     )
-    def test_each_task_is_turned_off_alone(self, off, never):
+    def test_each_task_can_be_disabled_alone(self, off, never):
         housekeeper = Housekeeper(Tasks().changed({off: False}))
         housekeeper.connected()
         _answered(housekeeper)
@@ -336,15 +334,15 @@ class TestWhatIsTurnedOff:
         assert never not in done
         assert done, "and the others are still done"
 
-    def test_an_overflow_is_left_alone_when_told_to(self):
+    def test_overflow_poll_can_be_disabled(self):
         housekeeper = Housekeeper(Tasks().changed({"integrity_on_overflow": False}))
         housekeeper.saw(OVERFLOW, answering=A_READ)
         assert housekeeper.due == ()
 
 
-class TestNoTaskCommands:
-    def test_whatever_is_indicated_nothing_is_sent_but_reads_and_these_two_writes(self):
-        """Every combination of the indications a task answers, connecting or not."""
+class TestTasksNeverOperateOutputs:
+    def test_only_reads_unsolicited_control_and_two_writes_are_sent(self):
+        """Check every combination of the relevant IIN bits, with and without connect."""
         bits = [
             IIN(first=IINBit.DEVICE_RESTART),
             IIN(first=IINBit.NEED_TIME),
@@ -384,8 +382,8 @@ def _names(exchanges) -> list[str]:
     return [exchange.task for exchange in exchanges]
 
 
-class TestAgainstTheOutstation:
-    def test_starting_settles_it_and_fills_the_store(self, simulation):
+class TestLoopback:
+    def test_start_runs_startup_and_fills_the_store(self, simulation):
         simulation.advance(1.0)
         master = Loopback(simulation.outstation.session(), tasks=Tasks())
 
@@ -400,21 +398,21 @@ class TestAgainstTheOutstation:
         assert master.store.analog_input(WATTS).value == round(simulation.der.watts)
         assert master.unasked == done
 
-    def test_the_time_written_is_the_time_the_outstation_then_keeps(self, simulation):
+    def test_time_write_sets_the_outstation_clock(self, simulation):
         master = Loopback(
             simulation.outstation.session(), tasks=Tasks(), time_ms=lambda: 1_700_000_000_000
         )
         master.start()
         assert abs(simulation.outstation.now_ms() - 1_700_000_000_000) < 5_000
 
-    def test_given_no_tasks_it_sends_nothing_unasked(self, simulation):
+    def test_without_tasks_nothing_automatic_is_sent(self, simulation):
         master = Loopback(simulation.outstation.session())
         assert master.start() == []
         poll = master.integrity_poll()
         assert poll.iin.is_set(IINBit.DEVICE_RESTART) and poll.iin.is_set(IINBit.NEED_TIME)
         assert master.unasked == [] and poll.sequence == 0 and poll.task is None
 
-    def test_an_outstation_that_restarts_is_settled_again_and_read_again(self, simulation):
+    def test_outstation_restart_reruns_startup(self, simulation):
         session = simulation.outstation.session()
         master = Loopback(session, tasks=Tasks())
         master.start()
@@ -436,7 +434,7 @@ class TestAgainstTheOutstation:
         now = master.store.analog_input(WATTS).value
         assert now == round(simulation.der.watts) and now != before
 
-    def test_events_are_fetched_when_a_response_says_there_are_some(self, simulation):
+    def test_events_bit_triggers_event_poll(self, simulation):
         master = Loopback(simulation.outstation.session(), tasks=Tasks())
         master.start()
         events = len(master.store.events)
@@ -450,7 +448,7 @@ class TestAgainstTheOutstation:
         assert master.unasked[0].objects and len(master.store.events) > events
         assert master.read(binary_inputs=[0]).iin.first == 0, "confirmed, so none are left"
 
-    def test_an_overflow_is_answered_with_an_integrity_poll(self):
+    def test_overflow_triggers_integrity_poll(self):
         point_map = load.resolve(for_reference_der(), Composition())
         device = der.ReferenceDer()
         outstation = DerOutstation(point_map, device.bind(point_map), event_capacity=1)
@@ -467,7 +465,7 @@ class TestAgainstTheOutstation:
         assert _names(master.unasked) == ["integrity"]
         assert master.store.analog_input(WATTS).value == round(simulation.der.watts)
 
-    def test_nothing_is_done_between_a_select_and_its_operate(self, simulation):
+    def test_no_task_runs_between_select_and_operate(self, simulation):
         master = Loopback(simulation.outstation.session(), tasks=Tasks())
         master.start()
         del master.unasked[:]
@@ -489,7 +487,7 @@ class TestAgainstTheOutstation:
         assert sent == [FunctionCode.SELECT, FunctionCode.OPERATE, FunctionCode.READ]
         assert _names(master.unasked) == ["events"]
 
-    def test_unsolicited_reporting_is_turned_on_after_startup_and_events_arrive(self, simulation):
+    def test_unsolicited_enabled_after_startup_delivers_events(self, simulation):
         session = simulation.outstation.session(unsolicited=True)
         master = Loopback(session, tasks=Tasks(enable_unsolicited=(1, 2, 3)))
 
@@ -503,7 +501,7 @@ class TestAgainstTheOutstation:
         assert report.objects and len(master.store.events) > events
         assert master.unasked == [], "what arrived unasked needed no poll"
 
-    def test_a_restart_announced_unasked_is_settled(self, simulation):
+    def test_unsolicited_restart_reruns_startup(self, simulation):
         session = simulation.outstation.session(unsolicited=True)
         master = Loopback(session, tasks=Tasks(enable_unsolicited=(1, 2, 3)))
         master.start()
@@ -523,8 +521,8 @@ class TestAgainstTheOutstation:
         ]
         assert not session.restart_indication
 
-    def test_a_master_that_does_not_confirm_is_not_made_to_poll_for_ever(self, simulation):
-        """Events nobody confirms stay buffered. One poll is made for them, not a stream."""
+    def test_unconfirmed_events_do_not_cause_a_poll_loop(self, simulation):
+        """Unconfirmed events stay buffered. That must cause one poll, not a loop."""
         session = simulation.outstation.session()
         master = Loopback(
             session,
@@ -548,9 +546,9 @@ async def _until(condition, *, timeout: float = 5.0) -> None:
             await asyncio.sleep(0.01)
 
 
-class TestOverASocket:
+class TestOverTcp:
     @pytest.mark.asyncio
-    async def test_connecting_settles_the_outstation_before_anything_asked(self, simulation):
+    async def test_startup_runs_before_caller_requests(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         seen = []
         await server.start()
@@ -576,7 +574,7 @@ class TestOverASocket:
         assert lab.tasks == Tasks() and lab.tasks_due == ()
 
     @pytest.mark.asyncio
-    async def test_a_scan_on_a_schedule_waits_for_startup_too(self, simulation):
+    async def test_startup_runs_before_repeated_scans(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         seen = []
         await server.start()
@@ -595,8 +593,8 @@ class TestOverASocket:
         assert _names(seen[:5])[-1] is None and None not in _names(seen[:4])
 
     @pytest.mark.asyncio
-    async def test_left_alone_it_keeps_its_store_current_through_a_restart(self):
-        """The outstation goes away and comes back as a device that restarted."""
+    async def test_store_stays_current_through_outstation_restart(self):
+        """The outstation stops and comes back as a restarted device."""
         point_map = load.resolve(for_reference_der(), Composition())
         device = der.ReferenceDer()
         running = der.Simulation(device, DerOutstation(point_map, device.bind(point_map)))
@@ -640,7 +638,7 @@ class TestOverASocket:
         assert connections[:3] == [True, False, True]
 
     @pytest.mark.asyncio
-    async def test_a_manual_master_sends_nothing_it_was_not_asked_for(self, simulation):
+    async def test_manual_sends_nothing_automatic(self, simulation):
         # An outstation that announces its restart unasked, and asks for the
         # announcement to be confirmed.
         session = simulation.outstation.session(unsolicited=True)
@@ -664,7 +662,7 @@ class TestOverASocket:
             await server.stop()
 
     @pytest.mark.asyncio
-    async def test_manual_leaves_alone_what_is_given_beside_it(self, simulation):
+    async def test_explicit_tasks_and_confirm_override_manual(self, simulation):
         lab_tasks = Tasks.none().changed({"startup": True})
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
@@ -684,7 +682,7 @@ class TestOverASocket:
         assert lab.tasks == lab_tasks and lab.counts == {"complete": 2}
 
     @pytest.mark.asyncio
-    async def test_a_lost_connection_is_not_made_again_when_told_not_to(self, simulation):
+    async def test_reconnect_none_stays_disconnected(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
         port = server.port
@@ -702,7 +700,7 @@ class TestOverASocket:
                 await again.stop()
 
     @pytest.mark.asyncio
-    async def test_a_connection_the_caller_closed_is_not_made_again(self, simulation):
+    async def test_close_does_not_reconnect(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
         try:
@@ -716,7 +714,7 @@ class TestOverASocket:
             await server.stop()
 
     @pytest.mark.asyncio
-    async def test_closing_while_it_is_trying_ends_the_trying(self, simulation):
+    async def test_close_stops_reconnection_attempts(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
         port = server.port
@@ -735,7 +733,7 @@ class TestOverASocket:
                 await again.stop()
 
     @pytest.mark.asyncio
-    async def test_a_restart_announced_unasked_is_settled_over_a_socket(self, simulation):
+    async def test_unsolicited_restart_reruns_startup_over_tcp(self, simulation):
         session = simulation.outstation.session(unsolicited=True)
         server = OutstationServer(session, bind="127.0.0.1:0", unsolicited_interval=0.02)
         seen = []
@@ -769,8 +767,8 @@ class TestOverASocket:
         assert not session.restart_indication
 
     @pytest.mark.asyncio
-    async def test_tasks_ended_before_they_began_leave_nobody_waiting(self):
-        """A task cancelled before it first runs never reaches its own cleanup."""
+    async def test_idle_returns_when_worker_is_cancelled_before_running(self):
+        """A worker cancelled before its first run never reaches its own cleanup."""
         lab = Outstation("lab", host="127.0.0.1")
         lab._settled.clear()
         lab._housekeeping = asyncio.create_task(lab._keep_house())
@@ -778,7 +776,7 @@ class TestOverASocket:
         await asyncio.wait_for(lab.idle(), 1.0)
 
     @pytest.mark.asyncio
-    async def test_it_keeps_trying_until_the_outstation_is_back(self, simulation):
+    async def test_reconnect_retries_until_outstation_returns(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
         port = server.port
@@ -801,8 +799,8 @@ class TestOverASocket:
                 await again.stop()
 
     @pytest.mark.asyncio
-    async def test_waiting_for_the_tasks_ends_with_the_connection(self, simulation):
-        """Nobody is left waiting for a startup that an outstation never answers."""
+    async def test_idle_returns_when_connection_closes(self, simulation):
+        """idle() must not hang on a startup the outstation never answers."""
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
         try:
@@ -825,6 +823,6 @@ class TestOverASocket:
             await server.stop()
 
     @pytest.mark.parametrize("wait", [0, -1.0])
-    def test_a_wait_between_attempts_that_is_not_one_is_refused(self, wait):
+    def test_invalid_reconnect_interval_is_rejected(self, wait):
         with pytest.raises(ValueError, match="a wait between attempts"):
             Outstation("lab", host="127.0.0.1", reconnect=wait)

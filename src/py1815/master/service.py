@@ -200,9 +200,8 @@ class Service:
                 indication, and any request by function code other than a
                 read. Off unless asked for. A master that is pointed at real
                 equipment should have to be told before it can change it.
-                The same holds for what the master does unasked: without
-                this, an outstation is added with the tasks that write to it
-                turned off.
+                When off, outstations are also added with the automatic
+                tasks that write (restart clear, time write) disabled.
         """
         self.master = Master() if master is None else master
         self.allow_control = allow_control
@@ -507,16 +506,15 @@ class Service:
         return self._describe_outstation(outstation)
 
     def _tasks(self, given: Any, manual: bool) -> Tasks:
-        """What an outstation being added is to have done for it unasked."""
+        """Build the task settings for a new outstation from the ``add`` parameters."""
         if given is not None and not isinstance(given, Mapping):
             raise BadRequest("tasks is an object of choices by task")
         tasks = (Tasks.none() if manual else Tasks()).changed(given or {})
         if self.allow_control:
             return tasks
-        # Clearing the restart indication and setting the clock are writes,
-        # and a service that only reads does not make them by itself either.
-        # Asked for by name, that is refused; left to the default, they are
-        # turned off, and the outstation's description says so.
+        # A read-only service does not run the tasks that write. Requesting
+        # one explicitly is refused; otherwise they are disabled, and the
+        # outstation's status shows that.
         for name in WRITING:
             if given and given.get(name):
                 self._commanding(f"the {name} task")
@@ -542,7 +540,7 @@ class Service:
         return self._describe_outstation(outstation)
 
     async def _idle(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        """Wait until nothing the master does unasked is due or under way."""
+        """Wait until no automatic task is pending or running."""
         outstation = self._outstation(params)
         await outstation.idle()
         return self._describe_outstation(outstation)

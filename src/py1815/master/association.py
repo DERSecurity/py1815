@@ -60,8 +60,8 @@ class Outcome(Enum):
     TIMEOUT = "timeout"
     #: The request was one that takes no response, and was sent.
     SENT = "sent"
-    #: The request was given up on while it was outstanding: the connection
-    #: was reset, or whoever asked stopped waiting for the answer.
+    #: The request was dropped before a response arrived: the connection
+    #: was reset, or the caller cancelled.
     ABANDONED = "abandoned"
 
 
@@ -87,8 +87,8 @@ class Exchange:
     undecoded: tuple[Decoded, ...] = ()
     #: Seconds from the request being built to the exchange ending.
     elapsed: float = 0.0
-    #: The task the master made the request for of its own accord, by name,
-    #: or None for a request a caller asked for.
+    #: Name of the automatic task that sent this request, or None if a
+    #: caller sent it.
     task: str | None = None
 
     @property
@@ -453,12 +453,11 @@ class MasterAssociation:
         return True
 
     def abandon(self) -> bool:
-        """End the outstanding exchange now, as abandoned. Says whether one was.
+        """End the pending exchange as abandoned. Return True if there was one.
 
-        For an owner whose caller has stopped waiting. The request was sent
-        and may yet be answered; an answer that comes is dropped as one that
-        nothing is waiting for, and is not confirmed. Left outstanding, the
-        request would refuse every one made after it.
+        Call this when the caller cancels a request that has already been
+        sent. A late response is then dropped and not confirmed. Without this
+        the association stays busy and rejects every later request.
         """
         if self._pending is None:
             return False

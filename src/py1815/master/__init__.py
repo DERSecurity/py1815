@@ -5,14 +5,13 @@ purpose is to exercise an outstation, this library's or any other, from a
 script: read what it holds, keep what it said, and report each exchange as a
 result with every fragment in it.
 
-It polls by class, reads named points, confirms what asks to be confirmed,
-takes unsolicited responses, keeps the last value of every point, and commands
-outputs when a caller asks. Left alone it looks after an outstation as a master
-does: settles it on connecting, clears its restart indication, sets its clock
-when asked, fetches the events it says it has, and connects again when the
-connection is lost. Each of those is a task that can be turned off, and
-``manual=True`` turns off every one. ``docs/planning/MASTER.md`` is the plan
-for the rest.
+It polls by class, reads named points, confirms responses, handles
+unsolicited responses, stores the last value of every point, and operates
+outputs on request. It also runs automatic tasks: a startup sequence on
+connect, clearing the restart indication, writing the time on request, polling
+for events when indicated, and reconnecting after a lost connection. Each task
+can be disabled, and ``manual=True`` disables them all.
+``docs/planning/MASTER.md`` is the plan for the rest.
 
 A master built on this library's own framing shares its reading of the
 standard with the outstation beside it. Agreement between the two is

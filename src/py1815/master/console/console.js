@@ -316,8 +316,7 @@ function facts(target, pairs) {
   }
 }
 
-// What the master does for an outstation without being asked, in the order
-// the service names it, and what each request it makes for one is called.
+// Automatic tasks: [setting name, Overview label, text when enabled].
 const TASKS = [
   ["startup", "On connecting, and after a restart", "Stops unsolicited reporting, reads everything"],
   ["clear_restart", "Restart indication", "Cleared when seen"],
@@ -360,7 +359,7 @@ function renderOverview() {
   facts("#overview-points", POINT_TYPES.map(([type, label]) => [label, outstation.points[type] || 0])
     .concat([["Events", outstation.events]]));
   const tasks = outstation.tasks;
-  // The two that write are off in a service that only reads, whatever was asked.
+  // A read-only service always disables the two tasks that write.
   const alone = (task) => (WRITING_TASKS.includes(task) && !state.allowControl
     ? "Left alone: the console is read only" : "Left alone");
   facts("#overview-tasks", TASKS.map(([task, label, done]) => [label, tasks[task] ? done : alone(task)])
@@ -890,7 +889,7 @@ function onServiceEvent(event) {
     if (event.exchange.outcome !== "complete") {
       note(`${event.outstation}: ${event.exchange.function} ended as ${event.exchange.outcome}`, true);
     } else if (event.exchange.task) {
-      // Nobody asked for this one, so it is said that it was done.
+      // Log requests sent by automatic tasks, since no one asked for them.
       note(`${event.outstation}: ${TASK_REQUESTS[event.exchange.task] || event.exchange.task}, unasked`);
     }
   } else if (event.event === "unsolicited") {

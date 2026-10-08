@@ -7,12 +7,11 @@ request is a coroutine that returns an
 and an error indication are results, and an exception means the interface was
 misused or the connection could not be made.
 
-An outstation is also looked after without being asked: settled when the
-connection is made, its restart indication cleared, its clock set when it
-asks, its events fetched when it says it has some, and the connection made
-again when it is lost. Each of those is a task of
-:class:`~py1815.master.tasks.Tasks` and can be turned off, and ``manual=True``
-turns off every one that sends anything.
+Each outstation also runs automatic tasks: a startup sequence on connect,
+clearing the restart indication, writing the time on request, polling for
+events when indicated, and reconnecting after a lost connection. Configure
+them with :class:`~py1815.master.tasks.Tasks`, or pass ``manual=True`` to
+disable every task and confirmation.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -48,7 +47,7 @@ logger = logging.getLogger(__name__)
 #: Seconds to wait for a TCP connection to be made.
 DEFAULT_CONNECT_TIMEOUT = 5.0
 
-#: Seconds between attempts to make again a connection that was lost.
+#: Default seconds between reconnection attempts.
 DEFAULT_RECONNECT = 5.0
 
 #: Unsolicited responses kept before the oldest is dropped.
@@ -93,17 +92,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 further fragment of one.
             connect_timeout: Seconds to wait for the connection to be made.
             confirm: Whether fragments that ask to be confirmed are. See
-                :class:`~py1815.master.association.MasterAssociation`. They
-                are, unless ``manual`` is given.
-            tasks: What the master does without being asked. Every task of
-                :class:`~py1815.master.tasks.Tasks` at its default, unless
-                ``manual`` is given.
-            manual: Send nothing a caller did not ask for: no task, and no
-                confirmation. For driving an outstation by hand. ``tasks`` and
-                ``confirm`` given beside it are kept as given.
-            reconnect: Seconds between attempts to make again a connection
-                that was made and then lost, or None not to. A connection
-                that :meth:`close` ended is not made again.
+                :class:`~py1815.master.association.MasterAssociation`.
+                Defaults to True, or False when ``manual`` is set.
+            tasks: The automatic tasks to run. Defaults to ``Tasks()``, or
+                ``Tasks.none()`` when ``manual`` is set.
+            manual: Disable all automatic tasks and confirmations, so only
+                requests the caller makes are sent. An explicit ``tasks`` or
+                ``confirm`` overrides this.
+            reconnect: Seconds between reconnection attempts after a
+                connection is lost, or None to disable reconnection. A
+                connection ended by :meth:`close` is not reopened.
             on_unsolicited: Called with each unsolicited response as it
                 arrives, after it has been confirmed and stored.
             on_exchange: Called with each exchange as it ends, after its
@@ -148,9 +146,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         #: Set whenever something arrived or the connection ended, so a
         #: waiting request looks again.
         self._progress = asyncio.Event()
-        #: Set when a task has come due, so the one that does them looks.
+        #: Set when a task becomes due, to wake the task worker.
         self._attention = asyncio.Event()
-        #: Set while no task is due or under way.
+        #: Set while no task is pending or running.
         self._settled = asyncio.Event()
         self._settled.set()
         #: One request at a time, in the order asked.
@@ -164,12 +162,12 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
 
     @property
     def tasks(self) -> Tasks:
-        """What this master does for the outstation without being asked."""
+        """The automatic task settings for this outstation."""
         return self._housekeeper.tasks
 
     @property
     def tasks_due(self) -> tuple[str, ...]:
-        """The tasks waiting to be done, in the order they will be."""
+        """The pending tasks, in execution order."""
         return self._housekeeper.due
 
     @property
@@ -180,17 +178,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     async def connect(self) -> None:
         """Open the connection. Raises ``OSError`` if it cannot be made.
 
-        Returns once it is made. Whatever the master does on connecting is
-        done after that, and :meth:`idle` waits for it.
+        Returns as soon as the connection is open. The startup tasks run
+        after that; use :meth:`idle` to wait for them.
         """
         await self._stop_reconnecting()
         await self._open()
 
     async def idle(self) -> None:
-        """Wait until no task of the master's own is due or under way.
+        """Wait until no automatic task is pending or running.
 
-        Returns at once when there is none, and when the connection has
-        ended, since nothing is done without one.
+        Returns immediately if there is none, or if the connection has ended.
         """
         await self._settled.wait()
 
@@ -210,8 +207,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self.trace.reset()
         self._receiving = asyncio.create_task(self._receive(), name=f"dnp3-master-{self.name}")
         self._notify_connection(True)
-        # Nothing is known of an outstation just connected to, so whatever is
-        # done on connecting is due, and is done before the first scan.
+        # Queue the startup tasks for the new connection.
         self._housekeeper.connected()
         self._attention.clear()
         if self._housekeeper.due:
@@ -219,9 +215,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self._housekeeping = asyncio.create_task(
             self._keep_house(), name=f"dnp3-master-{self.name}-tasks"
         )
-        # Let it take its turn before this returns. Whatever is asked of the
-        # outstation from here on, by a caller or by a scan on a schedule,
-        # then waits behind what is done on connecting.
+        # Yield once so the task worker acquires the request lock first.
+        # Requests made after this returns, including repeated scans, then
+        # queue behind the startup tasks.
         await asyncio.sleep(0)
         for kind, interval in self._scan_intervals.items():
             self._start_scan(kind, interval)
@@ -229,8 +225,8 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     async def _stop_reconnecting(self) -> None:
         reconnecting, self._reconnecting = self._reconnecting, None
         if reconnecting is not None:
-            # Waited for, so that an attempt under way does not finish after
-            # this and leave a second connection.
+            # Wait for the cancellation, so an attempt in progress cannot
+            # complete afterwards and open a second connection.
             reconnecting.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reconnecting
@@ -239,9 +235,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         housekeeping, self._housekeeping = self._housekeeping, None
         if housekeeping is not None:
             housekeeping.cancel()
-        # Nothing is done without a connection, so nobody waits for it. Said
-        # here and not left to the task, which says nothing if it is ended
-        # before it has run.
+        # No tasks run without a connection, so release anyone in idle().
+        # Set it here as well as in the worker: a worker cancelled before its
+        # first run never reaches its own cleanup.
         self._settled.set()
 
     async def _reconnect(self, interval: float) -> None:
@@ -305,7 +301,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 writer.close()
                 self._stop_housekeeping()
                 self._notify_connection(False)
-                # Lost, and not closed by the caller: made again if asked.
+                # The connection was lost, not closed by the caller: reconnect.
                 if self.reconnect is not None and self._reconnecting is None:
                     self._reconnecting = asyncio.create_task(
                         self._reconnect(self.reconnect), name=f"dnp3-master-{self.name}-reconnect"
@@ -353,19 +349,19 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     def _note(
         self, indications: IIN | None, answering: tuple[FunctionCode, bytes] | None = None
     ) -> None:
-        """Show the indications of a response to whatever decides the tasks."""
+        """Pass a response's indications to the housekeeper and wake the worker."""
         self._housekeeper.saw(indications, answering=answering)
         if self._housekeeper.due and self._housekeeping is not None:
             self._settled.clear()
             self._attention.set()
 
     async def _keep_house(self) -> None:
-        """Do the tasks as they come due, each in its turn among the requests."""
+        """Task worker: send the requests for pending tasks until disconnected."""
         try:
             while True:
                 if self._housekeeper.due:
-                    # One turn for all that is due, so that what is done on
-                    # connecting is done before anything else is asked.
+                    # Hold the request lock for the whole batch, so the
+                    # startup sequence is not interleaved with other requests.
                     async with self._turn:
                         while (step := self._housekeeper.next()) is not None:
                             await self._exchange_in_turn(step.function, step.body, task=step.task)
@@ -375,8 +371,8 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         except NotConnected:
             logger.info("dnp3 master: the tasks for %s stopped with the connection", self.name)
         except Exception:  # pylint: disable=broad-exception-caught
-            # A fault here is this library's. It ends the tasks and not the
-            # connection, and nobody is left waiting for them.
+            # An unexpected error is a bug in this library. Log it and stop
+            # the worker without dropping the connection.
             logger.exception("dnp3 master: the tasks for %s failed", self.name)
         finally:
             self._settled.set()
@@ -419,10 +415,11 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._progress.wait(), wait)
         except asyncio.CancelledError:
-            # Whoever asked has stopped waiting: a caller's own timeout, or a
-            # scan on a schedule that was set again while one was out. The
-            # request went all the same, so it is ended here and kept as a
-            # result. Left outstanding it would refuse every request after it.
+            # The caller cancelled while the request was in flight, for
+            # example on its own timeout or when a repeated scan is
+            # rescheduled. End the exchange as abandoned and record it.
+            # Otherwise the association stays busy and rejects every later
+            # request.
             self.association.abandon()
             given_up = self.association.take()
             if given_up is not None:

@@ -5,9 +5,9 @@ the session returns is handed to the association, and so on until neither has
 anything to say. With one injected clock shared by the two, a test moves time
 itself.
 
-It does nothing unasked unless it is given tasks, and then it does them as a
-master on a socket does: :meth:`Loopback.start` is the connection being made,
-and what comes due is done after each request and each :meth:`Loopback.listen`.
+Automatic tasks are off unless ``tasks`` is given. With tasks,
+:meth:`Loopback.start` runs the startup sequence, and pending tasks run after
+each request and each :meth:`Loopback.listen`.
 
 This is the two halves of the library talking to each other. It is the fastest
 way to exercise either, and it is not evidence that either reads the standard
@@ -55,10 +55,9 @@ class Loopback(Operations[Exchange, Operated]):
             store: Where what is read is kept. A new one when not given.
             clock: The clock a value is stamped with when it is stored. Give
                 the session, the association and this the same one.
-            tasks: What the master does without being asked. Nothing, when
-                not given.
-            time_ms: The time a time write carries, as milliseconds since the
-                epoch. The wall clock when not given.
+            tasks: The automatic tasks to run. Defaults to none.
+            time_ms: Clock for automatic time writes, in milliseconds since
+                the epoch. Defaults to the wall clock.
         """
         if association is None:
             facts = session.facts
@@ -75,11 +74,11 @@ class Loopback(Operations[Exchange, Operated]):
         self.housekeeper = (
             Housekeeper(chosen) if time_ms is None else Housekeeper(chosen, clock_ms=time_ms)
         )
-        #: Every exchange a task made, in the order made.
+        #: Exchanges sent by automatic tasks, in order.
         self.unasked: list[Exchange] = []
 
     def start(self) -> list[Exchange]:
-        """Do what the master does when a connection is made, and return the exchanges."""
+        """Run the startup tasks, as on a new connection, and return their exchanges."""
         self.housekeeper.connected()
         return self._keep_house()
 
@@ -110,8 +109,8 @@ class Loopback(Operations[Exchange, Operated]):
         return made
 
     def _carry_out(self, plan: Plan) -> Operated:
-        # No task is done between the requests of a plan: an operate follows
-        # its select with nothing between them.
+        # Run pending tasks only after the whole plan, so nothing is sent
+        # between a select and its operate.
         done: list[Exchange] = []
         while (step := plan.next(done)) is not None:
             done.append(self._one(*step))

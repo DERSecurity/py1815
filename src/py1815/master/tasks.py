@@ -1,23 +1,28 @@
-"""What a master does without being asked, as a list of tasks.
+"""Automatic master tasks: the requests a master sends without being asked.
 
-A conformant master does a few things of its own accord: it settles an
-outstation when it connects, clears the restart indication once it has seen
-it, sets the clock when it is asked to, and fetches events when it is told
-there are some. Here each is a task that can be turned off, and the deciding
-is kept apart from the doing: :class:`Housekeeper` is told what indications
-arrived and says what to send next, and whatever owns the connection sends it.
-It does no I/O and keeps no time, so it is tested without a socket.
+A conformant master runs a startup sequence when it connects, clears the
+restart indication, writes the time when the outstation needs it, and polls
+for events when a response indicates some are waiting. Each of these is a
+task that can be disabled.
 
-No task is made due by its own answer, so the master never talks to itself.
-The restart indication and the request for the time are acted on when they
-appear and not again until they have cleared and come back, since the write
-that answers each is what clears it. Events waiting and an overflow are acted
-on whenever a response says so, except the response to the poll made for them,
-which may go on saying so until what it carried has been confirmed. An
-indication that an outstation never clears therefore costs at most one request
-for each response that carries it, and never a stream of them.
+:class:`Housekeeper` decides which requests to send. It is given the internal
+indications (IIN) of each response and returns the next request. It does no
+I/O, so the connection owner sends the requests and the logic can be tested
+without a socket.
 
-No task commands an output, and none is ever added that does.
+Loop prevention: a task is never triggered by the response to its own
+request.
+
+- Restart and need-time are edge-triggered. They fire when the bit appears and
+  not again until it has cleared and reappeared.
+- Event and overflow polls fire on any response that carries the bit, except
+  the response to the poll itself. That response can still carry the bit until
+  its events are confirmed.
+
+An outstation that never clears a bit therefore costs at most one extra
+request per response.
+
+No task operates an output.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -32,14 +37,15 @@ from typing import Any, NamedTuple
 from py1815.application import IIN, FunctionCode, IIN2Bit, IINBit
 from py1815.master import requests
 
-#: The tasks, in the order they are done when several are due. Unsolicited
-#: reporting is stopped before anything is read, so that what is read is not
-#: overtaken; the restart indication is cleared before the poll that would
-#: otherwise report it again; the clock is set before events are fetched, so
-#: that they are timed by it; and reporting is turned back on last.
-#: The tasks that write to the outstation: its restart indication, its clock.
+#: Tasks that write to the outstation.
 WRITING = ("clear_restart", "write_time")
 
+#: Execution order when several tasks are due:
+#: 1. Disable unsolicited reporting, so it cannot interleave with the polls.
+#: 2. Clear the restart bit, so the integrity poll does not report it again.
+#: 3. Write the time, so later events are timestamped with it.
+#: 4. Poll.
+#: 5. Enable unsolicited reporting.
 ORDER = (
     "disable_unsolicited",
     "clear_restart",
@@ -54,22 +60,22 @@ _EVENT_BITS = (IINBit.CLASS_1_EVENTS, IINBit.CLASS_2_EVENTS, IINBit.CLASS_3_EVEN
 
 @dataclass(frozen=True)
 class Tasks:
-    """Which of the things a master does unasked it is to do."""
+    """Which automatic tasks are enabled."""
 
-    #: On connecting, and when the outstation reports that it restarted: stop
-    #: its unsolicited reporting, then read everything it holds.
+    #: Run the startup sequence (disable unsolicited, then integrity poll) on
+    #: connect and when the outstation reports a restart.
     startup: bool = True
-    #: Clear the restart indication once it has been seen.
+    #: Clear the restart bit (IIN1.7) when a response sets it.
     clear_restart: bool = True
-    #: Set the outstation's clock when it asks for the time.
+    #: Write the time when a response sets need-time (IIN1.4).
     write_time: bool = True
-    #: After startup, ask the outstation to report these event classes
-    #: without being polled. None, unless given.
+    #: Event classes to enable unsolicited reporting for after startup.
+    #: Empty means do not enable it.
     enable_unsolicited: tuple[int, ...] = ()
-    #: Fetch events when a response says there are some waiting.
+    #: Poll for events when a response sets a class 1, 2 or 3 events bit.
     events_when_indicated: bool = True
-    #: Read everything again when the outstation says its event buffer
-    #: overflowed, since events were lost.
+    #: Run an integrity poll when a response sets event buffer overflow
+    #: (IIN2.3), because events were lost.
     integrity_on_overflow: bool = True
 
     def __post_init__(self) -> None:
@@ -80,7 +86,7 @@ class Tasks:
 
     @classmethod
     def none(cls) -> Tasks:
-        """Nothing unasked: for driving an outstation by hand."""
+        """Return a configuration with every task disabled."""
         return cls(
             startup=False,
             clear_restart=False,
@@ -90,7 +96,11 @@ class Tasks:
         )
 
     def changed(self, given: Mapping[str, Any]) -> Tasks:
-        """These tasks with the ones a mapping names set as it says."""
+        """Return a copy with the settings in ``given`` applied.
+
+        Raises ``ValueError`` for an unknown task name or a value of the wrong
+        type.
+        """
         known = {each.name for each in fields(self)}
         unknown = sorted(set(given) - known)
         if unknown:
@@ -108,10 +118,11 @@ class Tasks:
         return replace(self, **chosen)
 
     def reading_only(self) -> Tasks:
-        """These tasks without the ones that write: for a master that may only read."""
+        """Return a copy with the tasks that write to the outstation disabled."""
         return replace(self, clear_restart=False, write_time=False)
 
     def describe(self) -> dict[str, Any]:
+        """Return the settings as a JSON-compatible dict."""
         return {
             each.name: (
                 list(self.enable_unsolicited)
@@ -123,7 +134,7 @@ class Tasks:
 
 
 class Step(NamedTuple):
-    """One request a task calls for."""
+    """One request to send, and the task it belongs to."""
 
     task: str
     function: FunctionCode
@@ -135,7 +146,12 @@ def _wall_clock_ms() -> int:
 
 
 class Housekeeper:
-    """Decides what a master sends unasked, from the indications it is shown."""
+    """Decide which automatic requests to send, based on response indications.
+
+    Call :meth:`connected` when a connection is made, :meth:`saw` with the
+    indications of every response, and :meth:`next` to get each request
+    that is due.
+    """
 
     def __init__(
         self, tasks: Tasks | None = None, *, clock_ms: Callable[[], int] = _wall_clock_ms
@@ -143,20 +159,20 @@ class Housekeeper:
         self.tasks = Tasks() if tasks is None else tasks
         self._clock_ms = clock_ms
         self._due: set[str] = set()
-        #: Whether the startup that connecting began is still under way, so
-        #: that the restart it finds is not taken for a second one.
+        #: True from the start of a startup sequence until its integrity poll
+        #: ends. A restart bit seen during that time does not start another.
         self._starting = False
-        #: Indications that are set and have been acted on already.
+        #: Edge detection: True while the bit is set and already handled.
         self._restart_seen = False
         self._time_asked = False
 
     @property
     def due(self) -> tuple[str, ...]:
-        """The tasks waiting to be done, in the order they will be."""
+        """The pending tasks, in execution order."""
         return tuple(name for name in ORDER if name in self._due)
 
     def connected(self) -> None:
-        """A connection was made: nothing is known of the outstation, and startup is due."""
+        """Reset state for a new connection and queue the startup sequence."""
         self._due.clear()
         self._restart_seen = self._time_asked = False
         self._starting = False
@@ -174,19 +190,18 @@ class Housekeeper:
     def saw(
         self, indications: IIN | None, *, answering: tuple[FunctionCode, bytes] | None = None
     ) -> None:
-        """Take note of the indications of a response.
+        """Queue the tasks that a response's indications call for.
 
         Args:
-            indications: What the response carried, or None if none arrived.
-            answering: The request it answered, as a function code and the
-                octets after it, or None for an unsolicited response. A poll
-                whose answer still indicates what it was made for is not
-                followed by another.
+            indications: The response's IIN, or None if no response arrived.
+            answering: The request that was answered, as (function code,
+                request body), or None for an unsolicited response. Used to
+                avoid re-triggering a poll from its own response.
         """
         integrity = answering == (FunctionCode.READ, requests.scan("integrity"))
         polled = integrity or answering == (FunctionCode.READ, requests.scan("events"))
-        # The startup's poll has been made, answered or not: a restart seen
-        # from here on is a new one.
+        # Startup ends with its integrity poll, whether or not it was answered.
+        # A restart bit seen after that is a new restart.
         starting, self._starting = self._starting, self._starting and not integrity
         if indications is None:
             return
@@ -210,9 +225,9 @@ class Housekeeper:
         else:
             self._time_asked = False
 
-        # Events were lost, and only reading every value says what was missed.
-        # The poll that does so may still carry the indication, which stands
-        # until the events sent with it are confirmed.
+        # Overflow means events were lost, so re-read every value. Skip this
+        # for the integrity poll's own response, which still carries the bit
+        # until its events are confirmed.
         lost = indications.is_set(IIN2Bit.EVENT_BUFFER_OVERFLOW)
         if lost and tasks.integrity_on_overflow and not integrity:
             self._due.add("integrity")
@@ -222,7 +237,7 @@ class Housekeeper:
             self._due.add("events")
 
     def next(self) -> Step | None:
-        """The next request to make, or None when nothing is due."""
+        """Return the next request to send, or None when nothing is due."""
         for name in ORDER:
             if name in self._due:
                 self._due.discard(name)
@@ -237,7 +252,7 @@ class Housekeeper:
         if name == "write_time":
             return Step(name, FunctionCode.WRITE, requests.write_time(self._clock_ms()))
         if name == "integrity":
-            # An integrity poll fetches the events as well.
+            # An integrity poll also reads events, so drop a pending event poll.
             self._due.discard("events")
             return Step(name, FunctionCode.READ, requests.scan("integrity"))
         if name == "events":
