@@ -598,15 +598,13 @@ class DerOutstation:
         return standing.quality is Quality.GOOD and bool(standing.value)
 
     def _event_time(self, reading: Reading, now: int) -> int:
-        """When the change this reading shows is said to have happened (D79).
+        """Return the timestamp for an event raised by this reading (D79).
 
-        The time the source gave, where it gave one for a value it vouches for,
-        carried onto this outstation's clock: a master's time write moves that
-        clock by an offset, and a time taken from the same wall clock moves with
-        it. Otherwise now. A reading that is not a measurement -- a value kept
-        from a source that has gone away, or one that is not in effect -- still
-        has the time it was last measured, and the event is the change of
-        standing, which this outstation is only now seeing.
+        Use the reading's own timestamp when it has one and its quality is
+        ``GOOD``, shifted by the offset a master's time write applied to this
+        outstation's clock. Otherwise use ``now``. A reading that is not
+        ``GOOD`` still holds the time of its last measurement, but the event
+        is the quality change, and that is happening now.
         """
         if reading.timestamp_ms is None or reading.quality is not Quality.GOOD:
             return now
