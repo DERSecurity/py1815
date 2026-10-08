@@ -103,6 +103,9 @@ async def integrity_poll(
         raise PollError(f"cannot connect to {host}:{port}: {error}") from error
     try:
         exchange = await outstation.integrity_poll()
+    except OSError as error:
+        # The outstation closed the connection before the request was sent.
+        raise PollError(f"{host}:{port} closed the connection: {error}") from error
     finally:
         await outstation.close()
     if not exchange.fragments:

@@ -7,8 +7,8 @@ from test_master_association import ANALOG, BINARY, _built, _from_outstation
 from test_profile_cli import _Served, tables  # noqa: F401  (a fixture)
 
 from py1815.application import FunctionCode
+from py1815.master import NotConnected, Outstation, poll
 from py1815.master import cli as master_cli
-from py1815.master import poll
 from py1815.master import requests as rq
 from py1815.profile import cli as der_cli
 from py1815.profile import load
@@ -70,6 +70,19 @@ class TestTheCommands:
             )
         assert status == 1
         assert "no answer from" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("main", [master_cli.main, der_cli.main])
+    def test_a_connection_closed_before_the_poll_is_a_failure_with_a_reason(
+        self, main, capsys, monkeypatch
+    ):
+        async def closed(_self):
+            raise NotConnected("poll is not connected")
+
+        monkeypatch.setattr(Outstation, "integrity_poll", closed)
+        with _Served() as port:
+            status = main(["poll", "--port", str(port), "--timeout", "2"])
+        assert status == 1
+        assert "closed the connection" in capsys.readouterr().err
 
     @pytest.mark.parametrize("main", [master_cli.main, der_cli.main])
     def test_both_commands_take_a_count_of_retries(self, main, capsys):

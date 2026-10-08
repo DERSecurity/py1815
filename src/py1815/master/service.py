@@ -186,6 +186,8 @@ class Condition:
         if equals is not None and not isinstance(equals, bool):
             equals = _number_given(equals, "value.equals")
         tolerance = _number_given(given.get("tolerance", 0), "value.tolerance")
+        if tolerance < 0:
+            raise BadRequest("value.tolerance is zero or more")
         bounds = [
             (name, _number_given(given[name], f"value.{name}"))
             for name in ("at_least", "at_most")
@@ -243,8 +245,9 @@ class Condition:
         outstation = self._outstation
 
         def test(_store: Store) -> bool:
+            # With no response yet, the bit is neither set nor clear.
             indications = outstation.indications
-            return (indications is not None and indications.is_set(bit)) == wanted
+            return indications is not None and indications.is_set(bit) == wanted
 
         return test
 

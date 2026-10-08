@@ -401,9 +401,14 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             self._progress.set()
 
     def _signal_change(self) -> None:
-        """Wake every wait_for(), each to look at its condition again."""
+        """Wake every wait_for(), each to look at its condition again.
+
+        The event is set and replaced, not set and cleared: a waiter holds the
+        event it took before it looked at its condition, so a change between
+        the look and the wait still wakes it.
+        """
         self._changed.set()
-        self._changed.clear()
+        self._changed = asyncio.Event()
 
     def _notify_connection(self, connected: bool) -> None:
         self._signal_change()
@@ -480,13 +485,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             raise ValueError(f"timeout is {timeout}; it is seconds, zero or more")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        while not condition(self.store):
+        while True:
+            # Taken before the look, so a change during it is not missed.
+            changed = self._changed
+            if condition(self.store):
+                return True
             remaining = deadline - loop.time()
             if remaining <= 0:
                 return False
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._changed.wait(), remaining)
-        return True
+                await asyncio.wait_for(changed.wait(), remaining)
 
     def _note(
         self, indications: IIN | None, answering: tuple[FunctionCode, bytes] | None = None

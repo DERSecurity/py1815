@@ -10,7 +10,7 @@ from profile_fixtures import for_reference_der
 from test_master_service import _added, _ask
 
 from py1815.application import IINBit
-from py1815.master import Master, Tasks
+from py1815.master import Master, Outstation, Tasks
 from py1815.master.service import Service
 from py1815.profile import der, load
 from py1815.profile.model import Composition
@@ -102,6 +102,22 @@ class TestInPython:
                 assert lab.unsolicited and lab.counts == {}
         finally:
             await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_a_change_while_the_condition_is_looked_at_is_not_missed(self):
+        lab = Outstation("lab", host="127.0.0.1")
+        looks = []
+
+        def condition(_store) -> bool:
+            looks.append(1)
+            if len(looks) == 1:
+                lab._signal_change()  # a response arrives during the first look
+                return False
+            return True
+
+        started = asyncio.get_running_loop().time()
+        assert await lab.wait_for(condition, 5)
+        assert asyncio.get_running_loop().time() - started < 1, "woken, not timed out"
 
     @pytest.mark.asyncio
     async def test_what_the_condition_raises_is_raised(self, served):
@@ -216,6 +232,24 @@ class TestTheService:
             await service.close()
 
     @pytest.mark.asyncio
+    async def test_no_response_yet_is_neither_set_nor_clear(self, served):
+        _, server = served
+        service = Service()
+        try:
+            await _added(service, server, manual=True)
+            for wanted in (True, False):
+                answer = await _ask(
+                    service,
+                    "wait_for",
+                    "lab",
+                    timeout=0,
+                    indication={"name": "NEED_TIME", "set": wanted},
+                )
+                assert answer["result"]["held"] is False, wanted
+        finally:
+            await service.close()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("params", "says"),
         [
@@ -231,6 +265,10 @@ class TestTheService:
             ({"timeout": 1, "indication": {"name": "SOON"}}, "indication.name is one of"),
             ({"timeout": 1, "indication": {"name": "NEED_TIME", "set": 1}}, "true or false"),
             ({"timeout": 1, "value": [1]}, "value is an object"),
+            (
+                {"timeout": 1, "value": {"type": "ai", "index": 1, "equals": 5, "tolerance": -1}},
+                "value.tolerance is zero or more",
+            ),
         ],
     )
     async def test_a_condition_that_is_not_one_is_refused(self, served, params, says):
