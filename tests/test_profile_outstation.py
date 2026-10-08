@@ -1031,13 +1031,11 @@ class TestAReadOnlyOutstation:
         assert (21, 0) in _values(_read(session, bytes([21, 0, ALL]), sequence=1))
 
 
-class TestWhenAnEventHappened:
-    """A reading may say when it was measured, and an event then carries that time.
+class TestEventTimestamps:
+    """Events use the reading's measurement time when it provides one.
 
-    A caller that reads a device on its own schedule and hands the readings
-    over later knows when each value was taken. The time the outstation
-    noticed the change is a different time, later by the length of a read and
-    of whatever queue sits between the two.
+    A caller that polls a device and queues the readings knows when each value
+    was measured. That is earlier than the time the outstation sees the change.
     """
 
     NOW = 5_000_000
@@ -1057,7 +1055,7 @@ class TestWhenAnEventHappened:
         (event,) = outstation.events.peek(event_class)
         return event
 
-    def test_a_binary_event_carries_the_time_its_reading_gives(self):
+    def test_binary_event_uses_reading_time(self):
         state = {"on": False}
         outstation = self._outstation(
             BI, 0, lambda: Reading(state["on"], timestamp_ms=self.MEASURED)
@@ -1067,7 +1065,7 @@ class TestWhenAnEventHappened:
 
         assert event.timestamp_ms == self.MEASURED
 
-    def test_an_analog_event_carries_it_too(self):
+    def test_analog_event_uses_reading_time(self):
         state = {"volts": 240.0}
         outstation = self._outstation(
             AI, 2, lambda: Reading(state["volts"], timestamp_ms=self.MEASURED)
@@ -1078,8 +1076,8 @@ class TestWhenAnEventHappened:
         assert event.timestamp_ms == self.MEASURED
 
     @pytest.mark.parametrize("bare", [True, False])
-    def test_a_reading_that_gives_no_time_is_timed_by_the_outstation(self, bare):
-        """A bare value, or a reading whose time is None: both mean now."""
+    def test_reading_without_time_uses_outstation_clock(self, bare):
+        """A bare value and a Reading with no timestamp both mean "now"."""
         state = {"on": False}
         outstation = self._outstation(
             BI, 0, (lambda: state["on"]) if bare else (lambda: Reading(state["on"]))
@@ -1089,10 +1087,9 @@ class TestWhenAnEventHappened:
 
         assert event.timestamp_ms == self.NOW
 
-    def test_a_readings_time_is_put_on_the_clock_a_master_set(self):
-        """A master's time write moves the outstation's clock, and every time it
-        reports with it. A reading taken ten seconds ago is ten seconds before
-        the outstation's now, whichever clock that is."""
+    def test_reading_time_is_shifted_by_master_time_write(self):
+        """A reading measured ten seconds ago is reported as ten seconds before
+        the outstation's current time, after a master has written the time."""
         state = {"on": False}
         outstation = self._outstation(
             BI, 0, lambda: Reading(state["on"], timestamp_ms=self.MEASURED)
@@ -1105,11 +1102,11 @@ class TestWhenAnEventHappened:
         assert outstation.now_ms() == written
         assert event.timestamp_ms == written - (self.NOW - self.MEASURED)
 
-    def test_a_master_reads_that_time_on_the_wire(self):
-        """Through a session, as a master gets it: a binary event with its time.
+    def test_master_reads_reading_time_in_event_response(self):
+        """The binary event a master reads carries the reading's time.
 
-        The master has written the time, so the event travels with an absolute
-        one: six octets after the flags.
+        The master has written the time, so the event is sent with an absolute
+        timestamp: six octets after the flags.
         """
         state = {"on": False}
         outstation = self._outstation(
@@ -1130,10 +1127,9 @@ class TestWhenAnEventHappened:
         assert stamped == written - (self.NOW - self.MEASURED)
 
     @pytest.mark.parametrize("quality", [Quality.COMM_LOST, Quality.NEVER_READ, Quality.OFFLINE])
-    def test_a_reading_that_is_not_a_measurement_is_timed_by_the_outstation(self, quality):
-        """A value retained from a source that has gone away still has the time
-        it was last measured. The event is that it went away, which happened
-        now and not then."""
+    def test_non_good_reading_uses_outstation_clock(self, quality):
+        """A reading that is not GOOD keeps its last measurement time, but the
+        event is the quality change, so it is timestamped now."""
         state = {"quality": Quality.GOOD}
         outstation = self._outstation(
             BI, 0, lambda: Reading(True, state["quality"], timestamp_ms=self.MEASURED)
