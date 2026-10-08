@@ -45,6 +45,20 @@ class Store:
     def __init__(self, *, event_capacity: int = DEFAULT_EVENT_CAPACITY) -> None:
         self._points: dict[tuple[PointType, int], PointValue] = {}
         self._events: deque[DecodedObject] = deque(maxlen=event_capacity)
+        #: Events received since the store was made, including those dropped
+        #: for capacity and those cleared. Counts up and never goes back.
+        self.events_received = 0
+
+    def events_since(self, received: int) -> tuple[DecodedObject, ...]:
+        """Return the events received after ``events_received`` stood at ``received``.
+
+        Only those still held: an event dropped for capacity or cleared is
+        not returned.
+        """
+        newer = self.events_received - received
+        if newer <= 0:
+            return ()
+        return tuple(self._events)[-newer:]
 
     def apply(self, objects: Iterable[DecodedObject], *, now: float) -> None:
         """Take the objects of a response, in the order they were sent.
@@ -68,6 +82,7 @@ class Store:
             )
             if decoded.event:
                 self._events.append(decoded)
+                self.events_received += 1
 
     def get(self, point: PointType, index: int) -> PointValue | None:
         """One point's last value, or None if the outstation has never sent it."""

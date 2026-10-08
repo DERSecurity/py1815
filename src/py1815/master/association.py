@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 #: Seconds to wait for a response, or for the next fragment of one.
 DEFAULT_RESPONSE_TIMEOUT = 5.0
 
+#: Times a read that timed out is sent again: none, as the DNP Users Group
+#: recommends for a master's application layer (AN2015-001, 1.6.2). A retry
+#: hides from the caller that the outstation did not answer, and a master
+#: built to evaluate outstations is there to report exactly that.
+DEFAULT_READ_RETRIES = 0
+
+#: The requests that are sent again when they time out. A read changes nothing
+#: at the outstation, so asking twice is harmless. IEEE 1815-2012 4.3 rule 16
+#: forbids retrying a direct operate, a delay measurement, a record of the
+#: current time and a time write, and any other control, write or freeze sent
+#: twice may be acted on twice (D80).
+RETRIED_FUNCTIONS = frozenset({FunctionCode.READ})
+
 
 class Busy(RuntimeError):
     """A request was made while another was still waiting for its response.
@@ -90,6 +103,12 @@ class Exchange:
     #: Name of the automatic task that sent this request, or None if a
     #: caller sent it.
     task: str | None = None
+    #: Times the request was sent again after a timeout, under the same
+    #: sequence number and with the same octets.
+    retries: int = 0
+    #: The broadcast address the request was sent to, or None when it was
+    #: sent to the outstation's own address.
+    broadcast: link.Broadcast | None = None
 
     @property
     def complete(self) -> bool:
@@ -132,6 +151,10 @@ class _Pending:
     undecoded: list[Decoded] = field(default_factory=list)
     #: The application sequence number the next fragment has to carry.
     expected: int = 0
+    #: Times the request may still be sent again after a timeout.
+    retries_left: int = 0
+    #: Times it has been sent again.
+    retries: int = 0
 
 
 #: Requests that are answered by silence. Sending one completes the exchange.
@@ -153,7 +176,8 @@ class MasterAssociation:
     send. :meth:`receive` takes what arrived and returns what to send back,
     which is a confirmation or nothing. :meth:`expire` is called when the time
     :meth:`expires_after` gave has passed, and ends an exchange that is not
-    going to finish. A finished exchange is collected with :meth:`take`, and
+    going to finish, after :meth:`retry` has said whether a read is sent again
+    instead. A finished exchange is collected with :meth:`take`, and
     unsolicited responses with :meth:`take_unsolicited`.
     """
 
@@ -165,6 +189,7 @@ class MasterAssociation:
         response_timeout: float = DEFAULT_RESPONSE_TIMEOUT,
         confirm: bool = True,
         max_fragment: int = 2048,
+        read_retries: int = DEFAULT_READ_RETRIES,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """
@@ -179,6 +204,10 @@ class MasterAssociation:
                 the caller did not ask for, and :meth:`confirm` sends one.
             max_fragment: The largest response fragment that will be
                 reassembled, in octets.
+            read_retries: Times a read that times out with nothing received
+                is sent again, as IEEE 1815-2012 4.3 rule 16 has it: under the
+                same sequence number and with the same octets. No other
+                request is ever sent again.
             clock: A monotonic clock in seconds.
         """
         for name, address in (
@@ -196,6 +225,11 @@ class MasterAssociation:
             )
         if not response_timeout > 0:
             raise ValueError(f"response_timeout is {response_timeout}; it is a wait")
+        if isinstance(read_retries, bool) or not isinstance(read_retries, int) or read_retries < 0:
+            raise ValueError(f"read_retries is {read_retries!r}; it is a count, zero or more")
+        #: Times a read that times out is sent again. Takes effect from the
+        #: next request.
+        self.read_retries = read_retries
         self._outstation_address = outstation_address
         self._master_address = master_address
         self._response_timeout = response_timeout
@@ -231,8 +265,19 @@ class MasterAssociation:
 
     # --------------------------------------------------------------- sending
 
-    def request(self, function: FunctionCode, body: bytes = b"") -> bytes:
+    def request(
+        self,
+        function: FunctionCode,
+        body: bytes = b"",
+        *,
+        broadcast: link.Broadcast | None = None,
+    ) -> bytes:
         """Begin an exchange, and return the octets that carry its request.
+
+        With ``broadcast`` the request goes to that broadcast address and not
+        to the outstation's own. No outstation answers a broadcast (IEEE
+        1815-2012 4.5.1), so the exchange ends at once as sent, whatever the
+        function code.
 
         Raises :class:`Busy` while another request is outstanding, and while
         a finished exchange has not been collected with :meth:`take`: the
@@ -242,12 +287,16 @@ class MasterAssociation:
             raise Busy(f"{self._pending.function.name} is still waiting for its response")
         if self._finished is not None:
             raise Busy("the last exchange has not been taken")
+        if broadcast is not None:
+            broadcast = link.Broadcast(broadcast)
         sequence = self._sequence
         self._sequence = (sequence + 1) % SEQUENCE_MODULUS
         fragment = build_request(function, sequence=sequence, body=body)
         now = self._clock()
-        if function in NO_RESPONSE_FUNCTIONS:
-            self._finished = Exchange(function, sequence, fragment, Outcome.SENT)
+        if broadcast is not None or function in NO_RESPONSE_FUNCTIONS:
+            self._finished = Exchange(
+                function, sequence, fragment, Outcome.SENT, broadcast=broadcast
+            )
         else:
             self._pending = _Pending(
                 function=function,
@@ -256,8 +305,9 @@ class MasterAssociation:
                 started=now,
                 deadline=now + self._response_timeout,
                 expected=sequence,
+                retries_left=self.read_retries if function in RETRIED_FUNCTIONS else 0,
             )
-        return self._send(fragment)
+        return self._send(fragment, destination=broadcast)
 
     def confirm(self, response: Response) -> bytes:
         """The octets that confirm a response fragment, for an owner that
@@ -266,10 +316,12 @@ class MasterAssociation:
             build_confirm(sequence=response.control.sequence, unsolicited=response.unsolicited)
         )
 
-    def _send(self, fragment: bytes) -> bytes:
+    def _send(self, fragment: bytes, *, destination: int | None = None) -> bytes:
         control = link.control_byte(
             from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
         )
+        if destination is None:
+            destination = self._outstation_address
         out = bytearray()
         segments = segment(fragment, first_sequence=self._transport_sequence)
         self._transport_sequence = (
@@ -278,7 +330,7 @@ class MasterAssociation:
         for tpdu in segments:
             out += link.build(
                 control,
-                destination=self._outstation_address,
+                destination=destination,
                 source=self._master_address,
                 payload=tpdu,
             )
@@ -423,6 +475,36 @@ class MasterAssociation:
             return None
         return max(0.0, self._pending.deadline - self._clock())
 
+    def retry(self, *, at_once: bool = False) -> bytes:
+        """Send the outstanding request again if it may be, and return its octets.
+
+        It may be when its time has passed with nothing received, it is a
+        read, and it has retries left (``read_retries``). It is sent under the
+        same sequence number with the same octets (IEEE 1815-2012 4.3 rule
+        16), and waits a whole response timeout again. A read whose response
+        has begun to arrive is not sent again, since the outstation is
+        answering it.
+
+        Return no octets when the request is not sent again; the owner then
+        calls :meth:`expire`. With ``at_once`` the time is not waited for: for
+        an owner that knows nothing more is coming, as :meth:`give_up` says.
+        """
+        pending = self._pending
+        if pending is None or pending.fragments or pending.retries_left <= 0:
+            return b""
+        now = self._clock()
+        if not at_once and now < pending.deadline:
+            return b""
+        pending.retries_left -= 1
+        pending.retries += 1
+        pending.deadline = now + self._response_timeout
+        logger.info(
+            "dnp3 master: %s with sequence %d timed out; sending it again",
+            pending.function.name,
+            pending.sequence,
+        )
+        return self._send(pending.request)
+
     def expire(self) -> bool:
         """End the outstanding exchange if its time has passed. Says whether it did."""
         pending = self._pending
@@ -477,6 +559,7 @@ class MasterAssociation:
             objects=tuple(pending.objects),
             undecoded=tuple(pending.undecoded),
             elapsed=now - pending.started,
+            retries=pending.retries,
         )
 
     # --------------------------------------------------------------- results
@@ -507,8 +590,10 @@ class MasterAssociation:
 
 
 __all__ = [
+    "DEFAULT_READ_RETRIES",
     "DEFAULT_RESPONSE_TIMEOUT",
     "NO_RESPONSE_FUNCTIONS",
+    "RETRIED_FUNCTIONS",
     "Busy",
     "Exchange",
     "MasterAssociation",

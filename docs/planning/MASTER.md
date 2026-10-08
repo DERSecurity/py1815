@@ -141,13 +141,15 @@ interface.
 | `master.requests`, `master.operations` | The requests as object headers, and the one list of operations every carrier shares | Built, for reading |
 | `master.store` | The last value of every point, and the events in order | Built |
 | `master.loopback` | A master handed straight to a `Session`, with no socket | Built |
-| `master.api` | `Master` and `Outstation`: the Python interface, over TCP, with scans repeated on request | Built, without TLS or reconnection |
-| `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | |
+| `master.api` | `Master` and `Outstation`: the Python interface, over TCP or TLS, with scans repeated on request | Built |
+| `master.sync` | The same interface for a caller with no event loop | Built |
+| `master.timesync` | The LAN and non-LAN time synchronization procedures, as plans | Built |
+| `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | Built |
 | `master.deviations` | Misbehavior, applied between the association and the connection | |
 | `master.trace` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built, without the capture writer |
-| `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built, for reading |
+| `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built |
 | `master.profile` | The DER profile: names, units, functions, curves | |
-| `master.cli` | `py1815-master` | Built: `console` and `serve` |
+| `master.cli` | `py1815-master` | Built: `console`, `serve`, `config` and `poll` |
 | `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, Log |
 
 ## The association
@@ -182,10 +184,10 @@ through the association:
 |---|---|---|
 | Disable unsolicited, then integrity poll | On connecting, and when the outstation reports a restart | On |
 | Clear the restart indication | When the outstation reports a restart | On |
-| Write the time | When the outstation asks for it | On |
+| Write the time, plainly or by the LAN or non-LAN procedure | When the outstation asks for it | On, plainly |
 | Enable unsolicited for the classes configured | After startup | Off |
 | Integrity poll | Every `integrity_interval` | Off |
-| Event poll, classes 1 to 3 | Every `event_interval`, and when class data is indicated | Off on a schedule, on when indicated |
+| Event poll, classes 1 to 3 | Every `event_interval`, when class data is indicated, and at once, up to three times in a row, when a poll leaves some waiting | Off on a schedule, on when indicated |
 | Integrity poll after a buffer overflow indication | When indicated | On |
 
 As built, the polls on a schedule are `repeat_scan` and stay off until asked
@@ -200,7 +202,9 @@ the phase that builds it lands, so two plans in flight do not claim one number.
 M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
 M10 as D77, the listening half of M9 as D78, M5 with the commanding half
 of M9 as D80, and M4 as D81. D82, reading named points by range, came out of
-the interoperability work and has no M number.
+the interoperability work and has no M number, and neither have D83 to D86,
+which came out of finishing items 2 to 6: what is tried again, broadcast and
+the time procedures, events left after a poll, and the blocking interface.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -522,34 +526,40 @@ done means.
 1. **Responses and objects.** `build_request`, `parse_response`, the decoders,
    the one size table. *Done when* the probe and the harnesses can use them and
    produce the octets and readings they produce now. *Built,* in `application`
-   and `decode`. *Left:* moving the probe and the harnesses onto them.
+   and `decode`. The probe's poll is the master's now (`master.poll`); its
+   parser stays, as a second reading of the outstation's octets that tests
+   use. *Left:* moving the harnesses onto them.
 2. **The association.** One request at a time, multi-fragment responses,
    confirmations, timeouts, read retries, the store. In process only. *Done
    when* an integrity poll and a class poll of the simulated DER fill the store
    with what the outstation holds. *Built,* with unsolicited responses taken
-   and confirmed as well. *Left:* retrying a read.
+   and confirmed as well, and a read that times out sent again under its own
+   sequence number, as many times as `read_retries` says, none by default
+   (D83). Nothing else is ever sent again.
 3. **The channel.** TCP and TLS, reconnecting. *Done when* `py1815-master poll`
    does what `py1815-der poll` does, and that command is implemented with it.
-   *Built:* TCP, inside `master.api`, and making again a connection that was
-   lost. *Left:* TLS, retrying a first connection that could not be made, and
-   the command.
+   *Built:* TCP and TLS, inside `master.api`; making again a connection that
+   was lost; trying a first connection again for as long as the caller says
+   (D83), which `--connect-wait` now uses; and `py1815-master poll`, which
+   `py1815-der poll` now is.
 4. **Controls and the rest of the requests.** Select and operate, direct
    operate, freezes, the time, the restart indication, restart. *Done when*
    every request in *Scope* has a test against a `Session` and a pinned frame.
    *Built:* `operate` in its three modes, with the rule for when a select is
    followed and a status for each control, the time write, clearing the restart
    indication, the freezes and restart, each against a session and with its
-   frame pinned. *Left:* broadcast, and the delay measurement before a time
-   write.
+   frame pinned; broadcast to each of the three addresses; and the LAN and
+   non-LAN time synchronization procedures, as operations and as the way the
+   time task may set the clock (D84).
 5. **Tasks and unsolicited responses.** The table in *The association*, and
    `manual=True`. *Done when* a master left alone keeps a store current through
    a restart of the outstation, and a manual one sends nothing unasked.
    *Built,* with both of those as tests over a socket: the tasks decided in
    `master.tasks` with no I/O, done by the master on a socket and by the one
    wired to a session, set for each outstation through the service and the
-   command line, and shown in the console. *Left:* changing an outstation's
-   tasks after it has been added, and fetching at once the events a poll left
-   waiting.
+   command line, and shown in the console; changed after an outstation has
+   been added, from Python and with the service's `set_tasks`; and events a
+   poll left waiting fetched at once, a bounded number of times (D85).
 6. **The API and the service.** The Python interface settled, the JSON service,
    the command line, `--allow-control`. *Done when* the workload in *What a test
    rig asks of a master* runs as a test over the socket. *Built,* for what the
@@ -557,8 +567,11 @@ done means.
    HTTP with a route for each, described in an OpenAPI document the tests hold
    the service to; and the operations that command, refused unless the service
    is started with `--allow-control`; and every setting in one JSON file, loaded
-   with `--config` and printed by `py1815-master config`. *Left:* `wait_for`, and the synchronous
-   counterparts.
+   with `--config` and printed by `py1815-master config`; `wait_for`, on the
+   store, an event or an indication, in Python and as an operation; and the
+   synchronous counterparts, `py1815.master.sync`, generated from the
+   asynchronous ones (D86). *Left:* the operations of later items (`deviate`,
+   exporting the trace, the `der.*` operations) as each is built.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.
    *Built:* recording, reading layer by layer, subscription. *Left:* the
@@ -571,7 +584,8 @@ done means.
    It found the master reading named points with a qualifier opendnp3 rejects
    (D82). *Left:* the dissectors reading a capture of what the master sends,
    which waits on the capture writer in item 7; freezes, which neither
-   outstation's fixture serves; and TLS.
+   outstation's fixture serves; and TLS, which the master now speaks and is
+   tested over against this library's own listener only.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
    certification procedures have been reproduced through it over a socket.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
@@ -643,5 +657,5 @@ is stable. 12 is last because it is built from all of them.
 - **Analog output variations.** Which of the four the master offers by default
   for a point with no profile to say: the outstation accepts all of them and a
   device on a bench may not.
-- **Synchronous interface.** Whether the blocking counterparts of the API are
-  written by hand or generated from the asynchronous ones.
+- **Synchronous interface.** Settled: generated from the asynchronous ones,
+  with a test that holds the two lists of operations together (D86).

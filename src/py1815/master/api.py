@@ -1,8 +1,8 @@
 """A master on a socket: the interface a script uses.
 
 :class:`Master` holds outstations by name. :class:`Outstation` is one
-association over one TCP connection, and is where the requests are. Each
-request is a coroutine that returns an
+association over one TCP connection, with TLS when it is given a context, and
+is where the requests are. Each request is a coroutine that returns an
 :class:`~py1815.master.association.Exchange` saying what happened: a timeout
 and an error indication are results, and an exception means the interface was
 misused or the connection could not be made.
@@ -11,7 +11,8 @@ Each outstation also runs automatic tasks: a startup sequence on connect,
 clearing the restart indication, writing the time on request, polling for
 events when indicated, and reconnecting after a lost connection. Configure
 them with :class:`~py1815.master.tasks.Tasks`, or pass ``manual=True`` to
-disable every task and confirmation.
+disable every task and confirmation. :mod:`py1815.master.sync` has the same
+interface for a script with no event loop.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -22,6 +23,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import ssl
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -29,18 +31,21 @@ from dataclasses import replace
 from types import TracebackType
 from typing import Any
 
+from py1815 import link
 from py1815.application import IIN, FunctionCode
 from py1815.master import requests
 from py1815.master.association import (
+    DEFAULT_READ_RETRIES,
     DEFAULT_RESPONSE_TIMEOUT,
     Exchange,
     MasterAssociation,
     Unsolicited,
 )
 from py1815.master.controls import Operated, Plan
-from py1815.master.operations import Operations
+from py1815.master.operations import Operations, Steps
 from py1815.master.store import Store
 from py1815.master.tasks import Housekeeper, Tasks
+from py1815.master.timesync import Synchronized, TimeSync
 from py1815.master.trace import RECEIVED, SENT, Trace
 
 logger = logging.getLogger(__name__)
@@ -50,6 +55,10 @@ DEFAULT_CONNECT_TIMEOUT = 5.0
 
 #: Default seconds between reconnection attempts.
 DEFAULT_RECONNECT = 5.0
+
+#: Default seconds between attempts at a first connection, for a caller that
+#: asked to wait for one.
+DEFAULT_CONNECT_EVERY = 1.0
 
 #: Unsolicited responses kept before the oldest is dropped.
 _UNSOLICITED_KEPT = 1000
@@ -61,7 +70,7 @@ class NotConnected(ConnectionError):
     """A request was made of an outstation that has no connection."""
 
 
-class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
+class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[Synchronized]]):
     """One outstation, as a master sees it: a connection, an association, a store."""
 
     def __init__(
@@ -73,7 +82,10 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         outstation_address: int = 1024,
         master_address: int = 1,
         response_timeout: float = DEFAULT_RESPONSE_TIMEOUT,
+        read_retries: int = DEFAULT_READ_RETRIES,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
+        tls: ssl.SSLContext | None = None,
+        server_name: str | None = None,
         confirm: bool | None = None,
         tasks: Tasks | None = None,
         manual: bool = False,
@@ -91,7 +103,18 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
             master_address: The link address this master speaks from.
             response_timeout: Seconds to wait for a response, and for each
                 further fragment of one.
-            connect_timeout: Seconds to wait for the connection to be made.
+            read_retries: Times a read that times out with nothing received
+                is sent again, under the same sequence number. No other
+                request is sent again. See
+                :class:`~py1815.master.association.MasterAssociation`.
+            connect_timeout: Seconds to wait for the connection to be made,
+                and for the TLS handshake when there is one.
+            tls: Connect over TLS with this client context. An outstation
+                that requires TLS also requires a certificate of the master:
+                load one into the context. :mod:`py1815.master.tls` makes one
+                from files.
+            server_name: The name the outstation's certificate is checked
+                against, when it is not ``host``. Only with ``tls``.
             confirm: Whether fragments that ask to be confirmed are. See
                 :class:`~py1815.master.association.MasterAssociation`.
                 Defaults to True, or False when ``manual`` is set.
@@ -115,11 +138,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self.port = port
         if reconnect is not None and not (reconnect > 0 and math.isfinite(reconnect)):
             raise ValueError(f"reconnect is {reconnect}; it is a wait between attempts")
+        if server_name is not None and tls is None:
+            raise ValueError("server_name names the certificate of a TLS connection; give tls")
+        self.tls = tls
+        self.server_name = server_name
         self.association = MasterAssociation(
             outstation_address=outstation_address,
             master_address=master_address,
             response_timeout=response_timeout,
             confirm=not manual if confirm is None else confirm,
+            read_retries=read_retries,
         )
         if tasks is None:
             tasks = Tasks.none() if manual else Tasks()
@@ -135,6 +163,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         #: The last exchange that received anything, and when it ended.
         self.last_response: Exchange | None = None
         self.last_response_at: float | None = None
+        #: The indications of the last response of either kind, solicited or
+        #: unsolicited, or None before the first.
+        self.indications: IIN | None = None
         self._scanning: dict[str, asyncio.Task[None]] = {}
         self._scan_intervals: dict[str, float] = {}
         self._connect_timeout = connect_timeout
@@ -149,6 +180,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self._progress = asyncio.Event()
         #: Set when a task becomes due, to wake the task worker.
         self._attention = asyncio.Event()
+        #: Set and cleared at once whenever the store, the indications or the
+        #: connection may have changed, to wake whoever is in wait_for().
+        self._changed = asyncio.Event()
         #: Set while no task is pending or running.
         self._settled = asyncio.Event()
         self._settled.set()
@@ -163,8 +197,21 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
 
     @property
     def tasks(self) -> Tasks:
-        """The automatic task settings for this outstation."""
+        """The automatic task settings for this outstation.
+
+        Set it to change them while the outstation is connected. A task that
+        is due and is now off is not done; what is done next follows the new
+        settings.
+        """
         return self._housekeeper.tasks
+
+    @tasks.setter
+    def tasks(self, tasks: Tasks) -> None:
+        if not isinstance(tasks, Tasks):
+            raise TypeError(f"tasks is a Tasks, not {type(tasks).__name__}")
+        self._housekeeper.tasks = tasks
+        if not self._housekeeper.due:
+            self._settled.set()
 
     @property
     def tasks_due(self) -> tuple[str, ...]:
@@ -176,8 +223,15 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         """The unsolicited responses received, oldest first."""
         return tuple(self._unsolicited)
 
-    async def connect(self) -> None:
+    async def connect(
+        self, *, wait: float | None = None, every: float = DEFAULT_CONNECT_EVERY
+    ) -> None:
         """Open the connection. Raises ``OSError`` if it cannot be made.
+
+        With ``wait``, a connection that cannot be made is tried again every
+        ``every`` seconds for up to ``wait`` seconds, and the last error is
+        raised when none could be made in that time. Without it the first
+        failure is raised.
 
         Returns as soon as the connection is open. The startup tasks run
         after that; use :meth:`idle` to wait for them.
@@ -185,16 +239,28 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         If this is called while the master is retrying a lost connection and
         the attempt fails, the error is raised and the retries carry on.
         """
+        if wait is not None and not (wait >= 0 and math.isfinite(wait)):
+            raise ValueError(f"wait is {wait}; it is seconds, zero or more")
+        if not (every > 0 and math.isfinite(every)):
+            raise ValueError(f"every is {every}; it is a wait between attempts")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (wait or 0.0)
         retrying = self._reconnecting is not None
         await self._stop_reconnecting()
-        try:
-            await self._open()
-        except OSError:
-            # This call cancelled the retry worker. Start it again, so a
-            # failed manual attempt does not end automatic reconnection.
-            if retrying:
-                self._start_reconnecting()
-            raise
+        while True:
+            try:
+                await self._open()
+                return
+            except OSError as error:
+                if loop.time() + every > deadline:
+                    # This call cancelled the retry worker. Start it again,
+                    # so a failed manual attempt does not end automatic
+                    # reconnection.
+                    if retrying:
+                        self._start_reconnecting()
+                    raise
+                logger.info("dnp3 master: %s is not reachable yet: %s", self.name, error)
+            await asyncio.sleep(every)
 
     async def idle(self) -> None:
         """Wait until no automatic task is pending or running.
@@ -206,9 +272,14 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     async def _open(self) -> None:
         if self.connected:
             return
+        secure: dict[str, Any] = {}
+        if self.tls is not None:
+            secure["ssl"] = self.tls
+            if self.server_name is not None:
+                secure["server_hostname"] = self.server_name
         try:
             self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port), self._connect_timeout
+                asyncio.open_connection(self.host, self.port, **secure), self._connect_timeout
             )
         except TimeoutError as exc:
             raise TimeoutError(
@@ -329,7 +400,13 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 self._start_reconnecting()
             self._progress.set()
 
+    def _signal_change(self) -> None:
+        """Wake every wait_for(), each to look at its condition again."""
+        self._changed.set()
+        self._changed.clear()
+
     def _notify_connection(self, connected: bool) -> None:
+        self._signal_change()
         if self.on_connection is not None:
             try:
                 self.on_connection(connected)
@@ -340,6 +417,8 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         for unsolicited in self.association.take_unsolicited():
             self.store.apply(unsolicited.objects, now=time.monotonic())
             self._unsolicited.append(unsolicited)
+            self.indications = unsolicited.iin
+            self._signal_change()
             self._note(unsolicited.iin)
             if self.on_unsolicited is not None:
                 try:
@@ -353,19 +432,61 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
 
     # -------------------------------------------------------------- requests
 
-    async def _exchange(self, function: FunctionCode, body: bytes) -> Exchange:
+    async def _exchange(
+        self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
+    ) -> Exchange:
         async with self._turn:
-            return await self._exchange_in_turn(function, body)
+            return await self._exchange_in_turn(function, body, broadcast=broadcast)
 
     async def _carry_out(self, plan: Plan) -> Operated:
         # One turn for the whole plan: an operate has to follow its select
         # with no other request between them, and a scan on a schedule would
         # otherwise be free to take the gap.
         async with self._turn:
-            done: list[Exchange] = []
-            while (step := plan.next(done)) is not None:
-                done.append(await self._exchange_in_turn(*step))
-            return plan.result(done)
+            result: Operated = await self._follow(plan)
+            return result
+
+    async def _synchronize(self, plan: TimeSync) -> Synchronized:
+        # One turn, so that nothing comes between the two requests and the
+        # time the write carries is as fresh as it can be.
+        async with self._turn:
+            result: Synchronized = await self._follow(plan)
+            return result
+
+    async def _follow(self, plan: Steps, *, task: str | None = None) -> Any:
+        """Make the requests a plan calls for. The caller holds the turn."""
+        done: list[Exchange] = []
+        while (step := plan.next(done)) is not None:
+            done.append(await self._exchange_in_turn(*step, task=task))
+        return plan.result(done)
+
+    async def wait_for(self, condition: Callable[[Store], bool], timeout: float) -> bool:
+        """Wait until ``condition(store)`` is true, and return True; or False at the timeout.
+
+        The condition is looked at now, and again each time a response or an
+        unsolicited response has been taken into the store and
+        :attr:`indications`, and when the connection is made or ends. It may
+        look at anything, this outstation included:
+
+        .. code-block:: python
+
+            await lab.wait_for(lambda store: store.analog_output(87).value == 5000, 10)
+            await lab.wait_for(lambda _: lab.indications.is_set(IINBit.NEED_TIME), 10)
+
+        Nothing is sent to make it come true. A timeout is a result and not an
+        exception; an exception the condition raises is raised here.
+        """
+        if not (timeout >= 0 and math.isfinite(timeout)):
+            raise ValueError(f"timeout is {timeout}; it is seconds, zero or more")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not condition(self.store):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._changed.wait(), remaining)
+        return True
 
     def _note(
         self, indications: IIN | None, answering: tuple[FunctionCode, bytes] | None = None
@@ -385,7 +506,12 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                     # startup sequence is not interleaved with other requests.
                     async with self._turn:
                         while (step := self._housekeeper.next()) is not None:
-                            await self._exchange_in_turn(step.function, step.body, task=step.task)
+                            if step.plan is not None:
+                                await self._follow(step.plan, task=step.task)
+                            else:
+                                await self._exchange_in_turn(
+                                    step.function, step.body, task=step.task
+                                )
                 self._settled.set()
                 await self._attention.wait()
                 self._attention.clear()
@@ -399,20 +525,20 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
             self._settled.set()
 
     async def _exchange_in_turn(
-        self, function: FunctionCode, body: bytes, *, task: str | None = None
+        self,
+        function: FunctionCode,
+        body: bytes,
+        *,
+        task: str | None = None,
+        broadcast: link.Broadcast | None = None,
     ) -> Exchange:
         writer = self._writer
         if writer is None or writer.is_closing():
             raise NotConnected(f"{self.name} is not connected")
         self._progress.clear()
-        octets = self.association.request(function, body)
-        self.trace.record(SENT, octets)
-        writer.write(octets)
+        octets = self.association.request(function, body, broadcast=broadcast)
         try:
-            # A write that fails is seen by the receive loop as well, which
-            # ends the exchange as abandoned.
-            with contextlib.suppress(OSError):
-                await writer.drain()
+            await self._write(writer, octets)
             while True:
                 exchange = self.association.take()
                 if exchange is not None:
@@ -426,7 +552,11 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                     # closed and reopened underneath this request.
                     raise NotConnected(f"the connection to {self.name} was reset")
                 if wait <= 0:
-                    self.association.expire()
+                    again = self.association.retry()
+                    if again:
+                        await self._write(writer, again)
+                    else:
+                        self.association.expire()
                     continue
                 self._progress.clear()
                 # Looked at again before waiting: something may have arrived
@@ -447,6 +577,14 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 self._finished(replace(given_up, task=task), body)
             raise
 
+    async def _write(self, writer: asyncio.StreamWriter, octets: bytes) -> None:
+        self.trace.record(SENT, octets)
+        writer.write(octets)
+        # A write that fails is seen by the receive loop as well, which ends
+        # the exchange as abandoned.
+        with contextlib.suppress(OSError):
+            await writer.drain()
+
     def _finished(self, exchange: Exchange, body: bytes) -> None:
         self.store.apply(exchange.objects, now=time.monotonic())
         self._note(exchange.iin, (exchange.function, body))
@@ -455,6 +593,8 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         if exchange.fragments:
             self.last_response = exchange
             self.last_response_at = time.time()
+            self.indications = exchange.iin
+        self._signal_change()
         if self.on_exchange is not None:
             try:
                 self.on_exchange(exchange)
@@ -530,16 +670,20 @@ class Master:
     def __getitem__(self, name: str) -> Outstation:
         return self._outstations[name]
 
-    async def add(self, name: str, *, connect: bool = True, **options: Any) -> Outstation:
+    async def add(
+        self, name: str, *, connect: bool = True, wait: float | None = None, **options: Any
+    ) -> Outstation:
         """Add an outstation and, unless told not to, connect to it.
 
-        ``options`` are those of :class:`Outstation`. A name is used once.
+        ``options`` are those of :class:`Outstation`, and ``wait`` is that of
+        :meth:`Outstation.connect`. A name is used once. An outstation whose
+        connection cannot be made is not added.
         """
         if name in self._outstations:
             raise ValueError(f"an outstation named {name!r} has already been added")
         outstation = Outstation(name, **options)
         if connect:
-            await outstation.connect()
+            await outstation.connect(wait=wait)
         self._outstations[name] = outstation
         return outstation
 

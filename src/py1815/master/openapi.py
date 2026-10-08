@@ -27,7 +27,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from py1815.master.controls import OPERATIONS as OPERATIONS_BY_NAME
+from py1815.master.operations import BROADCASTS
 from py1815.master.requests import SCAN_KINDS
+from py1815.master.service import INDICATIONS
+from py1815.master.timesync import PROCEDURES
 
 #: Where the document is committed, and served from.
 DOCUMENT = pathlib.Path(__file__).parent / "console" / "openapi.json"
@@ -117,8 +120,47 @@ SCHEMAS: dict[str, Schema] = {
                 "description": "Read everything again when the outstation says its event "
                 "buffer overflowed.",
             },
+            "time_procedure": {
+                **_nullable({"type": "string", "enum": list(PROCEDURES)}),
+                "description": "How `write_time` sets the clock. Null writes the master's "
+                "time as it stands; `lan` and `non_lan` follow the procedures of IEEE "
+                "1815-2012 10.3.3, which correct for the time the request takes.",
+            },
+            "event_follow_ups": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Event polls made at once, one after another, while a poll's "
+                "own response still says events are waiting. Zero leaves them for the next "
+                "response that says so.",
+            },
         },
         description="What the master does for an outstation without being asked.",
+    ),
+    "Tls": _object(
+        {
+            "ca": {
+                **_nullable(_STRING),
+                "description": "A PEM file of the authorities the outstation's certificate "
+                "is checked against. The system's own when null.",
+            },
+            "certificate": {
+                **_nullable(_STRING),
+                "description": "The master's certificate, in PEM, with its chain.",
+            },
+            "key": {
+                **_nullable(_STRING),
+                "description": "The master's private key, in PEM, when it is not in the "
+                "certificate's file. A password is read from PY1815_MASTER_KEY_PASSWORD on "
+                "the machine the service runs on, and is never a parameter.",
+            },
+            "server_name": {
+                **_nullable(_STRING),
+                "description": "The name the outstation's certificate is checked against, "
+                "when it is not the host.",
+            },
+        },
+        additionalProperties=False,
+        description="Files on the machine the service runs on, for a TLS connection.",
     ),
     "Outstation": _object(
         {
@@ -127,6 +169,14 @@ SCHEMAS: dict[str, Schema] = {
             "port": _INTEGER,
             "outstation_address": _ADDRESS,
             "master_address": _ADDRESS,
+            "read_retries": {
+                "type": "integer",
+                "description": "Times a read that times out is sent again.",
+            },
+            "tls": {
+                **_nullable(_ref("Tls")),
+                "description": "The TLS settings, or null for plain TCP.",
+            },
             "connected": _BOOLEAN,
             "indications": {
                 "type": "array",
@@ -180,6 +230,8 @@ SCHEMAS: dict[str, Schema] = {
             "port",
             "outstation_address",
             "master_address",
+            "read_retries",
+            "tls",
             "connected",
             "indications",
             "counts",
@@ -297,6 +349,16 @@ SCHEMAS: dict[str, Schema] = {
             },
             "elapsed_ms": _NUMBER,
             "request": {"type": "string", "description": "The request fragment, in hex."},
+            "retries": {
+                "type": "integer",
+                "description": "Times the request was sent again after a timeout. Only a "
+                "read is, under its own sequence number.",
+            },
+            "broadcast": {
+                **_nullable({"type": "string", "enum": list(BROADCASTS)}),
+                "description": "The broadcast address the request went to, or null when it "
+                "went to the outstation's own.",
+            },
         },
         required=[
             "function",
@@ -309,8 +371,40 @@ SCHEMAS: dict[str, Schema] = {
             "undecoded",
             "elapsed_ms",
             "request",
+            "retries",
+            "broadcast",
         ],
         description="One request and everything that came back for it.",
+    ),
+    "Synchronized": _object(
+        {
+            "procedure": {"type": "string", "enum": list(PROCEDURES)},
+            "written": {
+                "type": "boolean",
+                "description": "Whether the write was sent. It is not when the first request "
+                "was refused or not answered.",
+            },
+            "accepted": {
+                **_nullable(_BOOLEAN),
+                "description": "Whether the outstation took the time. False when no write "
+                "was sent or the write was refused; null when its response did not arrive.",
+            },
+            "delay_ms": {
+                **_nullable(_NUMBER),
+                "description": "The one-way delay measured by `non_lan`, in milliseconds.",
+            },
+            "time_ms": {
+                **_nullable(_INTEGER),
+                "description": "The time the write carried, in milliseconds since the epoch.",
+            },
+            "exchanges": {
+                "type": "array",
+                "items": _ref("Exchange"),
+                "description": "The first request, and the write when one was sent.",
+            },
+        },
+        required=["procedure", "written", "accepted", "delay_ms", "time_ms", "exchanges"],
+        description="A time synchronization by one of the procedures of IEEE 1815-2012 10.3.3.",
     ),
     "PointValue": _object(
         {
@@ -464,7 +558,19 @@ OPERATIONS: dict[str, dict[str, Any]] = {
                 "outstation_address": {**_ADDRESS, "default": 1024},
                 "master_address": {**_ADDRESS, "default": 1},
                 "response_timeout": {**_INTERVAL, "default": 5},
+                "read_retries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Times a read that times out with nothing received is sent "
+                    "again, under the same sequence number (IEEE 1815-2012 4.3 rule 16). No "
+                    "other request is ever sent again.",
+                },
                 "connect_timeout": {**_INTERVAL, "default": 5},
+                "tls": {
+                    **_nullable(_ref("Tls")),
+                    "description": "Connect over TLS with these files. Plain TCP when left out.",
+                },
                 "confirm": {
                     "type": "boolean",
                     "description": "Whether fragments that ask to be confirmed are. They "
@@ -525,9 +631,17 @@ OPERATIONS: dict[str, dict[str, Any]] = {
     "connect": {
         "summary": "Make an outstation's connection",
         "tag": "Outstations",
-        "params": _outstation(),
+        "params": _outstation(
+            {
+                "wait": {
+                    **_nullable({"type": "number", "minimum": 0}),
+                    "description": "Seconds to keep trying, once a second, when the connection "
+                    "cannot be made. The first failure is the answer when left out.",
+                }
+            }
+        ),
         "result": _ref("Outstation"),
-        "example": {"outstation": "lab"},
+        "example": {"outstation": "lab", "wait": 10},
     },
     "disconnect": {
         "summary": "Close an outstation's connection, and keep what was read",
@@ -545,6 +659,81 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "params": _outstation(),
         "result": _ref("Outstation"),
         "example": {"outstation": "lab"},
+    },
+    "set_tasks": {
+        "summary": "Change what the master does for an outstation unasked",
+        "description": "Merged with what the outstation has: a task left out stands as it "
+        "was. A task that is due and is turned off is not done. Turning on one of the two "
+        "that write is refused as `not_allowed` in a service not started to command.",
+        "tag": "Outstations",
+        "params": _outstation({"tasks": _ref("Tasks")}, required=["tasks"]),
+        "result": _ref("Outstation"),
+        "example": {"outstation": "lab", "tasks": {"events_when_indicated": False}},
+    },
+    "wait_for": {
+        "summary": "Wait until a value, an event or an indication is as named",
+        "description": "Answers when the condition holds, or at the timeout, with `held` "
+        "saying which. Nothing is sent to make it hold. Exactly one of `value`, `event` and "
+        "`indication` is given.",
+        "tag": "Reading",
+        "params": _outstation(
+            {
+                "timeout": {"type": "number", "minimum": 0, "description": "Seconds."},
+                "value": _object(
+                    {
+                        "type": _ref("PointType"),
+                        "index": _INDEX,
+                        "equals": {"oneOf": [_NUMBER, _BOOLEAN]},
+                        "tolerance": {"type": "number", "minimum": 0, "default": 0},
+                        "at_least": _NUMBER,
+                        "at_most": _NUMBER,
+                    },
+                    required=["type", "index"],
+                    additionalProperties=False,
+                    description="Holds once the point has been reported with the value "
+                    "named; with no comparison, once it has been reported at all.",
+                ),
+                "event": _object(
+                    {"type": _ref("PointType"), "index": _INDEX},
+                    additionalProperties=False,
+                    description="Holds once an event arrives after the wait began, of the "
+                    "type and index named when they are.",
+                ),
+                "indication": _object(
+                    {
+                        "name": {"type": "string", "enum": list(INDICATIONS)},
+                        "set": {"type": "boolean", "default": True},
+                    },
+                    required=["name"],
+                    additionalProperties=False,
+                    description="Holds once the indication is set, or clear when `set` is "
+                    "false, in the last response of either kind.",
+                ),
+            },
+            required=["timeout"],
+        ),
+        "result": _object(
+            {
+                "held": _BOOLEAN,
+                "elapsed_ms": _NUMBER,
+                "indications": {"type": "array", "items": _STRING},
+                "point": {
+                    **_nullable(_ref("PointValue")),
+                    "description": "The point a `value` condition names, as it stands.",
+                },
+                "events": {
+                    "type": "array",
+                    "items": _ref("Object"),
+                    "description": "The events that satisfied an `event` condition.",
+                },
+            },
+            required=["held", "elapsed_ms", "indications", "point", "events"],
+        ),
+        "example": {
+            "outstation": "lab",
+            "timeout": 5,
+            "value": {"type": "ai", "index": 4, "at_least": 0},
+        },
     },
     "profile": {
         "summary": "Every point of the profile an outstation is meant to serve",
@@ -729,6 +918,20 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "result": _ref("Exchange"),
         "example": {"outstation": "lab"},
     },
+    "synchronize_time": {
+        "summary": "Set an outstation's clock by a procedure of IEEE 1815-2012",
+        "description": "`lan` records the current time at the outstation, then writes the "
+        "time the master sent that request (10.3.3.2). `non_lan` measures the delay, then "
+        "writes the master's time plus the delay (10.3.3.1). The write is sent only if the "
+        "first request was answered without an error indication, and neither is ever sent "
+        "again.",
+        "tag": "Commanding",
+        "params": _outstation(
+            {"procedure": {"type": "string", "enum": list(PROCEDURES), "default": "lan"}}
+        ),
+        "result": _ref("Synchronized"),
+        "example": {"outstation": "lab", "procedure": "lan"},
+    },
     "clear_restart": {
         "summary": "Clear an outstation's restart indication",
         "tag": "Commanding",
@@ -764,6 +967,40 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         ),
         "result": _ref("Exchange"),
         "example": {"outstation": "lab", "kind": "cold"},
+    },
+    "broadcast": {
+        "summary": "Send a request to a broadcast address",
+        "description": "Every outstation on the link takes it, and none answers: the "
+        "exchange's outcome is `sent`. An outstation says it received one with IIN1.0 in "
+        "its next response. Over TCP it reaches the one outstation at the other end, as a "
+        "broadcast. READ, ENABLE_UNSOLICITED, DISABLE_UNSOLICITED and DELAY_MEASURE are "
+        "always sent; any other function code is refused as `not_allowed` unless the "
+        "service was started to command.",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "function": {
+                    "oneOf": [_STRING, {"type": "integer", "minimum": 0, "maximum": 255}],
+                    "description": "By name, as in IMMED_FREEZE_NR, or by number.",
+                },
+                "body": {
+                    "type": "string",
+                    "default": "",
+                    "description": "The octets after the function code, in hexadecimal.",
+                },
+                "address": {
+                    "type": "string",
+                    "enum": list(BROADCASTS),
+                    "default": "optional_confirm",
+                    "description": "0xFFFD, 0xFFFE or 0xFFFF: whether the outstation asks "
+                    "for the response that reports the broadcast to be confirmed (IEEE "
+                    "1815-2012 table 4-13).",
+                },
+            },
+            required=["function"],
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "function": "IMMED_FREEZE_NR", "body": "140006"},
     },
     "enable_unsolicited": {
         "summary": "Ask an outstation to report event classes without being polled",

@@ -36,7 +36,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from py1815.control import CommandStatus
-from py1815.profile import der, device_profile, extract, load, probe
+from py1815.master import poll as master_poll
+from py1815.profile import der, device_profile, extract, load
 from py1815.profile.config import DerConfig
 from py1815.profile.model import Kind, MapError, PointMap
 from py1815.server import DEFAULT_PORT, OutstationServer
@@ -53,8 +54,6 @@ _TERMS = (
     "this machine: IEEE's terms do not permit redistributing the workbook or the "
     "file read from it, so keep both out of anything you publish."
 )
-
-_GROUP_NAMES = {1: "binary inputs", 20: "counters", 21: "frozen counters", 30: "analog inputs"}
 
 
 def _download(url: str) -> bytes:
@@ -304,56 +303,8 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _poll(args: argparse.Namespace) -> int:
-    try:
-        result = asyncio.run(
-            probe.integrity_poll(
-                args.host,
-                args.port,
-                outstation=args.outstation_address,
-                master=args.master_address,
-                timeout=args.timeout,
-            )
-        )
-    except probe.ProbeError as error:
-        print(str(error), file=sys.stderr)
-        return 1
-
-    counts = ", ".join(f"{len(result.group(group))} {name}" for group, name in _GROUP_NAMES.items())
-    print(f"{args.host}:{args.port} answered in {result.fragments} fragment(s): {counts}")
-    print(
-        f"  {len(result.events)} event(s); indications 0x{result.indications[0]:02X} "
-        f"0x{result.indications[1]:02X}"
-    )
-
-    # Names and units come from the tables when this machine has them; the
-    # poll itself needs none, so their absence only shortens the report.
-    try:
-        point_map: PointMap | None = load.load(args.tables)
-    except MapError:
-        point_map = None
-
-    def live_first(value: probe.Value) -> tuple[bool, int]:
-        # The meter ahead of the nameplate: what moves is what shows the
-        # outstation is alive, and an enumeration says little as a number.
-        point = point_map.get(Kind.AI, value.index) if point_map else None
-        measured = (
-            point is not None
-            and "meter" in (point.section or "").lower()
-            and point.units not in (None, "Enum")
-        )
-        return (not measured, value.index)
-
-    analogs = result.group(30)
-    chosen = analogs if args.all else sorted(analogs, key=live_first)[: args.limit]
-    for value in sorted(chosen, key=lambda v: v.index):
-        point = point_map.get(Kind.AI, value.index) if point_map else None
-        if point is None:
-            print(f"  AI{value.index:<6} {value.value:>14.6g}")
-            continue
-        units = "" if point.units in (None, "None", "n/a") else f" {point.units}"
-        reading = point.from_wire(value.value)
-        print(f"  AI{value.index:<6} {reading:>14.6g}{units}  {point.name[:60]}")
-    return 0
+    # The master's poll, with the output this command has always had.
+    return master_poll.run(args)
 
 
 def _validate(document: str, schema: pathlib.Path) -> int:
@@ -642,12 +593,7 @@ def _parser() -> argparse.ArgumentParser:
     config.set_defaults(handler=_config)
 
     poll = commands.add_parser("poll", help="run one integrity poll against an outstation")
-    poll.add_argument("--host", default="127.0.0.1")
-    poll.add_argument("--port", type=int, default=DEFAULT_PORT)
-    poll.add_argument("--timeout", type=float, default=5.0)
-    poll.add_argument("--tables", type=pathlib.Path, default=None, help="for point names")
-    poll.add_argument("--all", action="store_true", help="print every analog input")
-    poll.add_argument("--limit", type=int, default=12, help="analog inputs to print")
+    master_poll.add_options(poll, default_port=DEFAULT_PORT)
     _add_link_options(poll, configured=False)
     poll.set_defaults(handler=_poll)
     return parser

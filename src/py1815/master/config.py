@@ -37,8 +37,9 @@ from typing import Any
 from py1815 import settings
 from py1815.master import requests
 from py1815.master.api import DEFAULT_CONNECT_TIMEOUT, DEFAULT_RECONNECT
-from py1815.master.association import DEFAULT_RESPONSE_TIMEOUT
+from py1815.master.association import DEFAULT_READ_RETRIES, DEFAULT_RESPONSE_TIMEOUT
 from py1815.master.tasks import WRITING, Tasks
+from py1815.master.tls import TlsSettings
 from py1815.settings import ConfigError, read
 
 #: ``repeat.outputs`` value that means "as often as the integrity poll".
@@ -46,6 +47,10 @@ WITH_INTEGRITY = "with_integrity"
 
 #: The scans that can be repeated, in the order they are written.
 REPEATED = ("integrity", "events", requests.OUTPUTS)
+
+#: The most times a read may be sent again: enough for any link, and a bound
+#: on how long one read can hold up every other request.
+_MAX_READ_RETRIES = 10
 
 
 @dataclass(frozen=True)
@@ -59,8 +64,12 @@ class OutstationConfig:
     master_address: int = 1
     #: Seconds to wait for a response, and for each further fragment of one.
     response_timeout: float = DEFAULT_RESPONSE_TIMEOUT
+    #: Times a read that times out is sent again. No other request is.
+    read_retries: int = DEFAULT_READ_RETRIES
     #: Seconds to wait for the TCP connection.
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
+    #: Connect over TLS with these files, or None for plain TCP.
+    tls: TlsSettings | None = None
     #: Connect when the master starts.
     connect: bool = True
     #: Seconds between reconnection attempts after a lost connection, or None
@@ -90,8 +99,8 @@ class OutstationConfig:
     def changed(self, given: Mapping[str, Any], where: str) -> OutstationConfig:
         """Return a copy with the settings in ``given`` applied.
 
-        ``tasks`` and ``repeat`` are merged: a setting they leave out keeps its
-        current value.
+        ``tasks``, ``repeat`` and ``tls`` are merged: a setting they leave out
+        keeps its current value. ``tls`` given as null is plain TCP.
         """
         allowed = [each.name for each in fields(self)]
         settings.section(given, where, allowed)
@@ -104,6 +113,10 @@ class OutstationConfig:
                 values[key] = settings.integer(value, at, 1, 65535)
             elif key in ("outstation_address", "master_address"):
                 values[key] = settings.integer(value, at, 0, settings.MAX_ADDRESS)
+            elif key == "read_retries":
+                values[key] = settings.integer(value, at, 0, _MAX_READ_RETRIES)
+            elif key == "tls":
+                values[key] = self._tls(value, at)
             elif key in self._SECONDS:
                 values[key] = settings.seconds(value, at)
             elif key in self._BOOLEANS:
@@ -122,6 +135,18 @@ class OutstationConfig:
         if values["outstation_address"] == values["master_address"]:
             raise ConfigError(f"{where}: outstation_address and master_address must be different")
         return OutstationConfig(**values)
+
+    def _tls(self, given: Any, where: str) -> TlsSettings | None:
+        """Return the TLS settings, merged with these as ``tasks`` and ``repeat`` are."""
+        if given is None:
+            return None
+        if not isinstance(given, Mapping):
+            raise ConfigError(f"{where} must be an object, or null for plain TCP")
+        merged = {**(self.tls.describe() if self.tls is not None else {}), **given}
+        try:
+            return TlsSettings.from_mapping(merged)
+        except ValueError as error:
+            raise ConfigError(f"{where}: {error}") from None
 
     def _repeat(self, given: Any, where: str) -> dict[str, float | str | None]:
         merged = dict(self.repeat)
@@ -149,7 +174,9 @@ class OutstationConfig:
             "outstation_address": self.outstation_address,
             "master_address": self.master_address,
             "response_timeout": self.response_timeout,
+            "read_retries": self.read_retries,
             "connect_timeout": self.connect_timeout,
+            "tls": None if self.tls is None else self.tls.describe(),
             "connect": self.connect,
             "reconnect": self.reconnect,
             "integrity_interval": integrity,
@@ -174,7 +201,7 @@ class OutstationConfig:
         described: dict[str, Any] = {}
         for each in fields(self):
             value = getattr(self, each.name)
-            if each.name == "tasks":
+            if each.name in ("tasks", "tls") and value is not None:
                 value = value.describe()
             elif each.name == "repeat":
                 value = dict(value)
@@ -270,7 +297,7 @@ class MasterConfig:
             for key, value in own.items():
                 if value == shared[key]:
                     continue
-                if isinstance(value, dict):
+                if isinstance(value, dict) and isinstance(shared[key], dict):
                     value = {k: v for k, v in value.items() if v != shared[key][k]}
                 entry[key] = value
             outstations.append(entry)

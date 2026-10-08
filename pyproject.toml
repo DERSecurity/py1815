@@ -48,6 +48,7 @@ docs = [
 ]
 # xmlschema is for the tests that validate a generated Device Profile against
 # the DNP Users Group schema, which run only where a checkout has a copy of it.
+# cryptography makes the throwaway certificates of the master's TLS tests.
 dev = [
     "py1815[docs]",
     "pytest>=8.0",
@@ -56,6 +57,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "xmlschema>=3.0",
+    "cryptography>=42",
 ]
 
 [tool.hatch.build.targets.wheel]

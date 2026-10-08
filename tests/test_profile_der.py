@@ -16,6 +16,7 @@ from profile_fixtures import REAL_TABLES, for_reference_der
 from py1815.application import FunctionCode, QualifierCode
 from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType, encode_crob
 from py1815.events import EventClass
+from py1815.master import poll
 from py1815.profile import der, load, probe
 from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
@@ -264,7 +265,7 @@ class TestOverTcp:
         await server.start()
         try:
             simulation.advance(1.0)
-            result = await probe.integrity_poll("127.0.0.1", server.port)
+            result = await poll.integrity_poll("127.0.0.1", server.port)
         finally:
             await server.stop()
 
@@ -282,10 +283,10 @@ class TestOverTcp:
         await server.start()
         try:
             _settle(simulation, 5)
-            first = await probe.integrity_poll("127.0.0.1", server.port)
+            first = await poll.integrity_poll("127.0.0.1", server.port)
             # The confirmation is on its way; give the listener a turn to take it.
             await asyncio.sleep(0.05)
-            second = await probe.integrity_poll("127.0.0.1", server.port)
+            second = await poll.integrity_poll("127.0.0.1", server.port)
         finally:
             await server.stop()
         assert first.events
@@ -293,16 +294,18 @@ class TestOverTcp:
 
     @pytest.mark.asyncio
     async def test_nothing_listening_is_reported_not_raised_raw(self):
-        with pytest.raises(probe.ProbeError, match="cannot connect"):
-            await probe.integrity_poll("127.0.0.1", 1, timeout=2.0)
+        with pytest.raises(poll.PollError, match="cannot connect"):
+            await poll.integrity_poll("127.0.0.1", 1, timeout=2.0)
 
     @pytest.mark.asyncio
     async def test_the_wrong_link_address_gets_no_answer(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
         try:
-            with pytest.raises(probe.ProbeError, match=r"no answer|closed"):
-                await probe.integrity_poll("127.0.0.1", server.port, outstation=9, timeout=0.5)
+            with pytest.raises(poll.PollError, match=r"no answer|closed"):
+                await poll.integrity_poll(
+                    "127.0.0.1", server.port, outstation_address=9, timeout=0.5
+                )
         finally:
             await server.stop()
 

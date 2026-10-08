@@ -130,7 +130,8 @@ jobs:
     # `pytest` and `pytest-asyncio`, and not the dev extra, whose tools may
     # have no wheel for this platform. The tests that validate a Device
     # Profile against the Users Group schema skip here as they do in `test`,
-    # for want of the schema. One Python version, because emulation is slow
+    # for want of the schema, and the master's TLS tests skip for want of
+    # `cryptography`, which makes their certificates. One Python version, because emulation is slow
     # and the question is the platform, not the interpreter.
     runs-on: ubuntu-latest
     timeout-minutes: 45

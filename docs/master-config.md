@@ -32,7 +32,9 @@ take `--config FILE`.
     "outstation_address": 1024,
     "master_address": 1,
     "response_timeout": 5.0,
+    "read_retries": 0,
     "connect_timeout": 5.0,
+    "tls": null,
     "connect": true,
     "reconnect": 5.0,
     "confirm": true,
@@ -44,7 +46,9 @@ take `--config FILE`.
       "write_time": true,
       "enable_unsolicited": [],
       "events_when_indicated": true,
-      "integrity_on_overflow": true
+      "integrity_on_overflow": true,
+      "time_procedure": null,
+      "event_follow_ups": 3
     },
     "repeat": {
       "integrity": null,
@@ -78,7 +82,8 @@ Every setting is optional. A file that only lists outstations is valid.
 | `connect_wait` | `0` | Seconds to keep trying to reach an outstation that is not there at startup. `0` tries once |
 
 The console's token is not in the file, because it is a secret. Give it with
-`--token` or the `PY1815_MASTER_TOKEN` environment variable.
+`--token` or the `PY1815_MASTER_TOKEN` environment variable. The same goes for
+the password of a TLS key: see [`tls`](#tls).
 
 ## Outstation settings
 
@@ -92,7 +97,9 @@ These go in `defaults`, in an outstation's entry, or both.
 | `outstation_address` | `1024` | The outstation's DNP3 link address |
 | `master_address` | `1` | The master's DNP3 link address |
 | `response_timeout` | `5` | Seconds to wait for a response, and for each further fragment |
-| `connect_timeout` | `5` | Seconds to wait for the TCP connection |
+| `read_retries` | `0` | Times a read that times out with nothing received is sent again, under the same sequence number. Up to 10. No other request is ever sent again |
+| `connect_timeout` | `5` | Seconds to wait for the TCP connection, and the TLS handshake |
+| `tls` | `null` | Connect over TLS with these files, or `null` for plain TCP. See [`tls`](#tls) |
 | `connect` | `true` | Connect when the master starts |
 | `reconnect` | `5` | Seconds between reconnection attempts after a lost connection. `null` disables reconnection |
 | `confirm` | `true` | Confirm response fragments that ask for confirmation |
@@ -111,6 +118,8 @@ These go in `defaults`, in an outstation's entry, or both.
 | `enable_unsolicited` | `[]` | Event classes (1, 2, 3) to enable unsolicited reporting for after startup |
 | `events_when_indicated` | `true` | Poll for events when a response says some are waiting |
 | `integrity_on_overflow` | `true` | Run an integrity poll when a response reports an event buffer overflow |
+| `time_procedure` | `null` | How `write_time` sets the clock. `null` writes the master's time as it stands; `"lan"` and `"non_lan"` follow the procedures of IEEE 1815-2012 10.3.3, which correct for the time the request takes |
+| `event_follow_ups` | `3` | Event polls made at once, one after another, while a poll's own response still says events are waiting. `0` leaves them for the next response that says so |
 
 ### `repeat`
 
@@ -120,8 +129,34 @@ These go in `defaults`, in an outstation's entry, or both.
 | `events` | `null` | Seconds between event polls. `null` means not repeated |
 | `outputs` | `"with_integrity"` | Seconds between reads of output status, `"with_integrity"` to read it as often as the integrity poll, or `null` for never. An integrity poll does not include output status |
 
-`tasks` and `repeat` are merged with the defaults. An outstation entry that
-sets `"tasks": {"startup": false}` changes that one task and keeps the rest.
+### `tls`
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ca` | `null` | A PEM file of the authorities the outstation's certificate is checked against. `null` uses the system's own |
+| `certificate` | `null` | The master's certificate, in PEM, with its chain if it has one |
+| `key` | `null` | The master's private key, in PEM, when it is not in the certificate's file |
+| `server_name` | `null` | The name the outstation's certificate is checked against, when it is not `host` |
+
+An outstation that listens with TLS usually requires a certificate of the
+master, as this library's does, so give `certificate` and `key`. A key that is
+encrypted is opened with the password in the `PY1815_MASTER_KEY_PASSWORD`
+environment variable; the password is never a setting, so `py1815-master
+config` never prints it.
+
+```json
+"defaults": {
+  "tls": {"ca": "lab-ca.pem", "certificate": "master.pem", "key": "master.key"}
+},
+"outstations": [
+  {"name": "lab", "host": "192.0.2.10", "tls": {"server_name": "inverter.lab"}},
+  {"name": "bench", "host": "192.0.2.11", "tls": null}
+]
+```
+
+`tasks`, `repeat` and `tls` are merged with the defaults. An outstation entry
+that sets `"tasks": {"startup": false}` changes that one task and keeps the
+rest, and one that sets `"tls": null` connects over plain TCP.
 
 ## Command-line flags
 
@@ -134,10 +169,15 @@ own value.
 | `--allow-control` | `allow_control` |
 | `--bind ADDRESS:PORT` | `bind` |
 | `--tables FILE` | `tables` |
-| `--connect-wait SECONDS` | `connect_wait` |
+| `--connect-wait SECONDS` | `connect_wait`: the service's `connect` keeps trying for this long, once a second |
 | `--outstation NAME=HOST:PORT` | Adds an entry to `outstations`. May be repeated |
 | `--outstation-address N` | `defaults.outstation_address` |
 | `--master-address N` | `defaults.master_address` |
+| `--read-retries N` | `defaults.read_retries` |
+| `--tls-ca FILE` | `defaults.tls.ca` |
+| `--tls-certificate FILE` | `defaults.tls.certificate` |
+| `--tls-key FILE` | `defaults.tls.key` |
+| `--tls-server-name NAME` | `defaults.tls.server_name` |
 | `--reconnect SECONDS` | `defaults.reconnect`. `0` means never |
 | `--manual` | `defaults.manual` |
 | `--profile` | `defaults.profile` |

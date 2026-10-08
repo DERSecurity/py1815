@@ -560,6 +560,8 @@ READING_TASKS = {
     "enable_unsolicited": [],
     "events_when_indicated": True,
     "integrity_on_overflow": True,
+    "time_procedure": None,
+    "event_follow_ups": 3,
 }
 
 
@@ -625,6 +627,52 @@ class TestWhatIsDoneUnasked:
         await _added(service, server)
         asked = (await _ask(service, "scan", "lab", kind="class0"))["result"]
         assert asked["task"] is None
+
+    @pytest.mark.asyncio
+    async def test_tasks_are_changed_after_adding_and_merged_with_what_they_were(
+        self, service, outstation
+    ):
+        _, server = outstation
+        await _added(service, server)
+        answer = await _ask(
+            service,
+            "set_tasks",
+            "lab",
+            tasks={"events_when_indicated": False, "event_follow_ups": 0},
+        )
+        assert answer["result"]["tasks"] == READING_TASKS | {
+            "events_when_indicated": False,
+            "event_follow_ups": 0,
+        }
+        assert service.master["lab"].tasks.events_when_indicated is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tasks", "kind"),
+        [
+            ({"write_time": True}, "not_allowed"),
+            ({"clear_restart": True, "startup": False}, "not_allowed"),
+            ({"polling": True}, "request"),
+            ({"write_time": True, "polling": True}, "request"),
+            ({}, "request"),
+            ("startup", "request"),
+        ],
+    )
+    async def test_a_reading_service_refuses_a_change_to_a_task_that_writes(
+        self, service, outstation, tasks, kind
+    ):
+        _, server = outstation
+        await _added(service, server)
+        answer = await _ask(service, "set_tasks", "lab", tasks=tasks)
+        assert answer["error"]["kind"] == kind
+        assert service.master["lab"].tasks.describe() == READING_TASKS, "nothing changed"
+
+    @pytest.mark.asyncio
+    async def test_one_started_to_command_turns_a_writing_task_on(self, commanding, outstation):
+        _, server = outstation
+        await _added(commanding, server, tasks={"write_time": False})
+        answer = await _ask(commanding, "set_tasks", "lab", tasks={"write_time": True})
+        assert answer["result"]["tasks"]["write_time"] is True
 
     @pytest.mark.asyncio
     async def test_manual_is_nothing_unasked_and_no_confirmation(self, commanding, outstation):
@@ -734,7 +782,12 @@ class TestWhatIsDoneUnasked:
         "flags, tasks, reconnect",
         [
             ([], READING_TASKS, 5.0),
-            (["--manual"], dict.fromkeys(READING_TASKS, False) | {"enable_unsolicited": []}, 5.0),
+            (
+                ["--manual"],
+                dict.fromkeys(READING_TASKS, False)
+                | {"enable_unsolicited": [], "time_procedure": None, "event_follow_ups": 0},
+                5.0,
+            ),
             (["--unsolicited", "2"], READING_TASKS | {"enable_unsolicited": [2]}, 5.0),
             (["--reconnect", "0"], READING_TASKS, None),
             (["--reconnect", "1.5"], READING_TASKS, 1.5),
@@ -1248,6 +1301,16 @@ class TestTheCommand:
             assert "late: connected" in capsys.readouterr().out
         finally:
             await server.stop()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("wait", [-1, "soon", True, float("inf")])
+    async def test_a_wait_that_is_not_one_is_refused(self, service, wait):
+        await _ask(service, "add", name="gone", host="127.0.0.1", port=1, connect=False)
+        answer = await _ask(service, "connect", "gone", wait=wait)
+        assert answer["error"] == {
+            "kind": "request",
+            "message": "wait is seconds to keep trying, zero or more",
+        }
 
     @pytest.mark.asyncio
     async def test_and_is_tried_once_unless_asked_to_wait(self, service):

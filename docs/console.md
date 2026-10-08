@@ -45,6 +45,9 @@ JSON file and loaded with `--config`. See
 | `--demo` | Starts a simulated IEEE 1815.2 DER and connects to it |
 | `--outstation NAME=HOST:PORT` | Adds an outstation and connects to it. May be given more than once |
 | `--outstation-address`, `--master-address` | The link addresses, for the outstations named. 1024 and 1 unless given |
+| `--read-retries N` | Sends a read that times out again, up to this many times. Nothing else is ever sent again. 0 unless given |
+| `--tls-ca`, `--tls-certificate`, `--tls-key FILE` | Connects to the outstations named over TLS: the authorities their certificates are checked against, and the master's own certificate and key. See [Configuring the master](master-config.md#tls) |
+| `--tls-server-name NAME` | The name an outstation's certificate is checked against, when it is not the host |
 | `--integrity-interval SECONDS` | Repeats an integrity poll of each outstation named |
 | `--event-interval SECONDS` | Repeats an event poll |
 | `--unsolicited CLASSES` | Enables unsolicited reporting for these event classes after startup, as in `1,2,3` |
@@ -66,7 +69,8 @@ Outstations can also be added from the page, under **Add outstation**.
 Once an outstation is connected, the master runs its automatic tasks:
 
 - On connect, it disables unsolicited reporting and runs an integrity poll.
-- It polls for events when a response says some are waiting.
+- It polls for events when a response says some are waiting, and polls again
+  at once, up to three times, while a poll's own response still says so.
 - It reconnects when the connection is lost.
 - With `--allow-control`, it also clears the restart indication and writes the
   time when the outstation asks.

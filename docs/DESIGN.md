@@ -1282,6 +1282,73 @@ outstation accepts both forms.
 list would cost 1 or 2 octets each, and the points come back in ascending order
 whatever order they were asked in.
 
+**D83 -- The master tries again only a read, and a first connection when asked.** A read
+that times out with nothing received is sent again `read_retries` times, under its own
+sequence number and with the same octets, as IEEE 1815-2012 4.3 rule 16 has it, so an
+outstation that answered the first and was not heard answers the retry from the same
+record. Nothing else is sent again: rule 16 forbids it for a direct operate, a delay
+measurement, a record of the current time and a time write, and a select, an operate, a
+write, a freeze or a restart sent twice may be acted on twice (D80). A read whose answer
+has begun to arrive is not sent again, since the outstation is answering it. The count is
+zero unless set, which is what the DNP Users Group recommends for a master's application
+layer (AN2015-001, 1.6.2) and what a tool that reports an outstation's silence needs: a
+retry that succeeds hides that the first request went unanswered. The decision lives in
+the association, so a master on a socket and one wired to a session retry alike. A first
+connection that cannot be made is likewise tried again only when the caller says for how
+long (`connect(wait=...)`); without that the failure is the answer at once, as before, and
+`--connect-wait` is now this and not a loop of the command line's own.
+*Trade-off:* on a lossy link the caller has to ask for retries, and a read that is
+answered after being sent twice reports `retries` and not a timeout, so the loss is in
+the result and not in the outcome.
+
+**D84 -- A broadcast ends when it is sent, and the clock is set by the standard's
+procedures when asked.** A request to a broadcast address is never answered (IEEE
+1815-2012 4.5.1), so its exchange ends as sent the moment it is built, whatever its
+function code, and is never sent again. It goes out on the outstation's own connection,
+since this master speaks TCP and not UDP; an outstation acts on a broadcast that arrives
+that way as on one that arrives by datagram, and reports it with IIN1.0 in its next
+response. The address given by default is 0xFFFF, the one the standard says every
+outstation takes. Setting the clock by the LAN or the non-LAN procedure (10.3.3) is two
+requests decided one at a time, as a select and its operate are: the write is sent only if
+the first request was answered without an error indication, and is built at that moment,
+from the master's clock and, for non-LAN, half the round trip less the time the outstation
+says it held the request. Both requests are made in one turn, so no scan comes between
+them. The `write_time` task can follow either procedure and writes the plain time unless
+told to, since an outstation that asks for the time need not answer either procedure.
+*Trade-off:* the master reads its clock when it builds a request and not when the last
+octet leaves the network interface, which the standard's note on the LAN procedure says
+costs accuracy; and a broadcast over TCP reaches one outstation, so reaching several is a
+broadcast per connection.
+
+**D85 -- Events left waiting after a poll are fetched at once, a bounded number of times,
+and the tasks can change while connected.** This replaces the rule of D81 that a poll's own
+response never makes another poll due. A response to a poll that still says events are
+waiting means the outstation held some back, and they are now fetched by another event
+poll at once, up to `event_follow_ups` in a row (three unless set). The count starts again
+only when a poll's response says nothing is waiting, or on a new connection, so an
+outstation that never clears the bit is polled four times and then left until it does,
+instead of being read either never or without end. Zero restores D81's behavior. An
+outstation's tasks can be set while it is connected; a task that is due and has been
+turned off is not done, while a startup sequence under way finishes, since its integrity
+poll may also be due for another reason. The service's `set_tasks` refuses to turn on a
+task that writes exactly as `add` does.
+*Trade-off:* a misbehaving outstation costs a few extra polls each time the bit is seen to
+clear and set again, where under D81 it cost one per response.
+
+**D86 -- A script with no event loop gets the same master, generated and not written
+twice.** `py1815.master.sync` runs the asynchronous master on an event loop in a thread of
+its own and hands each call to it, so the tasks, unsolicited responses and repeated scans
+carry on between a script's calls exactly as they do under asyncio. Its blocking methods
+are made from the list of operations and the socket master's coroutines, and a test holds
+that list to both: an operation added to one cannot be missing from the other, which two
+hand-written interfaces would allow the first time someone forgot. Everything else on an
+outstation, the store and the trace included, is read on the loop's thread, so a script
+never reads a dictionary while the loop is changing it. A condition given to `wait_for` is
+called on that thread with the store itself.
+*Trade-off:* the blocking methods carry the asynchronous ones' documentation and
+signatures but not a static type of their own, so a type checker sees them as returning
+anything.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1302,6 +1369,9 @@ Each layer is testable without the ones above it, and the session does no I/O.
 - `master.association` is the session's mirror: what is true of a conversation, from the end
   that asks. Like the session it does no I/O. `master.api` owns the socket, and
   `master.loopback` stands in for one by handing octets straight to a session.
+- `master.timesync` decides the two requests of a time synchronization, as `master.controls`
+  decides those of a select and operate, and does no I/O.
+- `master.sync` is `master.api` for a caller with no event loop. It adds no behavior.
 - `master.service` is the master's operations as JSON, and knows nothing of who is asking.
   The line socket, the HTTP server and the console are each a way to reach it.
 
