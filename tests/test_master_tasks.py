@@ -106,6 +106,10 @@ class TestTaskSettings:
             ({"enable_unsolicited": "123"}, "a list of event classes"),
             ({"enable_unsolicited": [0]}, "1, 2 or 3"),
             ({"enable_unsolicited": [4]}, "1, 2 or 3"),
+            ({"enable_unsolicited": [1.9]}, "1, 2 or 3"),
+            ({"enable_unsolicited": ["1"]}, "1, 2 or 3"),
+            ({"enable_unsolicited": [True]}, "1, 2 or 3"),
+            ({"enable_unsolicited": [None]}, "1, 2 or 3"),
         ],
     )
     def test_changed_rejects_invalid_settings(self, given, says):
@@ -776,6 +780,70 @@ class TestOverTcp:
         await asyncio.wait_for(lab.idle(), 1.0)
 
     @pytest.mark.asyncio
+    async def test_failed_connect_during_retries_does_not_stop_them(self, simulation):
+        """A manual connect() that fails must leave automatic reconnection running."""
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        port = server.port
+        async with Master() as master:
+            lab = await master.add(
+                "lab", host="127.0.0.1", port=port, reconnect=0.05, connect_timeout=0.5
+            )
+            await lab.idle()
+            await server.stop()
+            await _until(lambda: not lab.connected)
+            with pytest.raises(OSError):
+                await lab.connect()
+
+            again = OutstationServer(simulation.outstation.session(), bind=f"127.0.0.1:{port}")
+            await again.start()
+            try:
+                # Nothing more is asked of it: the retries must still be running.
+                await _until(lambda: lab.connected)
+            finally:
+                await again.stop()
+
+    @pytest.mark.asyncio
+    async def test_first_connect_that_fails_does_not_start_retries(self):
+        lab = Outstation("lab", host="127.0.0.1", port=1, reconnect=0.02, connect_timeout=0.5)
+        with pytest.raises(OSError):
+            await lab.connect()
+        assert lab._reconnecting is None
+
+    @pytest.mark.asyncio
+    async def test_retries_continue_when_the_peer_closes_at_once(self, simulation):
+        """A peer that accepts and immediately closes must not end reconnection."""
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        port = server.port
+        accepted = []
+
+        async def slam(_reader, writer):
+            accepted.append(1)
+            writer.close()
+
+        async with Master() as master:
+            lab = await master.add("lab", host="127.0.0.1", port=port, reconnect=0.02)
+            await lab.idle()
+            await server.stop()
+            await _until(lambda: not lab.connected)
+
+            closing = await asyncio.start_server(slam, "127.0.0.1", port)
+            try:
+                await _until(lambda: len(accepted) >= 4)
+            finally:
+                closing.close()
+                await closing.wait_closed()
+
+            again = OutstationServer(simulation.outstation.session(), bind=f"127.0.0.1:{port}")
+            await again.start()
+            try:
+                await _until(lambda: lab.connected)
+                assert (await lab.scan("class0")).complete
+            finally:
+                await again.stop()
+
+    @pytest.mark.asyncio
     async def test_reconnect_retries_until_outstation_returns(self, simulation):
         server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
         await server.start()
@@ -822,7 +890,7 @@ class TestOverTcp:
         finally:
             await server.stop()
 
-    @pytest.mark.parametrize("wait", [0, -1.0])
+    @pytest.mark.parametrize("wait", [0, -1.0, float("inf"), float("nan")])
     def test_invalid_reconnect_interval_is_rejected(self, wait):
         with pytest.raises(ValueError, match="a wait between attempts"):
             Outstation("lab", host="127.0.0.1", reconnect=wait)

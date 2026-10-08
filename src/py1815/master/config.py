@@ -29,6 +29,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
@@ -55,6 +56,9 @@ class ConfigError(ValueError):
 def _number(value: Any, where: str, *, minimum: float = 0.0) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{where} must be a number of seconds")
+    # JSON such as 1e309 decodes to infinity, which is not a usable interval.
+    if not math.isfinite(value):
+        raise ConfigError(f"{where} must be a finite number of seconds")
     if not value > minimum:
         raise ConfigError(f"{where} must be greater than {minimum:g}")
     return float(value)
@@ -259,7 +263,12 @@ class MasterConfig:
                 values[key] = _text(given[key], key)
         if "connect_wait" in given:
             wait = given["connect_wait"]
-            if isinstance(wait, bool) or not isinstance(wait, (int, float)) or wait < 0:
+            if (
+                isinstance(wait, bool)
+                or not isinstance(wait, (int, float))
+                or not math.isfinite(wait)
+                or wait < 0
+            ):
                 raise ConfigError("connect_wait must be a number of seconds, zero or more")
             values["connect_wait"] = float(wait)
 
