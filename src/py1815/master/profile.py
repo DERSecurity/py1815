@@ -23,6 +23,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import asyncio
+import decimal
 import math
 import re
 import weakref
@@ -88,7 +89,7 @@ _CLASS_WORDS = {"none": 0, "one": 1, "two": 2, "three": 3}
 
 
 def address(point: Point) -> str:
-    """A point's address as text: its kind and index, as in ``AO87``."""
+    """Return a point's address as text: its kind and index, as in ``AO87``."""
     return f"{point.kind.value}{point.index}"
 
 
@@ -101,17 +102,25 @@ def _normal(text: str) -> str:
 
 
 def _head(text: str) -> str:
-    """The first sentence of a name, which is the name where the tables add a description."""
+    """Return the first sentence of a name: the name, where the tables add a description."""
     return " ".join(text.split()).split(". ", maxsplit=1)[0].rstrip(".")
 
 
+def _places(number: float | None) -> int:
+    """Return how many decimal places a number from the tables is written with."""
+    if number is None:
+        return 0
+    exponent = decimal.Decimal(repr(float(number))).normalize().as_tuple().exponent
+    return max(0, -exponent) if isinstance(exponent, int) else 0
+
+
 def label(point: Point) -> str:
-    """A point's name without the description the tables append to some."""
+    """Return a point's name without the description the tables append to some."""
     return _head(point.name)
 
 
 def _function_name(enable: Point) -> str:
-    """A function's name, from the name of the output that enables it.
+    """Return a function's name, from the name of the output that enables it.
 
     ``Enable Volt-Var Control Mode`` names the function ``Volt-Var Control``.
     """
@@ -126,7 +135,7 @@ def _key(name: str) -> str:
 
 
 def quality(flags: int | None, reported: bool = True) -> str:
-    """What a flag octet says of a value: ``good``, ``offline``, ``comm_lost`` or ``restart``.
+    """Return what a flag octet says of a value: ``good``, ``offline``, ``comm_lost``, ``restart``.
 
     ``not_reported`` for a point the outstation did not report, and
     ``no_flags`` for a variation that carries no flag octet, which says
@@ -201,10 +210,18 @@ class Reading:
 
     @property
     def value(self) -> bool | int | float | None:
-        """The value in engineering units: the transmitted number through the multiplier."""
+        """The value in engineering units: the transmitted number through the multiplier.
+
+        A whole transmitted number is given to as many decimal places as the
+        multiplier and offset have, so 4224 tenths of a volt reads 422.4 and
+        not the 422.40000000000003 that binary floating point makes of it.
+        """
         if self.raw is None or isinstance(self.raw, bool):
             return self.raw
-        return self.point.from_wire(self.raw)
+        value = self.point.from_wire(self.raw)
+        if isinstance(self.raw, int) and math.isfinite(value):
+            return round(value, _places(self.point.multiplier) + _places(self.point.offset))
+        return value
 
     @property
     def state(self) -> str | None:
@@ -228,7 +245,7 @@ class Readings:
     exchanges: tuple[Exchange, ...]
 
     def __getitem__(self, name: str) -> Reading:
-        """One reading, by the point's address or its name."""
+        """Return one reading, by the point's address or its name."""
         for reading in self.readings:
             if name.strip().upper() == address(reading.point) or _normal(name) in (
                 _normal(reading.point.name),
@@ -467,7 +484,7 @@ class DerProfile:
     # ---------------------------------------------------------------- names
 
     def point(self, name: str, *, outputs: bool = False) -> Point:
-        """A point by its address, as in ``AO87``, or by its name.
+        """Return a point by its address, as in ``AO87``, or by its name.
 
         A name is matched whole or by its first sentence, ignoring case and
         spacing. The tables give some names to more than one point, an output
@@ -501,7 +518,7 @@ class DerProfile:
         raise ValueError(f"the profile has no point named {name!r}")
 
     def function(self, name: str) -> Function:
-        """A function by its key, its name, its purpose, or the address of its enable output."""
+        """Return a function by its key, name, purpose, or the address of its enable output."""
         wanted = _normal(name)
         for function in self.functions:
             if wanted in (
@@ -515,7 +532,7 @@ class DerProfile:
         raise ValueError(f"the profile has no function {name!r}; it has {known}")
 
     def group(self, name: str) -> tuple[Point, ...]:
-        """The points of a named group: a function, or everything of one purpose.
+        """Return the points of a named group: a function, or everything of one purpose.
 
         A purpose is what the tables say a point is for: ``Nameplate``,
         ``Monitoring``, ``Return to Service``. A function's group is its own
@@ -532,7 +549,7 @@ class DerProfile:
         return tuple(sorted(found, key=_by_address))
 
     def mirror(self, point: Point) -> Point | None:
-        """The input that reads an output back, when the tables pair one."""
+        """Return the input that reads an output back, or None when the tables pair none."""
         paired = point.associated
         if paired is None or paired[0].is_output:
             return None
@@ -541,7 +558,7 @@ class DerProfile:
     # -------------------------------------------------------------- scaling
 
     def transmitted(self, point: Point, value: Any) -> bool | int:
-        """An output's value as it travels: a state, or a whole transmitted number.
+        """Return an output's value as it travels: a state, or a whole transmitted number.
 
         A binary output takes true or false, 1 or 0, or the name the tables
         give one of its states. An analog output takes a number in engineering
@@ -579,7 +596,7 @@ class DerProfile:
 
     @staticmethod
     def limits(point: Point) -> tuple[float | None, float | None]:
-        """An analog point's range in engineering units, lowest first. None where open."""
+        """Return an analog point's range in engineering units, lowest first; None where open."""
         ends = [
             None if bound is None else point.from_wire(float(bound))
             for bound in (point.minimum, point.maximum)
@@ -590,7 +607,7 @@ class DerProfile:
 
     @staticmethod
     def span(point: Point) -> str:
-        """An analog point's range in engineering units, as text."""
+        """Return an analog point's range in engineering units, as text."""
         low, high = DerProfile.limits(point)
         units = f" {point.units}" if point.units and point.units.lower() not in ("n/a",) else ""
         lower = "no lower limit" if low is None else f"{low:g}"
@@ -600,7 +617,7 @@ class DerProfile:
     # --------------------------------------------------------------- curves
 
     def curve_block(self) -> tuple[list[Point], list[Point]]:
-        """The curve block's outputs and the inputs that read them back, in the block's order.
+        """Return the curve block's outputs and the inputs that read them back, in order.
 
         The selector, the four fields, then X and Y of each point. Raises
         ValueError when the map does not hold the block or its readback.
@@ -622,13 +639,13 @@ class DerProfile:
         return outputs, inputs
 
     def referenced(self) -> Point | None:
-        """The input that says whether a function names the selected curve, if the map has it."""
+        """Return the input that says whether a function names the selected curve, if any."""
         return self.map.get(Kind.BI, CURVE_REFERENCED)
 
     # ------------------------------------------------------------ functions
 
     def _functions(self) -> tuple[Function, ...]:
-        """Every function: a supports input and the enable output it is paired with.
+        """Find every function: a supports input and the enable output it is paired with.
 
         A function's points are the ones the tables give the enable output's
         purpose, under its heading, as the outstation groups them (D57).
@@ -671,7 +688,7 @@ class DerProfile:
 
 
 def _static(objects: Iterable[DecodedObject]) -> dict[tuple[PointType, int], DecodedObject]:
-    """The objects of a response by point, a static object before an event for the same point."""
+    """Return a response's objects by point, a static object before an event for it."""
     found: dict[tuple[PointType, int], DecodedObject] = {}
     for decoded in objects:
         if decoded.point is None or decoded.index is None:
@@ -689,7 +706,7 @@ def _read_step(wanted: Mapping[PointType, Sequence[int]]) -> Step:
 
 
 def _runs(wanted: Mapping[PointType, Sequence[int]]) -> list[tuple[PointType, list[int]]]:
-    """Each run of consecutive indices, by type: one range header of a read (D82)."""
+    """Return each run of consecutive indices, by type: one range header of a read (D82)."""
     runs: list[tuple[PointType, list[int]]] = []
     for kind, indices in wanted.items():
         for index in sorted(set(indices)):
@@ -733,7 +750,8 @@ def _read_points(
 def read_plan(points: Sequence[Point]) -> Plan[Readings]:
     """Read points of the profile, and report each in engineering units.
 
-    One request, unless the outstation refuses it whole: see :func:`_read_points`.
+    One request, unless the outstation refuses it whole for a range that holds
+    no point it serves: then each range is read again on its own (D93).
     """
     if not points:
         raise ValueError("a read names at least one point")
@@ -871,7 +889,7 @@ def functions_plan(profile: DerProfile) -> Plan[Functions]:
 
 
 def _whole(value: Any, what: str) -> int:
-    """A curve's number, field or point value, which travels as a whole number."""
+    """Return a curve's number, field or point value, which travels as a whole number."""
     if isinstance(value, bool):
         raise ValueError(f"{what} is a number, not {value!r}")
     try:
@@ -1051,7 +1069,7 @@ _LISTS = {
 
 
 def read_device_profile(text: str) -> tuple[Declared, ...]:
-    """The points a DNP3 Device Profile document declares.
+    """Return the points a DNP3 Device Profile document declares.
 
     Reads the point lists of the form :mod:`py1815.profile.device_profile`
     writes, schema version 2.12.00. A counter that declares a frozen counter

@@ -83,7 +83,7 @@ reading the simulated DER, with the point tables fetched as above:
 
 ```
 py1815-master console --demo --open                   # reads
-py1815-master console --demo --open --allow-control   # and can operate outputs
+py1815-master console --demo --open --allow-control   # and can operate outputs and DER functions
 ```
 
 That starts a simulated IEEE 1815.2 DER, a master connected to it, and the console at
@@ -140,6 +140,9 @@ In the console:
 - **Commands** sends a scan, a read or any other request, and shows what came back.
 - **Events** lists changes as they are reported, and **Traffic** every frame, read layer by
   layer.
+- **DER**, for an outstation with a profile, shows its nameplate and measurements in
+  engineering units, each function with its settings and an enable switch, its curve as a
+  plot, and what it serves against its Device Profile document.
 
 The same master answers a script. Over HTTP, while the console is running:
 
@@ -164,8 +167,8 @@ async def main():
 asyncio.run(main())
 ```
 
-This first version reads: it polls, reads named points and takes unsolicited responses, and
-does not yet operate an output. See [The console](https://dersecurity.github.io/py1815/console/),
+It polls, reads named points and takes unsolicited responses, and, started with
+`--allow-control`, operates outputs and writes a DER's settings by name. See [The console](https://dersecurity.github.io/py1815/console/),
 [The master's API](https://dersecurity.github.io/py1815/master-api/), whose routes are
 described in an [OpenAPI document](src/py1815/master/console/openapi.json), and
 [The master](https://dersecurity.github.io/py1815/master/) for the Python interface.

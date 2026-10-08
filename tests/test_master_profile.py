@@ -210,6 +210,24 @@ class TestScaling:
             profile.transmitted(switch, "maybe")
 
     @pytest.mark.parametrize(
+        ("multiplier", "offset", "raw", "value"),
+        [
+            (0.1, 0.0, 4224, 422.4),
+            (0.001, 0.0, 60012, 60.012),
+            (0.25, 0.5, 3, 1.25),
+            (None, 0.0, 7, 7),
+        ],
+    )
+    def test_a_value_read_has_the_decimal_places_of_its_multiplier(
+        self, point_map, multiplier, offset, raw, value
+    ):
+        point = dataclasses.replace(
+            point_map.point(Kind.AI, 147), multiplier=multiplier, offset=offset
+        )
+        read = Reading(point, raw, 0x01, None, reported=True).value
+        assert read == value and repr(read) == repr(value)
+
+    @pytest.mark.parametrize(
         ("flags", "reported", "says"),
         [
             (0x01, True, "good"),

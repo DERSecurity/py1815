@@ -146,9 +146,9 @@ interface.
 | `master.deviations` | Misbehavior, applied between the association and the connection | |
 | `master.trace` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built, without the capture writer |
 | `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built, for reading |
-| `master.profile` | The DER profile: names, units, functions, curves | |
+| `master.profile` | The DER profile: names, units, functions, curves | Built |
 | `master.cli` | `py1815-master` | Built: `console` and `serve` |
-| `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, Log |
+| `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, DER, Log |
 
 ## The association
 
@@ -200,7 +200,8 @@ the phase that builds it lands, so two plans in flight do not claim one number.
 M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
 M10 as D77, the listening half of M9 as D78, M5 with the commanding half
 of M9 as D80, and M4 as D81. D82, reading named points by range, came out of
-the interoperability work and has no M number.
+the interoperability work and has no M number. D90 to D93 record how the DER profile
+is spoken (item 10), and have none either.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -576,7 +577,17 @@ done means.
    certification procedures have been reproduced through it over a socket.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
     each function can be configured, enabled and read back by name against the
-    simulated DER.
+    simulated DER. *Built,* in `master.profile`, with every operation of the
+    table above, `verify`, and a `der.*` service operation for each: each
+    function the simulated DER implements is configured, enabled and read back
+    by name over a socket, and the rig's last rows play over the line socket
+    (D90 to D93). *Left:* the functions the simulated DER does not implement
+    (watt-var, frequency droop, the trip curves, enter service) are found and
+    written by name, and have been driven against no outstation that carries
+    them out; the schedules; checking a point's event class by the events it
+    produces, where the comparison now reports the declared class; and running
+    the profile's operations against an independent outstation, which needs
+    one that serves the profile.
 11. **The console.** The layout above, the demonstration command, the image.
     *Done when* a person can add an outstation, watch its points, operate an
     output, enable a function and read the traffic without a terminal.
@@ -584,7 +595,10 @@ done means.
     the traffic, with `console --demo`; the profile's points an outstation has
     not reported; operating an output, the time, the restart indication and
     the freezes, when started to command; the image; and tests that load it in
-    a browser. *Left:* the DER and Evaluate tabs, and the saved requests.
+    a browser; and the DER tab, with the nameplate, monitoring, each supported
+    function with its settings and an enable switch, the curve as a plot and a
+    table, and the comparison with a Device Profile document. *Left:* the
+    Evaluate tab, and the saved requests.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say.

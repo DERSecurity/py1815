@@ -200,7 +200,7 @@ def _units(point: Point) -> str | None:
 
 
 def describe_point(profile: DerProfile, point: Point) -> dict[str, Any]:
-    """A point of the profile: where it is, what it is called, its units and range."""
+    """Describe a point of the profile: where it is, its name, its units and its range."""
     low, high = DerProfile.limits(point) if point.kind.is_analog else (None, None)
     mirror = profile.mirror(point) if point.kind.is_output else None
     return {
@@ -219,7 +219,7 @@ def describe_point(profile: DerProfile, point: Point) -> dict[str, Any]:
 
 
 def describe_reading(reading: Reading) -> dict[str, Any]:
-    """One point as an outstation reported it, in engineering units."""
+    """Describe one point as an outstation reported it, in engineering units."""
     point = reading.point
     point_type = _KIND_TYPES[point.kind][0]
     return {
@@ -239,7 +239,7 @@ def describe_reading(reading: Reading) -> dict[str, Any]:
 
 
 def _enumerated(point: Point, value: int | None) -> str | None:
-    """The name an enumerated point's name gives one of its values."""
+    """Return the name an enumerated point's name gives one of its values."""
     if value is None:
         return None
     _label, values = split_enumeration(point.name)
@@ -418,7 +418,7 @@ class Service:
         self._names[outstation] = names
 
     def set_device_profile(self, outstation: str, document: str) -> None:
-        """Give an outstation the Device Profile document ``der.compare`` compares it with.
+        """Give an outstation the Device Profile document that ``der.compare`` uses.
 
         Raises ValueError for a document whose point lists cannot be read.
         """
