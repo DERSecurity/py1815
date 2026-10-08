@@ -17,11 +17,14 @@ import pytest
 from profile_fixtures import for_reference_der
 
 from py1815.application import IINBit
-from py1815.master import ALL, Master, NotConnected, Outcome, Outstation, PointType
+from py1815.master import ALL, Master, NotConnected, Outcome, Outstation, PointType, Tasks
 from py1815.profile import der, load
 from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
 from py1815.server import OutstationServer
+
+#: For a test that counts what was sent: only what it asks for is.
+ASKED = Tasks.none()
 
 
 @pytest.fixture
@@ -50,7 +53,7 @@ class TestReading:
         try:
             simulation.advance(1.0)
             async with Master() as master:
-                lab = await master.add("lab", host="127.0.0.1", port=server.port)
+                lab = await master.add("lab", host="127.0.0.1", port=server.port, tasks=ASKED)
                 poll = await lab.integrity_poll()
         finally:
             await server.stop()
@@ -86,7 +89,7 @@ class TestReading:
         await server.start()
         try:
             async with Master() as master:
-                lab = await master.add("lab", host="127.0.0.1", port=server.port)
+                lab = await master.add("lab", host="127.0.0.1", port=server.port, tasks=ASKED)
                 results = await asyncio.gather(
                     lab.scan("class0"),
                     lab.read(analog_outputs=ALL),
@@ -160,7 +163,7 @@ class TestSilenceAndConnections:
         await server.start()
         try:
             async with Master() as master:
-                lab = await master.add("lab", host="127.0.0.1", port=server.port)
+                lab = await master.add("lab", host="127.0.0.1", port=server.port, tasks=ASKED)
                 first = await lab.scan("class0")
                 await lab.close()
                 assert not lab.connected

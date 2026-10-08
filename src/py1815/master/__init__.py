@@ -5,11 +5,14 @@ purpose is to exercise an outstation, this library's or any other, from a
 script: read what it holds, keep what it said, and report each exchange as a
 result with every fragment in it.
 
-This first version reads. It polls by class, reads named points, confirms what
-asks to be confirmed, takes unsolicited responses, and keeps the last value of
-every point. It does not command, does not reconnect, and sends nothing a
-caller did not ask for beyond confirmations. ``docs/planning/MASTER.md`` is the
-plan for the rest.
+It polls by class, reads named points, confirms what asks to be confirmed,
+takes unsolicited responses, keeps the last value of every point, and commands
+outputs when a caller asks. Left alone it looks after an outstation as a master
+does: settles it on connecting, clears its restart indication, sets its clock
+when asked, fetches the events it says it has, and connects again when the
+connection is lost. Each of those is a task that can be turned off, and
+``manual=True`` turns off every one. ``docs/planning/MASTER.md`` is the plan
+for the rest.
 
 A master built on this library's own framing shares its reading of the
 standard with the outstation beside it. Agreement between the two is
@@ -34,6 +37,7 @@ from py1815.master.controls import Command, Mode, Operated, PointStatus
 from py1815.master.loopback import Loopback
 from py1815.master.operations import ALL
 from py1815.master.store import PointValue, Store
+from py1815.master.tasks import Tasks
 
 __all__ = [
     "ALL",
@@ -54,6 +58,7 @@ __all__ = [
     "PointType",
     "PointValue",
     "Store",
+    "Tasks",
     "Unsolicited",
     "decode_objects",
 ]

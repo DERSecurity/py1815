@@ -143,6 +143,59 @@ class TestLoading:
         assert await page.count("#indications .indication") == 14
 
 
+class TestWhatIsDoneUnasked:
+    @pytest.mark.asyncio
+    async def test_the_overview_says_what_the_master_does_by_itself(self, console):
+        page = console.page
+        card = await page.text("#overview-tasks")
+        assert "Stops unsolicited reporting, reads everything" in card
+        assert "Fetched when a response says so" in card
+        assert "Made again, trying every 5 s" in card and "Not asked for" in card
+        # A service that only reads leaves the two writes alone.
+        assert card.count("Left alone") == 2
+
+    @pytest.mark.asyncio
+    @commanding
+    async def test_one_started_to_command_does_the_two_writes_as_well(self, console):
+        card = await console.page.text("#overview-tasks")
+        assert "Cleared when seen" in card and "Set when the outstation asks" in card
+        assert "Left alone" not in card
+
+    @pytest.mark.asyncio
+    async def test_the_log_says_what_was_done_unasked(self, console):
+        page = console.page
+        await console.service.handle({"op": "disconnect", "outstation": "lab"})
+        await console.service.handle({"op": "connect", "outstation": "lab"})
+        await console.service.handle({"op": "idle", "outstation": "lab"})
+        await console.tab("log")
+        await page.wait_for("document.querySelector('#log').textContent.includes('unasked')")
+        log = await page.text("#log")
+        assert "lab: stopped unsolicited reporting, on connecting, unasked" in log
+        assert "lab: read everything, unasked" in log
+
+    @pytest.mark.asyncio
+    async def test_an_outstation_is_added_as_manual_or_with_unsolicited_reporting(self, console):
+        page = console.page
+        port = console.outstation.port
+        for name, fill in (
+            ("by-hand", "form.elements.manual.checked = true;"),
+            ("reporting", "form.elements.unsolicited.value = '1, 3';"),
+        ):
+            await page.evaluate(
+                "(() => { const form = document.querySelector('#add-form'); form.reset();"
+                f" form.elements.name.value = '{name}'; form.elements.host.value = '127.0.0.1';"
+                f" form.elements.port.value = '{port}'; {fill} form.requestSubmit(); }})()"
+            )
+            await page.wait_for(f"document.querySelector('#title').textContent === '{name}'")
+        status = await console.service.handle({"op": "status"})
+        added = {each["name"]: each for each in status["result"]["outstations"]}
+        assert not any(added["by-hand"]["tasks"].values())
+        assert added["reporting"]["tasks"]["enable_unsolicited"] == [1, 3]
+        assert added["reporting"]["tasks"]["startup"]
+        card = await page.text("#overview-tasks")
+        assert "Turned on for class 1, 3" in card
+
+
 class TestThePointsTable:
     @pytest.mark.asyncio
     async def test_it_lists_what_the_outstation_reported_by_name(self, console):

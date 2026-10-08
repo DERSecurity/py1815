@@ -36,6 +36,7 @@ from py1815.master.api import Master, Outstation
 from py1815.master.association import Exchange, Unsolicited
 from py1815.master.controls import Mode, Operated, Plan, commands
 from py1815.master.store import PointValue
+from py1815.master.tasks import WRITING, Tasks
 from py1815.master.trace import Entry, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
 from py1815.profile.model import Kind, PointMap
@@ -199,6 +200,9 @@ class Service:
                 indication, and any request by function code other than a
                 read. Off unless asked for. A master that is pointed at real
                 equipment should have to be told before it can change it.
+                The same holds for what the master does unasked: without
+                this, an outstation is added with the tasks that write to it
+                turned off.
         """
         self.master = Master() if master is None else master
         self.allow_control = allow_control
@@ -213,6 +217,7 @@ class Service:
             "remove": self._remove,
             "connect": self._connect,
             "disconnect": self._disconnect,
+            "idle": self._idle,
             "scan": self._scan,
             "read": self._read,
             "values": self._values,
@@ -358,6 +363,9 @@ class Service:
             "events": len(outstation.store.events),
             "frames": len(outstation.trace),
             "repeat": outstation.scan_intervals,
+            "tasks": outstation.tasks.describe(),
+            "tasks_due": list(outstation.tasks_due),
+            "reconnect": outstation.reconnect,
             "named": bool(self._names.get(outstation.name)),
             "profile": self._profile_counts(outstation.name),
         }
@@ -369,6 +377,7 @@ class Service:
         ]
         return {
             "function": exchange.function.name,
+            "task": exchange.task,
             "sequence": exchange.sequence,
             "outcome": exchange.outcome.value,
             "fragments": len(exchange.fragments),
@@ -469,6 +478,11 @@ class Service:
                 options[key] = kind(params[key])
         if params.get("confirm") is not None:
             options["confirm"] = bool(params["confirm"])
+        if "reconnect" in params:
+            given = params["reconnect"]
+            options["reconnect"] = None if given is None else float(given)
+        options["manual"] = manual = bool(params.get("manual", False))
+        options["tasks"] = self._tasks(params.get("tasks"), manual)
         outstation = await self.master.add(name, connect=False, **options)
         self.attach(outstation)
         intervals = {
@@ -492,6 +506,22 @@ class Service:
                 raise
         return self._describe_outstation(outstation)
 
+    def _tasks(self, given: Any, manual: bool) -> Tasks:
+        """What an outstation being added is to have done for it unasked."""
+        if given is not None and not isinstance(given, Mapping):
+            raise BadRequest("tasks is an object of choices by task")
+        tasks = (Tasks.none() if manual else Tasks()).changed(given or {})
+        if self.allow_control:
+            return tasks
+        # Clearing the restart indication and setting the clock are writes,
+        # and a service that only reads does not make them by itself either.
+        # Asked for by name, that is refused; left to the default, they are
+        # turned off, and the outstation's description says so.
+        for name in WRITING:
+            if given and given.get(name):
+                self._commanding(f"the {name} task")
+        return tasks.reading_only()
+
     async def _remove(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
         await self.master.remove(outstation.name)
@@ -509,6 +539,12 @@ class Service:
         outstation = self._outstation(params)
         await outstation.close()
         self.publish({"event": "connection", "outstation": outstation.name, "connected": False})
+        return self._describe_outstation(outstation)
+
+    async def _idle(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Wait until nothing the master does unasked is due or under way."""
+        outstation = self._outstation(params)
+        await outstation.idle()
         return self._describe_outstation(outstation)
 
     async def _scan(self, params: Mapping[str, Any]) -> dict[str, Any]:

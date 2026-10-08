@@ -85,6 +85,41 @@ SCHEMAS: dict[str, Schema] = {
         "description": "Binary input, binary output status, counter, frozen counter, analog "
         "input, analog output status.",
     },
+    "Tasks": _object(
+        {
+            "startup": {
+                "type": "boolean",
+                "description": "On connecting, and when the outstation reports that it "
+                "restarted: stop its unsolicited reporting, then read everything it holds.",
+            },
+            "clear_restart": {
+                "type": "boolean",
+                "description": "Clear the restart indication once it has been seen. A write: "
+                "off in a service that was not started to command.",
+            },
+            "write_time": {
+                "type": "boolean",
+                "description": "Set the outstation's clock when it asks for the time. A "
+                "write: off in a service that was not started to command.",
+            },
+            "enable_unsolicited": {
+                "type": "array",
+                "items": {"type": "integer", "enum": [1, 2, 3]},
+                "description": "After startup, ask the outstation to report these event "
+                "classes without being polled.",
+            },
+            "events_when_indicated": {
+                "type": "boolean",
+                "description": "Fetch events when a response says there are some waiting.",
+            },
+            "integrity_on_overflow": {
+                "type": "boolean",
+                "description": "Read everything again when the outstation says its event "
+                "buffer overflowed.",
+            },
+        },
+        description="What the master does for an outstation without being asked.",
+    ),
     "Outstation": _object(
         {
             "name": _STRING,
@@ -121,6 +156,17 @@ SCHEMAS: dict[str, Schema] = {
                 "additionalProperties": _NUMBER,
                 "description": "The scans being repeated, by kind, as seconds between them.",
             },
+            "tasks": _ref("Tasks"),
+            "tasks_due": {
+                "type": "array",
+                "items": _STRING,
+                "description": "The tasks waiting to be done, in the order they will be.",
+            },
+            "reconnect": {
+                "description": "Seconds between attempts to make again a connection that "
+                "was lost, or null when it is not made again.",
+                **_nullable(_NUMBER),
+            },
             "named": _BOOLEAN,
             "profile": {
                 "description": "Points in the profile the outstation is meant to serve, by "
@@ -139,6 +185,9 @@ SCHEMAS: dict[str, Schema] = {
             "counts",
             "points",
             "repeat",
+            "tasks",
+            "tasks_due",
+            "reconnect",
         ],
     ),
     "Object": _object(
@@ -213,6 +262,11 @@ SCHEMAS: dict[str, Schema] = {
     "Exchange": _object(
         {
             "function": {"type": "string", "description": "The request's function code."},
+            "task": {
+                "description": "The task the master made the request for of its own "
+                "accord, or null for a request that was asked for.",
+                **_nullable(_STRING),
+            },
             "sequence": {"type": "integer", "minimum": 0, "maximum": 15},
             "outcome": {
                 "type": "string",
@@ -398,7 +452,9 @@ OPERATIONS: dict[str, dict[str, Any]] = {
     "add": {
         "summary": "Add an outstation, and connect to it",
         "description": "An outstation that cannot be reached is still added, and the answer "
-        "is a connection error: it is listed as not connected and can be connected later.",
+        "is a connection error: it is listed as not connected and can be connected later. "
+        "Once connected, the master settles the outstation and looks after it, as `tasks` "
+        "says; `idle` waits for that to be done.",
         "tag": "Outstations",
         "params": _object(
             {
@@ -411,8 +467,27 @@ OPERATIONS: dict[str, dict[str, Any]] = {
                 "connect_timeout": {**_INTERVAL, "default": 5},
                 "confirm": {
                     "type": "boolean",
-                    "default": True,
-                    "description": "Whether fragments that ask to be confirmed are.",
+                    "description": "Whether fragments that ask to be confirmed are. They "
+                    "are, unless `manual` is given.",
+                },
+                "tasks": {
+                    "description": "What the master does for the outstation unasked. A task "
+                    "left out stands at its default: on, except `enable_unsolicited`, and "
+                    "except the two that write in a service not started to command. Asking "
+                    "for one of those two there is refused as `not_allowed`.",
+                    **_ref("Tasks"),
+                },
+                "manual": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Send nothing that was not asked for: no task, and no "
+                    "confirmation. `tasks` and `confirm` given beside it are kept as given.",
+                },
+                "reconnect": {
+                    "description": "Seconds between attempts to make again a connection "
+                    "that was made and then lost. Null for never.",
+                    "default": 5,
+                    **_nullable(_INTERVAL),
                 },
                 "integrity_interval": {
                     "description": "Repeat an integrity poll this often.",
@@ -456,6 +531,16 @@ OPERATIONS: dict[str, dict[str, Any]] = {
     },
     "disconnect": {
         "summary": "Close an outstation's connection, and keep what was read",
+        "tag": "Outstations",
+        "params": _outstation(),
+        "result": _ref("Outstation"),
+        "example": {"outstation": "lab"},
+    },
+    "idle": {
+        "summary": "Wait until nothing the master does unasked is due or under way",
+        "description": "What is done on connecting is done after `add` and `connect` have "
+        "answered. This answers once it is finished, and at once when the connection has "
+        "ended.",
         "tag": "Outstations",
         "params": _outstation(),
         "result": _ref("Outstation"),

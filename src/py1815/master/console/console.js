@@ -316,6 +316,27 @@ function facts(target, pairs) {
   }
 }
 
+// What the master does for an outstation without being asked, in the order
+// the service names it, and what each request it makes for one is called.
+const TASKS = [
+  ["startup", "On connecting, and after a restart", "Stops unsolicited reporting, reads everything"],
+  ["clear_restart", "Restart indication", "Cleared when seen"],
+  ["write_time", "Clock", "Set when the outstation asks"],
+  ["events_when_indicated", "Events waiting", "Fetched when a response says so"],
+  ["integrity_on_overflow", "Event buffer overflow", "Everything read again"],
+];
+
+const WRITING_TASKS = ["clear_restart", "write_time"];
+
+const TASK_REQUESTS = {
+  disable_unsolicited: "stopped unsolicited reporting, on connecting",
+  clear_restart: "cleared the restart indication",
+  write_time: "set the clock",
+  integrity: "read everything",
+  events: "fetched the events waiting",
+  enable_unsolicited: "turned unsolicited reporting on",
+};
+
 function renderOverview() {
   const outstation = current();
   if (!outstation) return;
@@ -338,6 +359,17 @@ function renderOverview() {
   ]);
   facts("#overview-points", POINT_TYPES.map(([type, label]) => [label, outstation.points[type] || 0])
     .concat([["Events", outstation.events]]));
+  const tasks = outstation.tasks;
+  // The two that write are off in a service that only reads, whatever was asked.
+  const alone = (task) => (WRITING_TASKS.includes(task) && !state.allowControl
+    ? "Left alone: the console is read only" : "Left alone");
+  facts("#overview-tasks", TASKS.map(([task, label, done]) => [label, tasks[task] ? done : alone(task)])
+    .concat([
+      ["Unsolicited reporting", tasks.enable_unsolicited.length
+        ? `Turned on for class ${tasks.enable_unsolicited.join(", ")}` : "Not asked for"],
+      ["Lost connection", outstation.reconnect === null
+        ? "Not made again" : `Made again, trying every ${outstation.reconnect} s`],
+    ]));
 
   const set = new Set(outstation.indications);
   const lamps = $("#indications");
@@ -857,6 +889,9 @@ function onServiceEvent(event) {
     applyObjects(event.exchange.objects, false);
     if (event.exchange.outcome !== "complete") {
       note(`${event.outstation}: ${event.exchange.function} ended as ${event.exchange.outcome}`, true);
+    } else if (event.exchange.task) {
+      // Nobody asked for this one, so it is said that it was done.
+      note(`${event.outstation}: ${TASK_REQUESTS[event.exchange.task] || event.exchange.task}, unasked`);
     }
   } else if (event.event === "unsolicited") {
     applyObjects(event.objects, true);
@@ -885,8 +920,10 @@ function wire() {
     const form = submitted.target;
     const params = {};
     for (const [key, value] of new FormData(form)) {
-      if (value === "") continue;
-      params[key] = ["name", "host"].includes(key) ? value : Number(value);
+      if (value.trim() === "") continue;
+      if (key === "manual") params.manual = true;
+      else if (key === "unsolicited") params.tasks = { enable_unsolicited: value.split(",").map(Number) };
+      else params[key] = ["name", "host"].includes(key) ? value : Number(value);
     }
     $("#add-error").textContent = "";
     try {

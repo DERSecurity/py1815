@@ -9,8 +9,9 @@ py1815-master console      # the API over HTTP, and the console, on 127.0.0.1:88
 py1815-master serve        # the API a line of JSON at a time, on 127.0.0.1:8816
 ```
 
-Both take `--outstation`, `--profile` and the interval options the
-[console](console.md#starting-it) takes.
+Both take `--outstation`, `--profile`, `--manual`, `--unsolicited`,
+`--reconnect` and the interval options the [console](console.md#starting-it)
+takes.
 
 ## Over HTTP
 
@@ -27,7 +28,7 @@ curl -s http://127.0.0.1:8815/api/scan -H 'Content-Type: application/json' \
 
 ```json
 {"id": null, "ok": true, "result": {
-  "function": "READ", "sequence": 0, "outcome": "complete", "fragments": 1,
+  "function": "READ", "task": null, "sequence": 2, "outcome": "complete", "fragments": 1,
   "indications": ["NEED_TIME", "DEVICE_RESTART"], "object_count": 344,
   "elapsed_ms": 15.0, "request": "c0013c02063c03063c04063c0106", "undecoded": [],
   "objects": [{"type": "bi", "group": 1, "variation": 2, "index": 0, "name": null,
@@ -47,6 +48,7 @@ disagree.
 | `POST /api/add` | Adds an outstation and connects to it |
 | `POST /api/remove` | Closes an outstation's connection and forgets it |
 | `POST /api/connect`, `POST /api/disconnect` | Its connection |
+| `POST /api/idle` | Waits until nothing the master does unasked is due or under way |
 | `POST /api/profile` | Every point of the profile an outstation is meant to serve |
 | `POST /api/scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3`, `outputs` |
 | `POST /api/read` | Named points, in one request |
@@ -97,6 +99,38 @@ names what it refused with.
 | `sent` | The request takes no response, and was sent |
 | `abandoned` | The connection ended while the request was outstanding |
 
+## What the master does by itself
+
+An outstation added through the service is looked after as
+[the master looks after any](master.md#what-it-does-without-being-asked): it is
+settled when the connection is made, its events are fetched when it says it has
+some, and a connection that is lost is made again. `add` says otherwise:
+
+```bash
+curl -s http://127.0.0.1:8815/api/add -H 'Content-Type: application/json' \
+     -d '{"name": "lab", "host": "192.0.2.10",
+          "tasks": {"enable_unsolicited": [1, 2, 3], "events_when_indicated": false},
+          "reconnect": 1.0}'
+```
+
+| Parameter | Is |
+|---|---|
+| `tasks` | An object of choices by task: `startup`, `clear_restart`, `write_time`, `events_when_indicated` and `integrity_on_overflow`, each true or false, and `enable_unsolicited`, a list of event classes. A task left out stands at its default |
+| `manual` | True to send nothing that was not asked for: no task, and no confirmation. `tasks` and `confirm` given beside it are kept as given |
+| `reconnect` | Seconds between attempts to make a lost connection again. Five when left out, and null for never |
+
+`add` and `connect` answer as soon as the connection is made, and `idle`
+answers once what is done on connecting has been done. An outstation's entry in
+`status` gives its `tasks`, the `tasks_due` that are waiting, and `reconnect`.
+A request the master made for a task has the task's name in `task`, in the
+`exchange` event that reports it; a request that was asked for has null.
+
+Two of the tasks write to the outstation: `clear_restart` and `write_time`. In
+a service that was not [started to command](#commanding) they are off, and
+asking for either by name is refused as `not_allowed`. Such a service settles
+an outstation and leaves its restart indication and its clock as it found
+them. Started with `--allow-control`, it does both.
+
 ## Commanding
 
 A service reads unless it is started to command:
@@ -109,8 +143,8 @@ py1815-master serve --allow-control
 Without that, every operation that changes an outstation is refused with
 `not_allowed` and nothing is sent: `operate`, `write_time`, `clear_restart`,
 `freeze`, `restart`, and a `request` by any function code other than `READ`,
-`ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE`. `status` says
-which it is, in `allow_control`.
+`ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE`. The two tasks
+that write are off as well. `status` says which it is, in `allow_control`.
 
 ```bash
 curl -s http://127.0.0.1:8815/api/operate -H 'Content-Type: application/json' \
@@ -179,7 +213,7 @@ data is a JSON object:
 | `event` | Sent when | Carries |
 |---|---|---|
 | `frame` | A frame is sent or received | `outstation`, `frame` |
-| `exchange` | A request ends, asked for or repeated | `outstation`, `exchange` |
+| `exchange` | A request ends: asked for, repeated, or made for a task | `outstation`, `exchange` |
 | `unsolicited` | An unsolicited response arrives | `outstation`, `indications`, `objects` |
 | `connection` | A connection is made or ends | `outstation`, `connected` |
 | `outstations` | An outstation is added or removed | |

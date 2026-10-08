@@ -1212,6 +1212,30 @@ and the default has to be the one nobody regrets.
 *Trade-off:* a caller who wants a retry writes it, and a demonstration has to be
 started with a flag before it can show a control.
 
+**D81 -- What a master does unasked is a list of tasks, decided apart from the
+sending.** Settling an outstation on connecting, clearing its restart indication,
+setting its clock when asked, enabling unsolicited reporting, and fetching events when
+a response says there are some or that some were lost: each is a task that can be
+turned off, and `manual=True` turns off every one along with confirmations, because a
+test of what an outstation does when nobody tidies up after it cannot have the master
+tidying up. One object is shown the indications of each response and says what to
+send next. It does no I/O, so the whole of it is tested without a socket, and the
+master on a socket and the one wired to a session cannot come to differ. No task is
+made due by the answer to its own request: the restart indication and the request for
+the time are acted on when they appear and again only after they have cleared, and a
+poll whose answer still says events are waiting is not followed by another. The
+master therefore never talks to itself, whatever an outstation leaves set. What is due
+is done in one turn, in a fixed order, and before anything asked for after the
+connection was made. No task commands an output. In the service the two tasks that
+write are off unless it was started with `--allow-control`, as the operations they
+stand for are (D80). A connection that was made and lost is made again, which is what
+lets a master left alone keep its store current through a restart of the outstation.
+*Trade-off:* events left waiting after a poll are fetched by the next response that
+says so and not at once, so an outstation that reports only part of what it holds is
+read more slowly than it could be; a reading service leaves an outstation saying it
+restarted; and a connection that could not be made in the first place is still the
+caller's to retry.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

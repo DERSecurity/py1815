@@ -184,17 +184,22 @@ through the association:
 | Clear the restart indication | When the outstation reports a restart | On |
 | Write the time | When the outstation asks for it | On |
 | Enable unsolicited for the classes configured | After startup | Off |
-| Integrity poll | Every `integrity_interval` | On |
-| Event poll, classes 1 to 3 | Every `event_interval`, and when class data is indicated | On |
+| Integrity poll | Every `integrity_interval` | Off |
+| Event poll, classes 1 to 3 | Every `event_interval`, and when class data is indicated | Off on a schedule, on when indicated |
 | Integrity poll after a buffer overflow indication | When indicated | On |
+
+As built, the polls on a schedule are `repeat_scan` and stay off until asked
+for: a tool that is pointed at a bench should not start a stream of requests
+because it was connected. The rest are `py1815.master.tasks`, and the table is
+otherwise as built.
 
 ## Decisions
 
 Numbered M here. Each takes the next number in [DESIGN.md](../DESIGN.md) when
 the phase that builds it lands, so two plans in flight do not claim one number.
 M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
-M10 as D77, the listening half of M9 as D78, and M5 with the commanding half
-of M9 as D80.
+M10 as D77, the listening half of M9 as D78, M5 with the commanding half
+of M9 as D80, and M4 as D81.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -214,7 +219,7 @@ compared with the one the certification harness was written with, and where
 the tables in `conformance/` state a width it is to be checked against them.
 
 **M4. Everything the master does unasked is a task that can be turned off.**
-`Master(manual=True)` sends nothing a caller did not ask for: no startup
+An outstation added with `manual=True` is sent nothing a caller did not ask for: no startup
 sequence, no scan, no automatic confirmation. That mode is what evaluation
 needs, because a test of what an outstation does when a confirmation never
 arrives cannot have the master helpfully sending one.
@@ -524,7 +529,9 @@ done means.
    and confirmed as well. *Left:* retrying a read.
 3. **The channel.** TCP and TLS, reconnecting. *Done when* `py1815-master poll`
    does what `py1815-der poll` does, and that command is implemented with it.
-   *Built:* TCP, inside `master.api`. *Left:* TLS, reconnection, the command.
+   *Built:* TCP, inside `master.api`, and making again a connection that was
+   lost. *Left:* TLS, retrying a first connection that could not be made, and
+   the command.
 4. **Controls and the rest of the requests.** Select and operate, direct
    operate, freezes, the time, the restart indication, restart. *Done when*
    every request in *Scope* has a test against a `Session` and a pinned frame.
@@ -536,6 +543,12 @@ done means.
 5. **Tasks and unsolicited responses.** The table in *The association*, and
    `manual=True`. *Done when* a master left alone keeps a store current through
    a restart of the outstation, and a manual one sends nothing unasked.
+   *Built,* with both of those as tests over a socket: the tasks decided in
+   `master.tasks` with no I/O, done by the master on a socket and by the one
+   wired to a session, set for each outstation through the service and the
+   command line, and shown in the console. *Left:* changing an outstation's
+   tasks after it has been added, and fetching at once the events a poll left
+   waiting.
 6. **The API and the service.** The Python interface settled, the JSON service,
    the command line, `--allow-control`. *Done when* the workload in *What a test
    rig asks of a master* runs as a test over the socket. *Built,* for what the

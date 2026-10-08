@@ -42,6 +42,9 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | `--outstation-address`, `--master-address` | The link addresses, for the outstations named. 1024 and 1 unless given |
 | `--integrity-interval SECONDS` | Repeats an integrity poll of each outstation named |
 | `--event-interval SECONDS` | Repeats an event poll |
+| `--unsolicited CLASSES` | After startup, asks each outstation named to report these event classes without being polled, as in `1,2,3` |
+| `--manual` | Sends the outstations named nothing that was not asked for: no startup sequence, no event poll, no confirmation |
+| `--reconnect SECONDS` | Tries this often to make again a connection that was lost. Five by default, and 0 for never |
 | `--output-interval SECONDS` | Repeats a read of output status. As often as the integrity poll unless given; 0 for never |
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
@@ -54,6 +57,14 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | `--open` | Opens the console in a browser |
 
 Outstations can also be added from the page, under **Add outstation**.
+
+However it is added, an outstation is looked after once it is connected: the
+console stops its unsolicited reporting and reads everything, fetches events
+when a response says some are waiting, and connects again when the connection
+is lost. Started with `--allow-control` it also clears the restart indication
+and sets the clock when the outstation asks. The **Overview** tab says which
+of these it does, and the **Log** says each time it does one. **Manual**, on
+the form and on the command line, turns all of it off.
 
 ### In Docker
 
@@ -99,7 +110,7 @@ one selected has six tabs.
 
 | Tab | Shows |
 |---|---|
-| **Overview** | Addresses, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, and every internal indication of the last response as a lamp |
+| **Overview** | Addresses, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, what the master does for the outstation unasked, and every internal indication of the last response as a lamp |
 | **Points** | A table for each point type |
 | **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |

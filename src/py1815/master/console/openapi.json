@@ -195,8 +195,30 @@
                   },
                   "confirm": {
                     "type": "boolean",
-                    "default": true,
-                    "description": "Whether fragments that ask to be confirmed are."
+                    "description": "Whether fragments that ask to be confirmed are. They are, unless `manual` is given."
+                  },
+                  "tasks": {
+                    "description": "What the master does for the outstation unasked. A task left out stands at its default: on, except `enable_unsolicited`, and except the two that write in a service not started to command. Asking for one of those two there is refused as `not_allowed`.",
+                    "$ref": "#/components/schemas/Tasks"
+                  },
+                  "manual": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Send nothing that was not asked for: no task, and no confirmation. `tasks` and `confirm` given beside it are kept as given."
+                  },
+                  "reconnect": {
+                    "description": "Seconds between attempts to make again a connection that was made and then lost. Null for never.",
+                    "default": 5,
+                    "oneOf": [
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description": "Seconds."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "integrity_interval": {
                     "description": "Repeat an integrity poll this often.",
@@ -321,7 +343,7 @@
             }
           }
         },
-        "description": "An outstation that cannot be reached is still added, and the answer is a connection error: it is listed as not connected and can be connected later."
+        "description": "An outstation that cannot be reached is still added, and the answer is a connection error: it is listed as not connected and can be connected later. Once connected, the master settles the outstation and looks after it, as `tasks` says; `idle` waits for that to be done."
       }
     },
     "/api/remove": {
@@ -615,6 +637,102 @@
             }
           }
         }
+      }
+    },
+    "/api/idle": {
+      "post": {
+        "operationId": "idle",
+        "summary": "Wait until nothing the master does unasked is due or under way",
+        "tags": [
+          "Outstations"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Outstation"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "What is done on connecting is done after `add` and `connect` have answered. This answers once it is finished, and at once when the connection has ended."
       }
     },
     "/api/profile": {
@@ -2802,6 +2920,7 @@
                       "remove",
                       "connect",
                       "disconnect",
+                      "idle",
                       "profile",
                       "scan",
                       "read",
@@ -2953,6 +3072,44 @@
         ],
         "description": "Binary input, binary output status, counter, frozen counter, analog input, analog output status."
       },
+      "Tasks": {
+        "type": "object",
+        "properties": {
+          "startup": {
+            "type": "boolean",
+            "description": "On connecting, and when the outstation reports that it restarted: stop its unsolicited reporting, then read everything it holds."
+          },
+          "clear_restart": {
+            "type": "boolean",
+            "description": "Clear the restart indication once it has been seen. A write: off in a service that was not started to command."
+          },
+          "write_time": {
+            "type": "boolean",
+            "description": "Set the outstation's clock when it asks for the time. A write: off in a service that was not started to command."
+          },
+          "enable_unsolicited": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            },
+            "description": "After startup, ask the outstation to report these event classes without being polled."
+          },
+          "events_when_indicated": {
+            "type": "boolean",
+            "description": "Fetch events when a response says there are some waiting."
+          },
+          "integrity_on_overflow": {
+            "type": "boolean",
+            "description": "Read everything again when the outstation says its event buffer overflowed."
+          }
+        },
+        "description": "What the master does for an outstation without being asked."
+      },
       "Outstation": {
         "type": "object",
         "properties": {
@@ -3044,6 +3201,27 @@
             },
             "description": "The scans being repeated, by kind, as seconds between them."
           },
+          "tasks": {
+            "$ref": "#/components/schemas/Tasks"
+          },
+          "tasks_due": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The tasks waiting to be done, in the order they will be."
+          },
+          "reconnect": {
+            "description": "Seconds between attempts to make again a connection that was lost, or null when it is not made again.",
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "named": {
             "type": "boolean"
           },
@@ -3089,7 +3267,10 @@
           "indications",
           "counts",
           "points",
-          "repeat"
+          "repeat",
+          "tasks",
+          "tasks_due",
+          "reconnect"
         ]
       },
       "Object": {
@@ -3311,6 +3492,17 @@
           "function": {
             "type": "string",
             "description": "The request's function code."
+          },
+          "task": {
+            "description": "The task the master made the request for of its own accord, or null for a request that was asked for.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sequence": {
             "type": "integer",

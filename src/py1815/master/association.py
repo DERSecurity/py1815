@@ -86,6 +86,9 @@ class Exchange:
     undecoded: tuple[Decoded, ...] = ()
     #: Seconds from the request being built to the exchange ending.
     elapsed: float = 0.0
+    #: The task the master made the request for of its own accord, by name,
+    #: or None for a request a caller asked for.
+    task: str | None = None
 
     @property
     def complete(self) -> bool:

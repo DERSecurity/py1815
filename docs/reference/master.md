@@ -16,6 +16,10 @@ guides; this is the reference.
 
 ::: py1815.master.controls
 
+## What is done unasked
+
+::: py1815.master.tasks
+
 ## In one process
 
 ::: py1815.master.loopback

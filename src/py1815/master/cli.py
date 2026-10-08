@@ -23,6 +23,7 @@ import time
 import webbrowser
 from collections.abc import Sequence
 
+from py1815.master.api import DEFAULT_RECONNECT
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
 from py1815.profile import der, load
 from py1815.profile.model import Composition, MapError, PointMap
@@ -94,6 +95,16 @@ def _outstation(text: str) -> tuple[str, str, int]:
         raise argparse.ArgumentTypeError(f"{port!r} is not a port") from None
 
 
+def _classes(text: str) -> list[int]:
+    try:
+        classes = [int(number) for number in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not event classes, as in 1,2,3") from None
+    if not classes or any(number not in (1, 2, 3) for number in classes):
+        raise argparse.ArgumentTypeError(f"{text!r} is not event classes, as in 1,2,3")
+    return classes
+
+
 async def _keep_trying(service: Service, name: str, seconds: float) -> None:
     """Connect to an outstation that was not there yet, for as long as was allowed.
 
@@ -130,6 +141,13 @@ async def _add_named(
                     "master_address": args.master_address,
                     "integrity_interval": args.integrity_interval,
                     "event_interval": args.event_interval,
+                    "manual": args.manual,
+                    "reconnect": args.reconnect or None,
+                    **(
+                        {}
+                        if not args.unsolicited
+                        else {"tasks": {"enable_unsolicited": args.unsolicited}}
+                    ),
                     **(
                         {}
                         if args.output_interval is None
@@ -259,6 +277,29 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help="keep trying, for this long, to connect to an outstation that is not there "
         "yet at startup (default: try once)",
+    )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help="send the outstations given nothing that was not asked for: no startup "
+        "sequence, no event poll, no confirmation (default: settle each on connecting, "
+        "and fetch events when it says it has some)",
+    )
+    parser.add_argument(
+        "--unsolicited",
+        type=_classes,
+        default=None,
+        metavar="CLASSES",
+        help="after startup, ask the outstations given to report these event classes "
+        "without being polled, as in 1,2,3 (default: do not)",
+    )
+    parser.add_argument(
+        "--reconnect",
+        type=float,
+        default=DEFAULT_RECONNECT,
+        metavar="SECONDS",
+        help="try this often to make again a connection that was lost "
+        f"(default: {DEFAULT_RECONNECT:g}; 0 for never)",
     )
     parser.add_argument("--outstation-address", type=int, default=1024)
     parser.add_argument("--master-address", type=int, default=1)
