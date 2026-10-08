@@ -360,14 +360,14 @@ class TestCommandAudit:
         try:
             await self._add(events, lab)
             caplog.set_level(logging.INFO, logger="py1815.master.service")
-            points = {str(index): False for index in range(14)}
+            points = {str(index): False for index in range(100)}
             await events.handle(
                 {"op": "operate", "outstation": "lab", "params": {"points": {"bo": points}}}
             )
         finally:
             await events.close()
         (line,) = [r.getMessage() for r in caplog.records if "command operate" in r.getMessage()]
-        assert all(f'"{index}":false' in line for index in range(14))
+        assert all(f'"{index}":false' in line for index in range(100))
 
     @pytest.mark.asyncio
     async def test_automatic_writes_are_logged(self, lab, caplog):
