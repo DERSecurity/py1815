@@ -52,6 +52,7 @@ dev = [
     "py1815[docs]",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
     "ruff>=0.6",
     "mypy>=1.11",
     "xmlschema>=3.0",
@@ -144,3 +145,10 @@ pythonpath = ["src"]
 # Strict rather than auto: an async test without the marker is a test that never
 # ran, and silence is how that goes unnoticed.
 asyncio_mode = "strict"
+# Fail any test that runs longer than this, by name, and go on with the rest.
+# The master's automatic tasks answer the outstation's responses, so a broken
+# loop guard hangs a test instead of failing it. The cap is above the slowest
+# setup: a browser test waits up to two minutes for Chrome to start on a cold
+# runner. On Linux the default signal method lets the run continue past the
+# timeout; Windows has no such signal, and there a timeout ends the run.
+timeout = 300
