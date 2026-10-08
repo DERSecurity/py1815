@@ -351,21 +351,27 @@ class TestAFirstConnection:
         assert not lab.connected
 
     @pytest.mark.asyncio
-    async def test_the_master_adds_one_once_it_is_reached(self, simulation):
-        port = await _free_port()
-        server = OutstationServer(simulation.outstation.session(), bind=f"127.0.0.1:{port}")
+    async def test_the_master_adds_one_once_it_is_reached(self, simulation, monkeypatch):
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        opened = Outstation._open
+        attempts: list[int] = []
 
-        async def later() -> None:
-            await asyncio.sleep(0.2)
-            await server.start()
+        async def refused_once(outstation: Outstation) -> None:
+            # The first attempt fails as if the outstation were not there yet.
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise ConnectionRefusedError("not there yet")
+            await opened(outstation)
 
-        starting = asyncio.create_task(later())
+        monkeypatch.setattr(Outstation, "_open", refused_once)
         try:
             async with Master() as master:
-                lab = await master.add("lab", host="127.0.0.1", port=port, tasks=ASKED, wait=5.0)
-                assert lab.connected and master["lab"] is lab
+                lab = await master.add(
+                    "lab", host="127.0.0.1", port=server.port, tasks=ASKED, wait=5.0
+                )
+                assert lab.connected and master["lab"] is lab and len(attempts) == 2
         finally:
-            await starting
             await server.stop()
 
     @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from py1815.decode import PointType, decode_objects
+from py1815.decode import DecodedObject, PointType, decode_objects
 from py1815.master import Store
 
 TIME_OCTETS = "00 E4 0B 54 02 00"
@@ -107,3 +107,28 @@ class TestEvents:
         store.apply(_objects("20 02 17 01  01 01 01 00"), now=0.0)
         store.clear_events()
         assert store.events == () and store.analog_input(1).value == 1
+
+
+class TestEventsSinceAMark:
+    @staticmethod
+    def _event(index: int) -> DecodedObject:
+        (event,) = _objects(f"20 01 17 01 {index:02X} 01 2C 01 00 00")
+        return event
+
+    def test_only_the_events_after_the_mark_are_returned(self):
+        store = Store()
+        store.apply([self._event(1), self._event(2)], now=0.0)
+        mark = store.events_received
+        store.apply([self._event(3)], now=1.0)
+        assert [each.index for each in store.events_since(mark)] == [3]
+        assert store.events_since(store.events_received) == ()
+
+    def test_events_cleared_after_the_mark_are_not_returned(self):
+        store = Store()
+        store.apply([self._event(1)], now=0.0)
+        mark = store.events_received
+        store.apply([self._event(2)], now=1.0)
+        store.clear_events()
+        store.apply([self._event(3)], now=2.0)
+        assert [each.index for each in store.events_since(mark)] == [3]
+        assert store.events_received == 3

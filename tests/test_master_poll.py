@@ -33,6 +33,15 @@ class TestTheReport:
             "  AI0                 300",
         ]
 
+    def test_an_analog_event_is_counted_as_an_event_and_not_listed(self):
+        # Group 32 variation 1, one object at index 5, online, 500.
+        event = "20 01 17 01 05 01 F4 01 00 00"
+        report = poll.report(
+            _poll_of(f"C0 81 00 00 {event} {ANALOG}"), "lab:1", None, limit=12, every=True
+        )
+        assert report[1] == "  1 event(s); indications 0x00 0x00"
+        assert report[2:] == ["  AI0                 300"]
+
     def test_what_could_not_be_read_is_said(self):
         report = poll.report(
             _poll_of(f"C0 81 00 00 {ANALOG} 63 01 00 00 00"), "lab:1", None, limit=1, every=False

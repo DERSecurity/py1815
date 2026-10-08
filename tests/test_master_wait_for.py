@@ -91,7 +91,15 @@ class TestInPython:
                 lab = await master.add(
                     "lab", host="127.0.0.1", port=server.port, tasks=Tasks.none(), confirm=True
                 )
-                assert await lab.wait_for(lambda _: bool(lab.unsolicited), 5.0)
+                # Nothing is asked, so only the announcement can say so.
+                assert await lab.wait_for(
+                    lambda _: (
+                        lab.indications is not None
+                        and lab.indications.is_set(IINBit.DEVICE_RESTART)
+                    ),
+                    5.0,
+                )
+                assert lab.unsolicited and lab.counts == {}
         finally:
             await server.stop()
 

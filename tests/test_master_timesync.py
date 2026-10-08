@@ -42,6 +42,16 @@ def _unanswered(function: FunctionCode):
     return association.take()
 
 
+def _begun(function: FunctionCode):
+    """An exchange whose first fragment arrived and whose last never did."""
+    association, clock = _built()
+    association.request(function, b"")
+    association.receive(_from_outstation("80 81 00 00"))
+    clock.now += 10.0
+    association.expire()
+    return association.take()
+
+
 class TestThePlan:
     def test_lan_records_the_time_and_then_writes_when_it_asked(self):
         clock = iter([NOW_MS, NOW_MS + 50])
@@ -100,6 +110,8 @@ class TestThePlan:
             # Not answered at all.
             ("lan", _unanswered(FunctionCode.RECORD_CURRENT_TIME)),
             ("non_lan", _unanswered(FunctionCode.DELAY_MEASURE)),
+            # Begun, and never finished.
+            ("lan", _begun(FunctionCode.RECORD_CURRENT_TIME)),
         ],
     )
     def test_nothing_is_written_unless_the_first_request_was_answered(self, procedure, first):
