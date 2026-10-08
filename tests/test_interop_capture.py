@@ -179,6 +179,12 @@ class TestTheWiresharkValidator:
             capsys.readouterr().err
         )
 
+    def test_a_required_function_that_is_absent_fails(self, monkeypatch, tmp_path, capsys):
+        functions = [function for function in MASTER_FUNCTIONS if function != "21"]
+        summary = {**MASTER_SUMMARY, "application_requests": 4}
+        assert _run_validate_pcap(monkeypatch, tmp_path, functions, summary, "--kind", "master")
+        assert "disable unsolicited" in capsys.readouterr().err
+
     def test_the_masters_capture_is_not_the_sweeps(self, monkeypatch, tmp_path, capsys):
         assert _run_validate_pcap(monkeypatch, tmp_path, MASTER_FUNCTIONS, MASTER_SUMMARY)
         assert "missing" in capsys.readouterr().err
