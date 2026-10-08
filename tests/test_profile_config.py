@@ -318,6 +318,22 @@ class TestAppliedToTheOutstation:
         events = master.scan("events")
         assert not any(decoded.point.value == "ai" for decoded in events.objects)
 
+    @pytest.mark.parametrize("level2, variation", [(False, 1), (True, 2)])
+    def test_level2_reaches_the_outstation(self, level2, variation):
+        """Level 2 sends analog output status in 16 bits (group 40 variation 2)."""
+        config, simulation = self._simulation({"level2": level2})
+        outstation = simulation.outstation
+        assert outstation.level2 is level2
+        master = Loopback(outstation.session(**config.session_options()))
+        outputs = master.scan("outputs")
+        analog = [o for o in outputs.objects if o.point is PointType.ANALOG_OUTPUT]
+        assert analog and {o.variation for o in analog} == {variation}
+
+    def test_level2_flag_reaches_the_outstation_through_the_command_line(self, tables):
+        config = cli.configuration(_args("run", "--level2"))
+        simulation = cli._build(config, cli._load_map(config))
+        assert simulation.outstation.level2 is True
+
     def test_tables_and_composition_reach_the_map_loader(self, monkeypatch):
         seen = []
         monkeypatch.setattr(cli.load, "load", lambda *given: seen.append(given))
