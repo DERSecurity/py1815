@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from py1815.master.api import DEFAULT_RECONNECT
+from py1815.master.capture import CaptureFile
 from py1815.master.config import ConfigError, MasterConfig, read
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
 from py1815.profile import der, load
@@ -144,7 +145,7 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
         document = read(args.config)
         # Report a mistake in the file as the file's, before flags are applied.
         MasterConfig.from_mapping(document)
-    for key in ("allow_control", "bind", "tables", "connect_wait"):
+    for key in ("allow_control", "bind", "tables", "connect_wait", "capture"):
         value = getattr(args, key, None)
         if value is not None:
             document[key] = value
@@ -204,6 +205,21 @@ async def _add_outstations(
     return True
 
 
+def _service(config: MasterConfig) -> Service | None:
+    """Return the service the configuration describes.
+
+    Return None, having said why, when the capture file cannot be created.
+    """
+    capture = None
+    if config.capture is not None:
+        try:
+            capture = CaptureFile(config.capture)
+        except OSError as error:
+            print(f"cannot write the capture file: {error}", file=sys.stderr)
+            return None
+    return Service(allow_control=config.allow_control, capture=capture)
+
+
 async def run_console(
     args: argparse.Namespace,
     point_map: PointMap | None = None,
@@ -219,7 +235,9 @@ async def run_console(
     """
     if config is None:
         config = configuration(args)
-    service = Service(allow_control=config.allow_control)
+    service = _service(config)
+    if service is None:
+        return 2
     token = args.token or os.environ.get(TOKEN_VARIABLE) or None
     if token is None and args.new_token:
         token = secrets.token_urlsafe(16)
@@ -233,6 +251,7 @@ async def run_console(
         )
     except ValueError as error:
         print(str(error), file=sys.stderr)
+        await service.close()
         return 2
     demo = Demo(service, point_map, tick=args.tick) if point_map is not None else None
     profile = point_map if point_map is not None else profile_map
@@ -245,6 +264,8 @@ async def run_console(
         print(f"Satori DNP3 master console at {server.url}", flush=True)
         if config.allow_control:
             print("  commanding is on: this console can operate outputs", flush=True)
+        if config.capture is not None:
+            print(f"  writing every frame to {config.capture}", flush=True)
         if demo is not None:
             print(
                 f"  a simulated DER is listening on 127.0.0.1:{demo.port} "
@@ -273,12 +294,15 @@ async def run_service(
     if config is None:
         config = configuration(args)
     bind = config.bind or DEFAULT_LINE_BIND
-    service = Service(allow_control=config.allow_control)
+    service = _service(config)
+    if service is None:
+        return 2
     waiting: list[asyncio.Task[None]] = []
     try:
         server = LineServer(service, bind=bind)
     except ValueError as error:
         print(str(error), file=sys.stderr)
+        await service.close()
         return 2
     await server.start()
     try:
@@ -288,6 +312,8 @@ async def run_service(
             f"DNP3 master service listening on {bind.rpartition(':')[0]}:{server.port}",
             flush=True,
         )
+        if config.capture is not None:
+            print(f"  writing every frame to {config.capture}", flush=True)
         await service.stopped.wait()
     finally:
         for task in waiting:
@@ -316,6 +342,13 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="allow operations and tasks that write to an outstation: outputs, counters, "
         "clock and restart indication (default: read only)",
+    )
+    parser.add_argument(
+        "--capture",
+        default=None,
+        metavar="FILE",
+        help="write every frame sent and received to this pcap file as it crosses the "
+        "wire (default: no file)",
     )
     parser.add_argument(
         "--outstation",

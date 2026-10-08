@@ -242,6 +242,7 @@ ORDER = [
     "disable_unsolicited",
     "repeat",
     "trace",
+    "capture",
     "clear",
     "disconnect",
     "connect",
