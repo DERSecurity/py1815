@@ -47,11 +47,10 @@ class Reading:
 
     value: float | bool
     quality: Quality = Quality.GOOD
-    #: When the source measured it, in milliseconds since the Unix epoch, UTC.
-    #: None means "now", which is right for a value computed on demand. An
-    #: event raised by a ``GOOD`` reading carries this time, moved onto the
-    #: clock a master has set; with any other quality the event is timed when
-    #: the outstation records it, since the value is then not a measurement.
+    #: Measurement time in milliseconds since the Unix epoch, UTC. None means
+    #: "now". Events from a ``GOOD`` reading use this time, shifted by any
+    #: master time write. Events from any other quality use the outstation's
+    #: clock.
     timestamp_ms: int | None = None
 
 
