@@ -33,7 +33,6 @@ the library. It is fetched only when this directory's job runs.
 not about yours.** The license question is about who is running the crate and
 why, so a downstream running this job should read the license for its own use.
 Commercial licensing is available from Step Function I/O at <https://stepfunc.io/contact>.
-Anyone who would rather not run it: delete this directory. The `interop` gate
-job in `.github/workflows/interop.yml` lists `rust-master` in its `needs`, so
-remove it there as well and the remaining peers, the C++ master and the two
-independent dissectors, carry on unchanged.
+Anyone who would rather not run it: delete this directory, and in
+`.github/workflows/interop.yml` delete the `rust-master` job and remove it from
+the `needs` of the `interop` job. The remaining peers carry on unchanged.

@@ -21,6 +21,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import argparse
+import queue
 import sys
 import threading
 import time
@@ -97,7 +98,8 @@ class Application(opendnp3.IOutstationApplication):
 class Commands(opendnp3.ICommandHandler):
     """Applies the fixture's control rules and logs every control received."""
 
-    outstation = None
+    #: Database updates waiting to be applied, in the order the controls arrived.
+    updates: queue.Queue = queue.Queue()
 
     def Start(self) -> None:
         pass
@@ -153,10 +155,16 @@ class Commands(opendnp3.ICommandHandler):
                 builder.Update(
                     opendnp3.Analog(value), MIRROR_ANALOG_INPUT, opendnp3.EventMode.Force
                 )
-        # Applied from another thread: this callback runs inside the stack,
-        # which must not be re-entered from here.
-        update = builder.Build()
-        threading.Thread(target=Commands.outstation.Apply, args=(update,), daemon=True).start()
+        # This callback runs inside the stack, which must not be re-entered
+        # from here, so the update is queued. One worker applies the queue in
+        # order: a thread per update could apply an older value last.
+        Commands.updates.put(builder.Build())
+
+
+def apply_updates(outstation: object) -> None:
+    """Apply queued database updates one at a time, in the order they were queued."""
+    while True:
+        outstation.Apply(Commands.updates.get())
 
 
 def configure(port: int, outstation_address: int, master_address: int) -> object:
@@ -239,7 +247,7 @@ def main() -> None:
         application=application,
         config=configure(args.port, args.outstation_address, args.master_address),
     )
-    Commands.outstation = outstation
+    threading.Thread(target=apply_updates, args=(outstation,), daemon=True).start()
     load(outstation)
     outstation.Enable()
     say(f"outstation listening on {args.host}:{args.port}")

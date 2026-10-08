@@ -35,15 +35,16 @@ the library. It is fetched only when this directory's job runs.
 **If you are working from a fork, that statement is about this repository and
 not about yours.** A downstream running this job should read the license for
 its own use. Commercial licensing is available from Step Function I/O at
-<https://stepfunc.io/contact>. To stop using it, delete this directory and
-remove `rust-outstation` from the `needs` of the `interop` job in
-`.github/workflows/interop.yml`.
+<https://stepfunc.io/contact>. To stop using it, delete this directory, and in
+`.github/workflows/interop.yml` delete the `rust-outstation` job and remove it
+from the `needs` of the `interop` job.
 
 ## Running it
 
+From the repository root:
+
 ```bash
-cd interop/rust-outstation
-cargo build --locked
-target/debug/interop-rust-outstation 127.0.0.1:20000 > outstation.log &
-python interop/master_check.py --port 20000 --log outstation.log   # from the repository root
+(cd interop/rust-outstation && cargo build --locked)
+interop/rust-outstation/target/debug/interop-rust-outstation 127.0.0.1:20000 > outstation.log &
+python interop/master_check.py --port 20000 --log outstation.log
 ```

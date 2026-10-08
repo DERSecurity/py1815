@@ -199,6 +199,11 @@ def check_values(checks: Checks, lab: Outstation) -> None:
 
     counters = store.points(PointType.COUNTER)
     checks.equal("counter values", [counters[i].value for i in sorted(counters)], COUNTERS)
+    checks.check(
+        "counters are online",
+        bool(counters) and all(value.flags & ONLINE for value in counters.values()),
+        {i: value.flags for i, value in counters.items()},
+    )
 
 
 async def check_reads(checks: Checks, lab: Outstation) -> None:
@@ -345,6 +350,12 @@ async def check_controls(checks: Checks, lab: Outstation, log: Log) -> None:
     checks.check("refusal is reported as not accepted", result.accepted is False)
 
     outputs = await lab.scan("outputs")
+    checks.check(
+        "output statuses are online",
+        bool(outputs.objects)
+        and all(o.flags is not None and o.flags & ONLINE for o in outputs.objects),
+        [(o.point, o.index, o.flags) for o in outputs.objects],
+    )
     statuses = {(o.point, o.index): o.value for o in outputs.objects}
     checks.equal(
         "output status after the controls",
