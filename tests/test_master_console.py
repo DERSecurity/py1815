@@ -737,6 +737,31 @@ class TestEventsAndTraffic:
         await page.wait_for("!document.querySelectorAll('#traffic-table tbody tr').length")
         assert page.errors == []
 
+    @pytest.mark.asyncio
+    async def test_save_capture_offers_the_trace_as_a_pcap_file(self, console):
+        page = console.page
+        await console.tab("traffic")
+        await page.wait_for("document.querySelectorAll('#traffic-table tbody tr').length")
+        # Keep the file the page offers instead of letting the browser save it.
+        await page.evaluate(
+            "window.saved = null;"
+            "URL.createObjectURL = (blob) => { window.saved = blob; return 'blob:kept'; };"
+            "HTMLAnchorElement.prototype.click = function () { window.savedAs = this.download; };"
+        )
+
+        await page.click("#traffic-save")
+        await page.wait_for("window.saved !== null")
+
+        magic = await page.evaluate(
+            "window.saved.arrayBuffer().then((b) => [...new Uint8Array(b).slice(0, 4)])"
+        )
+        assert magic == [0xD4, 0xC3, 0xB2, 0xA1], "a libpcap file, little-endian"
+        assert await page.evaluate("window.saved.type") == "application/vnd.tcpdump.pcap"
+        assert await page.evaluate("window.saved.size") > 24 + 3 * 70, "it holds packets"
+        name = await page.evaluate("window.savedAs")
+        assert name.startswith("lab-") and name.endswith(".pcap")
+        assert page.errors == []
+
 
 class TestWithAToken:
     """Started with a token, the page still has to load, and then to carry it."""

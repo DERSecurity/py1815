@@ -356,6 +356,55 @@ for entry in lab.trace.since():
 That is a connection being made to an outstation that has just started: the
 four requests of startup, each answered.
 
+## Captures
+
+A trace can be saved as a pcap file, which Wireshark, tshark and Suricata read
+as it is:
+
+```python
+pathlib.Path("lab.pcap").write_bytes(lab.trace.capture())
+```
+
+Each frame is one TCP segment of an IPv4 connection, carried in Ethernet, at
+the time it was sent or received. Each connection the master made is a TCP
+stream of its own, between the addresses and ports it really had, opened with
+a handshake and closed with FIN segments. The file is written from the trace
+and not observed on the network, so it needs no capture tool and no
+privileges, and it holds exactly the frames the master sent and received. It
+does not show how the operating system split the stream into segments, or
+retransmissions and acknowledgments of its own. An address that is not IPv4
+is written as `127.0.0.1`, with its port kept. `capture(after=id)` keeps only
+the frames after one, as `since` does.
+
+To write every frame to a file as it crosses the wire, from the start of a
+run, give the command a file:
+
+```bash
+py1815-master serve --outstation lab=192.0.2.10:20000 --capture lab.pcap
+```
+
+`console` takes `--capture` as well, and the configuration file takes
+`"capture"`. Every outstation's frames go to the one file, each connection a
+stream of its own, and each packet is on disk as soon as it is written, so a
+master that is stopped or killed leaves a file Wireshark can open. The file is
+emptied when the master starts. From Python, a `CaptureFile` and a `Recorder`
+on a trace's `listeners` do the same:
+
+```python
+from py1815.master.capture import CaptureFile
+from py1815.master.trace import Recorder
+
+written = CaptureFile("lab.pcap")
+recorder = Recorder(written, lab.trace, port=lab.port)
+lab.trace.listeners.append(recorder.record)
+...
+recorder.close()  # ends the open connection in the file
+written.close()
+```
+
+The console's Traffic tab has a Save capture button, and the service a
+`capture` operation, that return what the trace holds.
+
 ## From a browser, or from another process
 
 The same master can be driven without writing Python:

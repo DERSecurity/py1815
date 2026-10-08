@@ -998,6 +998,37 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         ),
         "example": {"outstation": "lab", "after": 0, "limit": 50},
     },
+    "capture": {
+        "summary": "The frames sent and received, as a pcap file",
+        "description": "Every frame kept, each as one TCP segment of an IPv4 connection in "
+        "Ethernet, with the time it was sent or received. Each connection the master made "
+        "is a TCP stream of its own, opened with a handshake and closed with FIN segments. "
+        "An address that is not IPv4 is written as 127.0.0.1. Wireshark, tshark and "
+        "Suricata read the file as it is.",
+        "tag": "Traffic",
+        "params": _outstation(
+            {
+                "after": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Only frames with a greater id.",
+                }
+            }
+        ),
+        "result": _object(
+            {
+                "frames": {"type": "integer", "description": "The frames in the file."},
+                "pcap": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "contentMediaType": "application/vnd.tcpdump.pcap",
+                    "description": "The file, in base64.",
+                },
+            },
+            required=["frames", "pcap"],
+        ),
+        "example": {"outstation": "lab"},
+    },
     "clear": {
         "summary": "Forget the frames or the events kept",
         "tag": "Traffic",

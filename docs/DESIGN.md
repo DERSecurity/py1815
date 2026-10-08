@@ -1282,6 +1282,41 @@ outstation accepts both forms.
 list would cost 1 or 2 octets each, and the points come back in ascending order
 whatever order they were asked in.
 
+**D87 -- A capture is written from the trace, a frame to a segment, and not observed.**
+`py1815.master.capture` writes classic libpcap files, and a trace is written into one by
+`Recorder`: each link frame becomes one TCP segment of an IPv4 connection carried in
+Ethernet, at the time the trace recorded it. Each connection the master made is a TCP
+stream of its own, between the addresses and ports the socket reported, opened with a
+handshake and closed with FIN segments at the time of its last frame. IP and TCP
+checksums are computed, because Suricata drops a packet whose checksum fails and would
+then look like a parser with no objection. An address that is not IPv4 is written as
+127.0.0.1 with its real port, since a stream is told apart by its ports. Writing the file
+needs no capture tool, no privileges and no race between starting a capture and starting
+the traffic, and the interoperability sweep, which wrote its own file the same way, now
+uses this one. A capture's own clock, for a caller that gives no times, counts whole
+microseconds, so it does not drift. The file format and every checksum are pinned to
+octets worked out by hand.
+*Trade-off:* the file is a record of what the master sent and read, not of the network. It
+does not show where the operating system split the stream, acknowledgments or
+retransmissions, octets that never formed a frame (the trace keeps only frames), or a
+connection on which no frame crossed.
+
+**D88 -- A capture reaches a caller through the service, and a file is written as frames
+cross.** `capture` is an operation like any other, answered from the trace, so the
+console's Save capture button asks the service for it as everything else the console does
+is asked (D77) and a script gets the same file with the same words. JSON carries the file
+in base64. A trace keeps its last 5000 frames, so a capture of a long run is written as
+the run happens instead: `--capture FILE` on `console` and `serve`, and `capture` in the
+configuration, put every outstation's frames in one file as they are recorded, each packet
+flushed as it is written so a master that is killed leaves a file a dissector can open.
+Reading the capture changes nothing at the outstation, so a service that does not command
+answers it. A file that cannot be written stops the capture and logs why, and the DNP3
+connection carries on: the listener that writes the file runs inside the receive loop,
+and a full disk is not a reason to drop an outstation.
+*Trade-off:* base64 is a third larger than the file, and the service holds the file in
+memory while it answers; the file named on the command line is emptied when the master
+starts and grows for as long as it runs.
+
 **D90 -- The master names a DER's points by address or by the tables' name, and a name
 has to be one point.** `py1815.master.profile` reads the map `py1815.profile` resolves,
 so a script and the console speak in the profile's terms. A point is named by its
@@ -1364,6 +1399,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
   functions and curves, each operation a plan of requests that whatever carries them runs.
 - `master.service` is the master's operations as JSON, and knows nothing of who is asking.
   The line socket, the HTTP server and the console are each a way to reach it.
+- `master.capture` writes pcap files and knows nothing of DNP3. `master.trace` turns the
+  frames it kept into that file's segments.
 
 ## Testing
 

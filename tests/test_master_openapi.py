@@ -249,6 +249,7 @@ ORDER = [
     "disable_unsolicited",
     "repeat",
     "trace",
+    "capture",
     "clear",
     "der.functions",
     "der.read",

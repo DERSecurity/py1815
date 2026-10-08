@@ -1042,6 +1042,20 @@ function wire() {
     });
   }
   $("#traffic-application").addEventListener("change", renderTraffic);
+  $("#traffic-save").addEventListener("click", async () => {
+    const name = state.selected;
+    let result;
+    try { result = await ask("capture saved", "capture"); } catch (error) { return; }
+    // The service sends the file in base64; the browser saves the octets.
+    const octets = Uint8Array.from(atob(result.pcap), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([octets], { type: "application/vnd.tcpdump.pcap" }));
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+    const link = el("a", { href: url, download: `${name}-${stamp}.pcap`, hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   $("#traffic-clear").addEventListener("click", async () => {
     try { await ask("traffic cleared", "clear", { what: "trace" }); } catch (error) { return; }
     state.frames = [];

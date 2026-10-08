@@ -67,7 +67,7 @@ several tables of object sizes and several response parsers:
 | `profile/probe.py` | One integrity poll over a socket, confirming what asks for it. Behind `py1815-der poll` | Any association: no retries, no controls, no events over time |
 | `tests/ied_harness.py` | Drives a `Session` in process for the certification procedures: requests, confirmations, link frames, corrupted frames | A socket, a clock of its own, a public interface |
 | `tests/epri_harness.py` | The DER profile procedures on top of the same harness | The same |
-| `interop/sweep.py`, `interop/probe.py` | Every function code over a real connection, with a capture written by `interop/pcap.py` | Anything beyond one request and its reply |
+| `interop/sweep.py`, `interop/probe.py` | Every function code over a real connection, with a capture written by `py1815.master.capture` (once `interop/pcap.py`) | Anything beyond one request and its reply |
 
 **Missing.** Parsing a response (the application layer parses requests and
 builds responses, and not the reverse), decoding the objects a response
@@ -144,7 +144,7 @@ interface.
 | `master.api` | `Master` and `Outstation`: the Python interface, over TCP, with scans repeated on request | Built, without TLS or reconnection |
 | `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | |
 | `master.deviations` | Misbehavior, applied between the association and the connection | |
-| `master.trace` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built, without the capture writer |
+| `master.trace`, `master.capture` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built |
 | `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built, for reading |
 | `master.profile` | The DER profile: names, units, functions, curves | Built |
 | `master.cli` | `py1815-master` | Built: `console` and `serve` |
@@ -200,8 +200,9 @@ the phase that builds it lands, so two plans in flight do not claim one number.
 M1 and M2 are recorded there as D73, M3 as D74 and D75, M8 as D76, M7 and
 M10 as D77, the listening half of M9 as D78, M5 with the commanding half
 of M9 as D80, and M4 as D81. D82, reading named points by range, came out of
-the interoperability work and has no M number. D90 to D93 record how the DER profile
-is spoken (item 10), and have none either.
+the interoperability work and has no M number. D87 and D88, the capture writer
+and how a capture reaches a caller, record item 7. D90 to D93 record how the DER
+profile is spoken (item 10), and have no M number either.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -562,17 +563,28 @@ done means.
    counterparts.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.
-   *Built:* recording, reading layer by layer, subscription. *Left:* the
-   capture writer.
+   *Built:* recording, reading layer by layer, subscription, and the capture
+   writer, now `py1815.master.capture` and used by the sweep (D87). A trace
+   exports itself as a pcap file, each connection a TCP stream of its own;
+   the service's `capture` operation returns that file and the console's
+   Traffic tab saves it; `--capture FILE` on `console` and `serve`, and
+   `capture` in the configuration, write every frame to a file as it crosses
+   the wire (D88). The parsers job reads a capture this master wrote, with
+   tshark and Suricata. *Left:* nothing. That job's first run is in CI:
+   Suricata 7.0.3 read the master's capture locally with no objection, and
+   no tshark was at hand.
 8. **Interoperability.** The independent outstations in CI. *Done when* both
    are read and commanded on every pull request. *Built:* an opendnp3
    outstation and a `dnp3` crate outstation, read and commanded by
    `interop/master_check.py` in two jobs of the interoperability workflow, with
    each control and the time write checked against the outstation's own log.
    It found the master reading named points with a qualifier opendnp3 rejects
-   (D82). *Left:* the dissectors reading a capture of what the master sends,
-   which waits on the capture writer in item 7; freezes, which neither
-   outstation's fixture serves; and TLS.
+   (D82). The parsers job also has the master read `interop/outstation.py`
+   (its startup sequence, event and class polls, a time write, a read of
+   named points, output status) and write a capture, which Wireshark's and
+   Suricata's dissectors read with the master's requests and confirmations
+   counted as well as the outstation's responses (`interop/master_capture.py`).
+   *Left:* freezes, which neither outstation's fixture serves; and TLS.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
    certification procedures have been reproduced through it over a socket.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*

@@ -62,6 +62,7 @@ disagree.
 | `POST /api/enable_unsolicited`, `POST /api/disable_unsolicited` | Reporting by event class |
 | `POST /api/repeat` | A scan on a schedule, or an end to one |
 | `POST /api/trace` | The frames sent and received |
+| `POST /api/capture` | The frames kept, as a pcap file in base64 |
 | `POST /api/clear` | Forgets the frames or the events kept |
 | `POST /api/der.read` | Points of the DER profile by name, or a named group, in engineering units |
 | `POST /api/der.write` | Outputs of the DER profile by name, in engineering units |
@@ -271,6 +272,21 @@ A point of a profile, from `profile`:
 | `enumeration` | Those values, each a `value` and a `name`, or null |
 | `mandatory` | Whether the profile requires every outstation to implement it |
 | `section` | The heading the tables list it under |
+
+## A capture
+
+`capture` answers with the frames kept for an outstation as a pcap file, in
+base64 so that JSON can carry it, and the number of frames in it. Decoded, it
+opens in Wireshark:
+
+```bash
+curl -s http://127.0.0.1:8815/api/capture -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab"}' | jq -r .result.pcap | base64 -d > lab.pcap
+```
+
+`after` keeps only the frames with a greater id, as it does for `trace`. The
+file's layout is described under [Captures](master.md#captures). It reads
+nothing from the outstation, so a service that does not command answers it.
 
 ## What happens unasked
 

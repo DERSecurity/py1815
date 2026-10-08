@@ -24,8 +24,9 @@ on:
 #                    octet the C++ one discards, and confirms a refused
 #                    control arrives as a refusal.
 #   parsers          Wireshark and Suricata, two independent C dissectors,
-#                    reading a capture of the whole function code sweep and
-#                    verifying every checksum in it.
+#                    reading a capture of the whole function code sweep, and
+#                    a capture of this library's master reading the same
+#                    outstation, and verifying every checksum in both.
 #
 # The masters answer "does it say the right thing". The parsers answer "is what
 # it put on the wire really DNP3". Those are different questions and neither
@@ -191,16 +192,20 @@ jobs:
         run: cat outstation.log || true
 
   parsers:
-    name: independent dissectors read the whole sweep
+    name: independent dissectors read the sweep and the master
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The sweep walks the function code space and writes the exchange to a
-    # capture. Two dissectors nobody here wrote then read it back.
+    # capture. Then this library's master reads a second outstation and writes
+    # its own capture, as `py1815-master serve --capture` does. Two dissectors
+    # nobody here wrote read both back: in the sweep's the outstation's
+    # responses are under test, in the master's the master's requests too.
     #
-    # The capture is written by the sweep rather than by tcpdump. That needs no
-    # root and has no race between starting a capture and starting the traffic,
-    # whose failure mode is an empty file and a job that passes because there
-    # was nothing to disagree with. interop/pcap.py has the trade-off.
+    # The captures are written by the code that made the traffic rather than
+    # by tcpdump. That needs no root and has no race between starting a capture
+    # and starting the traffic, whose failure mode is an empty file and a job
+    # that passes because there was nothing to disagree with.
+    # src/py1815/master/capture.py has the trade-off.
     steps:
       - uses: actions/checkout@v4
 
@@ -266,23 +271,65 @@ jobs:
           python -u interop/sweep.py --port 20000 \
             --pcap sweep.pcap --summary sweep.json
 
-      - name: Read the capture with Wireshark's dissector
+      - name: Read the sweep's capture with Wireshark's dissector
         run: python -u interop/validate_pcap.py sweep.pcap --port 20000 --expect sweep.json
 
-      - name: Read the capture with Suricata's parser
+      - name: Read the sweep's capture with Suricata's parser
         run: |
           mkdir -p suricata-out
           suricata -r sweep.pcap -c interop/suricata.yaml -l suricata-out \
             --set app-layer.protocols.dnp3.detection-ports.dp=20000
           python -u interop/validate_suricata.py suricata-out/eve.json --expect sweep.json
 
+      - name: Start a second outstation, for the master
+        run: |
+          # A fresh fixture rather than the sweep's: the sweep has read its
+          # events and cleared its restart indication, and the master's startup
+          # sequence, which clears that indication and confirms those events,
+          # is part of what its capture should hold. The same --max-response
+          # 36, so the master confirms a response of several fragments.
+          python -u interop/outstation.py --port 20001 --max-response 36 \
+            > outstation-master.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if grep -q 'outstation listening on' outstation-master.log 2>/dev/null; then
+              echo "outstation listening"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "outstation did not bind within 30s"
+          cat outstation-master.log
+          exit 1
+
+      - name: Read it with this library's master, recording the exchange
+        # Bounded well inside the job, so a hang fails here with a log.
+        timeout-minutes: 3
+        run: |
+          python -u interop/master_capture.py --port 20001 \
+            --pcap master.pcap --summary master.json
+
+      - name: Read the master's capture with Wireshark's dissector
+        run: |
+          python -u interop/validate_pcap.py master.pcap --port 20001 --kind master \
+            --expect master.json
+
+      - name: Read the master's capture with Suricata's parser
+        run: |
+          mkdir -p suricata-master
+          suricata -r master.pcap -c interop/suricata.yaml -l suricata-master \
+            --set app-layer.protocols.dnp3.detection-ports.dp=20001
+          python -u interop/validate_suricata.py suricata-master/eve.json --kind master \
+            --expect master.json
+
       - name: Logs
         if: always()
         run: |
           cat outstation.log || true
           tail -50 suricata-out/suricata.log || true
+          cat outstation-master.log || true
+          tail -50 suricata-master/suricata.log || true
 
-      - name: Keep the capture
+      - name: Keep the captures
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -291,6 +338,9 @@ jobs:
             sweep.pcap
             sweep.json
             suricata-out/eve.json
+            master.pcap
+            master.json
+            suricata-master/eve.json
           if-no-files-found: ignore
 
   opendnp3-outstation:

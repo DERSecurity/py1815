@@ -2693,6 +2693,123 @@
         }
       }
     },
+    "/api/capture": {
+      "post": {
+        "operationId": "capture",
+        "summary": "The frames sent and received, as a pcap file",
+        "tags": [
+          "Traffic"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "after": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Only frames with a greater id."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "frames": {
+                              "type": "integer",
+                              "description": "The frames in the file."
+                            },
+                            "pcap": {
+                              "type": "string",
+                              "contentEncoding": "base64",
+                              "contentMediaType": "application/vnd.tcpdump.pcap",
+                              "description": "The file, in base64."
+                            }
+                          },
+                          "required": [
+                            "frames",
+                            "pcap"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every frame kept, each as one TCP segment of an IPv4 connection in Ethernet, with the time it was sent or received. Each connection the master made is a TCP stream of its own, opened with a handshake and closed with FIN segments. An address that is not IPv4 is written as 127.0.0.1. Wireshark, tshark and Suricata read the file as it is."
+      }
+    },
     "/api/clear": {
       "post": {
         "operationId": "clear",
@@ -4294,6 +4411,7 @@
                       "disable_unsolicited",
                       "repeat",
                       "trace",
+                      "capture",
                       "clear",
                       "der.read",
                       "der.write",

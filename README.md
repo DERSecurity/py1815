@@ -112,6 +112,9 @@ says some are waiting, and otherwise sends what you ask for from the Commands ta
 Every setting can also be kept in a JSON file. `py1815-master config` prints a complete one
 to edit, and `--config FILE` loads it. See `docs/master-config.md`.
 
+`--capture FILE` writes every frame the master sends and receives to a pcap file as it crosses
+the wire, for Wireshark; the console's Traffic tab saves what it holds as one too.
+
 Or with Docker, which needs nothing installed but Docker:
 
 ```

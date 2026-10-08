@@ -15,6 +15,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import ipaddress
 import json
@@ -34,6 +35,7 @@ from py1815.decode import DecodedObject, PointType
 from py1815.master import requests
 from py1815.master.api import Master, Outstation
 from py1815.master.association import Exchange, Unsolicited
+from py1815.master.capture import CaptureFile
 from py1815.master.controls import Mode, Operated, Plan, commands
 from py1815.master.profile import (
     Curve,
@@ -54,7 +56,7 @@ from py1815.master.profile import address as point_address
 from py1815.master.profile import label as point_label
 from py1815.master.store import PointValue
 from py1815.master.tasks import WRITING, Tasks
-from py1815.master.trace import Entry, iin_names
+from py1815.master.trace import Entry, Recorder, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
 from py1815.profile.model import Kind, Point, PointMap
 
@@ -276,7 +278,13 @@ def describe_entry(entry: Entry) -> dict[str, Any]:
 class Service:
     """A master, and the operations it answers as JSON."""
 
-    def __init__(self, master: Master | None = None, *, allow_control: bool = False) -> None:
+    def __init__(
+        self,
+        master: Master | None = None,
+        *,
+        allow_control: bool = False,
+        capture: CaptureFile | None = None,
+    ) -> None:
         """
         Args:
             master: The master to serve. A new one when not given.
@@ -287,9 +295,16 @@ class Service:
                 equipment should have to be told before it can change it.
                 When off, outstations are also added with the automatic
                 tasks that write (restart clear, time write) disabled.
+            capture: A pcap file to write every frame of every outstation
+                added to, as it is sent or received. The service closes it
+                when it closes.
         """
         self.master = Master() if master is None else master
         self.allow_control = allow_control
+        self.capture_file = capture
+        self._recorders: dict[str, Recorder] = {}
+        #: Each outstation's listener that writes the capture file, by name.
+        self._capture_listeners: dict[str, Callable[[Entry], None]] = {}
         self._names: dict[str, dict[PointType, dict[int, str]]] = {}
         self._profiles: dict[str, PointMap] = {}
         self._der_profiles: dict[str, DerProfile] = {}
@@ -318,6 +333,7 @@ class Service:
             "disable_unsolicited": self._disable_unsolicited,
             "repeat": self._repeat,
             "trace": self._trace,
+            "capture": self._capture,
             "clear": self._clear,
             "der.read": self._der_read,
             "der.write": self._der_write,
@@ -536,6 +552,22 @@ class Service:
             self.publish({"event": "connection", "outstation": name, "connected": connected})
 
         outstation.trace.listeners.append(on_frame)
+        if self.capture_file is not None:
+            recorder = Recorder(self.capture_file, outstation.trace, port=outstation.port)
+            self._recorders[name] = recorder
+
+            def on_frame_captured(entry: Entry) -> None:
+                # A listener's error reaches the code that recorded the frame,
+                # which is the receive loop or a request. A full disk must not
+                # end the DNP3 connection, so the capture stops instead.
+                try:
+                    recorder.record(entry)
+                except (OSError, ValueError):
+                    logger.exception("dnp3 master: writing the capture of %s failed", name)
+                    self._stop_capture()
+
+            self._capture_listeners[name] = on_frame_captured
+            outstation.trace.listeners.append(on_frame_captured)
         outstation.on_exchange = on_exchange
         outstation.on_unsolicited = on_unsolicited
         outstation.on_connection = on_connection
@@ -636,9 +668,31 @@ class Service:
                 self._commanding(f"the {name} task")
         return tasks.reading_only()
 
+    def _stop_capture(self) -> None:
+        """Stop writing the capture file for every outstation, after a write failed.
+
+        The file is shared, so a failure for one outstation is a failure for
+        all. Open connections are abandoned without their FIN packets, since
+        writing more to a failing file would only fail again.
+        """
+        for name, listener in self._capture_listeners.items():
+            with contextlib.suppress(KeyError, ValueError):
+                self.master[name].trace.listeners.remove(listener)
+        self._capture_listeners.clear()
+        for recorder in self._recorders.values():
+            recorder.abandon()
+        self._recorders.clear()
+        if self.capture_file is not None:
+            with contextlib.suppress(OSError):
+                self.capture_file.close()
+
     async def _remove(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
         await self.master.remove(outstation.name)
+        self._capture_listeners.pop(outstation.name, None)
+        recorder = self._recorders.pop(outstation.name, None)
+        if recorder is not None:
+            recorder.close()
         self._names.pop(outstation.name, None)
         self._profiles.pop(outstation.name, None)
         self._der_profiles.pop(outstation.name, None)
@@ -862,6 +916,14 @@ class Service:
         entries = outstation.trace.since(int(params.get("after", 0)))
         limit = int(params.get("limit", 500))
         return {"frames": [describe_entry(entry) for entry in entries[-limit:]]}
+
+    async def _capture(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the frames kept as a pcap file, in base64 so JSON can carry it."""
+        outstation = self._outstation(params)
+        after = int(params.get("after", 0))
+        frames = len(outstation.trace.since(after))
+        pcap = outstation.trace.capture(after=after, port=outstation.port)
+        return {"frames": frames, "pcap": base64.b64encode(pcap).decode("ascii")}
 
     async def _clear(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
@@ -1110,7 +1172,13 @@ class Service:
         return {"stopping": True}
 
     async def close(self) -> None:
+        """Close every connection, then end each connection in the capture file and close it."""
         await self.master.close()
+        for recorder in self._recorders.values():
+            recorder.close()
+        self._recorders.clear()
+        if self.capture_file is not None:
+            self.capture_file.close()
 
 
 # ------------------------------------------------------------------ transports

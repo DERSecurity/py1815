@@ -12,8 +12,11 @@ same wrong way on both sides of a round trip and never notices. It is also
 cheap: no master to drive, no session to keep alive, just a capture and a
 parser that was not written here.
 
-Run against the capture the sweep produces, so the frames examined cover every
-function code the sweep sends rather than one integrity poll.
+Run against two captures. The sweep's covers every function code the sweep
+sends, rather than one integrity poll. The master's (``--kind master``,
+written by ``master_capture.py``) is this library's master reading the same
+outstation: there the requests and confirmations under test are the master's,
+and the responses the outstation's.
 
 Exits non-zero, loudly, on anything it cannot verify.
 
@@ -58,19 +61,34 @@ FIELDS = [
 #: is a frame this library emitted with a checksum the dissector disagrees with.
 CHECKSUM_GOOD = "1"
 
-#: Application function codes the capture must contain for the run to be
+#: Application function codes each capture must contain for the run to be
 #: meaningful. A capture with no responses in it would otherwise pass every
 #: checksum assertion by containing nothing to check.
 REQUIRED_APP_FUNCTIONS = {
-    "0": "confirm",
-    "1": "read",
-    "2": "write",
-    "3": "select",
-    "4": "operate",
-    "5": "direct operate",
-    "6": "direct operate, no acknowledgment",
-    "129": "response",
+    "sweep": {
+        "0": "confirm",
+        "1": "read",
+        "2": "write",
+        "3": "select",
+        "4": "operate",
+        "5": "direct operate",
+        "6": "direct operate, no acknowledgment",
+        "129": "response",
+    },
+    # What master_capture.py has the master send: its startup sequence, the
+    # confirmation of each response fragment that asks for one, the reads and
+    # the writes.
+    "master": {
+        "0": "confirm",
+        "1": "read",
+        "2": "write",
+        "21": "disable unsolicited",
+        "129": "response",
+    },
 }
+
+#: Function codes below this are requests, which only a master sends.
+FIRST_RESPONSE_CODE = 128
 
 
 def fail(message: str) -> NoReturn:
@@ -124,8 +142,15 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=20000)
     parser.add_argument("--tshark", default="tshark")
     parser.add_argument(
+        "--kind",
+        choices=sorted(REQUIRED_APP_FUNCTIONS),
+        default="sweep",
+        help="which capture this is: the function code sweep, or the master's",
+    )
+    parser.add_argument(
         "--expect",
-        help="the sweep's summary, to check this dissector saw every reply that was sent",
+        help="the summary written with the capture, to check this dissector saw every "
+        "application fragment that was sent",
     )
     args = parser.parse_args()
 
@@ -179,32 +204,41 @@ def main() -> None:
     if bad_chunk:
         fail(f"data chunk checksum rejected on frames {sorted(set(bad_chunk))}")
 
-    missing = {
-        code: name for code, name in REQUIRED_APP_FUNCTIONS.items() if code not in app_functions
-    }
+    required = REQUIRED_APP_FUNCTIONS[args.kind]
+    missing = {code: name for code, name in required.items() if code not in app_functions}
     if missing:
         fail(
-            "the capture does not cover every function code the sweep sends, so "
+            f"the capture does not cover every function code the {args.kind} sends, so "
             f"it is not the capture this job expects: missing {sorted(missing.values())}"
         )
 
     responses = app_functions.get("129", 0)
+    confirms = app_functions.get("0", 0)
+    requests = sum(
+        count
+        for code, count in app_functions.items()
+        if code.isdigit() and 0 < int(code) < FIRST_RESPONSE_CODE
+    )
     if args.expect:
-        wanted = json.loads(pathlib.Path(args.expect).read_text(encoding="utf-8"))[
-            "application_replies"
-        ]
-        if responses < wanted:
-            # A frame whose checksum this dissector rejects still appears, with
-            # the status field set, so the count above is the check for a frame
-            # it could not delimit at all.
-            fail(
-                f"the outstation sent {wanted} application replies and this dissector "
-                f"found {responses} of them in the capture"
-            )
+        summary = json.loads(pathlib.Path(args.expect).read_text(encoding="utf-8"))
+        # A frame whose checksum this dissector rejects still appears, with the
+        # status field set, so these counts are the check for a frame it could
+        # not delimit at all.
+        found = {
+            "application_replies": (responses, "the outstation sent", "application replies"),
+            "application_requests": (requests, "the master sent", "requests"),
+            "confirms": (confirms, "the master sent", "confirmations"),
+        }
+        for key, (count, who, what) in found.items():
+            if key in summary and count < summary[key]:
+                fail(
+                    f"{who} {summary[key]} {what} and this dissector found {count} of "
+                    "them in the capture"
+                )
 
     print(
-        f"validate-pcap: OK, every checksum verified across {len(rows)} frames, "
-        f"{responses} of them responses"
+        f"validate-pcap: OK, every checksum verified across {len(rows)} frames: "
+        f"{requests} requests, {confirms} confirmations and {responses} responses"
     )
 
 

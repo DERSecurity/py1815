@@ -125,7 +125,7 @@ one selected has six tabs, and a seventh, **DER**, when it was given a profile.
 | **Points** | A table for each point type |
 | **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
-| **Traffic** | Every frame, and the one selected read layer by layer |
+| **Traffic** | Every frame, and the one selected read layer by layer; saved as a capture |
 | **DER** | The outstation as an IEEE 1815.2 DER: its nameplate, what it is measuring, each function with its settings and an enable switch, the curve the curve block shows, and what it serves against its Device Profile document. Offered for an outstation with a profile |
 | **Log** | What the console asked for, and what came of it |
 
@@ -294,6 +294,13 @@ header, and the application fragment on the frame that completed one. Point at
 a layer and its octets are picked out; checksums are left unshaded. The view
 can be narrowed to one direction or to frames that carry an application
 fragment, paused, and cleared.
+
+**Save capture** saves every frame the master has kept for the outstation as a
+pcap file, named for the outstation and the time, for Wireshark or any other
+tool that reads one. It saves both directions whatever the view is narrowed
+to, and nothing that was cleared. To keep everything from the start of a run
+instead, start the console with `--capture FILE`; see
+[Captures](master.md#captures).
 
 ## Who can reach it
 
