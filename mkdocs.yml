@@ -69,6 +69,7 @@ nav:
   - How DNP3 works: dnp3.md
   - Serving an outstation: outstation.md
   - Serving a DER: der.md
+  - Configuring the outstation: der-config.md
   - The master: master.md
   - The console: console.md
   - The master's API: master-api.md
