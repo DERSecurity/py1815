@@ -143,11 +143,19 @@ class TestLoading:
         assert await page.count("#indications .indication") == 14
 
 
-class TestWhatIsDoneUnasked:
+async def _tasks_card(page) -> str:
+    """Return the Overview's task card once it has been drawn."""
+    await page.wait_for(
+        "document.querySelector('#overview-tasks').textContent.includes('Lost connection')"
+    )
+    return await page.text("#overview-tasks")
+
+
+class TestAutomaticTasks:
     @pytest.mark.asyncio
-    async def test_the_overview_says_what_the_master_does_by_itself(self, console):
+    async def test_overview_lists_the_enabled_tasks(self, console):
         page = console.page
-        card = await page.text("#overview-tasks")
+        card = await _tasks_card(page)
         assert "Stops unsolicited reporting, reads everything" in card
         assert "Fetched when a response says so" in card
         assert "Made again, trying every 5 s" in card and "Not asked for" in card
@@ -156,25 +164,28 @@ class TestWhatIsDoneUnasked:
 
     @pytest.mark.asyncio
     @commanding
-    async def test_one_started_to_command_does_the_two_writes_as_well(self, console):
-        card = await console.page.text("#overview-tasks")
+    async def test_commanding_console_also_runs_the_two_writing_tasks(self, console):
+        card = await _tasks_card(console.page)
         assert "Cleared when seen" in card and "Set when the outstation asks" in card
         assert "Left alone" not in card
 
     @pytest.mark.asyncio
-    async def test_the_log_says_what_was_done_unasked(self, console):
+    async def test_log_records_each_task_that_runs(self, console):
         page = console.page
         await console.service.handle({"op": "disconnect", "outstation": "lab"})
         await console.service.handle({"op": "connect", "outstation": "lab"})
         await console.service.handle({"op": "idle", "outstation": "lab"})
         await console.tab("log")
-        await page.wait_for("document.querySelector('#log').textContent.includes('unasked')")
+        # Wait for the last of the startup requests, not the first.
+        await page.wait_for(
+            "document.querySelector('#log').textContent.includes('read everything, unasked')"
+        )
         log = await page.text("#log")
         assert "lab: stopped unsolicited reporting, on connecting, unasked" in log
         assert "lab: read everything, unasked" in log
 
     @pytest.mark.asyncio
-    async def test_an_outstation_is_added_as_manual_or_with_unsolicited_reporting(self, console):
+    async def test_add_form_sets_manual_and_unsolicited(self, console):
         page = console.page
         port = console.outstation.port
         for name, fill in (
@@ -192,8 +203,11 @@ class TestWhatIsDoneUnasked:
         assert not any(added["by-hand"]["tasks"].values())
         assert added["reporting"]["tasks"]["enable_unsolicited"] == [1, 3]
         assert added["reporting"]["tasks"]["startup"]
-        card = await page.text("#overview-tasks")
-        assert "Turned on for class 1, 3" in card
+        # The title changes before the Overview is redrawn, so wait for the card itself.
+        await page.wait_for(
+            "document.querySelector('#overview-tasks').textContent"
+            ".includes('Turned on for class 1, 3')"
+        )
 
 
 class TestThePointsTable:
