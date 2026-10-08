@@ -597,12 +597,33 @@ class DerOutstation:
         standing = self._standing(gate)
         return standing.quality is Quality.GOOD and bool(standing.value)
 
+    def _event_time(self, reading: Reading, now: int) -> int:
+        """When the change this reading shows is said to have happened (D79).
+
+        The time the source gave, where it gave one for a value it vouches for,
+        carried onto this outstation's clock: a master's time write moves that
+        clock by an offset, and a time taken from the same wall clock moves with
+        it. Otherwise now. A reading that is not a measurement -- a value kept
+        from a source that has gone away, or one that is not in effect -- still
+        has the time it was last measured, and the event is the change of
+        standing, which this outstation is only now seeing.
+        """
+        if reading.timestamp_ms is None or reading.quality is not Quality.GOOD:
+            return now
+        return int(reading.timestamp_ms) + self._time_offset_ms
+
     def _binary(self, point: Point) -> BinaryPoint:
-        reading = self._reading(point)
+        return self._binary_of(self._reading(point))
+
+    @staticmethod
+    def _binary_of(reading: Reading) -> BinaryPoint:
         return BinaryPoint(bool(reading.value), _QUALITY_FLAGS[reading.quality])
 
     def _analog(self, point: Point) -> AnalogPoint:
-        reading = self._reading(point)
+        return self._analog_of(point, self._reading(point))
+
+    @staticmethod
+    def _analog_of(point: Point, reading: Reading) -> AnalogPoint:
         flags = _QUALITY_FLAGS[reading.quality]
         raw = point.to_wire(float(reading.value))
         if math.isfinite(raw):
@@ -863,21 +884,23 @@ class DerOutstation:
             reported = self._classes[point.address]
             if not reported:
                 continue
-            binary = self._binary(point)
+            reading = self._reading(point)
+            binary = self._binary_of(reading)
             if not self._primed:
                 self.events.prime_binary(point.index, binary)
             elif self.events.record_binary(
                 point.index,
                 binary,
                 event_class=EventClass(reported),
-                timestamp_ms=now,
+                timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
         for point in self._served[Kind.AI]:
             reported = self._classes[point.address]
             if not reported:
                 continue
-            analog = self._analog(point)
+            reading = self._reading(point)
+            analog = self._analog_of(point, reading)
             if not self._primed:
                 self.events.prime_analog(point.index, analog)
             elif self.events.record_analog(
@@ -885,7 +908,7 @@ class DerOutstation:
                 analog,
                 event_class=EventClass(reported),
                 deadband=self._deadbands.get(point.index, 0.0),
-                timestamp_ms=now,
+                timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
         self._primed = True

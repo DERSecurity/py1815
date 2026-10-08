@@ -1197,6 +1197,39 @@ network that reaches nothing, and tells nobody that it is running.
 *Trade-off:* the fonts of the project's site are named and not fetched, so the console
 is set in whatever the machine has when they are not installed.
 
+**D79 -- An event is timed by its reading when the reading says when, and by the
+outstation otherwise.** A binding returns a `Reading`, and a `Reading` may carry the time
+its value was measured. `poll()` stamped every event with the outstation's own clock, so
+that time went nowhere, and the field's documentation said it was the measurement time. A
+caller that reads a device on its own schedule and hands the readings over later knows
+when each value was taken, and the time `poll()` happens to run is later by the length of
+a read and of whatever queue sits between the two. For a sequence of events that
+difference is what a timestamp is for.
+
+So an event raised by a reading that gives a time carries that time. Two rules bound it.
+
+*The time is moved onto the outstation's clock.* A master's time write does not set the
+host's clock; it sets an offset from it (`set_time`), and everything the outstation reports
+is on the clock that offset gives. A source's time is taken from the host's wall clock, so
+it gets the same offset. Without that, one outstation's events would sit on two time
+bases, the ones a source timed and the ones it did not, and a master could not order them.
+
+*Only a measurement has a measurement time.* The reading's time is used when its quality
+is `GOOD`. A value retained from a source that has gone away still has the time it was
+last measured, and so does the value of a function that has been disabled. The event in
+those cases is the change of standing, which happened when the outstation saw it and not
+when the value was taken, so it is timed by the outstation. Stamping a loss of
+communications with the time of the last good reading would date the loss to before it
+occurred.
+
+A reading that gives no time, and a binding that returns a bare value, are timed by the
+outstation as before, so a caller that never set the field sees no change. Counters are
+untouched: a freeze is an act of the outstation's, and its time is when it froze.
+*Trade-off:* events from one outstation need not be in time order, since a source may
+report late. A run of binary events sent with relative times is already broken and given
+a new common time whenever the next event does not fit after the last, which is what an
+earlier time needs too.
+
 **D80 -- A control is sent once, and a service commands only when started to.** The
 master never repeats a control and no task of its own sends one. After a select it sends
 the operate only if the outstation echoed every control unchanged and accepted each; a
