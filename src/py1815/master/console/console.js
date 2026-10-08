@@ -872,15 +872,36 @@ function scheduleRender() {
 }
 
 // Reload what the page shows for the selected outstation, after updates were missed.
+// Events that arrive while a reload is under way, replayed once it ends,
+// so a snapshot taken before them does not overwrite them.
+let held = null;
+
 async function resynchronize(reason) {
   note(reason, true);
-  await refreshStatus();
-  if (state.selected) await select(state.selected);
+  if (held) return;
+  held = [];
+  try {
+    await refreshStatus();
+    if (state.selected) await select(state.selected);
+  } finally {
+    const replay = held;
+    held = null;
+    const shown = new Set(state.frames.map((frame) => frame.id));
+    for (const event of replay) {
+      // The reloaded trace may already hold a frame that arrived during the reload.
+      if (event.event === "frame" && shown.has(event.frame.id)) continue;
+      onServiceEvent(event);
+    }
+  }
 }
 
 function onServiceEvent(event) {
   if (event.event === "lost") {
     resynchronize(`Missed ${event.dropped} update(s) while the page was behind; reloaded`);
+    return;
+  }
+  if (held) {
+    held.push(event);
     return;
   }
   if (event.event === "outstations" || event.event === "connection") {

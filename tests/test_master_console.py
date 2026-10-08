@@ -693,6 +693,19 @@ class TestStayingCurrent:
         await page.wait_for("state.frames.length > 0")
 
 
+class TestReloadKeepsLaterEvents:
+    @pytest.mark.asyncio
+    async def test_a_frame_that_arrives_during_a_reload_is_kept(self, console):
+        page = console.page
+        await page.wait_for("state.frames.length > 0")
+        await page.evaluate(
+            "(() => { const frame = { ...state.frames[state.frames.length - 1], id: 999999999 };"
+            " resynchronize('test reload');"
+            " onServiceEvent({ event: 'frame', outstation: state.selected, frame }); })()"
+        )
+        await page.wait_for("state.frames.some((frame) => frame.id === 999999999)")
+
+
 class TestEventsAndTraffic:
     @pytest.mark.asyncio
     async def test_events_are_listed_as_they_arrive(self, console):

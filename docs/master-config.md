@@ -88,7 +88,7 @@ Every setting is optional. A file that only lists outstations is valid.
 | `capture_keep` | `10` | Older capture files to keep. `0` keeps only the current one |
 | `log_file` | `null` | Path of a file to write the log to, as well as the terminal. `null` logs to the terminal only. See [Running for days](master.md#running-for-days) |
 | `log_max_mb` | `10` | Start a new log file once the current one reaches this many megabytes. The full one is renamed `master.log.1` |
-| `log_keep` | `5` | Older log files to keep |
+| `log_keep` | `5` | Older log files to keep, at least 1 |
 | `log_level` | `"info"` | The lowest level written to the log file: `debug`, `info` or `warning` |
 
 The console's token is not in the file, because it is a secret. Give it with

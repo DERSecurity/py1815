@@ -371,11 +371,16 @@ class Recorder:
         self._last = entry.at
 
     def close(self) -> None:
-        """Write the FIN exchange of the open connection, if there is one."""
-        if self._stream is not None:
+        """Write the FIN exchange of the open connection, if there is one.
+
+        A connection opened in a file the capture has since rotated away from
+        is forgotten instead: its FIN packets would land in the new file with
+        no handshake before them.
+        """
+        if self._stream is not None and self._capture.generation == self._generation:
             self._stream.close(self._last)
-            self._stream = None
-            self._connection = None
+        self._stream = None
+        self._connection = None
 
     def abandon(self) -> None:
         """Forget the open connection without writing anything more."""

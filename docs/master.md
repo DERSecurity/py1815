@@ -389,10 +389,12 @@ The log records, at INFO:
 - What the master was started with, and each outstation's address.
 - Each connection made, lost and made again.
 - Every command sent to an outstation (operate, the time, the restart
-  indication, freeze, restart, and any request that is not a read), with the
-  points and values asked for and whether the outstation accepted. A command
+  indication, freeze, restart, and any request that is not a read), with all
+  the points and values asked for and whether the outstation accepted. A command
   refused because the service was not started with `--allow-control` is logged
   as a warning.
+- Each time the master clears the restart indication or writes the time by
+  itself, and how the request ended.
 
 An outstation that stays unreachable is logged once when the retries begin and
 then once an hour, with the number of attempts, instead of at every attempt.

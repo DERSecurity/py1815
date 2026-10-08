@@ -40,7 +40,7 @@ from py1815.master.association import (
 from py1815.master.controls import Operated, Plan
 from py1815.master.operations import Operations
 from py1815.master.store import Store
-from py1815.master.tasks import Housekeeper, Tasks
+from py1815.master.tasks import WRITING, Housekeeper, Tasks
 from py1815.master.trace import RECEIVED, SENT, Trace
 
 logger = logging.getLogger(__name__)
@@ -451,7 +451,18 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                     # startup sequence is not interleaved with other requests.
                     async with self._turn:
                         while (step := self._housekeeper.next()) is not None:
-                            await self._exchange_in_turn(step.function, step.body, task=step.task)
+                            exchange = await self._exchange_in_turn(
+                                step.function, step.body, task=step.task
+                            )
+                            if step.task in WRITING:
+                                # A write the master made by itself is a command
+                                # like any other, and goes in the log as one.
+                                logger.info(
+                                    "dnp3 master: automatic %s to %s: %s",
+                                    step.task,
+                                    self.name,
+                                    exchange.outcome.value,
+                                )
                 self._settled.set()
                 await self._attention.wait()
                 self._attention.clear()

@@ -175,6 +175,27 @@ class TestCaptureRotation:
         capture.boundary()
         assert capture.generation == 0
 
+    def test_closing_a_connection_from_a_rotated_file_writes_nothing_to_the_new_one(self, tmp_path):
+        path = tmp_path / "master.pcap"
+        capture = CaptureFile(path, max_bytes=200, keep=1)
+        first, second = Trace(clock=Clock()), Trace(clock=Clock())
+        quiet = Recorder(capture, first)
+        busy = Recorder(capture, second)
+        first.listeners.append(quiet.record)
+        second.listeners.append(busy.record)
+        first.reset(local=("192.0.2.1", 50001), peer=("192.0.2.2", 20000))
+        second.reset(local=("192.0.2.1", 50002), peer=("192.0.2.3", 20000))
+        first.record(SENT, _request())
+        second.record(SENT, _request())  # the file is full, so this one starts a new file
+        assert capture.generation == 1
+        quiet.close()
+        busy.close()
+        capture.close()
+        ports = [struct.unpack_from("!H", packet, 34)[0] for packet in _records(path.read_bytes())]
+        assert 50001 not in ports and 50001 not in [
+            struct.unpack_from("!H", packet, 36)[0] for packet in _records(path.read_bytes())
+        ]
+
     def test_a_recorded_connection_starts_again_in_the_new_file(self, tmp_path):
         path = tmp_path / "master.pcap"
         trace = Trace(clock=Clock())
@@ -211,6 +232,17 @@ class TestSlowSubscribers:
         assert lost == {"event": "lost", "dropped": service.SUBSCRIBER_QUEUE + 1}
         later = [queue.get_nowait()["number"] for _ in range(queue.qsize())]
         assert later == list(range(service.SUBSCRIBER_QUEUE + 1, service.SUBSCRIBER_QUEUE + 5))
+
+    def test_the_lost_count_adds_up_over_several_overflows(self):
+        events = Service()
+        queue = events.subscribe()
+        total = service.SUBSCRIBER_QUEUE * 3 + 7
+        for number in range(total):
+            events.publish({"event": "frame", "number": number})
+        waiting = [queue.get_nowait() for _ in range(queue.qsize())]
+        lost = waiting[0]
+        assert lost["event"] == "lost"
+        assert lost["dropped"] + len(waiting) - 1 == total, "every update is delivered or counted"
 
     def test_memory_stays_bounded_however_far_a_subscriber_lags(self):
         events = Service()
@@ -321,6 +353,34 @@ class TestCommandAudit:
             await events.close()
         (line,) = [r.getMessage() for r in caplog.records if "command operate" in r.getMessage()]
         assert "to lab" in line and '"87":30' in line and line.endswith(": accepted")
+
+    @pytest.mark.asyncio
+    async def test_every_point_of_a_large_command_is_logged(self, lab, caplog):
+        events = Service(allow_control=True)
+        try:
+            await self._add(events, lab)
+            caplog.set_level(logging.INFO, logger="py1815.master.service")
+            points = {str(index): False for index in range(14)}
+            await events.handle(
+                {"op": "operate", "outstation": "lab", "params": {"points": {"bo": points}}}
+            )
+        finally:
+            await events.close()
+        (line,) = [r.getMessage() for r in caplog.records if "command operate" in r.getMessage()]
+        assert all(f'"{index}":false' in line for index in range(14))
+
+    @pytest.mark.asyncio
+    async def test_automatic_writes_are_logged(self, lab, caplog):
+        caplog.set_level(logging.INFO, logger="py1815.master.api")
+        events = Service(allow_control=True)
+        try:
+            await self._add(events, lab)
+            await events.handle({"op": "idle", "outstation": "lab"})
+        finally:
+            await events.close()
+        lines = [r.getMessage() for r in caplog.records]
+        assert "dnp3 master: automatic clear_restart to lab: complete" in lines
+        assert "dnp3 master: automatic write_time to lab: complete" in lines
 
     @pytest.mark.asyncio
     async def test_a_refused_command_is_logged_as_a_warning(self, lab, caplog):
@@ -442,6 +502,7 @@ class TestLogFile:
             ({"log_max_mb": 0}, "log_max_mb must be greater than 0"),
             ({"capture_max_mb": "big"}, "capture_max_mb must be a number of megabytes"),
             ({"capture_keep": -1}, "capture_keep must be a whole number from 0 to 1000"),
+            ({"log_keep": 0}, "log_keep must be a whole number from 1 to 1000"),
             ({"log_file": ""}, "log_file must be a non-empty string"),
         ],
     )

@@ -127,9 +127,6 @@ STREAM_WRITE_TIMEOUT = 60.0
 #: Whether the operation being handled commanded an outstation.
 _commanded: contextvars.ContextVar[bool] = contextvars.ContextVar("commanded", default=False)
 
-#: The longest parameter text written to the log for one command.
-_LOGGED_PARAMS = 500
-
 
 def _outcome(result: Any) -> str:
     """Summarize a command's result for the log."""
@@ -339,8 +336,6 @@ class Service:
         """Log a command sent to an outstation, with what was asked and what came of it."""
         asked = {key: value for key, value in params.items() if key != "outstation"}
         text = json.dumps(asked, separators=(",", ":"), default=str)
-        if len(text) > _LOGGED_PARAMS:
-            text = text[:_LOGGED_PARAMS] + "..."
         logger.info(
             "dnp3 master: command %s to %s %s: %s", op, params.get("outstation"), text, outcome
         )
@@ -370,8 +365,9 @@ class Service:
             except asyncio.QueueFull:
                 dropped = 1
                 while not queue.empty():
-                    queue.get_nowait()
-                    dropped += 1
+                    waiting = queue.get_nowait()
+                    # A lost update already waiting stands for all it dropped.
+                    dropped += waiting.get("dropped", 1) if waiting.get("event") == "lost" else 1
                 logger.warning(
                     "dnp3 master: a subscriber fell behind; dropped %d update(s)", dropped
                 )

@@ -253,9 +253,14 @@ class MasterConfig:
         for key in ("capture_max_mb", "log_max_mb"):
             if key in given:
                 values[key] = settings.seconds(given[key], key, unit="megabytes")
-        for key in ("capture_keep", "log_keep"):
-            if key in given:
-                values[key] = settings.integer(given[key], key, 0, 1000)
+        if "capture_keep" in given:
+            values["capture_keep"] = settings.integer(
+                given["capture_keep"], "capture_keep", 0, 1000
+            )
+        if "log_keep" in given:
+            # At least 1: Python's rotating log handler does not rotate with 0,
+            # and the file would then grow without limit.
+            values["log_keep"] = settings.integer(given["log_keep"], "log_keep", 1, 1000)
         if "log_level" in given:
             level = given["log_level"]
             if level not in LOG_LEVELS:
