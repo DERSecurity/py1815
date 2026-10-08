@@ -354,6 +354,29 @@ class TestTheTraceAsACapture:
         assert trace.endpoints(10) == (None, None)
 
 
+class TestLongRuns:
+    def test_sequence_numbers_wrap_at_32_bits(self):
+        capture = Capture()
+        stream = capture.stream()
+        stream.open()
+        stream._client.sequence = 0xFFFFFFF0
+        stream.sent(b"x" * 32)
+        stream.sent(b"y")
+        packets = [packet for _, packet in _records(capture.pcap())]
+        assert _segment(packets[-2])["sequence"] == 0xFFFFFFF0
+        assert _segment(packets[-1])["sequence"] == 0x10
+        assert all(_verifies(packet) for packet in packets)
+
+    def test_connections_with_no_frames_are_not_kept(self):
+        trace = Trace(clock=Clock())
+        trace.reset(local=("192.0.2.1", 50000), peer=("192.0.2.2", 20000))
+        trace.record(SENT, _request())
+        for port in range(50001, 50501):
+            trace.reset(local=("192.0.2.1", port), peer=("192.0.2.2", 20000))
+        assert len(trace._endpoints) == 2, "the connection a frame crossed, and the current one"
+        assert trace.endpoints(1) == (("192.0.2.1", 50000), ("192.0.2.2", 20000))
+
+
 class TestARecorder:
     def test_a_listener_writes_each_frame_as_it_is_recorded(self, tmp_path):
         trace = Trace(clock=Clock())
@@ -514,6 +537,42 @@ class TestTheService:
             assert again["ok"] and again["result"]["outcome"] == "complete"
         finally:
             await service.close()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_capture_stops_for_every_outstation_and_removal_still_works(
+        self, outstation, tmp_path
+    ):
+        written = CaptureFile(tmp_path / "master.pcap")
+        service = Service(capture=written)
+        # A second outstation of its own: one session serves one connection.
+        simulation = der.build(load.resolve(for_reference_der(), Composition()))
+        second = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await second.start()
+        try:
+            await _add(service, outstation)
+            answer = await service.handle(
+                {
+                    "op": "add",
+                    "params": {
+                        "name": "bench",
+                        "host": "127.0.0.1",
+                        "port": second.port,
+                        "manual": True,
+                    },
+                }
+            )
+            assert answer["ok"], answer
+            await service.handle({"op": "scan", "outstation": "lab", "params": {"kind": "class1"}})
+            written._file.close()  # the disk fails under an open file
+            await service.handle({"op": "scan", "outstation": "lab", "params": {"kind": "class1"}})
+
+            listeners = [len(service.master[name].trace.listeners) for name in ("lab", "bench")]
+            assert listeners == [1, 1], "only the console's listener is left on each trace"
+            removed = await service.handle({"op": "remove", "outstation": "lab"})
+            assert removed["ok"], removed
+        finally:
+            await service.close()
+            await second.stop()
 
 
 class TestTheCommandLine:
