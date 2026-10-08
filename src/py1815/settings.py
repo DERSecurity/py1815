@@ -24,13 +24,13 @@ class ConfigError(ValueError):
     """A configuration that cannot be used. The message says where and why."""
 
 
-def seconds(value: Any, where: str, *, minimum: float = 0.0) -> float:
-    """Return a number of seconds greater than ``minimum``."""
+def seconds(value: Any, where: str, *, minimum: float = 0.0, unit: str = "seconds") -> float:
+    """Return a number greater than ``minimum``, of seconds unless ``unit`` says otherwise."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ConfigError(f"{where} must be a number of seconds")
-    # JSON such as 1e309 decodes to infinity, which is not a usable interval.
+        raise ConfigError(f"{where} must be a number of {unit}")
+    # JSON such as 1e309 decodes to infinity, which is not a usable value.
     if not math.isfinite(value):
-        raise ConfigError(f"{where} must be a finite number of seconds")
+        raise ConfigError(f"{where} must be a finite number of {unit}")
     if not value > minimum:
         raise ConfigError(f"{where} must be greater than {minimum:g}")
     return float(value)

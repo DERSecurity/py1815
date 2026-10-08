@@ -258,6 +258,14 @@ class Capture:
         self._packets.append((at, packet))
 
     @property
+    def generation(self) -> int:
+        """How many times the capture has started a new file. Always 0 in memory."""
+        return 0
+
+    def boundary(self) -> None:
+        """Mark a point where a new file may start. Does nothing in memory."""
+
+    @property
     def packets(self) -> int:
         """The number of packets added."""
         return len(self._packets)
@@ -272,29 +280,112 @@ class Capture:
         return len(self._packets)
 
 
+def rotated(path: str | pathlib.Path, number: int) -> pathlib.Path:
+    """Return the name of an older capture file: ``master.pcap`` becomes ``master.1.pcap``."""
+    path = pathlib.Path(path)
+    return path.with_name(f"{path.stem}.{number}{path.suffix}")
+
+
 class CaptureFile(Capture):
     """A capture written to a file as each packet is added.
 
     Each packet is flushed as it is written, so a process that is killed
     leaves a file that holds everything up to that point. Nothing is kept in
     memory.
+
+    With ``max_bytes``, the file is rotated so a capture that runs for days
+    has a bounded size on disk. Once the current file reaches ``max_bytes``,
+    the next :meth:`boundary` renames it to ``<stem>.1<suffix>`` (shifting
+    older files up by one, and deleting any beyond ``keep``) and starts a new
+    file at ``path``. Every file is a complete pcap file. Rotation happens
+    only at a boundary, so a writer that marks one before each TCP segment
+    group never has a handshake split across two files.
     """
 
-    def __init__(self, path: str | pathlib.Path, *, start: float = DEFAULT_START) -> None:
-        """Create or truncate ``path`` and write the global header. Raises ``OSError``."""
+    def __init__(
+        self,
+        path: str | pathlib.Path,
+        *,
+        start: float = DEFAULT_START,
+        max_bytes: int | None = None,
+        keep: int = 0,
+    ) -> None:
+        """Create or truncate ``path`` and write the global header. Raises ``OSError``.
+
+        Args:
+            path: The file to write.
+            start: Where the capture's own clock starts.
+            max_bytes: Start a new file at the next boundary once the current
+                one is this large. None never rotates.
+            keep: How many older files to keep after rotation. 0 keeps none.
+        """
         super().__init__(start=start)
+        if max_bytes is not None and max_bytes < 1:
+            raise ValueError(f"max_bytes is {max_bytes}; it must be at least 1")
+        if keep < 0:
+            raise ValueError(f"keep is {keep}; it cannot be negative")
         self.path = pathlib.Path(path)
-        self._file: BinaryIO | None = self.path.open("wb")
+        self.max_bytes = max_bytes
+        self.keep = keep
         self._count = 0
+        self._generation = 0
+        self._file: BinaryIO | None = None
+        self._open()
+
+    def _open(self) -> None:
+        self._file = self.path.open("wb")
         self._file.write(global_header())
         self._file.flush()
+        self._size = len(global_header())
+        self._in_file = 0
 
     def _keep(self, at: int, packet: bytes) -> None:
         if self._file is None:
             raise ValueError(f"the capture file {self.path} is closed")
-        self._file.write(record(at, packet))
+        written = record(at, packet)
+        self._file.write(written)
         self._file.flush()
+        self._size += len(written)
+        self._in_file += 1
         self._count += 1
+
+    @property
+    def generation(self) -> int:
+        """How many times this capture has started a new file."""
+        return self._generation
+
+    @property
+    def size(self) -> int:
+        """The size of the current file in octets."""
+        return self._size
+
+    def boundary(self) -> None:
+        """Start a new file if the current one has reached ``max_bytes``.
+
+        Raises ``OSError`` if a file cannot be renamed or created.
+        """
+        if (
+            self._file is None
+            or self.max_bytes is None
+            or self._size < self.max_bytes
+            or self._in_file == 0
+        ):
+            return
+        self._file.close()
+        self._file = None
+        for number in range(self.keep - 1, 0, -1):
+            older = rotated(self.path, number)
+            if older.exists():
+                older.replace(rotated(self.path, number + 1))
+        self.path.replace(rotated(self.path, 1))
+        # Remove older files beyond keep: with keep 0 the file just renamed,
+        # and any left by an earlier run that kept more.
+        number = self.keep + 1
+        while rotated(self.path, number).exists():
+            rotated(self.path, number).unlink()
+            number += 1
+        self._open()
+        self._generation += 1
 
     @property
     def packets(self) -> int:
@@ -332,4 +423,5 @@ __all__ = [
     "ipv4",
     "microseconds",
     "record",
+    "rotated",
 ]

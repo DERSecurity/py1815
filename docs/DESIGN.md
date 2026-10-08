@@ -1315,7 +1315,25 @@ connection carries on: the listener that writes the file runs inside the receive
 and a full disk is not a reason to drop an outstation.
 *Trade-off:* base64 is a third larger than the file, and the service holds the file in
 memory while it answers; the file named on the command line is emptied when the master
-starts and grows for as long as it runs.
+starts.
+
+**D89 -- A master that runs for days has bounded memory, rotated files and an audit log.**
+Every buffer the master keeps has a fixed limit. A subscriber that falls behind is not
+dropped, which used to leave a console showing "Service running" while it received
+nothing: its waiting updates are replaced by one `lost` update that says how many were
+dropped, and the console reloads. An event stream that has not accepted a write for 60
+seconds is closed, so the browser opens a new one. The capture file and an optional log
+file rotate by size and keep a set number of older files. A capture rotates only at a
+point the recorder marks between frames, and each connection open at that point starts
+again with a handshake in the new file, so every file reads on its own. The log records
+what the master was started with, each connection made and lost, and every command sent
+to an outstation with what was asked and what came of it; a command is recognized by the
+same check that refuses it without `--allow-control`, so a new commanding operation is
+logged without being listed. An outstation that stays unreachable is logged once when the
+retries begin and once an hour after.
+*Trade-off:* the master keeps no history of measurements, only of traffic; a connection
+cut by a rotation has no FIN in the old file; a subscriber told `lost` has to read
+everything again.
 
 ## Layering
 

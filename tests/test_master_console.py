@@ -680,6 +680,19 @@ class TestCommanding:
         )
 
 
+class TestStayingCurrent:
+    @pytest.mark.asyncio
+    async def test_missed_updates_make_the_console_reload(self, console):
+        page = console.page
+        await page.evaluate("state.frames = []")
+        console.service.publish({"event": "lost", "dropped": 12345})
+        await console.tab("log")
+        await page.wait_for(
+            "document.querySelector('#log').textContent.includes('Missed 12345 update(s)')"
+        )
+        await page.wait_for("state.frames.length > 0")
+
+
 class TestEventsAndTraffic:
     @pytest.mark.asyncio
     async def test_events_are_listed_as_they_arrive(self, console):

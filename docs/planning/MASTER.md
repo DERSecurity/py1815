@@ -569,7 +569,9 @@ done means.
    Traffic tab saves it; `--capture FILE` on `console` and `serve`, and
    `capture` in the configuration, write every frame to a file as it crosses
    the wire (D88). The parsers job reads a capture this master wrote, with
-   tshark and Suricata. *Left:* nothing. That job's first run is in CI:
+   tshark and Suricata. A master left running for days keeps bounded
+   memory, rotates the capture and an optional log file by size, and logs
+   every command it sends (D89). *Left:* nothing. That job's first run is in CI:
    Suricata 7.0.3 read the master's capture locally with no objection, and
    no tshark was at hand.
 8. **Interoperability.** The independent outstations in CI. *Done when* both

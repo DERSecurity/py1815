@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib.metadata
 import logging
+import logging.handlers
 import os
 import pathlib
 import secrets
@@ -27,11 +29,13 @@ from typing import Any
 
 from py1815.master.api import DEFAULT_RECONNECT
 from py1815.master.capture import CaptureFile
-from py1815.master.config import ConfigError, MasterConfig, read
+from py1815.master.config import LOG_LEVELS, MEGABYTE, ConfigError, MasterConfig, read
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
 from py1815.profile import der, load
 from py1815.profile.model import Composition, MapError, PointMap
 from py1815.server import OutstationServer
+
+logger = logging.getLogger(__name__)
 
 DEMO_NAME = "simulated-der"
 
@@ -145,7 +149,19 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
         document = read(args.config)
         # Report a mistake in the file as the file's, before flags are applied.
         MasterConfig.from_mapping(document)
-    for key in ("allow_control", "bind", "tables", "connect_wait", "capture"):
+    for key in (
+        "allow_control",
+        "bind",
+        "tables",
+        "connect_wait",
+        "capture",
+        "capture_max_mb",
+        "capture_keep",
+        "log_file",
+        "log_max_mb",
+        "log_keep",
+        "log_level",
+    ):
         value = getattr(args, key, None)
         if value is not None:
             document[key] = value
@@ -213,7 +229,11 @@ def _service(config: MasterConfig) -> Service | None:
     capture = None
     if config.capture is not None:
         try:
-            capture = CaptureFile(config.capture)
+            capture = CaptureFile(
+                config.capture,
+                max_bytes=round(config.capture_max_mb * MEGABYTE),
+                keep=config.capture_keep,
+            )
         except OSError as error:
             print(f"cannot write the capture file: {error}", file=sys.stderr)
             return None
@@ -349,6 +369,46 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         metavar="FILE",
         help="write every frame sent and received to this pcap file as it crosses the "
         "wire (default: no file)",
+    )
+    parser.add_argument(
+        "--capture-max-mb",
+        type=float,
+        default=None,
+        metavar="MB",
+        help="start a new capture file once the current one reaches this size (default: 100)",
+    )
+    parser.add_argument(
+        "--capture-keep",
+        type=int,
+        default=None,
+        metavar="FILES",
+        help="older capture files to keep after rotation (default: 10)",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        metavar="FILE",
+        help="also write the log to this file, rotated by size (default: terminal only)",
+    )
+    parser.add_argument(
+        "--log-max-mb",
+        type=float,
+        default=None,
+        metavar="MB",
+        help="start a new log file once the current one reaches this size (default: 10)",
+    )
+    parser.add_argument(
+        "--log-keep",
+        type=int,
+        default=None,
+        metavar="FILES",
+        help="older log files to keep after rotation (default: 5)",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=LOG_LEVELS,
+        default=None,
+        help="the lowest level written to the log file (default: info)",
     )
     parser.add_argument(
         "--outstation",
@@ -497,17 +557,85 @@ def _interrupt(_signal: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
+#: How each log record is written, to the terminal and to the file.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging(config: MasterConfig, *, verbose: bool) -> logging.Handler | None:
+    """Set up the root logger: the terminal, and the rotating log file if configured.
+
+    The terminal shows warnings, or everything from INFO with ``verbose``.
+    The file gets ``log_level`` and above. Return the file's handler, or None
+    when there is no file. Raises ``OSError`` if the file cannot be opened.
+    """
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    terminal = logging.StreamHandler()
+    terminal.setLevel(logging.INFO if verbose else logging.WARNING)
+    terminal.setFormatter(logging.Formatter(LOG_FORMAT))
+    root.addHandler(terminal)
+    levels = [terminal.level]
+    file_handler: logging.Handler | None = None
+    if config.log_file is not None:
+        file_handler = logging.handlers.RotatingFileHandler(
+            config.log_file,
+            maxBytes=round(config.log_max_mb * MEGABYTE),
+            backupCount=config.log_keep,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(config.log_level.upper())
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        root.addHandler(file_handler)
+        levels.append(file_handler.level)
+    root.setLevel(min(levels))
+    return file_handler
+
+
+def _version() -> str:
+    try:
+        return importlib.metadata.version("py1815")
+    except importlib.metadata.PackageNotFoundError:
+        return "(not installed)"
+
+
+def _log_start(config: MasterConfig, command: str) -> None:
+    """Write what the master was started with, so a log file says what it covers."""
+    logger.info(
+        "dnp3 master: py1815 %s started (%s), commanding %s, capture %s",
+        _version(),
+        command,
+        "on" if config.allow_control else "off",
+        config.capture or "none",
+    )
+    for outstation in config.outstations:
+        logger.info(
+            "dnp3 master: outstation %s at %s:%d, link %d to %d",
+            outstation.name,
+            outstation.host,
+            outstation.port,
+            outstation.master_address,
+            outstation.outstation_address,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
     try:
         config = configuration(args)
     except ConfigError as error:
         print(str(error), file=sys.stderr)
         return 2
+    if args.command != "config":
+        try:
+            log_file = configure_logging(config, verbose=args.verbose)
+        except OSError as error:
+            print(f"cannot write the log file: {error}", file=sys.stderr)
+            return 2
+        if log_file is not None:
+            print(f"  logging to {config.log_file}", flush=True)
+        _log_start(config, args.command)
     if args.command == "config":
         if args.out is None:
             sys.stdout.write(config.render())

@@ -233,6 +233,16 @@ data is a JSON object:
 | `unsolicited` | An unsolicited response arrives | `outstation`, `indications`, `objects` |
 | `connection` | A connection is made or ends | `outstation`, `connected` |
 | `outstations` | An outstation is added or removed | |
+| `lost` | This subscriber fell 10,000 updates behind, and the waiting updates were dropped | `dropped`: how many |
+
+A subscriber that receives `lost` should read the state it shows again, for
+example with `status`, `values`, `events` and `trace`. It stays subscribed.
+An event stream that has not accepted a write for 60 seconds is closed; open a
+new one.
+
+Every operation that commands an outstation is written to the master's log at
+INFO with the points and values asked for and the result, and one refused for
+lack of `--allow-control` at WARNING.
 
 ```bash
 curl -N http://127.0.0.1:8815/events

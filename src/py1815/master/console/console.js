@@ -871,7 +871,18 @@ function scheduleRender() {
   });
 }
 
+// Reload what the page shows for the selected outstation, after updates were missed.
+async function resynchronize(reason) {
+  note(reason, true);
+  await refreshStatus();
+  if (state.selected) await select(state.selected);
+}
+
 function onServiceEvent(event) {
+  if (event.event === "lost") {
+    resynchronize(`Missed ${event.dropped} update(s) while the page was behind; reloaded`);
+    return;
+  }
   if (event.event === "outstations" || event.event === "connection") {
     if (event.event === "connection") {
       note(`${event.outstation}: ${event.connected ? "connected" : "connection ended"}`, !event.connected);
@@ -902,7 +913,15 @@ function onServiceEvent(event) {
 function listen() {
   const chip = $("#service-state");
   const source = new EventSource(TOKEN ? `events?token=${encodeURIComponent(TOKEN)}` : "events");
-  source.onopen = () => { chip.textContent = "Service running"; chip.className = "chip good"; refreshStatus(); };
+  let opened = false;
+  source.onopen = () => {
+    chip.textContent = "Service running";
+    chip.className = "chip good";
+    // A stream opened again after a break may have missed updates.
+    if (opened) resynchronize("Reconnected to the service; reloaded");
+    else refreshStatus();
+    opened = true;
+  };
   source.onerror = () => { chip.textContent = "Service unreachable"; chip.className = "chip bad"; };
   source.onmessage = (message) => onServiceEvent(JSON.parse(message.data));
 }

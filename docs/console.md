@@ -231,6 +231,13 @@ In the Points tab, each row of the binary and analog output tables has an
 Without `--allow-control` the form and the buttons are greyed out, and the
 service behind the page refuses the operations whoever asks.
 
+### Staying current
+
+The console keeps the last 600 frames, 1,000 events and 300 log lines. If it
+falls behind the service, for example in a laptop that slept, or loses the
+connection to it, it reloads the selected outstation and says so in the Log
+tab. See [Running for days](master.md#running-for-days).
+
 ### Traffic
 
 Each frame with its time, its direction and one line saying what it is:

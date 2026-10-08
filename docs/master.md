@@ -353,6 +353,56 @@ written.close()
 The console's Traffic tab has a Save capture button, and the service a
 `capture` operation, that return what the trace holds.
 
+## Running for days
+
+The master is meant to stay connected for as long as it is left running. Every
+buffer it keeps in memory has a fixed limit, so its memory does not grow with
+time, and what is written to disk is rotated by size.
+
+| Kept | Limit | When full |
+|---|---|---|
+| The trace (frames), per outstation | 5,000 frames | The oldest is dropped |
+| The event store, per outstation | 10,000 events | The oldest is dropped |
+| Unsolicited responses, per outstation | 1,000 | The oldest is dropped |
+| The last value of each point | One per point | Replaced |
+| Updates waiting for a subscriber (the console, or a script on the line service) | 10,000 | Replaced by one `lost` update that says how many were dropped |
+| The console's frames, events and log, in the browser | 600, 1,000 and 300 | The oldest is dropped |
+
+A console that falls behind, for example in a laptop that slept, is sent a
+`lost` update and reloads what it shows. An event stream that has not accepted
+a write for 60 seconds is closed, and the browser opens a new one and reloads.
+
+For a record that outlives the trace, write it to disk:
+
+- `--capture FILE` writes every frame to a pcap file. The file is rotated at
+  `--capture-max-mb` megabytes (100 by default), keeping `--capture-keep` older
+  files (10 by default) named `FILE.1`, `FILE.2` and so on before the extension:
+  `master.pcap`, `master.1.pcap`. Each file opens with its connections' handshakes,
+  so it reads on its own.
+- `--log-file FILE` writes the log to a file, rotated at `--log-max-mb` megabytes
+  (10 by default), keeping `--log-keep` older files (5 by default). The file gets
+  `--log-level` and above (`info` by default); the terminal shows warnings only,
+  unless `--verbose`.
+
+The log records, at INFO:
+
+- What the master was started with, and each outstation's address.
+- Each connection made, lost and made again.
+- Every command sent to an outstation (operate, the time, the restart
+  indication, freeze, restart, and any request that is not a read), with the
+  points and values asked for and whether the outstation accepted. A command
+  refused because the service was not started with `--allow-control` is logged
+  as a warning.
+
+An outstation that stays unreachable is logged once when the retries begin and
+then once an hour, with the number of attempts, instead of at every attempt.
+Each attempt is still logged at DEBUG.
+
+The master does not keep a history of measurements: it is a test tool, not a
+historian. Use the capture file for a complete record of what was exchanged.
+
+All of these settings are also in the [configuration file](master-config.md).
+
 ## From a browser, or from another process
 
 The same master can be driven without writing Python:
