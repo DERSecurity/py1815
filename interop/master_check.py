@@ -47,13 +47,21 @@ COMM_LOST = 0x04
 STARTUP = ["disable_unsolicited", "clear_restart", "write_time", "integrity", "enable_unsolicited"]
 
 
+#: How many checks a complete run makes. A run that makes fewer stopped part
+#: way, for example after an early return in a section, and fails even if
+#: nothing it checked failed. Change this when a check is added or removed.
+EXPECTED_CHECKS = 68
+
+
 class Checks:
-    """Runs named checks, prints each result, and counts the failures."""
+    """Runs named checks, prints each result, and counts the checks and failures."""
 
     def __init__(self) -> None:
+        self.ran = 0
         self.failed = 0
 
     def check(self, name: str, passed: bool, detail: object = "") -> None:
+        self.ran += 1
         if passed:
             print(f"ok    {name}", flush=True)
         else:
@@ -422,10 +430,13 @@ async def run(args: argparse.Namespace) -> int:
         await check_event_poll(checks, lab, seen)
         counts = dict(lab.counts)
     checks.equal("no request timed out or was abandoned", set(counts) - {"complete", "sent"}, set())
+    if checks.ran != EXPECTED_CHECKS:
+        print(f"ran {checks.ran} checks, expected {EXPECTED_CHECKS}", flush=True)
+        return 1
     if checks.failed:
         print(f"{checks.failed} check(s) failed", flush=True)
         return 1
-    print("every check passed", flush=True)
+    print(f"every check passed ({checks.ran})", flush=True)
     return 0
 
 
