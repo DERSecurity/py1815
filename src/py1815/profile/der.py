@@ -28,6 +28,7 @@ import math
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from py1815.control import CommandStatus
 from py1815.profile import curves
@@ -814,8 +815,12 @@ class Simulation:
         self.outstation.poll()
 
 
-def build(point_map: PointMap, *, seed: int = 0) -> Simulation:
-    """A ready simulation: the reference DER bound to an outstation for *point_map*."""
+def build(point_map: PointMap, *, seed: int = 0, **options: Any) -> Simulation:
+    """Build a simulation: the reference DER bound to an outstation for *point_map*.
+
+    ``options`` are passed to :class:`~py1815.profile.outstation.DerOutstation`,
+    for example ``read_only=True`` or ``event_capacity=500``.
+    """
     der = ReferenceDer(seed=seed)
-    outstation = DerOutstation(point_map, der.bind(point_map))
+    outstation = DerOutstation(point_map, der.bind(point_map), **options)
     return Simulation(der, outstation)

@@ -28,6 +28,12 @@ consulted.
 
 ::: py1815.profile.outstation
 
+## Configuration
+
+::: py1815.profile.config
+
+::: py1815.settings
+
 ## Coverage
 
 ::: py1815.profile.coverage

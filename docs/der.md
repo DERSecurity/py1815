@@ -27,10 +27,18 @@ test or a demonstration has values that move and controls that answer. It is
 not a model of a DER, and it will not become one: see
 [What is out of scope](#what-is-out-of-scope).
 
-`py1815-der points` lists every point it serves. `py1815-der run --help` has
-the link addresses, the bind address, and options for resolving equipment
-blocks (`--inverters 2`, and so on). `py1815-der run --unsolicited` serves it
-with unsolicited responses on, for a master that enables them.
+`py1815-der points` lists every point it serves. `py1815-der run --unsolicited`
+serves it with unsolicited responses on, for a master that enables them.
+
+Every setting (addresses, the bind address, equipment counts, event policy,
+timeouts) can be kept in a JSON file, and most also have a flag:
+
+```bash
+py1815-der config --out der.json     # print every setting with its default
+py1815-der run --config der.json     # run with the edited file
+```
+
+[Configuring the outstation](der-config.md) lists them all.
 
 ## Where the tables come from
 

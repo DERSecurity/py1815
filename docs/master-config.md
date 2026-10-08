@@ -163,6 +163,9 @@ outstations[1].port must be a whole number from 1 to 65535
 outstations[2].name 'lab' is used more than once
 ```
 
+The outstation has the same arrangement. See
+[Configuring the outstation](der-config.md).
+
 ## From Python
 
 ```python
