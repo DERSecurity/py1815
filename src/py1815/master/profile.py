@@ -584,7 +584,8 @@ class DerProfile:
             raise ValueError(f"{where} takes a number, not {value!r}")
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: a JSON integer such as 10**1000 has no float.
             raise ValueError(f"{where} takes a number, not {value!r}") from None
         raw = point.to_wire(number)
         if not math.isfinite(raw):
@@ -894,8 +895,10 @@ def _whole(value: Any, what: str) -> int:
         raise ValueError(f"{what} is a number, not {value!r}")
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError(f"{what} is a number, not {value!r}") from None
+    if not math.isfinite(number):
+        raise ValueError(f"{what} is a finite number, not {value!r}")
     if not number.is_integer():
         raise ValueError(f"{what} travels as a whole number, and {value!r} is not one")
     return int(number)
@@ -990,7 +993,7 @@ def write_curve_plan(
         raise ValueError(f"a curve has at most {curves.MAX_POINTS} points, not {len(points)}")
     pairs: list[tuple[int, int]] = []
     for position, pair in enumerate(points, start=1):
-        if isinstance(pair, (str, bytes)) or len(pair) != 2:
+        if not isinstance(pair, Sequence) or isinstance(pair, (str, bytes)) or len(pair) != 2:
             raise ValueError(f"point {position} of the curve is an X and a Y")
         pairs.append(
             (_whole(pair[0], f"X of point {position}"), _whole(pair[1], f"Y of point {position}"))
@@ -1132,6 +1135,9 @@ def read_device_profile(text: str) -> tuple[Declared, ...]:
                 try:
                     deadband = float(_text(data, "deadband") or "")
                 except ValueError:
+                    deadband = None
+                # NaN and infinity are not deadbands, and are not valid JSON.
+                if deadband is not None and not math.isfinite(deadband):
                     deadband = None
             declared.append(
                 Declared(

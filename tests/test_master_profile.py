@@ -194,7 +194,7 @@ class TestScaling:
         with pytest.raises(ValueError, match="outside 0 to 100"):
             DerProfile(point_map).transmitted(limit, value)
 
-    @pytest.mark.parametrize("value", [True, "fast", None, float("nan")])
+    @pytest.mark.parametrize("value", [True, "fast", None, float("nan"), 10**1000])
     def test_an_analog_output_takes_a_finite_number_only(self, point_map, value):
         with pytest.raises(ValueError, match="takes a"):
             DerProfile(point_map).transmitted(point_map.point(Kind.AO, 87), value)
@@ -488,6 +488,10 @@ class TestCurves:
             ({"type": "volt-var"}, "the curve type is a number"),
             ({"number": 0}, "outside 1 to"),
             ({"x_units": 999}, "outside 0 to 255"),
+            ({"points": [1]}, "point 1 of the curve is an X and a Y"),
+            ({"points": [{"x": 1, "y": 2}]}, "point 1 of the curve is an X and a Y"),
+            ({"points": [(10**1000, 2)]}, "X of point 1 is a number"),
+            ({"points": [(float("inf"), 2)]}, "X of point 1 is a finite number"),
         ],
     )
     def test_a_curve_that_cannot_be_written_is_refused_before_anything_is_sent(
@@ -547,6 +551,18 @@ class TestTheDeviceProfile:
         assert declared[(PointType.COUNTER, 0)].event_class == 0
         power = declared[(PointType.ANALOG_INPUT, 7)]
         assert (power.event_class, power.class_0, power.deadband) == (2, False, 50.0)
+
+    @pytest.mark.parametrize("written", ["NaN", "inf", "-Infinity"])
+    def test_a_deadband_that_is_not_finite_is_read_as_none(self, written):
+        text = f"""<?xml version="1.0"?>
+<DNP3DeviceProfileDocument xmlns="http://www.dnp.org/DNP3/DeviceProfile">
+ <referenceDevice><dataPointsList><analogInputPoints><dataPoints>
+   <analogInput><index>7</index><name>Power</name><changeEventClass>two</changeEventClass>
+    <dnpData><deadband>{written}</deadband></dnpData></analogInput>
+ </dataPoints></analogInputPoints></dataPointsList></referenceDevice>
+</DNP3DeviceProfileDocument>"""
+        (power,) = read_device_profile(text)
+        assert power.deadband is None
 
     @pytest.mark.parametrize(
         ("text", "says"),

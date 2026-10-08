@@ -187,12 +187,15 @@ function derFunctions() {
   const result = der.functions;
   if (!result) return el("p", { class: "hint", text: der.loading ? "Reading…" : "" });
   if (result.error) return el("p", { class: "hint", text: result.error });
-  const supported = result.functions.filter((fn) => fn.supported);
-  const other = result.functions.filter((fn) => !fn.supported);
+  const supported = result.functions.filter((fn) => fn.supported === true);
+  const other = result.functions.filter((fn) => fn.supported === false);
+  // null: the outstation did not report its supports point, which is not a "no".
+  const unknown = result.functions.filter((fn) => fn.supported !== true && fn.supported !== false);
   return [
     state.allowControl ? null : el("p", { class: "hint", text: "Commanding is off: the switches and settings are shown, and cannot be changed. Start the console with --allow-control to change them." }),
     supported.length ? supported.map(derFunctionRow) : el("p", { class: "hint", text: "The outstation reports no function as supported." }),
     other.length ? el("p", { class: "hint der-unsupported" }, "Not supported: ", other.map((fn) => fn.name).join(", ")) : null,
+    unknown.length ? el("p", { class: "hint der-unknown" }, "Support not reported: ", unknown.map((fn) => fn.name).join(", ")) : null,
   ];
 }
 
