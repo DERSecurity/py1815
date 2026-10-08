@@ -28,65 +28,23 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
-import json
 import pathlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from py1815 import settings
 from py1815.master import requests
 from py1815.master.api import DEFAULT_CONNECT_TIMEOUT, DEFAULT_RECONNECT
 from py1815.master.association import DEFAULT_RESPONSE_TIMEOUT
 from py1815.master.tasks import WRITING, Tasks
+from py1815.settings import ConfigError, read
 
 #: ``repeat.outputs`` value that means "as often as the integrity poll".
 WITH_INTEGRITY = "with_integrity"
 
 #: The scans that can be repeated, in the order they are written.
 REPEATED = ("integrity", "events", requests.OUTPUTS)
-
-_MAX_ADDRESS = 65519
-
-
-class ConfigError(ValueError):
-    """A configuration that cannot be used. The message says where and why."""
-
-
-def _number(value: Any, where: str, *, minimum: float = 0.0) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ConfigError(f"{where} must be a number of seconds")
-    if not value > minimum:
-        raise ConfigError(f"{where} must be greater than {minimum:g}")
-    return float(value)
-
-
-def _integer(value: Any, where: str, low: int, high: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
-        raise ConfigError(f"{where} must be a whole number from {low} to {high}")
-    return value
-
-
-def _boolean(value: Any, where: str) -> bool:
-    if not isinstance(value, bool):
-        raise ConfigError(f"{where} must be true or false")
-    return value
-
-
-def _text(value: Any, where: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ConfigError(f"{where} must be a non-empty string")
-    return value
-
-
-def _object(value: Any, where: str, allowed: Sequence[str]) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ConfigError(f"{where} must be an object")
-    for key in value:
-        if key not in allowed:
-            raise ConfigError(
-                f"{where}.{key} is not a setting; expected one of {', '.join(allowed)}"
-            )
-    return value
 
 
 @dataclass(frozen=True)
@@ -135,22 +93,22 @@ class OutstationConfig:
         current value.
         """
         allowed = [each.name for each in fields(self)]
-        _object(given, where, allowed)
+        settings.section(given, where, allowed)
         values: dict[str, Any] = {each.name: getattr(self, each.name) for each in fields(self)}
         for key, value in given.items():
             at = f"{where}.{key}"
             if key in ("name", "host"):
-                values[key] = _text(value, at)
+                values[key] = settings.text(value, at)
             elif key == "port":
-                values[key] = _integer(value, at, 1, 65535)
+                values[key] = settings.integer(value, at, 1, 65535)
             elif key in ("outstation_address", "master_address"):
-                values[key] = _integer(value, at, 0, _MAX_ADDRESS)
+                values[key] = settings.integer(value, at, 0, settings.MAX_ADDRESS)
             elif key in self._SECONDS:
-                values[key] = _number(value, at)
+                values[key] = settings.seconds(value, at)
             elif key in self._BOOLEANS:
-                values[key] = _boolean(value, at)
+                values[key] = settings.boolean(value, at)
             elif key == "reconnect":
-                values[key] = None if value is None else _number(value, at)
+                values[key] = None if value is None else settings.seconds(value, at)
             elif key == "tasks":
                 if not isinstance(value, Mapping):
                     raise ConfigError(f"{at} must be an object")
@@ -166,11 +124,11 @@ class OutstationConfig:
 
     def _repeat(self, given: Any, where: str) -> dict[str, float | str | None]:
         merged = dict(self.repeat)
-        for kind, value in _object(given, where, REPEATED).items():
+        for kind, value in settings.section(given, where, REPEATED).items():
             if value is None or (kind == requests.OUTPUTS and value == WITH_INTEGRITY):
                 merged[kind] = value
             else:
-                merged[kind] = _number(value, f"{where}.{kind}")
+                merged[kind] = settings.seconds(value, f"{where}.{kind}")
         return merged
 
     def output_interval(self) -> float | None:
@@ -250,13 +208,13 @@ class MasterConfig:
         Raises :class:`ConfigError` for an unknown setting, a value of the
         wrong type, an outstation with no name or host, or a name used twice.
         """
-        _object(given, "configuration", _TOP_LEVEL)
+        settings.section(given, "configuration", _TOP_LEVEL)
         values: dict[str, Any] = {}
         if "allow_control" in given:
-            values["allow_control"] = _boolean(given["allow_control"], "allow_control")
+            values["allow_control"] = settings.boolean(given["allow_control"], "allow_control")
         for key in ("bind", "tables"):
             if given.get(key) is not None:
-                values[key] = _text(given[key], key)
+                values[key] = settings.text(given[key], key)
         if "connect_wait" in given:
             wait = given["connect_wait"]
             if isinstance(wait, bool) or not isinstance(wait, (int, float)) or wait < 0:
@@ -321,22 +279,7 @@ class MasterConfig:
 
     def render(self) -> str:
         """Return the complete configuration as formatted JSON."""
-        return json.dumps(self.describe(), indent=2) + "\n"
-
-
-def read(path: str | pathlib.Path) -> dict[str, Any]:
-    """Read a JSON configuration file and return the decoded document."""
-    try:
-        text = pathlib.Path(path).read_text(encoding="utf-8")
-    except OSError as error:
-        raise ConfigError(f"{path}: {error.strerror or error}") from None
-    try:
-        document = json.loads(text)
-    except ValueError as error:
-        raise ConfigError(f"{path} is not valid JSON: {error}") from None
-    if not isinstance(document, dict):
-        raise ConfigError(f"{path} must hold a JSON object")
-    return document
+        return settings.render(self.describe())
 
 
 __all__ = ["REPEATED", "WITH_INTEGRITY", "ConfigError", "MasterConfig", "OutstationConfig", "read"]

@@ -260,4 +260,4 @@ class TestArguments:
         args = cli._parser().parse_args(["points"])
         args.meters = -1
         assert cli._load(args) is None
-        assert "cannot be negative" in capsys.readouterr().err
+        assert "composition.meters must be a whole number" in capsys.readouterr().err

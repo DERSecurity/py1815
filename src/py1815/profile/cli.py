@@ -4,6 +4,10 @@
     py1815-der run               serve a simulated DER as an IEEE 1815.2 outstation
     py1815-der poll              ask a running outstation for everything, once
     py1815-der profile           write the outstation's DNP3 Device Profile document
+    py1815-der config            print the complete configuration as JSON, for editing
+
+``run``, ``points`` and ``profile`` take their settings from ``--config FILE``,
+from flags, or both. A flag overrides the file. See :mod:`py1815.profile.config`.
 
 The tables are IEEE's and are not part of this package (D36). ``tables fetch``
 downloads them from IEEE to the machine it runs on and reads them into the
@@ -29,11 +33,14 @@ import urllib.error
 import urllib.request
 import zipfile
 from collections.abc import Sequence
+from typing import Any
 
 from py1815.control import CommandStatus
 from py1815.profile import der, device_profile, extract, load, probe
-from py1815.profile.model import Composition, Kind, MapError, PointMap
+from py1815.profile.config import DerConfig
+from py1815.profile.model import Kind, MapError, PointMap
 from py1815.server import DEFAULT_PORT, OutstationServer
+from py1815.settings import ConfigError, read
 
 logger = logging.getLogger("py1815.profile")
 
@@ -116,29 +123,114 @@ def _tables_build(args: argparse.Namespace) -> int:
     return _write_tables(args.workbook, args.out or load.default_tables())
 
 
-def _composition(args: argparse.Namespace) -> Composition:
-    return Composition(
-        meters=args.meters,
-        der_units=args.der_units,
-        inverters=args.inverters,
-        batteries=args.batteries,
-    )
+#: Flags that set a top-level setting of the same name.
+_TOP_LEVEL_FLAGS = (
+    "bind",
+    "outstation_address",
+    "master_address",
+    "unsolicited",
+    "read_only",
+    "level2",
+    "event_capacity",
+    "max_response",
+    "select_timeout",
+    "idle_timeout",
+)
+_COMPOSITION_FLAGS = ("meters", "der_units", "inverters", "batteries")
+_IDENTITY_FLAGS = ("vendor", "device", "hardware_version", "software_version", "author")
 
 
-def _load(args: argparse.Namespace) -> PointMap | None:
+def configuration(args: argparse.Namespace) -> DerConfig:
+    """Build the configuration from ``--config`` and the command-line flags.
+
+    The file is the base, and a flag that is given overrides it. A command
+    that does not have a flag leaves that setting as the file has it.
+
+    Raises :class:`~py1815.settings.ConfigError`.
+    """
+    document: dict[str, Any] = {}
+    if getattr(args, "config", None):
+        document = read(args.config)
+        # Report a mistake in the file as the file's, before flags are applied.
+        DerConfig.from_mapping(document)
+
+    def given(name: str) -> Any:
+        return getattr(args, name, None)
+
+    for name in _TOP_LEVEL_FLAGS:
+        if given(name) is not None:
+            document[name] = given(name)
+    if given("tables") is not None:
+        document["tables"] = str(given("tables"))
+    if given("any_master"):
+        document["master_address"] = None
+    for section, names in (("composition", _COMPOSITION_FLAGS), ("identity", _IDENTITY_FLAGS)):
+        chosen = {name: given(name) for name in names if given(name) is not None}
+        if chosen:
+            document[section] = {**(document.get(section) or {}), **chosen}
+    simulation = {name: given(name) for name in ("seed", "tick") if given(name) is not None}
+    if simulation:
+        document["simulation"] = {**(document.get("simulation") or {}), **simulation}
+    return DerConfig.from_mapping(document)
+
+
+def _configured(args: argparse.Namespace) -> DerConfig | None:
+    """Return the configuration, or None after printing why it cannot be used."""
     try:
-        return load.load(args.tables, _composition(args))
-    except (MapError, ValueError) as error:
-        # A composition refuses a count it cannot mean, and says which.
+        return configuration(args)
+    except ConfigError as error:
         print(str(error), file=sys.stderr)
         return None
 
 
+def _load_map(config: DerConfig) -> PointMap | None:
+    """Load the point map for the configured composition, or print why not."""
+    try:
+        return load.load(config.tables, config.composition)
+    except (MapError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return None
+
+
+def _load(args: argparse.Namespace) -> PointMap | None:
+    config = _configured(args)
+    return None if config is None else _load_map(config)
+
+
+def _build(config: DerConfig, point_map: PointMap) -> der.Simulation | None:
+    """Build the simulated DER, or print why the configuration does not fit it."""
+    try:
+        return der.build(point_map, seed=config.seed, **config.outstation_options())
+    except (MapError, ValueError) as error:
+        # For example an event policy that names a point this DER does not serve.
+        print(str(error), file=sys.stderr)
+        return None
+
+
+def _config(args: argparse.Namespace) -> int:
+    config = _configured(args)
+    if config is None:
+        return 2
+    if args.out is None:
+        sys.stdout.write(config.render())
+    else:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(config.render(), encoding="utf-8", newline="\n")
+        print(f"wrote {args.out}")
+    return 0
+
+
 def _points(args: argparse.Namespace) -> int:
-    point_map = _load(args)
+    config = _configured(args)
+    if config is None:
+        return 2
+    point_map = _load_map(config)
     if point_map is None:
         return 1
-    outstation = der.build(point_map, seed=args.seed).outstation
+    simulation = _build(config, point_map)
+    if simulation is None:
+        return 2
+    outstation = simulation.outstation
     if args.coverage:
         print(outstation.coverage().render())
         return 0
@@ -149,34 +241,30 @@ def _points(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _serve(args: argparse.Namespace, point_map: PointMap) -> None:
-    simulation = der.build(point_map, seed=args.seed)
+async def _serve(config: DerConfig, simulation: der.Simulation) -> None:
     outstation = simulation.outstation
-    session = outstation.session(
-        outstation_address=args.outstation_address,
-        master_address=_served_master(args),
-        unsolicited=args.unsolicited,
-    )
-    server = OutstationServer(session, bind=args.bind)
+    point_map = outstation.point_map
+    session = outstation.session(**config.session_options())
+    server = OutstationServer(session, bind=config.bind, idle_timeout=config.idle_timeout)
     await server.start()
     served = ", ".join(f"{len(outstation.served(kind))} {kind.value}" for kind in Kind)
+    master = "any" if config.master_address is None else config.master_address
     print(
         f"IEEE 1815.2 DER outstation (profile version {point_map.profile_version}) "
-        f"listening on {args.bind}\n"
-        f"  link address {args.outstation_address}, "
-        f"master {'any' if args.any_master else args.master_address}; "
+        f"listening on {config.bind}\n"
+        f"  link address {config.outstation_address}, master {master}; "
         f"serving {served}",
         flush=True,
     )
     try:
         last = time.monotonic()
         while True:
-            await asyncio.sleep(args.tick)
+            await asyncio.sleep(config.tick)
             now = time.monotonic()
             simulation.advance(now - last)
             last = now
-            # What the step just buffered is reported now, if a master has
-            # enabled its class, and not at the listener's next look.
+            # Report the events this step buffered now, if a master has
+            # enabled their class, instead of at the listener's next check.
             server.notify()
     finally:
         await server.stop()
@@ -187,9 +275,15 @@ def _interrupt(_signal: int, _frame: object) -> None:
 
 
 def _run(args: argparse.Namespace) -> int:
-    point_map = _load(args)
+    config = _configured(args)
+    if config is None:
+        return 2
+    point_map = _load_map(config)
     if point_map is None:
         return 1
+    simulation = _build(config, point_map)
+    if simulation is None:
+        return 2
     # A container's first process ignores a termination signal it has no
     # handler for, and `docker stop` would then wait out its grace period
     # before killing it. Handled, it stops the listener the way Ctrl-C does.
@@ -197,10 +291,15 @@ def _run(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, _interrupt)
     try:
         with contextlib.suppress(KeyboardInterrupt):
-            asyncio.run(_serve(args, point_map))
+            asyncio.run(_serve(config, simulation))
     except OSError as error:
-        print(f"cannot listen on {args.bind}: {error}", file=sys.stderr)
+        print(f"cannot listen on {config.bind}: {error}", file=sys.stderr)
         return 1
+    except ValueError as error:
+        # A setting the session refuses, such as a response size too small
+        # for one block of points.
+        print(str(error), file=sys.stderr)
+        return 2
     return 0
 
 
@@ -278,22 +377,29 @@ def _validate(document: str, schema: pathlib.Path) -> int:
 
 
 def _profile(args: argparse.Namespace) -> int:
-    point_map = _load(args)
+    config = _configured(args)
+    if config is None:
+        return 2
+    point_map = _load_map(config)
     if point_map is None:
         return 1
-    outstation = der.build(point_map, seed=args.seed).outstation
-    session = outstation.session(
-        outstation_address=args.outstation_address,
-        master_address=_served_master(args),
-        unsolicited=args.unsolicited,
-    )
-    host, _, port = args.bind.rpartition(":")
+    simulation = _build(config, point_map)
+    if simulation is None:
+        return 2
+    outstation = simulation.outstation
+    try:
+        session = outstation.session(**config.session_options())
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    host, _, port = config.bind.rpartition(":")
+    described = config.identity
     identity = device_profile.Identity(
-        vendor=args.vendor,
-        device=args.device,
-        hardware_version=args.hardware_version,
-        software_version=args.software_version,
-        author=args.author,
+        vendor=described.vendor,
+        device=described.device,
+        hardware_version=described.hardware_version,
+        software_version=described.software_version,
+        author=described.author,
         host=host or None,
         port=int(port) if port.isdigit() else None,
     )
@@ -339,6 +445,18 @@ def _interval(text: str) -> float:
 
 
 def _add_map_options(parser: argparse.ArgumentParser) -> None:
+    """Add ``--config`` and the options that choose the point map.
+
+    Each option defaults to None, meaning "not given", so that a flag
+    overrides the configuration file only when it is actually used.
+    """
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="FILE",
+        help="a JSON configuration file; flags given on the command line override it "
+        "(print a complete one with `py1815-der config`)",
+    )
     parser.add_argument(
         "--tables",
         type=pathlib.Path,
@@ -353,38 +471,108 @@ def _add_map_options(parser: argparse.ArgumentParser) -> None:
         ("batteries", "batteries"),
     ):
         parser.add_argument(
-            f"--{name}", type=_count, default=0, help=f"equipment blocks to resolve for {what}"
+            f"--{name}",
+            type=_count,
+            default=None,
+            help=f"number of {what} the DER has (default: 0)",
         )
-    parser.add_argument("--seed", type=int, default=0, help="seed for the simulation's noise")
+    parser.add_argument(
+        "--seed", type=int, default=None, help="seed for the simulation's noise (default: 0)"
+    )
 
 
-def _add_link_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--outstation-address", type=int, default=1024)
-    parser.add_argument("--master-address", type=int, default=1)
+def _add_link_options(parser: argparse.ArgumentParser, *, configured: bool = True) -> None:
+    """Add the link address options.
+
+    With ``configured`` the defaults come from the configuration. Without it,
+    for a command that has no configuration, they are 1024 and 1.
+    """
+    parser.add_argument(
+        "--outstation-address",
+        type=int,
+        default=None if configured else 1024,
+        help="the outstation's link address (default: 1024)",
+    )
+    parser.add_argument(
+        "--master-address",
+        type=int,
+        default=None if configured else 1,
+        help="the master's link address (default: 1)",
+    )
 
 
-def _add_any_master_option(parser: argparse.ArgumentParser) -> None:
+def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
+    """Add the options that describe how the outstation is served."""
+    _add_link_options(parser)
     parser.add_argument(
         "--any-master",
         action="store_true",
+        default=None,
         help="serve whichever master address speaks first on a connection, "
         "instead of --master-address; with no transport security, any peer "
         "that can reach the listener can then read and command",
     )
-
-
-def _served_master(args: argparse.Namespace) -> int | None:
-    """The master address the session is built for, or None for any."""
-    return None if args.any_master else args.master_address
-
-
-def _add_unsolicited_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--bind",
+        default=None,
+        help=f"host:port to listen on (default: 127.0.0.1:{DEFAULT_PORT}, this machine only)",
+    )
     parser.add_argument(
         "--unsolicited",
         action="store_true",
+        default=None,
         help="send unsolicited responses: announce a restart, and report the events "
         "of each class the master enables (default: report only when polled)",
     )
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        default=None,
+        help="refuse every control, so a master can read and cannot command",
+    )
+    parser.add_argument(
+        "--level2",
+        action="store_true",
+        default=None,
+        help="answer as a DNP3 Subset Level 2 outstation, without the profile's additions",
+    )
+    parser.add_argument(
+        "--event-capacity",
+        type=int,
+        default=None,
+        metavar="EVENTS",
+        help="events each class holds before the oldest is dropped (default: 2000)",
+    )
+    parser.add_argument(
+        "--max-response",
+        type=int,
+        default=None,
+        metavar="OCTETS",
+        help="largest response fragment to send (default: 2048)",
+    )
+    parser.add_argument(
+        "--select-timeout",
+        type=_interval,
+        default=None,
+        metavar="SECONDS",
+        help="how long a select stays valid (default: 10)",
+    )
+    parser.add_argument(
+        "--idle-timeout",
+        type=_interval,
+        default=None,
+        metavar="SECONDS",
+        help="seconds of silence before a connection is closed (default: 300)",
+    )
+
+
+def _add_identity_options(parser: argparse.ArgumentParser) -> None:
+    """Add the options that fill in the Device Profile document's identity."""
+    parser.add_argument("--vendor", default=None, help="default: Not stated")
+    parser.add_argument("--device", default=None, help="the device's name")
+    parser.add_argument("--hardware-version", default=None)
+    parser.add_argument("--software-version", default=None, help="default: this library's version")
+    parser.add_argument("--author", default=None, help="default: py1815")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -407,15 +595,13 @@ def _parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="serve a simulated DER")
     _add_map_options(run)
-    _add_link_options(run)
-    _add_any_master_option(run)
+    _add_outstation_options(run)
     run.add_argument(
-        "--bind",
-        default=f"127.0.0.1:{DEFAULT_PORT}",
-        help="host:port to listen on (default: loopback only)",
+        "--tick",
+        type=_interval,
+        default=None,
+        help="seconds between simulation steps (default: 1)",
     )
-    run.add_argument("--tick", type=_interval, default=1.0, help="seconds between simulation steps")
-    _add_unsolicited_option(run)
     run.set_defaults(handler=_run)
 
     points = commands.add_parser("points", help="list the points the simulated DER serves")
@@ -431,18 +617,9 @@ def _parser() -> argparse.ArgumentParser:
         "profile", help="write the DNP3 Device Profile document for the simulated DER"
     )
     _add_map_options(profile)
-    _add_link_options(profile)
-    _add_any_master_option(profile)
-    profile.add_argument(
-        "--bind", default=f"127.0.0.1:{DEFAULT_PORT}", help="host:port it listens on"
-    )
+    _add_outstation_options(profile)
+    _add_identity_options(profile)
     profile.add_argument("--out", type=pathlib.Path, default=None, help="write here, not to stdout")
-    profile.add_argument("--vendor", default="Not stated")
-    profile.add_argument("--device", default="py1815 simulated DER outstation")
-    profile.add_argument("--hardware-version", default="Not applicable (software)")
-    profile.add_argument("--software-version", default="", help="default: this library's version")
-    profile.add_argument("--author", default="py1815")
-    _add_unsolicited_option(profile)
     profile.add_argument(
         "--validate",
         type=pathlib.Path,
@@ -452,6 +629,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     profile.set_defaults(handler=_profile)
 
+    config = commands.add_parser(
+        "config", help="print the complete configuration as JSON, for editing and for --config"
+    )
+    _add_map_options(config)
+    _add_outstation_options(config)
+    _add_identity_options(config)
+    config.add_argument("--tick", type=_interval, default=None, help="seconds between steps")
+    config.add_argument(
+        "--out", type=pathlib.Path, default=None, help="write to this file instead of stdout"
+    )
+    config.set_defaults(handler=_config)
+
     poll = commands.add_parser("poll", help="run one integrity poll against an outstation")
     poll.add_argument("--host", default="127.0.0.1")
     poll.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -459,7 +648,7 @@ def _parser() -> argparse.ArgumentParser:
     poll.add_argument("--tables", type=pathlib.Path, default=None, help="for point names")
     poll.add_argument("--all", action="store_true", help="print every analog input")
     poll.add_argument("--limit", type=int, default=12, help="analog inputs to print")
-    _add_link_options(poll)
+    _add_link_options(poll, configured=False)
     poll.set_defaults(handler=_poll)
     return parser
 
