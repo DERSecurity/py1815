@@ -267,6 +267,9 @@ function renderHeader() {
   chip.textContent = outstation.connected ? "Connected" : "Not connected";
   chip.className = `chip ${outstation.connected ? "good" : "bad"}`;
   $("#connect-button").textContent = outstation.connected ? "Disconnect" : "Connect";
+  // The DER tab is for an outstation that was given a profile to name its points by.
+  $(".tabs [data-tab='der']").hidden = !outstation.profile;
+  if (!outstation.profile && state.tab === "der") showTab("overview");
 }
 
 // Whether this page can command is the service's to say, and is said plainly:
@@ -284,6 +287,7 @@ function renderControl() {
   pointHead = null;
   pointRows = new Map();
   if (state.tab === "points") renderPoints();
+  if (state.tab === "der") renderDer();
 }
 
 function showOperateFields() {
@@ -841,9 +845,10 @@ function renderAll() {
   if (state.tab === "points") renderPoints();
   if (state.tab === "log") renderLog();
   if (state.tab === "traffic") renderFrame();
+  if (state.tab === "der") renderDer();
 }
 
-const TABS = ["overview", "points", "commands", "events", "traffic", "log"];
+const TABS = ["overview", "points", "commands", "events", "traffic", "der", "log"];
 
 function showTab(name) {
   state.tab = name;
@@ -1050,6 +1055,7 @@ function wire() {
     renderEvents();
   });
   $("#log-clear").addEventListener("click", () => { state.log = []; renderLog(); });
+  wireDer();
 }
 
 document.body.append(tip);

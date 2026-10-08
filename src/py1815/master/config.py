@@ -74,6 +74,9 @@ class OutstationConfig:
     #: The outstation is an IEEE 1815.2 DER: name its points from the profile
     #: tables.
     profile: bool = False
+    #: Path of the outstation's DNP3 Device Profile document, which
+    #: ``der.compare`` compares what it serves with. None for none.
+    device_profile: str | None = None
     #: The automatic tasks. The two that write (``clear_restart`` and
     #: ``write_time``) only run when ``allow_control`` is on.
     tasks: Tasks = field(default_factory=Tasks)
@@ -110,6 +113,8 @@ class OutstationConfig:
                 values[key] = settings.boolean(value, at)
             elif key == "reconnect":
                 values[key] = None if value is None else settings.seconds(value, at)
+            elif key == "device_profile":
+                values[key] = None if value is None else settings.text(value, at)
             elif key == "tasks":
                 if not isinstance(value, Mapping):
                     raise ConfigError(f"{at} must be an object")

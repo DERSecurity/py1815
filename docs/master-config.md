@@ -38,6 +38,7 @@ take `--config FILE`.
     "confirm": true,
     "manual": false,
     "profile": false,
+    "device_profile": null,
     "tasks": {
       "startup": true,
       "clear_restart": true,
@@ -97,7 +98,8 @@ These go in `defaults`, in an outstation's entry, or both.
 | `reconnect` | `5` | Seconds between reconnection attempts after a lost connection. `null` disables reconnection |
 | `confirm` | `true` | Confirm response fragments that ask for confirmation |
 | `manual` | `false` | Send only what is asked for. Disables every task and confirmation, whatever `tasks` and `confirm` say |
-| `profile` | `false` | The outstation is an IEEE 1815.2 DER: name its points from the profile tables |
+| `profile` | `false` | The outstation is an IEEE 1815.2 DER: name its points from the profile tables, and offer the [DER profile's operations](master-api.md#the-der-profile) |
+| `device_profile` | `null` | Path of the outstation's DNP3 Device Profile document, which [`der.compare`](master-api.md#the-der-profile) compares what it serves with. Read when the master starts |
 | `tasks` | see below | The [automatic tasks](master.md#what-it-does-without-being-asked) |
 | `repeat` | see below | Scans repeated on a schedule |
 
@@ -141,6 +143,7 @@ own value.
 | `--reconnect SECONDS` | `defaults.reconnect`. `0` means never |
 | `--manual` | `defaults.manual` |
 | `--profile` | `defaults.profile` |
+| `--device-profile FILE` | `defaults.device_profile` |
 | `--unsolicited 1,2,3` | `defaults.tasks.enable_unsolicited` |
 | `--integrity-interval SECONDS` | `defaults.repeat.integrity` |
 | `--event-interval SECONDS` | `defaults.repeat.events` |
