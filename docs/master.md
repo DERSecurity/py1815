@@ -9,8 +9,10 @@ are the same master from a browser and from another process.
     It polls by class, reads named points, confirms what asks to be
     confirmed, takes unsolicited responses and keeps the last value of every
     point. It operates outputs, sets the clock, clears the restart indication
-    and freezes counters. All of it from Python, from a JSON service, or from a
-    web console. It does not reconnect by itself, and has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    and freezes counters. Left alone it looks after an outstation as a master
+    does: settles it on connecting, fetches the events it says it has, and
+    connects again when the connection is lost. All of it from Python, from a
+    JSON service, or from a web console. It has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -18,7 +20,7 @@ are the same master from a browser and from another process.
 ```python
 import asyncio
 
-from py1815.master import ALL, Master
+from py1815.master import ALL, Master, PointType
 
 
 async def main() -> None:
@@ -26,6 +28,9 @@ async def main() -> None:
         lab = await master.add(
             "lab", host="192.0.2.10", port=20000, outstation_address=1024, master_address=1
         )
+
+        await lab.idle()               # what it does on connecting is done
+        print(len(lab.store.points(PointType.ANALOG_INPUT)), "analog inputs read")
 
         poll = await lab.integrity_poll()
         print(poll.outcome, len(poll.fragments), "fragments", len(poll.objects), "objects")
@@ -71,7 +76,7 @@ outstation's answer is an exception.
 
 | Field | Holds |
 |---|---|
-| `outcome` | `COMPLETE`, `TIMEOUT`, `SENT` for a request that takes no response, or `ABANDONED` when the connection ended first |
+| `outcome` | `COMPLETE`, `TIMEOUT`, `SENT` for a request that takes no response, or `ABANDONED` when the connection ended first or the caller stopped waiting |
 | `fragments` | Each response fragment, in the order received |
 | `objects` | Every object of every fragment, decoded, in the order sent |
 | `iin` | The indications of the last fragment, or `None` if nothing arrived |
@@ -97,6 +102,64 @@ variation that has no flags, which is not the same as none being set. An
 object the library does not know ends the reading of that fragment: what came
 before it is kept, and `undecoded` holds the reason and the rest of the octets.
 
+## What it does without being asked
+
+A master does a few things of its own accord, and this one does them unless
+told not to. Each is a task:
+
+| Task | Does | When | Default |
+|---|---|---|---|
+| `startup` | Stops unsolicited reporting, then reads everything with an integrity poll | On connecting, and when the outstation reports that it restarted | On |
+| `clear_restart` | Clears the restart indication | When a response carries it | On |
+| `write_time` | Sets the outstation's clock | When a response asks for the time | On |
+| `enable_unsolicited` | Asks the outstation to report the classes named without being polled | After startup | Off: no classes |
+| `events_when_indicated` | Polls for events | When a response says some are waiting | On |
+| `integrity_on_overflow` | Reads everything again | When a response says the event buffer overflowed | On |
+
+```python
+from py1815.master import Tasks
+
+lab = await master.add(
+    "lab",
+    host="192.0.2.10",
+    tasks=Tasks(enable_unsolicited=(1, 2, 3), write_time=False),
+)
+await lab.idle()
+```
+
+`add` and `connect` return as soon as the connection is made. What is done on
+connecting is done next, before anything you ask for and before any scan on a
+schedule, and `idle()` waits for it. When several tasks are due they are done
+in the order of the table, with nothing else between them.
+
+Every request a task makes is an exchange like any other: it is in the trace,
+it is counted, it is handed to `on_exchange`, and its `task` says which task
+made it. An exchange you asked for has `task` set to `None`.
+
+Three things a task never does:
+
+- **Command an output.** No task selects or operates anything, and none sends
+  a request between a select and its operate.
+- **Answer itself.** A task is not made due by the response to its own
+  request. An outstation that never clears an indication is asked about it at
+  most once for each response that carries it, and never in a stream.
+- **Repeat a scan.** Nothing is sent on a schedule unless you ask for it with
+  [`repeat_scan`](#repeating-a-scan).
+
+### A connection that is lost
+
+A connection that was made and then lost is made again: the master tries every
+five seconds until it succeeds, and then does what it does on connecting, so
+the store is read afresh from an outstation that may have restarted.
+
+```python
+lab = await master.add("lab", host="192.0.2.10", reconnect=1.0)   # every second
+lab = await master.add("lab", host="192.0.2.10", reconnect=None)  # never
+```
+
+A connection you closed with `close()` is not made again, and a first
+connection that cannot be made still raises `OSError`.
+
 ## The store
 
 Each outstation has a `store`: the last value of every point it has reported,
@@ -121,12 +184,17 @@ The master confirms each one, puts its values in the store, keeps it in
 lab = await master.add("lab", host="192.0.2.10", on_unsolicited=print)
 ```
 
-The master does not enable them for you. Send the request yourself:
+The master enables them when it is told which classes to enable, after it has
+settled the outstation, and again after each restart and each reconnection:
 
 ```python
-from py1815.application import FunctionCode, class_header
+lab = await master.add("lab", host="192.0.2.10", tasks=Tasks(enable_unsolicited=(1, 2)))
+```
 
-await lab.request(FunctionCode.ENABLE_UNSOLICITED, class_header(1) + class_header(2))
+Or once, by asking:
+
+```python
+await lab.enable_unsolicited(1, 2)
 ```
 
 ## Commanding outputs
@@ -182,13 +250,19 @@ an operation that is not one.
 
 ## Driving an outstation by hand
 
-`confirm=False` stops the master confirming anything. Nothing is then sent that
-you did not ask for, which is what a test of an outstation's own behavior
-needs: events left unconfirmed are still there on the next scan.
+`manual=True` turns off every task and stops the master confirming anything.
+Nothing is then sent that you did not ask for, which is what a test of an
+outstation's own behavior needs: its restart indication is still set when you
+look, and events left unconfirmed are still there on the next scan.
 
 ```python
-lab = await master.add("lab", host="192.0.2.10", confirm=False)
+lab = await master.add("lab", host="192.0.2.10", manual=True)
 ```
+
+It is shorthand for `tasks=Tasks.none(), confirm=False`, and either given
+beside it is kept as given: `manual=True, confirm=True` sends nothing unasked
+but confirmations. Reconnecting is apart from it, since it sends nothing to
+the outstation; turn it off with `reconnect=None`.
 
 ## Repeating a scan
 
@@ -202,7 +276,7 @@ lab.repeat_scan("events", None)    # stop
 ```
 
 A repeated scan takes its turn with every other request, stops when the
-connection ends, and starts again when `connect()` makes it again.
+connection ends, and starts again when the connection is made again.
 
 ## The traffic
 
@@ -212,9 +286,19 @@ its octets and a reading of them one layer at a time.
 ```python
 for entry in lab.trace.since():
     print(entry.direction, entry.summary)
-# tx READ seq 0: class 1, class 2, class 3, class 0
-# rx RESPONSE seq 0 CON [NEED_TIME, DEVICE_RESTART]: g1v2 x49, g30v1 x283
+# tx DISABLE_UNSOLICITED seq 0: class 1, class 2, class 3
+# rx RESPONSE seq 0 [CLASS_3_EVENTS, NEED_TIME, DEVICE_RESTART]
+# tx WRITE seq 1
+# rx RESPONSE seq 1 [CLASS_3_EVENTS, NEED_TIME]
+# tx WRITE seq 2
+# rx RESPONSE seq 2 [CLASS_3_EVENTS]
+# tx READ seq 3: class 1, class 2, class 3, class 0
+# rx RESPONSE seq 3 CON: g1v2 x49, g20v1 x4, g21v5 x4, g23v5 x4, g30v1 x283
+# tx CONFIRM seq 3
 ```
+
+That is a connection being made to an outstation that has just started: the
+four requests of startup, each answered.
 
 ## From a browser, or from another process
 
@@ -225,6 +309,8 @@ The same master can be driven without writing Python:
   simulated DER.
 - [The master's API](master-api.md) is every operation as JSON, over HTTP or a
   line at a time over a local socket, described in an OpenAPI document.
+- [Configuring the master](master-config.md) lists every setting, as a JSON
+  file and as command-line flags.
 
 ## In one process, with no socket
 
@@ -237,6 +323,17 @@ from py1815.master import Loopback
 master = Loopback(outstation.session())
 poll = master.integrity_poll()
 unasked = master.listen()      # what the session would send without being asked
+```
+
+A `Loopback` does nothing unasked unless it is given tasks. Given them,
+`start()` stands for the connection being made and returns the exchanges it
+led to, and whatever comes due later is done after the request or the
+`listen()` that showed it, and kept in `master.unasked`:
+
+```python
+master = Loopback(outstation.session(), tasks=Tasks())
+for exchange in master.start():
+    print(exchange.task, exchange.outcome)
 ```
 
 Give the session and the `Loopback` the same clock and a test moves time

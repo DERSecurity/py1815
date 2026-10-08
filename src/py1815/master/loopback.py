@@ -5,6 +5,10 @@ the session returns is handed to the association, and so on until neither has
 anything to say. With one injected clock shared by the two, a test moves time
 itself.
 
+Automatic tasks are off unless ``tasks`` is given. With tasks,
+:meth:`Loopback.start` runs the startup sequence, and pending tasks run after
+each request and each :meth:`Loopback.listen`.
+
 This is the two halves of the library talking to each other. It is the fastest
 way to exercise either, and it is not evidence that either reads the standard
 correctly, since they share the layers below them. See ``docs/planning/MASTER.md``.
@@ -16,12 +20,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 
 from py1815.application import FunctionCode
 from py1815.master.association import Exchange, MasterAssociation, Unsolicited
 from py1815.master.controls import Operated, Plan
 from py1815.master.operations import Operations
 from py1815.master.store import Store
+from py1815.master.tasks import Housekeeper, Tasks
 from py1815.session import Session
 
 #: Passes of octets between the two before something is assumed to be looping.
@@ -38,6 +44,8 @@ class Loopback(Operations[Exchange, Operated]):
         association: MasterAssociation | None = None,
         store: Store | None = None,
         clock: Callable[[], float] = time.monotonic,
+        tasks: Tasks | None = None,
+        time_ms: Callable[[], int] | None = None,
     ) -> None:
         """
         Args:
@@ -47,6 +55,9 @@ class Loopback(Operations[Exchange, Operated]):
             store: Where what is read is kept. A new one when not given.
             clock: The clock a value is stamped with when it is stored. Give
                 the session, the association and this the same one.
+            tasks: The automatic tasks to run. Defaults to none.
+            time_ms: Clock for automatic time writes, in milliseconds since
+                the epoch. Defaults to the wall clock.
         """
         if association is None:
             facts = session.facts
@@ -59,22 +70,51 @@ class Loopback(Operations[Exchange, Operated]):
         self.association = association
         self.store = Store() if store is None else store
         self._clock = clock
+        chosen = Tasks.none() if tasks is None else tasks
+        self.housekeeper = (
+            Housekeeper(chosen) if time_ms is None else Housekeeper(chosen, clock_ms=time_ms)
+        )
+        #: Exchanges sent by automatic tasks, in order.
+        self.unasked: list[Exchange] = []
+
+    def start(self) -> list[Exchange]:
+        """Run the startup tasks, as on a new connection, and return their exchanges."""
+        self.housekeeper.connected()
+        return self._keep_house()
 
     def _exchange(self, function: FunctionCode, body: bytes) -> Exchange:
+        exchange = self._one(function, body)
+        self._keep_house()
+        return exchange
+
+    def _one(self, function: FunctionCode, body: bytes, *, task: str | None = None) -> Exchange:
         self._pump(self.association.request(function, body))
         # Everything the session was going to say, it has said. An outstation
         # that is silent here is silent, and waiting would not change it.
         self.association.give_up()
         exchange = self.association.take()
         assert exchange is not None
+        if task is not None:
+            exchange = replace(exchange, task=task)
         self.store.apply(exchange.objects, now=self._clock())
+        self.housekeeper.saw(exchange.iin, answering=(function, body))
         self._collect()
         return exchange
 
+    def _keep_house(self) -> list[Exchange]:
+        made: list[Exchange] = []
+        while (step := self.housekeeper.next()) is not None:
+            made.append(self._one(step.function, step.body, task=step.task))
+        self.unasked += made
+        return made
+
     def _carry_out(self, plan: Plan) -> Operated:
+        # Run pending tasks only after the whole plan, so nothing is sent
+        # between a select and its operate.
         done: list[Exchange] = []
         while (step := plan.next(done)) is not None:
-            done.append(self._exchange(*step))
+            done.append(self._one(*step))
+        self._keep_house()
         return plan.result(done)
 
     def listen(self) -> list[Unsolicited]:
@@ -85,7 +125,9 @@ class Loopback(Operations[Exchange, Operated]):
         clock past a retry.
         """
         self._pump_back(self.session.initiate())
-        return self._collect()
+        received = self._collect()
+        self._keep_house()
+        return received
 
     def _pump(self, to_session: bytes) -> None:
         """Carry octets back and forth until both sides are quiet."""
@@ -104,4 +146,5 @@ class Loopback(Operations[Exchange, Operated]):
         received = self.association.take_unsolicited()
         for unsolicited in received:
             self.store.apply(unsolicited.objects, now=self._clock())
+            self.housekeeper.saw(unsolicited.iin)
         return received

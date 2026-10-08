@@ -346,6 +346,7 @@ async def lab():
     try:
         async with Master() as master:
             outstation = await master.add("lab", host="127.0.0.1", port=server.port)
+            await outstation.idle()
             yield simulation, outstation
     finally:
         await server.stop()

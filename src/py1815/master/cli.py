@@ -16,13 +16,17 @@ import asyncio
 import contextlib
 import logging
 import os
+import pathlib
 import secrets
 import signal
 import sys
 import time
 import webbrowser
 from collections.abc import Sequence
+from typing import Any
 
+from py1815.master.api import DEFAULT_RECONNECT
+from py1815.master.config import ConfigError, MasterConfig, read
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
 from py1815.profile import der, load
 from py1815.profile.model import Composition, MapError, PointMap
@@ -94,6 +98,16 @@ def _outstation(text: str) -> tuple[str, str, int]:
         raise argparse.ArgumentTypeError(f"{port!r} is not a port") from None
 
 
+def _classes(text: str) -> list[int]:
+    try:
+        classes = [int(number) for number in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not event classes, as in 1,2,3") from None
+    if not classes or any(number not in (1, 2, 3) for number in classes):
+        raise argparse.ArgumentTypeError(f"{text!r} is not event classes, as in 1,2,3")
+    return classes
+
+
 async def _keep_trying(service: Service, name: str, seconds: float) -> None:
     """Connect to an outstation that was not there yet, for as long as was allowed.
 
@@ -110,41 +124,83 @@ async def _keep_trying(service: Service, name: str, seconds: float) -> None:
     print(f"{name}: still not reachable after {seconds:g} s", file=sys.stderr)
 
 
-async def _add_named(
+#: Where ``serve`` listens unless told otherwise.
+DEFAULT_LINE_BIND = "127.0.0.1:8816"
+
+
+def configuration(args: argparse.Namespace) -> MasterConfig:
+    """Build the configuration from ``--config`` and the command-line flags.
+
+    The file is the base. A flag that is given overrides the file: the
+    top-level settings directly, and the per-outstation flags by changing
+    ``defaults``. An outstation entry in the file that sets the same thing
+    keeps its own value. Outstations named with ``--outstation`` are added to
+    those in the file.
+
+    Raises :class:`~py1815.master.config.ConfigError`.
+    """
+    document: dict[str, Any] = {}
+    if getattr(args, "config", None):
+        document = read(args.config)
+        # Report a mistake in the file as the file's, before flags are applied.
+        MasterConfig.from_mapping(document)
+    for key in ("allow_control", "bind", "tables", "connect_wait"):
+        value = getattr(args, key, None)
+        if value is not None:
+            document[key] = value
+
+    defaults = dict(document.get("defaults") or {})
+    for key in ("outstation_address", "master_address", "manual", "profile"):
+        value = getattr(args, key, None)
+        if value is not None:
+            defaults[key] = value
+    if args.reconnect is not None:
+        defaults["reconnect"] = args.reconnect or None
+    if args.unsolicited is not None:
+        tasks = dict(defaults.get("tasks") or {})
+        defaults["tasks"] = {**tasks, "enable_unsolicited": args.unsolicited}
+    repeat = dict(defaults.get("repeat") or {})
+    if args.integrity_interval is not None:
+        repeat["integrity"] = args.integrity_interval
+    if args.event_interval is not None:
+        repeat["events"] = args.event_interval
+    if args.output_interval is not None:
+        repeat["outputs"] = args.output_interval or None
+    if repeat:
+        defaults["repeat"] = repeat
+    if defaults:
+        document["defaults"] = defaults
+
+    named = [{"name": name, "host": host, "port": port} for name, host, port in args.outstation]
+    if named:
+        document["outstations"] = [*(document.get("outstations") or []), *named]
+    return MasterConfig.from_mapping(document)
+
+
+async def _add_outstations(
     service: Service,
-    args: argparse.Namespace,
+    config: MasterConfig,
     point_map: PointMap | None = None,
     waiting: list[asyncio.Task[None]] | None = None,
 ) -> bool:
-    for name, host, port in args.outstation:
-        if point_map is not None and args.profile:
+    """Add each configured outstation to the service. Return False if one is refused."""
+    for outstation in config.outstations:
+        name = outstation.name
+        if point_map is not None and outstation.profile:
             service.set_profile(name, point_map)
         answer = await service.handle(
-            {
-                "op": "add",
-                "params": {
-                    "name": name,
-                    "host": host,
-                    "port": port,
-                    "outstation_address": args.outstation_address,
-                    "master_address": args.master_address,
-                    "integrity_interval": args.integrity_interval,
-                    "event_interval": args.event_interval,
-                    **(
-                        {}
-                        if args.output_interval is None
-                        else {"output_interval": args.output_interval or None}
-                    ),
-                },
-            }
+            {"op": "add", "params": outstation.add_params(allow_control=config.allow_control)}
         )
         if not answer["ok"]:
-            # Added, and shown as not connected, unless it could not be added at all.
+            # An unreachable outstation is still added and shown as not
+            # connected. Any other error means it could not be added at all.
             print(f"{name}: {answer['error']['message']}", file=sys.stderr)
             if answer["error"]["kind"] != "connection":
                 return False
-            if args.connect_wait > 0 and waiting is not None:
-                waiting.append(asyncio.create_task(_keep_trying(service, name, args.connect_wait)))
+            if config.connect_wait > 0 and waiting is not None:
+                waiting.append(
+                    asyncio.create_task(_keep_trying(service, name, config.connect_wait))
+                )
     return True
 
 
@@ -152,20 +208,29 @@ async def run_console(
     args: argparse.Namespace,
     point_map: PointMap | None = None,
     profile_map: PointMap | None = None,
+    config: MasterConfig | None = None,
 ) -> int:
     """Serve the console until interrupted or told to stop.
 
     ``point_map`` is the map a simulated DER is built from, for the
     demonstration. ``profile_map`` is the profile the outstations named on
-    the command line are meant to serve.
+    the command line are meant to serve. ``config`` is built from ``args``
+    when not given.
     """
-    service = Service(allow_control=args.allow_control)
+    if config is None:
+        config = configuration(args)
+    service = Service(allow_control=config.allow_control)
     token = args.token or os.environ.get(TOKEN_VARIABLE) or None
     if token is None and args.new_token:
         token = secrets.token_urlsafe(16)
     waiting: list[asyncio.Task[None]] = []
     try:
-        server = HttpServer(service, bind=args.bind, token=token, without_token=args.no_token)
+        server = HttpServer(
+            service,
+            bind=config.bind or DEFAULT_HTTP_BIND,
+            token=token,
+            without_token=args.no_token,
+        )
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -175,10 +240,10 @@ async def run_console(
     try:
         if demo is not None:
             await demo.start()
-        if not await _add_named(service, args, profile, waiting):
+        if not await _add_outstations(service, config, profile, waiting):
             return 2
         print(f"Satori DNP3 master console at {server.url}", flush=True)
-        if args.allow_control:
+        if config.allow_control:
             print("  commanding is on: this console can operate outputs", flush=True)
         if demo is not None:
             print(
@@ -199,21 +264,28 @@ async def run_console(
     return 0
 
 
-async def run_service(args: argparse.Namespace, profile_map: PointMap | None = None) -> int:
+async def run_service(
+    args: argparse.Namespace,
+    profile_map: PointMap | None = None,
+    config: MasterConfig | None = None,
+) -> int:
     """Serve the line service until interrupted or told to stop."""
-    service = Service(allow_control=args.allow_control)
+    if config is None:
+        config = configuration(args)
+    bind = config.bind or DEFAULT_LINE_BIND
+    service = Service(allow_control=config.allow_control)
     waiting: list[asyncio.Task[None]] = []
     try:
-        server = LineServer(service, bind=args.bind)
+        server = LineServer(service, bind=bind)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2
     await server.start()
     try:
-        if not await _add_named(service, args, profile_map, waiting):
+        if not await _add_outstations(service, config, profile_map, waiting):
             return 2
         print(
-            f"DNP3 master service listening on {args.bind.rpartition(':')[0]}:{server.port}",
+            f"DNP3 master service listening on {bind.rpartition(':')[0]}:{server.port}",
             flush=True,
         )
         await service.stopped.wait()
@@ -226,11 +298,24 @@ async def run_service(args: argparse.Namespace, profile_map: PointMap | None = N
 
 
 def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
+    """Add the options shared by every command.
+
+    Each one defaults to None, meaning "not given", so that a flag overrides
+    the configuration file only when it is actually used.
+    """
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="FILE",
+        help="a JSON configuration file; flags given on the command line override it "
+        "(print a complete one with `py1815-master config`)",
+    )
     parser.add_argument(
         "--allow-control",
         action="store_true",
-        help="carry out the operations that command an outstation: its outputs, counters, "
-        "clock and restart indication (default: read only, and refuse them)",
+        default=None,
+        help="allow operations and tasks that write to an outstation: outputs, counters, "
+        "clock and restart indication (default: read only)",
     )
     parser.add_argument(
         "--outstation",
@@ -238,13 +323,14 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=[],
         type=_outstation,
         metavar="NAME=HOST:PORT",
-        help="an outstation to add and connect to at startup; may be given more than once",
+        help="an outstation to add and connect to at startup; repeat for more than one",
     )
     parser.add_argument(
         "--profile",
         action="store_true",
-        help="the outstations given are IEEE 1815.2 DER: name their points from the profile "
-        "tables, and let the console show the points of the profile they have not reported",
+        default=None,
+        help="the outstations are IEEE 1815.2 DER: name their points from the profile "
+        "tables and show the profile points they have not reported",
     )
     parser.add_argument(
         "--tables",
@@ -255,34 +341,61 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--connect-wait",
         type=float,
-        default=0.0,
+        default=None,
         metavar="SECONDS",
-        help="keep trying, for this long, to connect to an outstation that is not there "
-        "yet at startup (default: try once)",
+        help="keep trying for this long to reach an outstation that is not there at "
+        "startup (default: try once)",
     )
-    parser.add_argument("--outstation-address", type=int, default=1024)
-    parser.add_argument("--master-address", type=int, default=1)
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        default=None,
+        help="send only what is asked for: no startup sequence, no event poll, no "
+        "confirmation (default: run the automatic tasks)",
+    )
+    parser.add_argument(
+        "--unsolicited",
+        type=_classes,
+        default=None,
+        metavar="CLASSES",
+        help="enable unsolicited reporting for these event classes after startup, as in "
+        "1,2,3 (default: do not)",
+    )
+    parser.add_argument(
+        "--reconnect",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="seconds between reconnection attempts after a lost connection "
+        f"(default: {DEFAULT_RECONNECT:g}; 0 for never)",
+    )
+    parser.add_argument(
+        "--outstation-address", type=int, default=None, help="link address (default: 1024)"
+    )
+    parser.add_argument(
+        "--master-address", type=int, default=None, help="link address (default: 1)"
+    )
     parser.add_argument(
         "--integrity-interval",
         type=float,
         default=None,
         metavar="SECONDS",
-        help="repeat an integrity poll of each outstation this often (default: do not)",
+        help="repeat an integrity poll this often (default: do not)",
     )
     parser.add_argument(
         "--output-interval",
         type=float,
         default=None,
         metavar="SECONDS",
-        help="repeat a read of output status this often (default: as often as the integrity "
-        "poll, which does not include it; 0 for never)",
+        help="repeat a read of output status this often (default: as often as the "
+        "integrity poll, which does not include it; 0 for never)",
     )
     parser.add_argument(
         "--event-interval",
         type=float,
         default=None,
         metavar="SECONDS",
-        help="repeat an event poll of each outstation this often (default: do not)",
+        help="repeat an event poll this often (default: do not)",
     )
 
 
@@ -296,7 +409,7 @@ def _parser() -> argparse.ArgumentParser:
     console = commands.add_parser("console", help="serve the web console")
     console.add_argument(
         "--bind",
-        default=DEFAULT_HTTP_BIND,
+        default=None,
         help=f"where the console listens (default: {DEFAULT_HTTP_BIND}, this machine only)",
     )
     console.add_argument(
@@ -329,9 +442,21 @@ def _parser() -> argparse.ArgumentParser:
 
     serve = commands.add_parser("serve", help="serve the JSON line service, for a test rig")
     serve.add_argument(
-        "--bind", default="127.0.0.1:8816", help="where the service listens, on this machine"
+        "--bind",
+        default=None,
+        help=f"where the service listens, on this machine (default: {DEFAULT_LINE_BIND})",
     )
     _add_outstation_options(serve)
+
+    config = commands.add_parser(
+        "config",
+        help="print the complete configuration as JSON, for editing and for --config",
+    )
+    config.add_argument("--bind", default=None, help="where the console or service listens")
+    config.add_argument(
+        "--out", type=pathlib.Path, default=None, help="write to this file instead of stdout"
+    )
+    _add_outstation_options(config)
     return parser
 
 
@@ -345,20 +470,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.INFO if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    try:
+        config = configuration(args)
+    except ConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    if args.command == "config":
+        if args.out is None:
+            sys.stdout.write(config.render())
+        else:
+            args.out.write_text(config.render(), encoding="utf-8", newline="\n")
+            print(f"wrote {args.out}")
+        return 0
+
     point_map: PointMap | None = None
     demo = args.command == "console" and args.demo
-    if demo or args.profile:
+    profiled = config.defaults.profile or any(each.profile for each in config.outstations)
+    if demo or profiled:
         try:
-            point_map = load.load(args.tables, Composition())
+            point_map = load.load(config.tables, Composition())
         except (MapError, ValueError, OSError) as error:
             print(str(error), file=sys.stderr)
             return 1
-    profile_map = point_map if args.profile else None
+    profile_map = point_map if profiled else None
     signal.signal(signal.SIGTERM, _interrupt)
     try:
         if args.command == "console":
-            return asyncio.run(run_console(args, point_map if demo else None, profile_map))
-        return asyncio.run(run_service(args, profile_map))
+            return asyncio.run(run_console(args, point_map if demo else None, profile_map, config))
+        return asyncio.run(run_service(args, profile_map, config))
     except KeyboardInterrupt:
         return 0
 

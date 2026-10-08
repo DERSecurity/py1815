@@ -225,6 +225,7 @@ def _documented(name: str) -> dict[str, Any]:
 #: The order the examples make sense in, against one outstation.
 ORDER = [
     "add",
+    "idle",
     "status",
     "profile",
     "scan",

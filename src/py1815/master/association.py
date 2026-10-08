@@ -60,7 +60,8 @@ class Outcome(Enum):
     TIMEOUT = "timeout"
     #: The request was one that takes no response, and was sent.
     SENT = "sent"
-    #: The connection was reset while the request was outstanding.
+    #: The request was dropped before a response arrived: the connection
+    #: was reset, or the caller cancelled.
     ABANDONED = "abandoned"
 
 
@@ -86,6 +87,9 @@ class Exchange:
     undecoded: tuple[Decoded, ...] = ()
     #: Seconds from the request being built to the exchange ending.
     elapsed: float = 0.0
+    #: Name of the automatic task that sent this request, or None if a
+    #: caller sent it.
+    task: str | None = None
 
     @property
     def complete(self) -> bool:
@@ -448,6 +452,18 @@ class MasterAssociation:
         self._finish(Outcome.TIMEOUT, self._clock())
         return True
 
+    def abandon(self) -> bool:
+        """End the pending exchange as abandoned. Return True if there was one.
+
+        Call this when the caller cancels a request that has already been
+        sent. A late response is then dropped and not confirmed. Without this
+        the association stays busy and rejects every later request.
+        """
+        if self._pending is None:
+            return False
+        self._finish(Outcome.ABANDONED, self._clock())
+        return True
+
     def _finish(self, outcome: Outcome, now: float) -> None:
         pending = self._pending
         assert pending is not None
@@ -487,8 +503,7 @@ class MasterAssociation:
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._last_unsolicited = None
-        if self._pending is not None:
-            self._finish(Outcome.ABANDONED, self._clock())
+        self.abandon()
 
 
 __all__ = [

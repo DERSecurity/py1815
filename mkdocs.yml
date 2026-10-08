@@ -72,6 +72,7 @@ nav:
   - The master: master.md
   - The console: console.md
   - The master's API: master-api.md
+  - Configuring the master: master-config.md
   - Design decisions: DESIGN.md
   - Testing: testing.md
   - Reference:

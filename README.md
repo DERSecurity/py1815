@@ -103,9 +103,14 @@ py1815-master console --outstation der=127.0.0.1:20000 --profile \
 
 `--outstation` names the outstation and says where it listens. `--profile` says it is an
 IEEE 1815.2 DER, so its points are shown by name and the console can list the profile's points
-it has not reported. The two intervals repeat an integrity poll and an event poll; without
-them the master sends only what you ask for from the Commands tab. The link addresses default
-to the simulated DER's (`--outstation-address 1024 --master-address 1`).
+it has not reported. The two intervals repeat an integrity poll and an event poll. Without
+them the master reads the outstation once when it connects, fetches events when a response
+says some are waiting, and otherwise sends what you ask for from the Commands tab; with
+`--manual` it sends only that. The link addresses default to the simulated DER's
+(`--outstation-address 1024 --master-address 1`).
+
+Every setting can also be kept in a JSON file. `py1815-master config` prints a complete one
+to edit, and `--config FILE` loads it. See `docs/master-config.md`.
 
 Or with Docker, which needs nothing installed but Docker:
 

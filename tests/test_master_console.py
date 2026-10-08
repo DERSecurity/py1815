@@ -143,6 +143,73 @@ class TestLoading:
         assert await page.count("#indications .indication") == 14
 
 
+async def _tasks_card(page) -> str:
+    """Return the Overview's task card once it has been drawn."""
+    await page.wait_for(
+        "document.querySelector('#overview-tasks').textContent.includes('Lost connection')"
+    )
+    return await page.text("#overview-tasks")
+
+
+class TestAutomaticTasks:
+    @pytest.mark.asyncio
+    async def test_overview_lists_the_enabled_tasks(self, console):
+        page = console.page
+        card = await _tasks_card(page)
+        assert "Stops unsolicited reporting, reads everything" in card
+        assert "Fetched when a response says so" in card
+        assert "Made again, trying every 5 s" in card and "Not asked for" in card
+        # A service that only reads leaves the two writes alone.
+        assert card.count("Left alone") == 2
+
+    @pytest.mark.asyncio
+    @commanding
+    async def test_commanding_console_also_runs_the_two_writing_tasks(self, console):
+        card = await _tasks_card(console.page)
+        assert "Cleared when seen" in card and "Set when the outstation asks" in card
+        assert "Left alone" not in card
+
+    @pytest.mark.asyncio
+    async def test_log_records_each_task_that_runs(self, console):
+        page = console.page
+        await console.service.handle({"op": "disconnect", "outstation": "lab"})
+        await console.service.handle({"op": "connect", "outstation": "lab"})
+        await console.service.handle({"op": "idle", "outstation": "lab"})
+        await console.tab("log")
+        # Wait for the last of the startup requests, not the first.
+        await page.wait_for(
+            "document.querySelector('#log').textContent.includes('read everything, unasked')"
+        )
+        log = await page.text("#log")
+        assert "lab: stopped unsolicited reporting, on connecting, unasked" in log
+        assert "lab: read everything, unasked" in log
+
+    @pytest.mark.asyncio
+    async def test_add_form_sets_manual_and_unsolicited(self, console):
+        page = console.page
+        port = console.outstation.port
+        for name, fill in (
+            ("by-hand", "form.elements.manual.checked = true;"),
+            ("reporting", "form.elements.unsolicited.value = '1, 3';"),
+        ):
+            await page.evaluate(
+                "(() => { const form = document.querySelector('#add-form'); form.reset();"
+                f" form.elements.name.value = '{name}'; form.elements.host.value = '127.0.0.1';"
+                f" form.elements.port.value = '{port}'; {fill} form.requestSubmit(); }})()"
+            )
+            await page.wait_for(f"document.querySelector('#title').textContent === '{name}'")
+        status = await console.service.handle({"op": "status"})
+        added = {each["name"]: each for each in status["result"]["outstations"]}
+        assert not any(added["by-hand"]["tasks"].values())
+        assert added["reporting"]["tasks"]["enable_unsolicited"] == [1, 3]
+        assert added["reporting"]["tasks"]["startup"]
+        # The title changes before the Overview is redrawn, so wait for the card itself.
+        await page.wait_for(
+            "document.querySelector('#overview-tasks').textContent"
+            ".includes('Turned on for class 1, 3')"
+        )
+
+
 class TestThePointsTable:
     @pytest.mark.asyncio
     async def test_it_lists_what_the_outstation_reported_by_name(self, console):

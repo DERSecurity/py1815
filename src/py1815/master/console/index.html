@@ -32,6 +32,8 @@
         <label>Integrity poll every (s) <input name="integrity_interval" type="number" min="1" step="any" placeholder="off"></label>
         <label>Event poll every (s) <input name="event_interval" type="number" min="0.2" step="any" placeholder="off"></label>
         <label>Output status every (s) <input name="output_interval" type="number" min="1" step="any" placeholder="with the integrity poll"></label>
+        <label>Unsolicited reporting, classes <input name="unsolicited" pattern="\s*[123](\s*,\s*[123])*\s*" placeholder="off" title="The event classes to have reported without being polled, as in 1,2,3"></label>
+        <label class="check" title="No startup sequence, no event poll and no confirmation: only what you ask for is sent"><input name="manual" type="checkbox"> Manual: send nothing unasked</label>
         <button type="submit" class="primary">Add and connect</button>
         <p id="add-error" class="error" role="alert"></p>
       </form>
@@ -76,6 +78,10 @@
             <h3>Points reported</h3>
             <dl id="overview-points" class="facts"></dl>
           </div>
+        </div>
+        <div class="card spaced">
+          <h3>Done unasked <span class="hint">by the master, for this outstation</span></h3>
+          <dl id="overview-tasks" class="facts paired"></dl>
         </div>
         <div class="card">
           <h3>Internal indications <span class="hint">from the last response</span></h3>
@@ -279,7 +285,7 @@
 
       <div class="panel" data-panel="log" hidden>
         <div class="toolbar">
-          <span class="hint">What this console asked for, and what came of it</span>
+          <span class="hint">What this console asked for, what the master did unasked, and what came of it</span>
           <div class="spacer"></div>
           <button id="log-clear" class="quiet">Clear</button>
         </div>

@@ -70,9 +70,16 @@ async def _ask(service: Service, op: str, outstation: str | None = None, **param
     return answer
 
 
+#: For a test that counts what was sent: only what it asks for is, and what
+#: asks to be confirmed still is.
+ASKED = {"manual": True, "confirm": True}
+
+
 async def _added(service: Service, server: OutstationServer, **params) -> None:
     answer = await _ask(service, "add", name="lab", host="127.0.0.1", port=server.port, **params)
     assert answer["ok"], answer
+    # What the master does on connecting is done before the test asks anything.
+    assert (await _ask(service, "idle", "lab"))["ok"]
 
 
 class TestFlagNames:
@@ -149,7 +156,7 @@ class TestOperations:
     @pytest.mark.asyncio
     async def test_an_outstation_is_added_scanned_and_read(self, service, outstation):
         simulation, server = outstation
-        await _added(service, server)
+        await _added(service, server, **ASKED)
 
         scan = (await _ask(service, "scan", "lab", kind="integrity"))["result"]
         assert scan["outcome"] == "complete" and scan["function"] == "READ"
@@ -252,7 +259,7 @@ class TestOperations:
     @pytest.mark.asyncio
     async def test_any_request_by_function_name_and_octets(self, service, outstation):
         _, server = outstation
-        await _added(service, server)
+        await _added(service, server, **ASKED)
         answer = (await _ask(service, "request", "lab", function="delay_measure"))["result"]
         assert answer["outcome"] == "complete" and answer["request"] == "c017"
         refused = (await _ask(service, "request", "lab", function="READ", body="6e0006"))["result"]
@@ -271,7 +278,7 @@ class TestOperations:
     @pytest.mark.asyncio
     async def test_the_trace_is_read_and_cleared(self, service, outstation):
         _, server = outstation
-        await _added(service, server)
+        await _added(service, server, **ASKED)
         await _ask(service, "scan", "lab", kind="class1")
 
         frames = (await _ask(service, "trace", "lab"))["result"]["frames"]
@@ -354,7 +361,7 @@ class TestOperations:
         self, service, outstation
     ):
         _, server = outstation
-        await _added(service, server)
+        await _added(service, server, **ASKED)
         (lab,) = (await _ask(service, "status"))["result"]["outstations"]
         assert lab["repeat"] == {} and lab["counts"] == {}
 
@@ -525,8 +532,9 @@ class TestCommandingIsOffUntilTurnedOn:
     def test_the_command_line_turns_it_on(self):
         parser = cli._parser()
         for command in ("console", "serve"):
-            assert parser.parse_args([command]).allow_control is False
-            assert parser.parse_args([command, "--allow-control"]).allow_control is True
+            assert cli.configuration(parser.parse_args([command])).allow_control is False
+            given = parser.parse_args([command, "--allow-control"])
+            assert cli.configuration(given).allow_control is True
 
     @pytest.mark.asyncio
     async def test_a_console_started_to_command_says_so(self, capsys, monkeypatch):
@@ -543,6 +551,205 @@ class TestCommandingIsOffUntilTurnedOn:
             with contextlib.suppress(asyncio.CancelledError):
                 await running
         assert "commanding is on" in printed
+
+
+READING_TASKS = {
+    "startup": True,
+    "clear_restart": False,
+    "write_time": False,
+    "enable_unsolicited": [],
+    "events_when_indicated": True,
+    "integrity_on_overflow": True,
+}
+
+
+class TestWhatIsDoneUnasked:
+    """The tasks of an outstation added through the service."""
+
+    @pytest.mark.asyncio
+    async def test_a_service_that_reads_settles_an_outstation_and_writes_nothing(
+        self, service, outstation
+    ):
+        simulation, server = outstation
+        queue = service.subscribe()
+        await _added(service, server)
+
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["tasks"] == READING_TASKS and lab["tasks_due"] == []
+        assert lab["counts"] == {"complete": 2}
+        # Read, and left as it was found: restarted, and asking for the time.
+        assert lab["points"]["ai"] == len(simulation.outstation.served(Kind.AI))
+        assert {"DEVICE_RESTART", "NEED_TIME"} <= set(lab["indications"])
+
+        made = []
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event["event"] == "exchange":
+                made.append((event["exchange"]["task"], event["exchange"]["function"]))
+        assert made == [("disable_unsolicited", "DISABLE_UNSOLICITED"), ("integrity", "READ")]
+
+    @pytest.mark.asyncio
+    async def test_one_started_to_command_clears_the_restart_and_sets_the_clock(
+        self, commanding, outstation
+    ):
+        _, server = outstation
+        await _added(commanding, server)
+        (lab,) = (await _ask(commanding, "status"))["result"]["outstations"]
+        assert lab["tasks"] == READING_TASKS | {"clear_restart": True, "write_time": True}
+        assert lab["counts"] == {"complete": 4} and lab["indications"] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("task", ["clear_restart", "write_time"])
+    async def test_a_task_that_writes_is_refused_by_a_service_that_reads(
+        self, service, outstation, task
+    ):
+        _, server = outstation
+        answer = await _ask(
+            service, "add", name="lab", host="127.0.0.1", port=server.port, tasks={task: True}
+        )
+        assert not answer["ok"] and answer["error"]["kind"] == "not_allowed"
+        assert task in answer["error"]["message"]
+        assert "--allow-control" in answer["error"]["message"]
+        assert (await _ask(service, "status"))["result"]["outstations"] == []
+
+    @pytest.mark.asyncio
+    async def test_saying_no_to_one_is_not_asking_for_it(self, service, outstation):
+        _, server = outstation
+        await _added(service, server, tasks={"clear_restart": False, "startup": False})
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["tasks"] == READING_TASKS | {"startup": False} and lab["counts"] == {}
+
+    @pytest.mark.asyncio
+    async def test_a_request_made_for_a_task_says_which(self, service, outstation):
+        _, server = outstation
+        await _added(service, server)
+        asked = (await _ask(service, "scan", "lab", kind="class0"))["result"]
+        assert asked["task"] is None
+
+    @pytest.mark.asyncio
+    async def test_manual_is_nothing_unasked_and_no_confirmation(self, commanding, outstation):
+        _, server = outstation
+        await _added(commanding, server, manual=True)
+        (lab,) = (await _ask(commanding, "status"))["result"]["outstations"]
+        assert not any(lab["tasks"].values()) and lab["counts"] == {} and lab["frames"] == 0
+        assert not commanding.master["lab"].association._confirm
+
+    @pytest.mark.asyncio
+    async def test_unsolicited_reporting_is_asked_for_after_startup(self, service, point_map):
+        simulation = der.build(point_map)
+        server = OutstationServer(
+            simulation.outstation.session(unsolicited=True), bind="127.0.0.1:0"
+        )
+        await server.start()
+        try:
+            queue = service.subscribe()
+            await _added(service, server, tasks={"enable_unsolicited": [1, 2, 3]})
+            (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+            assert lab["tasks"]["enable_unsolicited"] == [1, 2, 3]
+            tasks = []
+            while not queue.empty():
+                event = queue.get_nowait()
+                if event["event"] == "exchange":
+                    tasks.append(event["exchange"]["task"])
+            assert tasks == ["disable_unsolicited", "integrity", "enable_unsolicited"]
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tasks, says",
+        [
+            ([True], "an object of choices by task"),
+            ({"polling": True}, "'polling' is not a task"),
+            ({"startup": "yes"}, "startup is true or false"),
+            ({"enable_unsolicited": [7]}, "1, 2 or 3"),
+        ],
+    )
+    async def test_tasks_that_are_not_tasks_are_refused(self, service, outstation, tasks, says):
+        _, server = outstation
+        answer = await _ask(
+            service, "add", name="lab", host="127.0.0.1", port=server.port, tasks=tasks
+        )
+        assert not answer["ok"] and answer["error"]["kind"] == "request"
+        assert says in answer["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_lost_connection_is_made_again_as_often_as_asked(self, service, point_map):
+        simulation = der.build(point_map)
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        port = server.port
+        await _added(service, server, reconnect=0.05)
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["reconnect"] == 0.05
+        queue = service.subscribe()
+        await server.stop()
+        again = OutstationServer(simulation.outstation.session(), bind=f"127.0.0.1:{port}")
+        await again.start()
+        try:
+            states = []
+            async with asyncio.timeout(5):
+                while states[-2:] != [False, True]:
+                    event = await queue.get()
+                    if event["event"] == "connection":
+                        states.append(event["connected"])
+            assert (await _ask(service, "idle", "lab"))["result"]["connected"]
+        finally:
+            await again.stop()
+
+    @pytest.mark.asyncio
+    async def test_reconnecting_is_five_seconds_apart_unless_said_and_null_is_never(
+        self, service, outstation
+    ):
+        _, server = outstation
+        await _added(service, server)
+        assert (await _ask(service, "status"))["result"]["outstations"][0]["reconnect"] == 5.0
+        await _ask(service, "remove", "lab")
+        await _added(service, server, reconnect=None)
+        assert (await _ask(service, "status"))["result"]["outstations"][0]["reconnect"] is None
+
+    def test_the_command_line_has_a_flag_for_each(self):
+        parser = cli._parser()
+        for command in ("console", "serve"):
+            plain = cli.configuration(parser.parse_args([command])).defaults
+            assert (plain.manual, plain.tasks.enable_unsolicited, plain.reconnect) == (
+                False,
+                (),
+                5.0,
+            )
+            given = cli.configuration(
+                parser.parse_args([command, "--manual", "--unsolicited", "1,3", "--reconnect", "0"])
+            ).defaults
+            assert (given.manual, given.tasks.enable_unsolicited, given.reconnect) == (
+                True,
+                (1, 3),
+                None,
+            )
+        for wrong in ("0", "4", "1,,2", "all"):
+            with pytest.raises(SystemExit):
+                parser.parse_args(["serve", "--unsolicited", wrong])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "flags, tasks, reconnect",
+        [
+            ([], READING_TASKS, 5.0),
+            (["--manual"], dict.fromkeys(READING_TASKS, False) | {"enable_unsolicited": []}, 5.0),
+            (["--unsolicited", "2"], READING_TASKS | {"enable_unsolicited": [2]}, 5.0),
+            (["--reconnect", "0"], READING_TASKS, None),
+            (["--reconnect", "1.5"], READING_TASKS, 1.5),
+        ],
+    )
+    async def test_and_they_reach_the_outstations_named_on_it(
+        self, service, outstation, flags, tasks, reconnect
+    ):
+        _, server = outstation
+        args = cli._parser().parse_args(
+            ["serve", "--outstation", f"lab=127.0.0.1:{server.port}", *flags]
+        )
+        assert await cli._add_outstations(service, cli.configuration(args))
+        (lab,) = (await _ask(service, "status"))["result"]["outstations"]
+        assert lab["tasks"] == tasks and lab["reconnect"] == reconnect
 
 
 class TestCommands:
@@ -1026,7 +1233,7 @@ class TestTheCommand:
         )
         waiting: list[asyncio.Task[None]] = []
 
-        assert await cli._add_named(service, args, None, waiting)
+        assert await cli._add_outstations(service, cli.configuration(args), None, waiting)
         (late,) = (await _ask(service, "status"))["result"]["outstations"]
         assert not late["connected"] and len(waiting) == 1
 
@@ -1046,5 +1253,5 @@ class TestTheCommand:
     async def test_and_is_tried_once_unless_asked_to_wait(self, service):
         args = cli._parser().parse_args(["serve", "--outstation", "gone=127.0.0.1:1"])
         waiting: list[asyncio.Task[None]] = []
-        assert await cli._add_named(service, args, None, waiting)
+        assert await cli._add_outstations(service, cli.configuration(args), None, waiting)
         assert waiting == []

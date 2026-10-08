@@ -16,6 +16,10 @@ guides; this is the reference.
 
 ::: py1815.master.controls
 
+## What is done unasked
+
+::: py1815.master.tasks
+
 ## In one process
 
 ::: py1815.master.loopback
@@ -37,6 +41,10 @@ One conversation with one outstation, with no I/O: octets in, octets out.
 ## The service
 
 ::: py1815.master.service
+
+## Configuration
+
+::: py1815.master.config
 
 ## The description of the API
 

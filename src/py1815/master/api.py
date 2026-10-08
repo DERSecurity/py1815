@@ -7,6 +7,12 @@ request is a coroutine that returns an
 and an error indication are results, and an exception means the interface was
 misused or the connection could not be made.
 
+Each outstation also runs automatic tasks: a startup sequence on connect,
+clearing the restart indication, writing the time on request, polling for
+events when indicated, and reconnecting after a lost connection. Configure
+them with :class:`~py1815.master.tasks.Tasks`, or pass ``manual=True`` to
+disable every task and confirmation.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -15,13 +21,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from types import TracebackType
 from typing import Any
 
-from py1815.application import FunctionCode
+from py1815.application import IIN, FunctionCode
 from py1815.master import requests
 from py1815.master.association import (
     DEFAULT_RESPONSE_TIMEOUT,
@@ -32,12 +40,16 @@ from py1815.master.association import (
 from py1815.master.controls import Operated, Plan
 from py1815.master.operations import Operations
 from py1815.master.store import Store
+from py1815.master.tasks import Housekeeper, Tasks
 from py1815.master.trace import RECEIVED, SENT, Trace
 
 logger = logging.getLogger(__name__)
 
 #: Seconds to wait for a TCP connection to be made.
 DEFAULT_CONNECT_TIMEOUT = 5.0
+
+#: Default seconds between reconnection attempts.
+DEFAULT_RECONNECT = 5.0
 
 #: Unsolicited responses kept before the oldest is dropped.
 _UNSOLICITED_KEPT = 1000
@@ -62,7 +74,10 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         master_address: int = 1,
         response_timeout: float = DEFAULT_RESPONSE_TIMEOUT,
         connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
-        confirm: bool = True,
+        confirm: bool | None = None,
+        tasks: Tasks | None = None,
+        manual: bool = False,
+        reconnect: float | None = DEFAULT_RECONNECT,
         on_unsolicited: Callable[[Unsolicited], None] | None = None,
         on_exchange: Callable[[Exchange], None] | None = None,
         on_connection: Callable[[bool], None] | None = None,
@@ -79,6 +94,15 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
             connect_timeout: Seconds to wait for the connection to be made.
             confirm: Whether fragments that ask to be confirmed are. See
                 :class:`~py1815.master.association.MasterAssociation`.
+                Defaults to True, or False when ``manual`` is set.
+            tasks: The automatic tasks to run. Defaults to ``Tasks()``, or
+                ``Tasks.none()`` when ``manual`` is set.
+            manual: Disable all automatic tasks and confirmations, so only
+                requests the caller makes are sent. An explicit ``tasks`` or
+                ``confirm`` overrides this.
+            reconnect: Seconds between reconnection attempts after a
+                connection is lost, or None to disable reconnection. A
+                connection ended by :meth:`close` is not reopened.
             on_unsolicited: Called with each unsolicited response as it
                 arrives, after it has been confirmed and stored.
             on_exchange: Called with each exchange as it ends, after its
@@ -89,12 +113,18 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self.name = name
         self.host = host
         self.port = port
+        if reconnect is not None and not (reconnect > 0 and math.isfinite(reconnect)):
+            raise ValueError(f"reconnect is {reconnect}; it is a wait between attempts")
         self.association = MasterAssociation(
             outstation_address=outstation_address,
             master_address=master_address,
             response_timeout=response_timeout,
-            confirm=confirm,
+            confirm=not manual if confirm is None else confirm,
         )
+        if tasks is None:
+            tasks = Tasks.none() if manual else Tasks()
+        self._housekeeper = Housekeeper(tasks)
+        self.reconnect = reconnect
         self.store = Store()
         self.trace = Trace()
         self.on_unsolicited = on_unsolicited
@@ -112,9 +142,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._receiving: asyncio.Task[None] | None = None
+        self._housekeeping: asyncio.Task[None] | None = None
+        self._reconnecting: asyncio.Task[None] | None = None
         #: Set whenever something arrived or the connection ended, so a
         #: waiting request looks again.
         self._progress = asyncio.Event()
+        #: Set when a task becomes due, to wake the task worker.
+        self._attention = asyncio.Event()
+        #: Set while no task is pending or running.
+        self._settled = asyncio.Event()
+        self._settled.set()
         #: One request at a time, in the order asked.
         self._turn = asyncio.Lock()
 
@@ -125,12 +162,48 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         return self._writer is not None and not self._writer.is_closing()
 
     @property
+    def tasks(self) -> Tasks:
+        """The automatic task settings for this outstation."""
+        return self._housekeeper.tasks
+
+    @property
+    def tasks_due(self) -> tuple[str, ...]:
+        """The pending tasks, in execution order."""
+        return self._housekeeper.due
+
+    @property
     def unsolicited(self) -> tuple[Unsolicited, ...]:
         """The unsolicited responses received, oldest first."""
         return tuple(self._unsolicited)
 
     async def connect(self) -> None:
-        """Open the connection. Raises ``OSError`` if it cannot be made."""
+        """Open the connection. Raises ``OSError`` if it cannot be made.
+
+        Returns as soon as the connection is open. The startup tasks run
+        after that; use :meth:`idle` to wait for them.
+
+        If this is called while the master is retrying a lost connection and
+        the attempt fails, the error is raised and the retries carry on.
+        """
+        retrying = self._reconnecting is not None
+        await self._stop_reconnecting()
+        try:
+            await self._open()
+        except OSError:
+            # This call cancelled the retry worker. Start it again, so a
+            # failed manual attempt does not end automatic reconnection.
+            if retrying:
+                self._start_reconnecting()
+            raise
+
+    async def idle(self) -> None:
+        """Wait until no automatic task is pending or running.
+
+        Returns immediately if there is none, or if the connection has ended.
+        """
+        await self._settled.wait()
+
+    async def _open(self) -> None:
         if self.connected:
             return
         try:
@@ -146,11 +219,67 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self.trace.reset()
         self._receiving = asyncio.create_task(self._receive(), name=f"dnp3-master-{self.name}")
         self._notify_connection(True)
+        # Queue the startup tasks for the new connection.
+        self._housekeeper.connected()
+        self._attention.clear()
+        if self._housekeeper.due:
+            self._settled.clear()
+        self._housekeeping = asyncio.create_task(
+            self._keep_house(), name=f"dnp3-master-{self.name}-tasks"
+        )
+        # Yield once so the task worker acquires the request lock first.
+        # Requests made after this returns, including repeated scans, then
+        # queue behind the startup tasks.
+        await asyncio.sleep(0)
         for kind, interval in self._scan_intervals.items():
             self._start_scan(kind, interval)
 
+    async def _stop_reconnecting(self) -> None:
+        reconnecting, self._reconnecting = self._reconnecting, None
+        if reconnecting is not None:
+            # Wait for the cancellation, so an attempt in progress cannot
+            # complete afterwards and open a second connection.
+            reconnecting.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconnecting
+
+    def _stop_housekeeping(self) -> None:
+        housekeeping, self._housekeeping = self._housekeeping, None
+        if housekeeping is not None:
+            housekeeping.cancel()
+        # No tasks run without a connection, so release anyone in idle().
+        # Set it here as well as in the worker: a worker cancelled before its
+        # first run never reaches its own cleanup.
+        self._settled.set()
+
+    def _start_reconnecting(self) -> None:
+        """Start the retry worker, unless reconnection is off or one is running."""
+        if self.reconnect is not None and self._reconnecting is None:
+            self._reconnecting = asyncio.create_task(
+                self._reconnect(self.reconnect), name=f"dnp3-master-{self.name}-reconnect"
+            )
+
+    async def _reconnect(self, interval: float) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._open()
+            except OSError as exc:
+                logger.info("dnp3 master: %s is still not reachable: %s", self.name, exc)
+                continue
+            # The peer can close the new connection before _open() returns.
+            # The receive loop does not start another worker while this one
+            # is running, so keep retrying here.
+            if self.connected:
+                logger.info("dnp3 master: connected to %s again", self.name)
+                self._reconnecting = None
+                return
+            logger.info("dnp3 master: %s closed the new connection at once", self.name)
+
     async def close(self) -> None:
         """Close the connection. The store and the association's counters stay."""
+        await self._stop_reconnecting()
+        self._stop_housekeeping()
         for task in self._scanning.values():
             task.cancel()
         self._scanning.clear()
@@ -194,7 +323,10 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
             if self._writer is writer:
                 self._writer = None
                 writer.close()
+                self._stop_housekeeping()
                 self._notify_connection(False)
+                # The connection was lost, not closed by the caller: reconnect.
+                self._start_reconnecting()
             self._progress.set()
 
     def _notify_connection(self, connected: bool) -> None:
@@ -208,6 +340,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         for unsolicited in self.association.take_unsolicited():
             self.store.apply(unsolicited.objects, now=time.monotonic())
             self._unsolicited.append(unsolicited)
+            self._note(unsolicited.iin)
             if self.on_unsolicited is not None:
                 try:
                     self.on_unsolicited(unsolicited)
@@ -234,7 +367,40 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 done.append(await self._exchange_in_turn(*step))
             return plan.result(done)
 
-    async def _exchange_in_turn(self, function: FunctionCode, body: bytes) -> Exchange:
+    def _note(
+        self, indications: IIN | None, answering: tuple[FunctionCode, bytes] | None = None
+    ) -> None:
+        """Pass a response's indications to the housekeeper and wake the worker."""
+        self._housekeeper.saw(indications, answering=answering)
+        if self._housekeeper.due and self._housekeeping is not None:
+            self._settled.clear()
+            self._attention.set()
+
+    async def _keep_house(self) -> None:
+        """Task worker: send the requests for pending tasks until disconnected."""
+        try:
+            while True:
+                if self._housekeeper.due:
+                    # Hold the request lock for the whole batch, so the
+                    # startup sequence is not interleaved with other requests.
+                    async with self._turn:
+                        while (step := self._housekeeper.next()) is not None:
+                            await self._exchange_in_turn(step.function, step.body, task=step.task)
+                self._settled.set()
+                await self._attention.wait()
+                self._attention.clear()
+        except NotConnected:
+            logger.info("dnp3 master: the tasks for %s stopped with the connection", self.name)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # An unexpected error is a bug in this library. Log it and stop
+            # the worker without dropping the connection.
+            logger.exception("dnp3 master: the tasks for %s failed", self.name)
+        finally:
+            self._settled.set()
+
+    async def _exchange_in_turn(
+        self, function: FunctionCode, body: bytes, *, task: str | None = None
+    ) -> Exchange:
         writer = self._writer
         if writer is None or writer.is_closing():
             raise NotConnected(f"{self.name} is not connected")
@@ -242,33 +408,48 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         octets = self.association.request(function, body)
         self.trace.record(SENT, octets)
         writer.write(octets)
-        # A write that fails is seen by the receive loop as well, which
-        # ends the exchange as abandoned.
-        with contextlib.suppress(OSError):
-            await writer.drain()
-        while True:
-            exchange = self.association.take()
-            if exchange is not None:
-                self._finished(exchange)
-                return exchange
-            wait = self.association.expires_after()
-            if wait is None:
-                # Neither outstanding nor finished: the connection was
-                # closed and reopened underneath this request.
-                raise NotConnected(f"the connection to {self.name} was reset")
-            if wait <= 0:
-                self.association.expire()
-                continue
-            self._progress.clear()
-            # Looked at again before waiting: something may have arrived
-            # between taking and clearing.
-            if not self.association.busy:
-                continue
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._progress.wait(), wait)
+        try:
+            # A write that fails is seen by the receive loop as well, which
+            # ends the exchange as abandoned.
+            with contextlib.suppress(OSError):
+                await writer.drain()
+            while True:
+                exchange = self.association.take()
+                if exchange is not None:
+                    if task is not None:
+                        exchange = replace(exchange, task=task)
+                    self._finished(exchange, body)
+                    return exchange
+                wait = self.association.expires_after()
+                if wait is None:
+                    # Neither outstanding nor finished: the connection was
+                    # closed and reopened underneath this request.
+                    raise NotConnected(f"the connection to {self.name} was reset")
+                if wait <= 0:
+                    self.association.expire()
+                    continue
+                self._progress.clear()
+                # Looked at again before waiting: something may have arrived
+                # between taking and clearing.
+                if not self.association.busy:
+                    continue
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._progress.wait(), wait)
+        except asyncio.CancelledError:
+            # The caller cancelled while the request was in flight, for
+            # example on its own timeout or when a repeated scan is
+            # rescheduled. End the exchange as abandoned and record it.
+            # Otherwise the association stays busy and rejects every later
+            # request.
+            self.association.abandon()
+            given_up = self.association.take()
+            if given_up is not None:
+                self._finished(replace(given_up, task=task), body)
+            raise
 
-    def _finished(self, exchange: Exchange) -> None:
+    def _finished(self, exchange: Exchange, body: bytes) -> None:
         self.store.apply(exchange.objects, now=time.monotonic())
+        self._note(exchange.iin, (exchange.function, body))
         outcome = exchange.outcome.value
         self.counts[outcome] = self.counts.get(outcome, 0) + 1
         if exchange.fragments:
@@ -290,8 +471,8 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     def repeat_scan(self, kind: str, interval: float | None) -> None:
         """Repeat a scan every ``interval`` seconds, or stop repeating it with None.
 
-        Nothing is repeated unless this is called: a master sends what it was
-        asked to send. A repeated scan waits its turn like any other request,
+        No scan is repeated unless this is called. A repeated scan waits its
+        turn like any other request,
         stops when the connection ends, and starts again when it is made again.
         """
         requests.scan(kind)  # Refuses a kind that is not a scan, before anything runs.

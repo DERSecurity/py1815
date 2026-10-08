@@ -233,6 +233,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; margin: 0; font-size: 13.5px; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+/* Two facts to a row where there is the width for it. */
+.facts.paired { grid-template-columns: repeat(auto-fit, minmax(190px, max-content) minmax(230px, 1fr)); }
+.card.spaced { margin-bottom: 16px; }
 
 .lamps { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 16px; }
 .indication { display: flex; align-items: center; gap: 9px; color: var(--muted); font: 12px var(--mono); letter-spacing: 0.3px; }

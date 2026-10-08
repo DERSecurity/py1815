@@ -35,13 +35,21 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
     --integrity-interval 30 --event-interval 2
 ```
 
+Every option below except the token options and `--demo` can also be set in a
+JSON file and loaded with `--config`. See
+[Configuring the master](master-config.md).
+
 | Option | Does |
 |---|---|
+| `--config FILE` | Loads settings from a JSON file. Flags given on the command line override it |
 | `--demo` | Starts a simulated IEEE 1815.2 DER and connects to it |
 | `--outstation NAME=HOST:PORT` | Adds an outstation and connects to it. May be given more than once |
 | `--outstation-address`, `--master-address` | The link addresses, for the outstations named. 1024 and 1 unless given |
 | `--integrity-interval SECONDS` | Repeats an integrity poll of each outstation named |
 | `--event-interval SECONDS` | Repeats an event poll |
+| `--unsolicited CLASSES` | Enables unsolicited reporting for these event classes after startup, as in `1,2,3` |
+| `--manual` | Sends only what is asked for: no startup sequence, no event poll, no confirmation |
+| `--reconnect SECONDS` | Seconds between reconnection attempts after a lost connection. 5 by default, 0 for never |
 | `--output-interval SECONDS` | Repeats a read of output status. As often as the integrity poll unless given; 0 for never |
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
@@ -54,6 +62,18 @@ py1815-master console --outstation lab=192.0.2.10:20000 \
 | `--open` | Opens the console in a browser |
 
 Outstations can also be added from the page, under **Add outstation**.
+
+Once an outstation is connected, the master runs its automatic tasks:
+
+- On connect, it disables unsolicited reporting and runs an integrity poll.
+- It polls for events when a response says some are waiting.
+- It reconnects when the connection is lost.
+- With `--allow-control`, it also clears the restart indication and writes the
+  time when the outstation asks.
+
+The **Overview** tab shows which tasks are enabled, and the **Log** records
+each time one runs. **Manual**, on the form and on the command line, disables
+them all.
 
 ### In Docker
 
@@ -99,7 +119,7 @@ one selected has six tabs.
 
 | Tab | Shows |
 |---|---|
-| **Overview** | Addresses, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, and every internal indication of the last response as a lamp |
+| **Overview** | Addresses, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, what the master does for the outstation unasked, and every internal indication of the last response as a lamp |
 | **Points** | A table for each point type |
 | **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
