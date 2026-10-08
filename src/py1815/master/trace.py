@@ -275,11 +275,13 @@ class Trace:
         for reassembler in self._reassemblers.values():
             reassembler.reset()
         self._connection += 1
-        self._endpoints[self._connection] = (local, peer)
-        # Keep the endpoints of the connections a kept frame crossed, and no others.
-        oldest = self._entries[0].connection if self._entries else self._connection
-        for connection in [number for number in self._endpoints if number < oldest]:
+        # Keep the endpoints of the connections a kept frame crossed, and of
+        # the new one, and no others. A connection that closed before any
+        # frame would otherwise stay here for as long as the master runs.
+        needed = {entry.connection for entry in self._entries}
+        for connection in [number for number in self._endpoints if number not in needed]:
             del self._endpoints[connection]
+        self._endpoints[self._connection] = (local, peer)
 
     def endpoints(self, connection: int) -> tuple[Address | None, Address | None]:
         """Return this master's and the outstation's address on a connection.
@@ -363,6 +365,11 @@ class Recorder:
             self._stream.close(self._last)
             self._stream = None
             self._connection = None
+
+    def abandon(self) -> None:
+        """Forget the open connection without writing anything more."""
+        self._stream = None
+        self._connection = None
 
     def _open(self, connection: int, at: float) -> Stream:
         local, peer = self._trace.endpoints(connection)

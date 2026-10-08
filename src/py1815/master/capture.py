@@ -191,8 +191,9 @@ def _tcp(source: _End, destination: _End, flags: int, payload: bytes) -> bytes:
         "!HHIIBBHHH",
         source.port,
         destination.port,
-        source.sequence,
-        destination.sequence if flags & _ACK else 0,
+        # TCP sequence numbers wrap at 32 bits, so a long connection keeps going.
+        source.sequence & 0xFFFFFFFF,
+        destination.sequence & 0xFFFFFFFF if flags & _ACK else 0,
         5 << 4,  # data offset: five 32-bit words, no options
         flags,
         65535,  # window

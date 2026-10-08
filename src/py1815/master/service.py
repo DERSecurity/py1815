@@ -218,6 +218,8 @@ class Service:
         self.allow_control = allow_control
         self.capture_file = capture
         self._recorders: dict[str, Recorder] = {}
+        #: Each outstation's listener that writes the capture file, by name.
+        self._capture_listeners: dict[str, Callable[[Entry], None]] = {}
         self._names: dict[str, dict[PointType, dict[int, str]]] = {}
         self._profiles: dict[str, PointMap] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -446,8 +448,9 @@ class Service:
                     recorder.record(entry)
                 except (OSError, ValueError):
                     logger.exception("dnp3 master: writing the capture of %s failed", name)
-                    outstation.trace.listeners.remove(on_frame_captured)
+                    self._stop_capture()
 
+            self._capture_listeners[name] = on_frame_captured
             outstation.trace.listeners.append(on_frame_captured)
         outstation.on_exchange = on_exchange
         outstation.on_unsolicited = on_unsolicited
@@ -549,9 +552,28 @@ class Service:
                 self._commanding(f"the {name} task")
         return tasks.reading_only()
 
+    def _stop_capture(self) -> None:
+        """Stop writing the capture file for every outstation, after a write failed.
+
+        The file is shared, so a failure for one outstation is a failure for
+        all. Open connections are abandoned without their FIN packets, since
+        writing more to a failing file would only fail again.
+        """
+        for name, listener in self._capture_listeners.items():
+            with contextlib.suppress(KeyError, ValueError):
+                self.master[name].trace.listeners.remove(listener)
+        self._capture_listeners.clear()
+        for recorder in self._recorders.values():
+            recorder.abandon()
+        self._recorders.clear()
+        if self.capture_file is not None:
+            with contextlib.suppress(OSError):
+                self.capture_file.close()
+
     async def _remove(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
         await self.master.remove(outstation.name)
+        self._capture_listeners.pop(outstation.name, None)
         recorder = self._recorders.pop(outstation.name, None)
         if recorder is not None:
             recorder.close()
