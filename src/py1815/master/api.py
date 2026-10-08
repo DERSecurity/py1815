@@ -61,6 +61,13 @@ class NotConnected(ConnectionError):
     """A request was made of an outstation that has no connection."""
 
 
+def _address(name: Any) -> tuple[str, int] | None:
+    """Return a socket's address and port, or None when the socket did not give them."""
+    if isinstance(name, tuple) and len(name) >= 2:
+        return str(name[0]), int(name[1])
+    return None
+
+
 class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
     """One outstation, as a master sees it: a connection, an association, a store."""
 
@@ -207,16 +214,20 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         if self.connected:
             return
         try:
-            self._reader, self._writer = await asyncio.wait_for(
+            reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(self.host, self.port), self._connect_timeout
             )
         except TimeoutError as exc:
             raise TimeoutError(
                 f"no connection to {self.host}:{self.port} within {self._connect_timeout} s"
             ) from exc
+        self._reader, self._writer = reader, writer
         self.association.connection_reset()
         self.association.take()
-        self.trace.reset()
+        self.trace.reset(
+            local=_address(writer.get_extra_info("sockname")),
+            peer=_address(writer.get_extra_info("peername")),
+        )
         self._receiving = asyncio.create_task(self._receive(), name=f"dnp3-master-{self.name}")
         self._notify_connection(True)
         # Queue the startup tasks for the new connection.

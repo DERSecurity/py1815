@@ -301,21 +301,17 @@ SWEEP = pathlib.Path(__file__).resolve().parents[1] / "interop" / "sweep.py"
 def _sweep():
     """Load ``interop/sweep.py``, which is a script rather than a package.
 
-    It imports a sibling script by bare name, the way a script run from that
-    directory would, so the directory goes on the path first. It also declares
-    dataclasses under postponed annotations, and `dataclasses` resolves those
-    through `sys.modules`, so the module has to be registered there before it
-    runs rather than only after.
+    It declares dataclasses under postponed annotations, and `dataclasses`
+    resolves those through `sys.modules`, so the module has to be registered
+    there before it runs rather than only after.
     """
     spec = importlib.util.spec_from_file_location("interop_sweep", SWEEP)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(SWEEP.parent))
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
     finally:
-        sys.path.remove(str(SWEEP.parent))
         sys.modules.pop(spec.name, None)
     return module
 

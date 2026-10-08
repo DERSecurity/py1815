@@ -55,7 +55,8 @@ jobs:
       - name: The wheel must carry the library and nothing else
         # The interop fixtures and the test suite live beside the package and
         # are not part of it. A packaging change that swept them in would ship
-        # a master, an outstation fixture and a pcap writer to every consumer.
+        # the interoperability scripts, an outstation fixture and the test
+        # suite to every consumer.
         run: |
           strays=$(python -m zipfile -l dist/*.whl \
             | grep -Eo '^(interop|tests|docs)/[^ ]*' || true)

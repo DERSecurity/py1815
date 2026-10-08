@@ -27,6 +27,7 @@ take `--config FILE`.
   "bind": null,
   "tables": null,
   "connect_wait": 0.0,
+  "capture": null,
   "defaults": {
     "port": 20000,
     "outstation_address": 1024,
@@ -76,6 +77,7 @@ Every setting is optional. A file that only lists outstations is valid.
 | `bind` | `null` | Address and port to listen on. `null` uses the command's default: `127.0.0.1:8815` for `console`, `127.0.0.1:8816` for `serve` |
 | `tables` | `null` | Path of the IEEE 1815.2 profile tables file, for outstations with `profile` set. `null` uses the usual locations |
 | `connect_wait` | `0` | Seconds to keep trying to reach an outstation that is not there at startup. `0` tries once |
+| `capture` | `null` | Path of a pcap file to write every frame of every outstation to, as it is sent or received. The file is created, or emptied if it exists, when the master starts. `null` writes no file. See [Captures](master.md#captures) |
 
 The console's token is not in the file, because it is a secret. Give it with
 `--token` or the `PY1815_MASTER_TOKEN` environment variable.
@@ -135,6 +137,7 @@ own value.
 | `--bind ADDRESS:PORT` | `bind` |
 | `--tables FILE` | `tables` |
 | `--connect-wait SECONDS` | `connect_wait` |
+| `--capture FILE` | `capture` |
 | `--outstation NAME=HOST:PORT` | Adds an entry to `outstations`. May be repeated |
 | `--outstation-address N` | `defaults.outstation_address` |
 | `--master-address N` | `defaults.master_address` |

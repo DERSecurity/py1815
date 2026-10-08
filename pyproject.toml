@@ -113,11 +113,12 @@ include = [
 exclude = [
     "docs/planning",
     "interop",
-    # Tests the interoperability fixture, which is not in the allow-list and so
-    # is not here to be tested. What ships is the library and the tests of the
+    # Test the interoperability fixture and scripts, which are not in the
+    # allow-list and so are not here to be tested. What ships is the library and the tests of the
     # library; a test whose subject was left out is one that cannot pass, and a
     # downstream packager running the shipped suite would report it as a bug.
     "tests/test_interop_fixture.py",
+    "tests/test_interop_capture.py",
     # The same, for the changelog assembler under `scripts/`, which is release
     # tooling and is not shipped either.
     "tests/test_changelog_fragments.py",

@@ -1,6 +1,6 @@
 """The master's configuration: every setting in one JSON document.
 
-A configuration has four top-level settings, a ``defaults`` object with the
+A configuration has five top-level settings, a ``defaults`` object with the
 settings shared by every outstation, and a list of ``outstations``. An
 outstation entry needs a ``name`` and a ``host``; any other setting it gives
 overrides the default.
@@ -182,7 +182,15 @@ class OutstationConfig:
         return described
 
 
-_TOP_LEVEL = ("allow_control", "bind", "tables", "connect_wait", "defaults", "outstations")
+_TOP_LEVEL = (
+    "allow_control",
+    "bind",
+    "tables",
+    "connect_wait",
+    "capture",
+    "defaults",
+    "outstations",
+)
 
 
 @dataclass(frozen=True)
@@ -198,6 +206,9 @@ class MasterConfig:
     #: Seconds to keep trying to reach an outstation that is not there at
     #: startup. Zero tries once.
     connect_wait: float = 0.0
+    #: Path of a pcap file to write every frame to as it is sent or received,
+    #: or None for no file.
+    capture: str | None = None
     #: The settings an outstation has unless its own entry says otherwise.
     defaults: OutstationConfig = field(default_factory=OutstationConfig)
     outstations: tuple[OutstationConfig, ...] = ()
@@ -213,7 +224,7 @@ class MasterConfig:
         values: dict[str, Any] = {}
         if "allow_control" in given:
             values["allow_control"] = settings.boolean(given["allow_control"], "allow_control")
-        for key in ("bind", "tables"):
+        for key in ("bind", "tables", "capture"):
             if given.get(key) is not None:
                 values[key] = settings.text(given[key], key)
         if "connect_wait" in given:
@@ -279,6 +290,7 @@ class MasterConfig:
             "bind": self.bind,
             "tables": self.tables,
             "connect_wait": self.connect_wait,
+            "capture": self.capture,
             "defaults": shared,
             "outstations": outstations,
         }

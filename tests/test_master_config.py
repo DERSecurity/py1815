@@ -45,6 +45,7 @@ class TestDefaults:
             "bind": None,
             "tables": None,
             "connect_wait": 0.0,
+            "capture": None,
             "defaults": {
                 "port": 20000,
                 "outstation_address": 1024,
@@ -77,7 +78,7 @@ def test_documented_example_is_valid_and_shows_the_real_defaults():
     document = json.loads(text.split("```json\n", 1)[1].split("```", 1)[0])
     config = MasterConfig.from_mapping(document)
     real = MasterConfig.from_mapping({}).describe()
-    for key in ("allow_control", "bind", "tables", "connect_wait", "defaults"):
+    for key in ("allow_control", "bind", "tables", "connect_wait", "capture", "defaults"):
         assert document[key] == real[key], key
     assert [each.name for each in config.outstations] == ["lab", "bench"]
 
