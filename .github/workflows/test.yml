@@ -8,6 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite takes about two minutes. A hang must fail the job well before
+    # GitHub's six-hour default. pytest-timeout (see pyproject.toml) fails the
+    # hanging test by name first; this is the backstop.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
