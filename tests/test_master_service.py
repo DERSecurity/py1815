@@ -12,6 +12,7 @@ from profile_fixtures import for_reference_der
 
 from py1815.decode import PointType
 from py1815.master import cli
+from py1815.master.api import Outstation
 from py1815.master.service import (
     CONSOLE_DIRECTORY,
     HttpServer,
@@ -1318,3 +1319,48 @@ class TestTheCommand:
         waiting: list[asyncio.Task[None]] = []
         assert await cli._add_outstations(service, cli.configuration(args), None, waiting)
         assert waiting == []
+
+
+class TestWaitingForAFirstConnection:
+    @staticmethod
+    def _refused_once(monkeypatch) -> list[int]:
+        """Make the first attempt at a connection fail, as if the outstation were not there yet."""
+        opened = Outstation._open
+        attempts: list[int] = []
+
+        async def refused_once(outstation: Outstation) -> None:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise ConnectionRefusedError("not there yet")
+            await opened(outstation)
+
+        monkeypatch.setattr(Outstation, "_open", refused_once)
+        return attempts
+
+    @pytest.mark.asyncio
+    async def test_connect_keeps_trying_for_the_wait_given(self, service, outstation, monkeypatch):
+        _, server = outstation
+        await _ask(service, "add", name="lab", host="127.0.0.1", port=server.port, connect=False)
+        attempts = self._refused_once(monkeypatch)
+        answer = await _ask(service, "connect", "lab", wait=5)
+        assert answer["ok"] and answer["result"]["connected"] and len(attempts) == 2
+
+    @pytest.mark.asyncio
+    async def test_without_a_wait_the_first_failure_is_the_answer(
+        self, service, outstation, monkeypatch
+    ):
+        _, server = outstation
+        await _ask(service, "add", name="lab", host="127.0.0.1", port=server.port, connect=False)
+        attempts = self._refused_once(monkeypatch)
+        answer = await _ask(service, "connect", "lab")
+        assert answer["error"]["kind"] == "connection" and len(attempts) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_command_line_waits_through_the_service(
+        self, service, outstation, monkeypatch, capsys
+    ):
+        _, server = outstation
+        await _ask(service, "add", name="lab", host="127.0.0.1", port=server.port, connect=False)
+        attempts = self._refused_once(monkeypatch)
+        await cli._keep_trying(service, "lab", 5.0)
+        assert "lab: connected" in capsys.readouterr().out and len(attempts) == 2
