@@ -31,7 +31,7 @@ not a model of a DER, and it will not become one: see
 serves it with unsolicited responses on, for a master that enables them.
 
 Every setting (addresses, the bind address, equipment counts, event policy,
-timeouts) can be given as a flag or kept in a JSON file:
+timeouts) can be kept in a JSON file, and most also have a flag:
 
 ```bash
 py1815-der config --out der.json     # print every setting with its default

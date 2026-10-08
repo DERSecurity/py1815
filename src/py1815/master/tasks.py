@@ -79,9 +79,12 @@ class Tasks:
     integrity_on_overflow: bool = True
 
     def __post_init__(self) -> None:
-        classes = tuple(int(number) for number in self.enable_unsolicited)
-        if any(number not in (1, 2, 3) for number in classes):
-            raise ValueError("unsolicited reporting is by event class: 1, 2 or 3")
+        classes = tuple(self.enable_unsolicited)
+        for number in classes:
+            # Checked by type as well as value: int() would turn 1.9, "1" and
+            # True into class 1 instead of rejecting them.
+            if isinstance(number, bool) or not isinstance(number, int) or number not in (1, 2, 3):
+                raise ValueError("unsolicited reporting is by event class: 1, 2 or 3")
         object.__setattr__(self, "enable_unsolicited", classes)
 
     @classmethod

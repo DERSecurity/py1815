@@ -1,7 +1,9 @@
 # Configuring the outstation
 
-Every setting of `py1815-der` can be kept in one JSON file. The same settings
-are available as command-line flags, and a flag overrides the file.
+Every setting of `py1815-der` can be kept in one JSON file. Most also have a
+command-line flag, and a flag overrides the file. Three are set in the file
+only: `disabled_offline`, `confirm_timeout` and `event_policy`. The Flag column
+of the tables below shows which settings have one.
 
 ## Quick start
 
@@ -73,7 +75,7 @@ keep their defaults.
 | `event_capacity` | `2000` | `--event-capacity` | Events each class holds before the oldest is dropped |
 | `max_response` | `2048` | `--max-response` | Largest response fragment to send, in octets |
 | `select_timeout` | `10` | `--select-timeout` | Seconds a select stays valid |
-| `confirm_timeout` | `10` | | Seconds to wait for a master to confirm a response. `null` waits without limit |
+| `confirm_timeout` | `10` | | Seconds to wait for a master to confirm a response. `null` waits without limit, and is not allowed when `unsolicited` is true |
 | `idle_timeout` | `300` | `--idle-timeout` | Seconds of silence before a connection is closed |
 | `event_policy` | `null` | | Which points report events, in which class and past what deadband. `null` uses the profile tables' choices. See [Setting the event policy](der.md#setting-the-event-policy) for the format |
 

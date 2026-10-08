@@ -108,6 +108,13 @@ class TestErrors:
             ({"event_capacity": 0}, "event_capacity must be a whole number from 1"),
             ({"max_response": 100}, "max_response must be a whole number from 249"),
             ({"select_timeout": 0}, "select_timeout must be greater than 0"),
+            ({"select_timeout": float("inf")}, "select_timeout must be a finite number"),
+            ({"simulation": {"tick": float("inf")}}, "simulation.tick must be a finite number"),
+            ({"idle_timeout": float("nan")}, "idle_timeout must be a finite number"),
+            (
+                {"unsolicited": True, "confirm_timeout": None},
+                "confirm_timeout must be a number of seconds when unsolicited is true",
+            ),
             ({"idle_timeout": "long"}, "idle_timeout must be a number of seconds"),
             ({"composition": {"meter": 1}}, "composition.meter is not a setting"),
             ({"composition": {"meters": -1}}, "composition.meters must be a whole number from 0"),
@@ -126,6 +133,25 @@ class TestErrors:
         with pytest.raises(ConfigError) as raised:
             DerConfig.from_mapping(document)
         assert says in str(raised.value)
+
+    def test_infinity_written_in_json_is_rejected(self, tmp_path):
+        """JSON has no infinity, but 1e309 decodes to one."""
+        path = tmp_path / "der.json"
+        path.write_text('{"simulation": {"tick": 1e309}}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="tick must be a finite number"):
+            DerConfig.load(path)
+
+    def test_no_confirm_timeout_is_allowed_without_unsolicited(self):
+        config = DerConfig.from_mapping({"confirm_timeout": None})
+        assert config.confirm_timeout is None and not config.unsolicited
+
+    def test_every_accepted_configuration_builds_a_session(self):
+        """The check command must not accept what `run` would then refuse."""
+        for document in ({}, {"unsolicited": True}, {"confirm_timeout": None}):
+            config = DerConfig.from_mapping(document)
+            point_map = load.resolve(for_reference_der(), config.composition)
+            simulation = der.build(point_map, seed=config.seed, **config.outstation_options())
+            simulation.outstation.session(**config.session_options())
 
     def test_missing_file_is_reported(self, tmp_path):
         with pytest.raises(ConfigError, match="none"):

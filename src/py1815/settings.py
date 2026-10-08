@@ -11,6 +11,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -27,6 +28,9 @@ def seconds(value: Any, where: str, *, minimum: float = 0.0) -> float:
     """Return a number of seconds greater than ``minimum``."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{where} must be a number of seconds")
+    # JSON such as 1e309 decodes to infinity, which is not a usable interval.
+    if not math.isfinite(value):
+        raise ConfigError(f"{where} must be a finite number of seconds")
     if not value > minimum:
         raise ConfigError(f"{where} must be greater than {minimum:g}")
     return float(value)

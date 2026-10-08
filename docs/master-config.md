@@ -1,7 +1,9 @@
 # Configuring the master
 
-Every setting of `py1815-master` can be kept in one JSON file. The same
-settings are available as command-line flags, and a flag overrides the file.
+Every setting of `py1815-master` can be kept in one JSON file. The most
+common ones also have a command-line flag, and a flag overrides the file. The
+rest are set in the file only; [Command-line flags](#command-line-flags) lists
+which have a flag.
 
 ## Quick start
 

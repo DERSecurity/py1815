@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -112,7 +113,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         self.name = name
         self.host = host
         self.port = port
-        if reconnect is not None and not reconnect > 0:
+        if reconnect is not None and not (reconnect > 0 and math.isfinite(reconnect)):
             raise ValueError(f"reconnect is {reconnect}; it is a wait between attempts")
         self.association = MasterAssociation(
             outstation_address=outstation_address,
@@ -180,9 +181,20 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
 
         Returns as soon as the connection is open. The startup tasks run
         after that; use :meth:`idle` to wait for them.
+
+        If this is called while the master is retrying a lost connection and
+        the attempt fails, the error is raised and the retries carry on.
         """
+        retrying = self._reconnecting is not None
         await self._stop_reconnecting()
-        await self._open()
+        try:
+            await self._open()
+        except OSError:
+            # This call cancelled the retry worker. Start it again, so a
+            # failed manual attempt does not end automatic reconnection.
+            if retrying:
+                self._start_reconnecting()
+            raise
 
     async def idle(self) -> None:
         """Wait until no automatic task is pending or running.
@@ -240,6 +252,13 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
         # first run never reaches its own cleanup.
         self._settled.set()
 
+    def _start_reconnecting(self) -> None:
+        """Start the retry worker, unless reconnection is off or one is running."""
+        if self.reconnect is not None and self._reconnecting is None:
+            self._reconnecting = asyncio.create_task(
+                self._reconnect(self.reconnect), name=f"dnp3-master-{self.name}-reconnect"
+            )
+
     async def _reconnect(self, interval: float) -> None:
         while True:
             await asyncio.sleep(interval)
@@ -247,10 +266,15 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 await self._open()
             except OSError as exc:
                 logger.info("dnp3 master: %s is still not reachable: %s", self.name, exc)
-            else:
+                continue
+            # The peer can close the new connection before _open() returns.
+            # The receive loop does not start another worker while this one
+            # is running, so keep retrying here.
+            if self.connected:
                 logger.info("dnp3 master: connected to %s again", self.name)
                 self._reconnecting = None
                 return
+            logger.info("dnp3 master: %s closed the new connection at once", self.name)
 
     async def close(self) -> None:
         """Close the connection. The store and the association's counters stay."""
@@ -302,10 +326,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated]]):
                 self._stop_housekeeping()
                 self._notify_connection(False)
                 # The connection was lost, not closed by the caller: reconnect.
-                if self.reconnect is not None and self._reconnecting is None:
-                    self._reconnecting = asyncio.create_task(
-                        self._reconnect(self.reconnect), name=f"dnp3-master-{self.name}-reconnect"
-                    )
+                self._start_reconnecting()
             self._progress.set()
 
     def _notify_connection(self, connected: bool) -> None:

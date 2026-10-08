@@ -159,6 +159,13 @@ class DerConfig:
         config = cls(**values)
         if config.master_address == config.outstation_address:
             raise ConfigError("outstation_address and master_address must be different")
+        if config.unsolicited and config.confirm_timeout is None:
+            # The session refuses this combination: with no limit on the wait
+            # for a confirmation, one master that never confirms a read would
+            # block unsolicited responses for good.
+            raise ConfigError(
+                "confirm_timeout must be a number of seconds when unsolicited is true"
+            )
         return config
 
     @staticmethod

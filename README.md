@@ -177,8 +177,9 @@ expects master address 1 (`--outstation-address`, `--master-address`), or serves
 master address speaks first with `--any-master`. The native command listens
 on loopback only, because this entry point serves plaintext with no peer allow-list; pass
 `--bind 0.0.0.0:20000` to reach it from another host. `py1815-der points` lists every point
-served. Every setting can be given as a flag or kept in a JSON file: `py1815-der config`
-prints a complete one to edit and `--config FILE` loads it (see `docs/der-config.md`). The
+served. Every setting can be kept in a JSON file, and most also have a flag:
+`py1815-der config` prints a complete file to edit and `--config FILE` loads it (see
+`docs/der-config.md`). The
 Docker command above publishes
 the port on every interface of the host; write `-p 127.0.0.1:20000:20000` to keep it local.
 
