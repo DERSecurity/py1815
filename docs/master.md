@@ -64,6 +64,10 @@ returns an `Outstation`, which is where the requests are:
 Requests made at the same time take turns, in the order they were made. An
 outstation carries one request at a time.
 
+`read(...)` sends each run of consecutive indices as one start-stop range, in
+ascending order, because that is the form every outstation accepts. The points
+come back in ascending order, whatever order you named them in.
+
 An integrity poll does not return what the outputs stand at. The IEEE 1815.2
 profile leaves output status out of class 0, so it is read by naming its
 groups: `scan("outputs")` reads binary and analog output status, and

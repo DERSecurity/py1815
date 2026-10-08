@@ -16,7 +16,7 @@ from py1815.application import (
     QualifierCode,
     all_objects_header,
     class_header,
-    index_list_header,
+    object_header,
 )
 from py1815.decode import PointType
 
@@ -107,11 +107,16 @@ def scan(kind: str) -> bytes:
 
 
 def read_points(points: Mapping[PointType, Sequence[int] | None]) -> bytes:
-    """The headers of a read of named points, in the outstation's default variations.
+    """Build the headers of a read of named points, in the default variations.
 
     Each point type maps to the indices wanted, or to None for every point of
-    that type. Types are asked in the order given and indices in the order
-    given.
+    that type. Types are asked in the order given.
+
+    Indices are sent as start-stop ranges (qualifiers 0x00 and 0x01), one
+    header for each run of consecutive indices, in ascending order. A DNP3
+    Subset Level 2 outstation is only required to accept ranges in a read. The
+    index-list qualifiers (0x17 and 0x28) are optional at that level, and
+    opendnp3 rejects them.
     """
     if not points:
         raise ValueError("a read names at least one point type")
@@ -120,6 +125,22 @@ def read_points(points: Mapping[PointType, Sequence[int] | None]) -> bytes:
         group = STATIC_GROUPS[point]
         if indices is None:
             headers += all_objects_header(group, DEFAULT_VARIATION)
-        else:
-            headers += index_list_header(group, DEFAULT_VARIATION, indices)
+            continue
+        for start, stop in _runs(indices):
+            headers += object_header(group, DEFAULT_VARIATION, start=start, stop=stop)
     return bytes(headers)
+
+
+def _runs(indices: Sequence[int]) -> list[tuple[int, int]]:
+    """Group indices into (start, stop) runs of consecutive values, ascending."""
+    if not indices:
+        raise ValueError("a read of a point type names at least one index")
+    if min(indices) < 0 or max(indices) > 0xFFFF:
+        raise ValueError("an index is 0 to 65535")
+    runs: list[tuple[int, int]] = []
+    for index in sorted(set(indices)):
+        if runs and index == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], index)
+        else:
+            runs.append((index, index))
+    return runs

@@ -30,6 +30,18 @@ on:
 # The masters answer "does it say the right thing". The parsers answer "is what
 # it put on the wire really DNP3". Those are different questions and neither
 # subsumes the other.
+#
+# Two more jobs test the other direction: this library's master reading and
+# commanding outstations it did not write.
+#
+#   opendnp3-outstation  an outstation built on opendnp3, the same C++ stack,
+#                        through the dnp3-python bindings.
+#   rust-outstation      an outstation built on the `dnp3` crate by Step
+#                        Function I/O (https://github.com/stepfunc/dnp3).
+#
+# Both serve the same fixture and log every control and time write they
+# receive. interop/master_check.py checks what the master decodes against the
+# fixture, and what each outstation logged against what the master sent.
 
 jobs:
   opendnp3-master:
@@ -281,10 +293,143 @@ jobs:
             suricata-out/eve.json
           if-no-files-found: ignore
 
+  opendnp3-outstation:
+    name: the master reads and commands a C++ outstation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The other direction: this library's master against an outstation it did
+    # not write. The outstation is built on opendnp3 through the dnp3-python
+    # bindings, which need Python 3.10, so the job has two virtual environments.
+    #
+    # interop/master_check.py runs the checks. It compares what the master
+    # decodes with the outstation's fixture, and what the outstation logs it
+    # received with what the master sent.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python for the master
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the library
+        run: |
+          python -m venv .venv-master
+          .venv-master/bin/pip install --quiet -e .
+
+      - name: Set up Python for the outstation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the independent outstation
+        run: |
+          python3.10 -m venv .venv-outstation
+          .venv-outstation/bin/pip install --quiet dnp3-python==0.3.0b2
+
+      - name: Start the independent outstation
+        run: |
+          .venv-outstation/bin/python -u interop/opendnp3_outstation.py --port 20000 \
+            > outstation.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if grep -q 'outstation listening on' outstation.log 2>/dev/null; then
+              echo "outstation listening"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "outstation did not bind within 30s"
+          cat outstation.log
+          exit 1
+
+      - name: Read and command it with this library's master
+        # Bounded well inside the job, so a hang fails here with a log.
+        timeout-minutes: 3
+        run: |
+          .venv-master/bin/python -u interop/master_check.py --port 20000 \
+            --log outstation.log
+
+      - name: Outstation log
+        if: always()
+        run: cat outstation.log || true
+
+  rust-outstation:
+    name: the master reads and commands a Rust outstation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The same checks against a second independent outstation, built on Step
+    # Function I/O's `dnp3` crate (https://github.com/stepfunc/dnp3).
+    #
+    # The crate is used under their public license, which is not an
+    # open-source license:
+    #   https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt
+    # They have said that using it for testing and interoperability of py1815
+    # in this repository's public CI is in line with it
+    # (https://github.com/DERSecurity/py1815/issues/48). A fork running this
+    # job should read the license for its own use; commercial licensing is at
+    # https://stepfunc.io/contact. interop/rust-outstation/README.md says
+    # more, and deleting that directory and this job removes this use of it.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the library
+        run: pip install --quiet -e .
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the outstation's dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            interop/rust-outstation/target
+          key: rust-outstation-${{ hashFiles('interop/rust-outstation/Cargo.lock') }}
+
+      - name: Check the independent outstation's code
+        working-directory: interop/rust-outstation
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Build the independent outstation
+        working-directory: interop/rust-outstation
+        run: cargo build --locked
+
+      - name: Start the independent outstation
+        run: |
+          interop/rust-outstation/target/debug/interop-rust-outstation 127.0.0.1:20000 \
+            > outstation.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if grep -q 'outstation listening on' outstation.log 2>/dev/null; then
+              echo "outstation listening"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "outstation did not bind within 30s"
+          cat outstation.log
+          exit 1
+
+      - name: Read and command it with this library's master
+        # Bounded well inside the job, so a hang fails here with a log.
+        timeout-minutes: 3
+        run: python -u interop/master_check.py --port 20000 --log outstation.log
+
+      - name: Outstation log
+        if: always()
+        run: cat outstation.log || true
+
   interop:
     name: interop
     runs-on: ubuntu-latest
-    needs: [opendnp3-master, rust-master, parsers]
+    needs: [opendnp3-master, rust-master, parsers, opendnp3-outstation, rust-outstation]
     if: always()
     # One gate the branch protection can name, in front of however many peer
     # jobs there turn out to be.
@@ -305,4 +450,4 @@ jobs:
               exit 1
             fi
           done
-          echo "every peer read this outstation without objection"
+          echo "every peer agreed with this library, as outstation and as master"
