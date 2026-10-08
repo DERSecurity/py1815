@@ -176,6 +176,60 @@ class TestSilenceAndConnections:
         assert second.sequence == first.sequence + 1, "the association outlives the socket"
 
 
+class TestARequestNobodyWaitsFor:
+    """A request that is cancelled was still sent. It must not block the ones after it."""
+
+    @pytest.mark.asyncio
+    async def test_a_caller_that_stops_waiting_leaves_the_outstation_usable(self, simulation):
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        seen = []
+        await server.start()
+        try:
+            async with Master() as master:
+                # Nobody answers to address 77, so the request stays out.
+                lab = await master.add(
+                    "lab",
+                    host="127.0.0.1",
+                    port=server.port,
+                    outstation_address=77,
+                    response_timeout=30.0,
+                    tasks=ASKED,
+                    on_exchange=seen.append,
+                )
+                for _ in range(2):
+                    with pytest.raises(TimeoutError):
+                        await asyncio.wait_for(lab.scan("class0"), 0.05)
+                assert not lab.association.busy
+        finally:
+            await server.stop()
+
+        assert lab.counts == {"abandoned": 2}
+        assert [exchange.outcome for exchange in seen] == [Outcome.ABANDONED] * 2
+        assert [exchange.sequence for exchange in seen] == [0, 1]
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_scan_set_again_while_one_is_out_goes_on_scanning(self, simulation):
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        try:
+            async with Master() as master:
+                lab = await master.add("lab", host="127.0.0.1", port=server.port, tasks=ASKED)
+                lab.repeat_scan("events", 0.02)
+                # Until a scan is out and unanswered, and then set it again.
+                async with asyncio.timeout(5):
+                    while not lab.association.busy:
+                        await asyncio.sleep(0)
+                lab.repeat_scan("events", 0.02)
+                lab.repeat_scan("outputs", 0.02)
+
+                answered = lab.counts.get("complete", 0)
+                await _until(lambda: lab.counts.get("complete", 0) >= answered + 6)
+                assert lab.store.points(PointType.ANALOG_OUTPUT), "the outputs scan ran"
+                assert lab.counts.get("abandoned") == 1
+        finally:
+            await server.stop()
+
+
 class TestUnsolicitedResponses:
     @pytest.mark.asyncio
     async def test_the_restart_announcement_arrives_unasked_and_is_confirmed(self, simulation):

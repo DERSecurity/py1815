@@ -60,7 +60,8 @@ class Outcome(Enum):
     TIMEOUT = "timeout"
     #: The request was one that takes no response, and was sent.
     SENT = "sent"
-    #: The connection was reset while the request was outstanding.
+    #: The request was given up on while it was outstanding: the connection
+    #: was reset, or whoever asked stopped waiting for the answer.
     ABANDONED = "abandoned"
 
 
@@ -451,6 +452,19 @@ class MasterAssociation:
         self._finish(Outcome.TIMEOUT, self._clock())
         return True
 
+    def abandon(self) -> bool:
+        """End the outstanding exchange now, as abandoned. Says whether one was.
+
+        For an owner whose caller has stopped waiting. The request was sent
+        and may yet be answered; an answer that comes is dropped as one that
+        nothing is waiting for, and is not confirmed. Left outstanding, the
+        request would refuse every one made after it.
+        """
+        if self._pending is None:
+            return False
+        self._finish(Outcome.ABANDONED, self._clock())
+        return True
+
     def _finish(self, outcome: Outcome, now: float) -> None:
         pending = self._pending
         assert pending is not None
@@ -490,8 +504,7 @@ class MasterAssociation:
         self._frames = link.FrameReader()
         self._reassembler.reset()
         self._last_unsolicited = None
-        if self._pending is not None:
-            self._finish(Outcome.ABANDONED, self._clock())
+        self.abandon()
 
 
 __all__ = [

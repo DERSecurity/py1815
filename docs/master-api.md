@@ -97,7 +97,7 @@ names what it refused with.
 | `complete` | The response arrived, to its final fragment |
 | `timeout` | Nothing more arrived in time. What did arrive is in the result |
 | `sent` | The request takes no response, and was sent |
-| `abandoned` | The connection ended while the request was outstanding |
+| `abandoned` | The request was given up on while it was outstanding: the connection ended, or the scan on a schedule that made it was set again |
 
 ## What the master does by itself
 

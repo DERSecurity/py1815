@@ -76,7 +76,7 @@ outstation's answer is an exception.
 
 | Field | Holds |
 |---|---|
-| `outcome` | `COMPLETE`, `TIMEOUT`, `SENT` for a request that takes no response, or `ABANDONED` when the connection ended first |
+| `outcome` | `COMPLETE`, `TIMEOUT`, `SENT` for a request that takes no response, or `ABANDONED` when the connection ended first or the caller stopped waiting |
 | `fragments` | Each response fragment, in the order received |
 | `objects` | Every object of every fragment, decoded, in the order sent |
 | `iin` | The indications of the last fragment, or `None` if nothing arrived |

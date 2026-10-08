@@ -271,6 +271,28 @@ class TestSilence:
         assert association.expires_after() is None
         assert not association.expire() and not association.give_up()
 
+    def test_a_request_nobody_is_waiting_for_is_abandoned_and_the_next_is_made(self):
+        association, _ = _built()
+        first = _fragment(association.request(FunctionCode.READ, rq.scan("class0")))
+        assert association.abandon() and not association.busy
+
+        given_up = association.take()
+        assert given_up.outcome is Outcome.ABANDONED and given_up.request == first
+        assert not association.abandon(), "there is nothing left to give up on"
+
+        # The next request is made as usual, under the next sequence number.
+        assert _fragment(association.request(FunctionCode.READ, rq.scan("class0")))[0] == 0xC1
+
+    def test_the_answer_to_an_abandoned_request_is_dropped_and_not_confirmed(self):
+        association, _ = _built()
+        association.request(FunctionCode.READ, rq.scan("class0"))
+        association.abandon()
+        association.take()
+
+        # It asks to be confirmed, and confirming it would retire events nobody read.
+        assert association.receive(_from_outstation(f"E0 81 00 00 {ANALOG}")) == b""
+        assert association.take() is None and not association.busy
+
     def test_a_reset_connection_abandons_what_was_outstanding(self):
         association, _ = _built()
         association.request(FunctionCode.READ, rq.scan("class0"))
