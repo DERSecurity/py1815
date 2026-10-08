@@ -1,0 +1,92 @@
+# A simulated IEEE 1815.2 DER, and a DNP3 master reading it, with the master's
+# console in a browser.
+#
+#   docker compose up
+#
+# and open http://localhost:8815/ . Stop it with Ctrl-C, and `docker compose
+# down` removes the containers. `docker compose down --volumes` also removes
+# the point tables, which are then fetched again next time.
+#
+# Three things run, in this order:
+#
+#   tables   fetches the profile's point tables from IEEE, once, into a volume.
+#            This library may not redistribute them, so each machine gets its
+#            own copy. It needs the internet the first time and not after.
+#   der      the outstation: a simulated DER, listening for a master.
+#   master   the master, connected to `der`, serving its API and the console.
+#
+# The console is published to this machine only, and asks for no token. To
+# reach it from another machine, change the address under `ports` and set
+# PY1815_MASTER_TOKEN to something only you know. The address to open is then
+# http://<host>:8815/?token=<it>.
+
+name: py1815
+
+services:
+  tables:
+    build: .
+    entrypoint: ["sh", "-c"]
+    # Fetched only when the volume does not have them yet.
+    command:
+      - 'test -s "$$PY1815_TABLES" || py1815-der tables fetch'
+    volumes:
+      - tables:/data
+
+  der:
+    build: .
+    command: ["run", "--bind", "0.0.0.0:20000"]
+    depends_on:
+      tables:
+        condition: service_completed_successfully
+    volumes:
+      - tables:/data
+    # Reached by the master over the network the two share. Publish it as
+    # well to point a master of your own at it:
+    # ports:
+    #   - "127.0.0.1:20000:20000"
+
+  master:
+    build:
+      context: .
+      target: master
+    command:
+      - console
+      - --bind
+      - 0.0.0.0:8815
+      # The simulated DER, by the name it has on the network the two share,
+      # and as an IEEE 1815.2 device, so its points are shown by name.
+      - --outstation
+      - der=der:20000
+      - --profile
+      - --integrity-interval
+      - "30"
+      - --event-interval
+      - "2"
+      # The outstation may take a moment longer to start than this does.
+      - --connect-wait
+      - "60"
+      # Inside a container the console listens on every interface, which it
+      # will not do without a token unless told to. It is told to here because
+      # what decides who can reach it is `ports`, below, and that says this
+      # machine alone.
+      - --no-token
+      # Lets the console operate outputs. The only outstation it is given
+      # is the simulated DER beside it; take this out before pointing it
+      # at anything else.
+      - --allow-control
+    environment:
+      # Set a token before publishing the console any wider than that. With
+      # one set, every request to the service has to carry it.
+      PY1815_MASTER_TOKEN: ${PY1815_MASTER_TOKEN:-}
+    depends_on:
+      der:
+        condition: service_started
+      tables:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8815:8815"
+    volumes:
+      - tables:/data
+
+volumes:
+  tables:

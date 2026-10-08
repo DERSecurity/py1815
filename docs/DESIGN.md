@@ -16,6 +16,15 @@ requiring them. Control objects are sharper still: 32-bit analog outputs exceed 
 once controls are in scope. Level 2 is therefore the floor, and every object served above it
 belongs in the device profile document as an agreed extension.
 
+**The DER is out of scope.** The library carries the profile's points and what the profile
+says of the points themselves. What a DER does with them is not here: the DER functions of
+IEEE 1815.2 clause 6, the following of a curve (6.1.3), schedules, ramps, reversion timeouts
+and ride-through are the behavior of a device, and a caller binds the points to whatever has
+that behavior, a DER simulator or the device itself. The simulated DER shipped here answers
+to a few functions so that the points can be seen working, and is deliberately no more than
+that. Growing it into a model of a DER would put a second, weaker implementation of DER
+behavior beside every real one this library is bound to.
+
 ## Decisions
 
 **D1 -- Pure Python, standard library only.** No native extension, no bindings, no compiled
@@ -1118,6 +1127,76 @@ else about an outstation built this way: the listener's TLS allow-list, or the n
 *Trade-off:* a master that reconnects under a different address has to enable again, and
 until it does its events wait in the buffers for a poll.
 
+**D73 -- The master lives in this package, and its association does no I/O.**
+`py1815.master` is a master for exercising outstations: this one in tests, any other on a
+bench. It is here and not in a distribution of its own because it stands on `link`,
+`transport` and `application`, which are not published as a stable interface for another
+package to depend on. Its core has no runtime dependency, as the rest of the library has
+none. `MasterAssociation` is the session turned around: it is handed the octets that
+arrived and returns the octets to send, and time is a clock read when a method is called.
+A test drives it against a `Session` in one process, through as much protocol time as it
+likes, with no socket and no sleep, and the socket lives in one place above it.
+*Trade-off:* the owner writes the loop that waits, as the listener does for the session.
+
+**D74 -- Objects are read by a decoder written from the standard, not from the encoders.**
+`py1815.decode` holds the layout of every object a response may carry and reads them from
+octets. It was written from the standard's object definitions and is tested from octets
+written out by hand. Producing it by inverting `py1815.objects` would have been less work
+and worth nothing: an encoder and a decoder derived from one another agree through any
+mistake they share, and the reason to read an outstation is to learn what it sent. The
+same argument limits what the master can show. It shares its framing with the outstation
+beside it, so the two agreeing is convenient and is not evidence; the independent masters
+and parsers of the interoperability jobs remain what judges the octets.
+*Trade-off:* two descriptions of each object, kept honest by tests and not by construction.
+
+**D75 -- A decoder reads as far as it can, and says where it stopped.** An object's width
+is the only way to find the object after it, so a group or variation the table does not
+hold ends the reading of that fragment. That is reported, with the reason and the octets
+left unread, beside every object read before it. It is not raised. A response that is
+half understood is still half of what the outstation said, and a tool for evaluating
+outstations will meet objects it does not know more often than one built for a known map.
+*Trade-off:* a caller has to look at `undecoded` to know a fragment was read in full.
+
+**D76 -- What an outstation did with a request is a result, never an exception.** Every
+request returns an `Exchange`: the fragment sent, each fragment received, the objects, the
+indications, how it ended and how long it took. A timeout, an error indication and a
+refusal are outcomes of asking, and are reported the same way a good answer is. An
+exception from the master means the interface was misused or there was no connection to
+ask over. A caller evaluating an outstation is asking what it does, and "it did not
+answer" is as much an answer as any other.
+*Trade-off:* a failure is not loud by itself, so a caller has to check `outcome`.
+
+**D77 -- The master's service is one table of operations, and the console speaks only
+that.** `Service.handle` takes a JSON object naming an operation and returns one. A line
+socket carries those messages for a test rig, and HTTP carries the same ones for a
+browser. The web console holds no logic: it renders what the service reports and sends
+what a person asks, so nothing it does is out of reach of a script, and its behavior is
+tested at the service with no browser. A request over HTTP is a POST and what happens
+unasked arrives as server-sent events, which between them need nothing the standard
+library lacks; a WebSocket would have needed a dependency or a protocol implementation
+owned here, to carry what two plain HTTP exchanges already carry.
+*Trade-off:* the stream is one way, so a request and its answer never share a connection
+with the events around them, and a client correlates the two by `id`.
+
+**D78 -- The console listens on this machine, and takes a request only from its own
+page.** A master is pointed at real equipment, and a service that drives one is a way
+into that equipment. It binds the loopback address unless told otherwise, and told
+otherwise it refuses to start without a token that every request then has to carry. That
+is not enough by itself, because a browser will carry a request from any site to a port
+on the machine it runs on. So a request is refused when its `Origin` is another site,
+when it names a host that is not this machine, and when its body is not sent as
+`application/json`, which a page elsewhere cannot send without asking first and being
+refused. The token is asked of the service, which is every operation and the stream of
+what happens, and not of the console's own files: a page cannot put a token on the
+stylesheet and script it links to, and those say nothing about any outstation. A container
+is the one place the console listens widely by design, since its own network is not the
+one its port is published on; there a token is made for the run, or taken from the
+environment, or done without when the caller says the port is published to this machine
+alone. The console's own page loads nothing from the network, so it works on a lab
+network that reaches nothing, and tells nobody that it is running.
+*Trade-off:* the fonts of the project's site are named and not fetched, so the console
+is set in whatever the machine has when they are not installed.
+
 **D79 -- An event is timed by its reading when the reading says when, and by the
 outstation otherwise.** A binding returns a `Reading`, and a `Reading` may carry the time
 its value was measured. `poll()` stamped every event with the outstation's own clock, so
@@ -1151,6 +1230,21 @@ report late. A run of binary events sent with relative times is already broken a
 a new common time whenever the next event does not fit after the last, which is what an
 earlier time needs too.
 
+**D80 -- A control is sent once, and a service commands only when started to.** The
+master never repeats a control and no task of its own sends one. After a select it sends
+the operate only if the outstation echoed every control unchanged and accepted each; a
+response that does not arrive is reported as not known, which is not a refusal, and the
+caller decides what follows, because only the caller knows whether operating twice is
+harmless. A select and its operate hold the association's turn together, so a scan on a
+schedule cannot fall between them and void the select. The service refuses every
+operation that changes an outstation unless it was started with `--allow-control`:
+outputs, counters, the clock, the restart indication, and a request by any function
+code that is not a read. The last is the one that matters, since a way to send any
+fragment is a way to send an operate. A master is pointed at real equipment in a lab,
+and the default has to be the one nobody regrets.
+*Trade-off:* a caller who wants a retry writes it, and a demonstration has to be
+started with a flag before it can show a control.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1167,6 +1261,12 @@ Each layer is testable without the ones above it, and the session does no I/O.
   object data is parsed as far as its first object header; walking further needs the width of
   every group and variation, which the map knows and this layer does not.
 - `session` holds what is true of a conversation rather than of a frame.
+- `decode` reads objects and knows nothing of who asked for them.
+- `master.association` is the session's mirror: what is true of a conversation, from the end
+  that asks. Like the session it does no I/O. `master.api` owns the socket, and
+  `master.loopback` stands in for one by handing octets straight to a session.
+- `master.service` is the master's operations as JSON, and knows nothing of who is asking.
+  The line socket, the HTTP server and the console are each a way to reach it.
 
 ## Testing
 

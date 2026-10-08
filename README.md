@@ -38,8 +38,10 @@ breaking change.
 ## Run an IEEE 1815.2 DER outstation
 
 `py1815-der` serves a simulated DER as an IEEE 1815.2 outstation: the profile's own point map,
-measurements that move, energy counters that freeze, and four DER functions a master can enable
-and watch take effect.
+measurements that move, energy counters that freeze, and a few DER functions a master can enable
+and watch take effect. The simulation is there to exercise the points. It is not a model of a
+DER: how a DER carries out a function is out of scope for this package, and belongs to the
+device or simulator bound behind the outstation.
 
 Natively, with Python 3.11 or later:
 
@@ -74,6 +76,97 @@ docker exec der py1815-der poll     # Docker
   ...
 ```
 
+## Quickstart: a master and a console on the simulated DER
+
+`py1815-master` is a DNP3 master for testing outstations, with a web console. To see one
+reading the simulated DER, with the point tables fetched as above:
+
+```
+py1815-master console --demo --open                   # reads
+py1815-master console --demo --open --allow-control   # and can operate outputs
+```
+
+That starts a simulated IEEE 1815.2 DER, a master connected to it, and the console at
+<http://127.0.0.1:8815/>, in one process.
+
+To connect a master to a simulated DER that is already running, as you would to a real
+outstation, use two terminals:
+
+```
+py1815-der run                      # terminal 1: the outstation, on 127.0.0.1:20000
+```
+
+```
+py1815-master console --outstation der=127.0.0.1:20000 --profile \
+    --integrity-interval 30 --event-interval 2 --open          # terminal 2
+```
+
+`--outstation` names the outstation and says where it listens. `--profile` says it is an
+IEEE 1815.2 DER, so its points are shown by name and the console can list the profile's points
+it has not reported. The two intervals repeat an integrity poll and an event poll; without
+them the master sends only what you ask for from the Commands tab. The link addresses default
+to the simulated DER's (`--outstation-address 1024 --master-address 1`).
+
+Or with Docker, which needs nothing installed but Docker:
+
+```
+git clone https://github.com/DERSecurity/py1815 && cd py1815
+docker compose up
+```
+
+and open <http://localhost:8815/>. That fetches the point tables from IEEE into a volume the
+first time, starts the simulated DER as an outstation in one container, and starts the master
+with its API and console in another, connected to it. `compose.yaml` says what each part
+does and how to reach the console from another machine. To run the master's image by itself
+against an outstation of your own:
+
+```
+docker build --target master -t py1815-master .
+docker run --rm -p 127.0.0.1:8815:8815 py1815-master \
+    console --bind 0.0.0.0:8815 --new-token --outstation lab=192.0.2.10:20000
+```
+
+It prints the address to open, with a token made for that run.
+
+In the console:
+
+- **Overview** shows the connection and the internal indications of the last response.
+- **Points** shows every point by type, with its value, flags and age.
+- **Commands** sends a scan, a read or any other request, and shows what came back.
+- **Events** lists changes as they are reported, and **Traffic** every frame, read layer by
+  layer.
+
+The same master answers a script. Over HTTP, while the console is running:
+
+```
+curl -s http://127.0.0.1:8815/api/scan -H 'Content-Type: application/json' \
+     -d '{"outstation": "der", "kind": "integrity"}'
+```
+
+And from Python, with no console at all:
+
+```python
+import asyncio
+from py1815.master import Master
+
+async def main():
+    async with Master() as master:
+        der = await master.add("der", host="127.0.0.1", port=20000)
+        poll = await der.integrity_poll()
+        print(poll.outcome.value, len(poll.objects), "objects")
+        print(der.store.analog_input(537))      # System Meter Active Power
+
+asyncio.run(main())
+```
+
+This first version reads: it polls, reads named points and takes unsolicited responses, and
+does not yet operate an output. See [The console](https://dersecurity.github.io/py1815/console/),
+[The master's API](https://dersecurity.github.io/py1815/master-api/), whose routes are
+described in an [OpenAPI document](src/py1815/master/console/openapi.json), and
+[The master](https://dersecurity.github.io/py1815/master/) for the Python interface.
+
+## More about the simulated DER
+
 Any DNP3 master can connect in place of `poll`. The outstation's link address is 1024 and it
 expects master address 1 (`--outstation-address`, `--master-address`), or serves whichever
 master address speaks first with `--any-master`. The native command listens
@@ -101,8 +194,8 @@ certification body:
 | Event classes, class 0 membership and reporting modes (5.3, 5.6) | Implemented as the profile selects them |
 | Counter freezing (5.6.3): periodic from startup, period set by the master, never cleared, logged as timestamped events | Implemented |
 | Every point the tables mark mandatory | Served by the simulated DER |
-| DER functions (clause 6) | Active power limit, charge/discharge, constant vars, constant power factor, volt-var and volt-watt act on the simulation. Every other function reports "not supported" through its supports point, as 6.1.1 requires of a function that is not implemented. A disabled function's inputs are sent without the ONLINE flag |
-| Curves (6.1.3) | Ten curves behind the multiplexed block, with the selector, referenced-indicator, locking and curve-type rules. Volt-var and volt-watt follow theirs; hysteresis is not followed |
+| DER functions (clause 6) | Their points are served. Their behavior is out of scope: what a DER does when a function is enabled belongs to the device or simulator bound behind the outstation. What the profile says of the points themselves is implemented: a function with no enable output bound reports "not supported" through its supports point, as 6.1.1 requires, and a disabled function's inputs are sent without the ONLINE flag. The simulated DER answers to active power limit, charge/discharge, constant vars, constant power factor, volt-var and volt-watt, far enough to exercise those points and no further |
+| Curves (6.1.3) | The curve block is implemented: ten curves behind the multiplexed block, with the selector, referenced-indicator, locking and curve-type rules. Following a curve is out of scope, and belongs to the DER behind the outstation. The simulated DER follows volt-var and volt-watt by straight lines between points; hysteresis is not followed |
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
 | DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
 | DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
@@ -114,8 +207,10 @@ certification body:
 2.12.00), generated from the running configuration: its point lists, limits and
 implementation table. See [Serving a DER](https://dersecurity.github.io/py1815/der/).
 
-To put a real device behind the same outstation, bind its values to the profile's points instead
-of the simulation's: see [Serving a DER](https://dersecurity.github.io/py1815/der/).
+To put a real device or a DER simulator behind the same outstation, bind its values to the
+profile's points instead of the simulation's: see
+[Serving a DER](https://dersecurity.github.io/py1815/der/). That is also where DER functions,
+curves and anything else a DER does come from.
 
 ## What it does
 
@@ -135,6 +230,7 @@ variations are served and named in the device profile.
 | Events | `events` | Class 1 to 3 buffers, deadbands and confirmation |
 | Session | `session` | One master association: octets in, octets out |
 | DER profile | `profile` | The IEEE 1815.2 point map, a builder that turns a map and a binding into an outstation, and a simulated DER |
+| Master | `master`, `decode` | A master for exercising outstations: it polls, reads named points, takes unsolicited responses and keeps what it was told, and operates outputs by direct operate or by select and operate, from Python, a JSON service, or a web console (`py1815-master console`). The service commands only when started with `--allow-control`. A first version |
 
 Each layer is testable without the ones above it. The session does no I/O at all -- it takes
 the bytes that arrived and returns the bytes to send -- so protocol behavior is pinned against

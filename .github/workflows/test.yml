@@ -24,7 +24,16 @@ jobs:
       # Validates changelog.d/, so a malformed entry fails here rather
       # than at release, when whoever is cutting it has the least context.
       - run: python scripts/build_changelog.py --check
+      # The master's API document is built from a description of its
+      # operations. This fails when the one committed is not the one built.
+      - run: python -m py1815.master.openapi --check
       - run: pytest -q
+        env:
+          # The console is tested in a browser, and a machine without one skips
+          # those tests. This runner has one, so on one version of Python a
+          # skip is a failure: a test that silently never ran is the outcome
+          # the skip would otherwise allow.
+          PY1815_REQUIRE_BROWSER: ${{ matrix.python-version == '3.12' && '1' || '' }}
 
   image:
     # The Dockerfile is what the README tells people to build, so it is built
@@ -55,6 +64,51 @@ jobs:
           found=$(docker run --rm --entrypoint sh py1815-der -c \
             'find / -xdev \( -name "*.xlsx" -o -name "ieee-1815-2-*.json" \) 2>/dev/null || true')
           test -z "$found" || { echo "the image carries: $found"; exit 1; }
+      # The same file makes a second image: the master, with its API and its
+      # console. It is built and run here for the reason the first is.
+      - run: docker build --target master -t py1815-master .
+      - name: The master's command runs
+        run: docker run --rm py1815-master --help
+      - name: The master's image serves its console and guards its API
+        # A container listens on every interface, which the console will not
+        # do without a token. Its own page needs none; the service does.
+        run: |
+          docker run -d --name master -p 127.0.0.1:8815:8815 \
+            -e PY1815_MASTER_TOKEN=ci py1815-master
+          for attempt in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:8815/ && break
+            sleep 1
+          done
+          curl -fs http://127.0.0.1:8815/ | grep -q "Satori DNP3 Master"
+          curl -fs http://127.0.0.1:8815/openapi.json | grep -q '"openapi"'
+          refused=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8815/api/status)
+          test "$refused" = 401 || { echo "with no token the API answered $refused"; exit 1; }
+          curl -fs -H 'Content-Type: application/json' -H 'Authorization: Bearer ci' \
+            -d '{}' http://127.0.0.1:8815/api/status | grep -q '"ok":true'
+          docker logs master 2>&1 | grep -q 'token=ci'
+          docker rm -f master
+      - name: Told nothing, the master makes a token and prints where to go
+        run: |
+          docker run -d --name master py1815-master
+          for attempt in $(seq 1 30); do
+            docker logs master 2>&1 | grep -q 'console at' && break
+            sleep 1
+          done
+          docker logs master 2>&1 | grep -Eq 'http://localhost:8815/\?token=.{16,}'
+          docker rm -f master
+      - name: The master's image carries no point tables either
+        run: |
+          found=$(docker run --rm --entrypoint sh py1815-master -c \
+            'find / -xdev \( -name "*.xlsx" -o -name "ieee-1815-2-*.json" \) 2>/dev/null || true')
+          test -z "$found" || { echo "the image carries: $found"; exit 1; }
+      - name: The compose file is one Docker accepts
+        # Not brought up: its first step downloads IEEE's workbook, which CI
+        # does not do. That it parses, and names targets the file has, is what
+        # can be checked here.
+        run: |
+          docker compose config --quiet
+          docker compose build
 
   test-arm32:
     # The library is meant to run on small ARM controllers, and some of those
@@ -120,3 +174,6 @@ jobs:
       - run: docker build --platform ${{ matrix.platform }} -t py1815-der .
       - name: The command runs
         run: docker run --rm --platform ${{ matrix.platform }} py1815-der --help
+      - run: docker build --platform ${{ matrix.platform }} --target master -t py1815-master .
+      - name: The master's command runs
+        run: docker run --rm --platform ${{ matrix.platform }} py1815-master --help

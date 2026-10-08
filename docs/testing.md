@@ -269,6 +269,34 @@ a full event buffer costs on that platform in the log; see
 job, `image-arm`, builds the Docker image for `linux/arm64` and `linux/arm/v7`
 and starts the command in each.
 
+## The master, its API and the console
+
+The master is tested the way the outstation is, and from the same argument.
+
+- **From octets.** The decoder that reads a response's objects is tested from
+  octets written out by hand, and the requests the master builds are pinned to
+  theirs. It is not tested by encoding with this library and decoding again,
+  which would agree with itself through any mistake the two shared.
+- **The association against frames**, with no socket and an injected clock:
+  sequence numbers, a response of several fragments, confirmations, silence,
+  unsolicited responses, and who is speaking.
+- **Against this library's outstation**, in one process and over a real
+  socket. These show the two halves agree and that the master's bookkeeping is
+  right. They are not evidence that either reads the standard correctly,
+  since both stand on the same layers.
+- **The API against its description.** `tests/test_master_openapi.py` fails
+  when an operation exists that the OpenAPI document does not describe, when
+  the document committed is not the one the description builds, and when what
+  the service answers to each documented example does not fit what the
+  document says it answers.
+- **The console in a browser.** `tests/test_master_console.py` starts a
+  simulated DER, the service and a headless browser, and checks the page: that
+  it shows what the service reports, that its controls do what they say, that
+  its tables hold still while values change, that a name is shown as text and
+  never run, and that it asks the outside world for nothing. A machine with no
+  Chrome, Chromium or Edge skips these, and says so. CI has one, and there a
+  skip is a failure. Point `PY1815_BROWSER` at a browser to name one.
+
 ## Running them
 
 ```bash
