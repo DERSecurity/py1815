@@ -492,6 +492,60 @@ class TestEachCheckCanFail:
         assert f"and AO{der.AO_POWER_LIMIT_CHARGING} was set to" in result.detail
         assert not simulation.der.settings[(Kind.BO, der.BO_ENABLE_POWER_LIMIT)]
 
+    def test_setting_wrong_only_while_enabled_fails_and_the_function_is_disabled_again(self):
+        points = _synthetic()
+        setting = (Kind.AO, der.AO_POWER_LIMIT_CHARGING)
+        enable = (Kind.BO, der.BO_ENABLE_POWER_LIMIT)
+
+        def change(binding: Binding, reference: der.ReferenceDer) -> None:
+            binding.outputs[setting] = dataclasses.replace(
+                binding.outputs[setting],
+                status=lambda: 3.0 if reference.settings[enable] else reference.settings[setting],
+            )
+
+        simulation = _faulty(points, change)
+        result = _one(simulation, points, "APL-001", settle=1.0)
+        assert result.verdict is FAILED
+        assert f"and AO{der.AO_POWER_LIMIT_CHARGING} was set to" in result.detail
+        assert not simulation.der.settings[enable], "the check disabled what it enabled"
+
+    def test_write_refused_by_a_der_that_is_locked_out_fails(self):
+        points = _synthetic()
+        simulation = der.build(points)
+        simulation.der.settings[(Kind.BO, der.BO_LOCKOUT)] = True
+        result = _one(simulation, points, "CONN-001")
+        assert result.verdict is FAILED
+        assert result.detail.endswith("was refused with status BLOCKED")
+        assert result.detail.startswith("a write of ")
+
+    def test_output_with_no_served_readback_is_noted_and_not_read(self):
+        tables = _synthetic()
+        setting = der.AO_POWER_LIMIT_CHARGING
+        mirror = tables.points[(Kind.AO, setting)].associated
+        # The device serves the setting and not the input that reads it back.
+        unpaired = dataclasses.replace(tables.points[(Kind.AO, setting)], associated=None)
+        device = dataclasses.replace(
+            tables,
+            points={
+                address: unpaired if address == (Kind.AO, setting) else point
+                for address, point in tables.points.items()
+                if address != mirror
+            },
+        )
+        result = _one(der.build(device), tables, "APL-001")
+        assert result.verdict is PASSED, result.detail
+        assert f"no input reads AO{setting} back, so its value was not verified" in result.notes
+
+    def test_function_said_to_be_unsupported_that_can_be_enabled_fails_and_is_disabled(self):
+        points = _synthetic()
+        supports = SUPPORTS + der.BO_ENABLE_POWER_LIMIT
+        simulation = _faulty(points, _stuck(Kind.BI, supports, False))
+        result = _one(simulation, points, "APL-001")
+        assert result.verdict is FAILED
+        assert result.title == "active power limit: not supported"
+        assert result.detail == "the enabling of active power limit was accepted"
+        assert not simulation.der.settings[(Kind.BO, der.BO_ENABLE_POWER_LIMIT)]
+
     def test_function_said_to_be_unsupported_that_serves_a_point_fails(self):
         points = _synthetic()
 
@@ -746,7 +800,9 @@ class TestTheReport:
         False,
         "synthetic",
         (
-            Result("MON-001", "Monitoring", PASSED, notes=("24 points",), requests=24),
+            Result(
+                "MON-001", "Monitoring", PASSED, notes=("24 points",), requests=24, frames=(1, 39)
+            ),
             Result("SERV-001", "Service", FAILED, "BI15 did not stop", requests=9, frames=(40, 57)),
             Result("VV-001", "Volt-var", NOT_RUN, "it writes"),
         ),
@@ -858,6 +914,19 @@ class TestTheCommand:
         assert printed[0].startswith(f"lab at 127.0.0.1:{port}, outstation 1024, ")
         assert printed[0].endswith(", read only")
         assert printed[-1] == f"{len(CATALOG)} checks: 3 passed, 1 not applicable, 31 not run"
+
+    def test_only_a_run_allowed_to_write_clears_the_restart_indication(self, capsys):
+        def restart_indicated(port: int) -> bool:
+            assert cli.main(["poll", "--port", str(port), "--limit", "0"]) == 0
+            printed = capsys.readouterr().out.splitlines()
+            (line,) = (each for each in printed if "indications " in each)
+            return bool(int(line.split("indications ")[1].split()[0], 16) & 0x80)
+
+        with _Served() as port:
+            assert _evaluate(port, "--check", "OP-001") == 0
+            assert restart_indicated(port), "a read-only run writes nothing, its tasks included"
+            assert _evaluate(port, "--check", "OP-001", "--allow-control") == 0
+            assert not restart_indicated(port)
 
     def test_with_allow_control_a_check_that_writes_is_run(self, capsys):
         with _Served() as port:
