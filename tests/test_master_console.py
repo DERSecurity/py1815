@@ -680,6 +680,32 @@ class TestCommanding:
         )
 
 
+class TestStayingCurrent:
+    @pytest.mark.asyncio
+    async def test_missed_updates_make_the_console_reload(self, console):
+        page = console.page
+        await page.evaluate("state.frames = []")
+        console.service.publish({"event": "lost", "dropped": 12345})
+        await console.tab("log")
+        await page.wait_for(
+            "document.querySelector('#log').textContent.includes('Missed 12345 update(s)')"
+        )
+        await page.wait_for("state.frames.length > 0")
+
+
+class TestReloadKeepsLaterEvents:
+    @pytest.mark.asyncio
+    async def test_a_frame_that_arrives_during_a_reload_is_kept(self, console):
+        page = console.page
+        await page.wait_for("state.frames.length > 0")
+        await page.evaluate(
+            "(() => { const frame = { ...state.frames[state.frames.length - 1], id: 999999999 };"
+            " resynchronize('test reload');"
+            " onServiceEvent({ event: 'frame', outstation: state.selected, frame }); })()"
+        )
+        await page.wait_for("state.frames.some((frame) => frame.id === 999999999)")
+
+
 class TestEventsAndTraffic:
     @pytest.mark.asyncio
     async def test_events_are_listed_as_they_arrive(self, console):
@@ -735,6 +761,31 @@ class TestEventsAndTraffic:
 
         await page.click("#traffic-clear")
         await page.wait_for("!document.querySelectorAll('#traffic-table tbody tr').length")
+        assert page.errors == []
+
+    @pytest.mark.asyncio
+    async def test_save_capture_offers_the_trace_as_a_pcap_file(self, console):
+        page = console.page
+        await console.tab("traffic")
+        await page.wait_for("document.querySelectorAll('#traffic-table tbody tr').length")
+        # Keep the file the page offers instead of letting the browser save it.
+        await page.evaluate(
+            "window.saved = null;"
+            "URL.createObjectURL = (blob) => { window.saved = blob; return 'blob:kept'; };"
+            "HTMLAnchorElement.prototype.click = function () { window.savedAs = this.download; };"
+        )
+
+        await page.click("#traffic-save")
+        await page.wait_for("window.saved !== null")
+
+        magic = await page.evaluate(
+            "window.saved.arrayBuffer().then((b) => [...new Uint8Array(b).slice(0, 4)])"
+        )
+        assert magic == [0xD4, 0xC3, 0xB2, 0xA1], "a libpcap file, little-endian"
+        assert await page.evaluate("window.saved.type") == "application/vnd.tcpdump.pcap"
+        assert await page.evaluate("window.saved.size") > 24 + 3 * 70, "it holds packets"
+        name = await page.evaluate("window.savedAs")
+        assert name.startswith("lab-") and name.endswith(".pcap")
         assert page.errors == []
 
 

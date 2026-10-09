@@ -6,6 +6,7 @@
 <title>Satori DNP3 Master</title>
 <link rel="icon" href="satori-mark.png">
 <link rel="stylesheet" href="console.css">
+<link rel="stylesheet" href="der.css">
 </head>
 <body>
 <header class="masthead">
@@ -61,6 +62,7 @@
         <button role="tab" data-tab="commands">Commands</button>
         <button role="tab" data-tab="events">Events <span id="events-count" class="count"></span></button>
         <button role="tab" data-tab="traffic">Traffic <span id="traffic-count" class="count"></span></button>
+        <button role="tab" data-tab="der" hidden title="The outstation as an IEEE 1815.2 DER, named by its profile">DER</button>
         <button role="tab" data-tab="log">Log</button>
       </nav>
 
@@ -268,6 +270,7 @@
           <label class="check"><input id="traffic-application" type="checkbox"> Application layer only</label>
           <label class="check"><input id="traffic-pause" type="checkbox"> Pause</label>
           <div class="spacer"></div>
+          <button id="traffic-save" class="quiet" title="Save the frames kept as a pcap file, for Wireshark">Save capture</button>
           <button id="traffic-clear" class="quiet">Clear</button>
         </div>
         <div class="split">
@@ -283,6 +286,15 @@
         </div>
       </div>
 
+      <div class="panel" data-panel="der" hidden>
+        <div class="toolbar">
+          <span class="hint">The outstation as an IEEE 1815.2 DER: points by name, in engineering units</span>
+          <div class="spacer"></div>
+          <button id="der-reload" class="quiet">Read again</button>
+        </div>
+        <div id="der-content"></div>
+      </div>
+
       <div class="panel" data-panel="log" hidden>
         <div class="toolbar">
           <span class="hint">What this console asked for, what the master did unasked, and what came of it</span>
@@ -295,6 +307,7 @@
   </main>
 </div>
 
+<script src="der.js"></script>
 <script src="console.js"></script>
 </body>
 </html>

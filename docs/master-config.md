@@ -27,6 +27,13 @@ take `--config FILE`.
   "bind": null,
   "tables": null,
   "connect_wait": 0.0,
+  "capture": null,
+  "capture_max_mb": 100.0,
+  "capture_keep": 10,
+  "log_file": null,
+  "log_max_mb": 10.0,
+  "log_keep": 5,
+  "log_level": "info",
   "defaults": {
     "port": 20000,
     "outstation_address": 1024,
@@ -40,6 +47,7 @@ take `--config FILE`.
     "confirm": true,
     "manual": false,
     "profile": false,
+    "device_profile": null,
     "tasks": {
       "startup": true,
       "clear_restart": true,
@@ -80,6 +88,13 @@ Every setting is optional. A file that only lists outstations is valid.
 | `bind` | `null` | Address and port to listen on. `null` uses the command's default: `127.0.0.1:8815` for `console`, `127.0.0.1:8816` for `serve` |
 | `tables` | `null` | Path of the IEEE 1815.2 profile tables file, for outstations with `profile` set. `null` uses the usual locations |
 | `connect_wait` | `0` | Seconds to keep trying to reach an outstation that is not there at startup. `0` tries once |
+| `capture` | `null` | Path of a pcap file to write every frame of every outstation to, as it is sent or received. The file is created, or emptied if it exists, when the master starts. `null` writes no file. See [Captures](master.md#captures) |
+| `capture_max_mb` | `100` | Start a new capture file once the current one reaches this many megabytes. The full one is renamed `master.1.pcap` for a `capture` of `master.pcap` |
+| `capture_keep` | `10` | Older capture files to keep. `0` keeps only the current one |
+| `log_file` | `null` | Path of a file to write the log to, as well as the terminal. `null` logs to the terminal only. See [Running for days](master.md#running-for-days) |
+| `log_max_mb` | `10` | Start a new log file once the current one reaches this many megabytes. The full one is renamed `master.log.1` |
+| `log_keep` | `5` | Older log files to keep, at least 1 |
+| `log_level` | `"info"` | The lowest level written to the log file: `debug`, `info` or `warning` |
 
 The console's token is not in the file, because it is a secret. Give it with
 `--token` or the `PY1815_MASTER_TOKEN` environment variable. The same goes for
@@ -104,7 +119,8 @@ These go in `defaults`, in an outstation's entry, or both.
 | `reconnect` | `5` | Seconds between reconnection attempts after a lost connection. `null` disables reconnection |
 | `confirm` | `true` | Confirm response fragments that ask for confirmation |
 | `manual` | `false` | Send only what is asked for. Disables every task and confirmation, whatever `tasks` and `confirm` say |
-| `profile` | `false` | The outstation is an IEEE 1815.2 DER: name its points from the profile tables |
+| `profile` | `false` | The outstation is an IEEE 1815.2 DER: name its points from the profile tables, and offer the [DER profile's operations](master-api.md#the-der-profile) |
+| `device_profile` | `null` | Path of the outstation's DNP3 Device Profile document, which [`der.compare`](master-api.md#the-der-profile) compares what it serves with. Read when the master starts |
 | `tasks` | see below | The [automatic tasks](master.md#what-it-does-without-being-asked) |
 | `repeat` | see below | Scans repeated on a schedule |
 
@@ -170,6 +186,13 @@ own value.
 | `--bind ADDRESS:PORT` | `bind` |
 | `--tables FILE` | `tables` |
 | `--connect-wait SECONDS` | `connect_wait`: the service's `connect` keeps trying for this long, once a second |
+| `--capture FILE` | `capture` |
+| `--capture-max-mb MB` | `capture_max_mb` |
+| `--capture-keep FILES` | `capture_keep` |
+| `--log-file FILE` | `log_file` |
+| `--log-max-mb MB` | `log_max_mb` |
+| `--log-keep FILES` | `log_keep` |
+| `--log-level LEVEL` | `log_level` |
 | `--outstation NAME=HOST:PORT` | Adds an entry to `outstations`. May be repeated |
 | `--outstation-address N` | `defaults.outstation_address` |
 | `--master-address N` | `defaults.master_address` |
@@ -181,6 +204,7 @@ own value.
 | `--reconnect SECONDS` | `defaults.reconnect`. `0` means never |
 | `--manual` | `defaults.manual` |
 | `--profile` | `defaults.profile` |
+| `--device-profile FILE` | `defaults.device_profile` |
 | `--unsolicited 1,2,3` | `defaults.tasks.enable_unsolicited` |
 | `--integrity-interval SECONDS` | `defaults.repeat.integrity` |
 | `--event-interval SECONDS` | `defaults.repeat.events` |

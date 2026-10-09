@@ -38,6 +38,10 @@
       "description": "The frames that crossed the wire."
     },
     {
+      "name": "DER profile",
+      "description": "An IEEE 1815.2 DER's points by name and in engineering units, its functions, its curves, and its Device Profile document."
+    },
+    {
       "name": "Service",
       "description": "The service itself."
     }
@@ -3289,6 +3293,123 @@
         }
       }
     },
+    "/api/capture": {
+      "post": {
+        "operationId": "capture",
+        "summary": "The frames sent and received, as a pcap file",
+        "tags": [
+          "Traffic"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "after": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Only frames with a greater id."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "frames": {
+                              "type": "integer",
+                              "description": "The frames in the file."
+                            },
+                            "pcap": {
+                              "type": "string",
+                              "contentEncoding": "base64",
+                              "contentMediaType": "application/vnd.tcpdump.pcap",
+                              "description": "The file, in base64."
+                            }
+                          },
+                          "required": [
+                            "frames",
+                            "pcap"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every frame kept, each as one TCP segment of an IPv4 connection in Ethernet, with the time it was sent or received. Each connection the master made is a TCP stream of its own, opened with a handshake and closed with FIN segments. An address that is not IPv4 is written as 127.0.0.1. Wireshark, tshark and Suricata read the file as it is."
+      }
+    },
     "/api/clear": {
       "post": {
         "operationId": "clear",
@@ -3399,6 +3520,1360 @@
             }
           }
         }
+      }
+    },
+    "/api/der.read": {
+      "post": {
+        "operationId": "der.read",
+        "summary": "Read points of the DER profile by name, or a named group",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "names": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Points, by address or name."
+                  },
+                  "group": {
+                    "type": "string",
+                    "description": "A function, or a purpose."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "group": "volt-var"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "points": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/DerReading"
+                              }
+                            },
+                            "exchanges": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Exchange"
+                              }
+                            }
+                          },
+                          "required": [
+                            "points",
+                            "exchanges"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "In engineering units, with each point's quality. A point is named by its address, as in `AI148`, or by its name or the name's first sentence; a name the tables give to more than one point is refused with the addresses it could mean. A group is a function, by key, name or purpose, or everything of one purpose, as in `Nameplate` or `Monitoring`. One request, unless the outstation refuses it whole for a range it does not serve: then each range is read again on its own, and a point no read returned is `not_reported`. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.write": {
+      "post": {
+        "operationId": "der.write",
+        "summary": "Write outputs of the DER profile by name, in engineering units",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "points": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "minProperties": 1,
+                    "description": "Values by address or name: a number in engineering units, or for a binary output true, false, or a state by name."
+                  },
+                  "verify": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "select",
+                      "direct_no_ack"
+                    ],
+                    "default": "direct",
+                    "description": "How each write is sent, as for `operate`."
+                  },
+                  "variation": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "enum": [
+                          1,
+                          2,
+                          3,
+                          4
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "1 or 2 sends the transmitted number as a 32- or 16-bit integer; 3 or 4 sends the engineering value as a float, which the profile has an outstation take unscaled. The narrowest integer when left out."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "points"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "points": {
+                  "AO87": 50
+                },
+                "verify": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "accepted": {
+                              "oneOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "As for `operate`."
+                            },
+                            "verified": {
+                              "description": "True when every readback matched, false when one did not, null when not asked or not known.",
+                              "oneOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "points": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "address": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "$ref": "#/components/schemas/PointType"
+                                  },
+                                  "index": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "units": {
+                                    "oneOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "requested": {
+                                    "description": "As asked for.",
+                                    "oneOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "sent": {
+                                    "description": "As it travelled.",
+                                    "oneOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "sent_value": {
+                                    "description": "What was sent, in engineering units.",
+                                    "oneOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "status": {
+                                    "oneOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "echoed": {
+                                    "type": "boolean"
+                                  },
+                                  "readback": {
+                                    "oneOf": [
+                                      {
+                                        "$ref": "#/components/schemas/DerReading"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "matches": {
+                                    "oneOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "address",
+                                  "requested",
+                                  "sent",
+                                  "status",
+                                  "matches"
+                                ]
+                              }
+                            },
+                            "operated": {
+                              "$ref": "#/components/schemas/Operated"
+                            }
+                          },
+                          "required": [
+                            "accepted",
+                            "verified",
+                            "points",
+                            "operated"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "One request, in the order given. An analog value is divided by the point's multiplier and sent as the nearest whole number; one outside the point's range is refused before anything is sent. With `verify`, the input that mirrors each output is read afterwards and compared with what was asked, within one step of the multiplier. Refused as `not_allowed` unless the service was started to command. Sent once: a write whose answer did not arrive is reported as not known, and never sent again. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.enable": {
+      "post": {
+        "operationId": "der.enable",
+        "summary": "Enable a DER function, and read whether it is enabled",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "function": {
+                    "type": "string",
+                    "description": "By key, name, purpose, or its enable output's address."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "select",
+                      "direct_no_ack"
+                    ],
+                    "default": "direct",
+                    "description": "How each write is sent, as for `operate`."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "function"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "function": "volt-var"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/DerSwitched"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Latches the function's enable output on, then reads the input that reports whether the function is enabled. Refused as `not_allowed` unless the service was started to command. Sent once: a write whose answer did not arrive is reported as not known, and never sent again. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.disable": {
+      "post": {
+        "operationId": "der.disable",
+        "summary": "Disable a DER function, and read whether it is enabled",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "function": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "select",
+                      "direct_no_ack"
+                    ],
+                    "default": "direct",
+                    "description": "How each write is sent, as for `operate`."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "function"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "function": "volt-var"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/DerSwitched"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Latches the function's enable output off, then reads the input that reports whether the function is enabled. Refused as `not_allowed` unless the service was started to command. Sent once: a write whose answer did not arrive is reported as not known, and never sent again. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.functions": {
+      "post": {
+        "operationId": "der.functions",
+        "summary": "The DER functions, which are supported and which enabled",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "functions": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/DerFunction"
+                              }
+                            },
+                            "exchanges": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Exchange"
+                              }
+                            }
+                          },
+                          "required": [
+                            "functions",
+                            "exchanges"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads every function's supports input and enabled input, in one request, and lists each function with its settings. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.curve": {
+      "post": {
+        "operationId": "der.curve",
+        "summary": "Read the curve the curve block shows",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "number": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Select this curve first."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "select",
+                      "direct_no_ack"
+                    ],
+                    "default": "direct",
+                    "description": "How each write is sent, as for `operate`."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "curve": {
+                              "$ref": "#/components/schemas/Curve"
+                            },
+                            "selected": {
+                              "oneOf": [
+                                {
+                                  "$ref": "#/components/schemas/Operated"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "curve",
+                            "selected"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "The block shows one curve at a time, the one its selector names. Given `number`, the selector is written first, which is a control: refused as `not_allowed` unless the service was started to command. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.write_curve": {
+      "post": {
+        "operationId": "der.write_curve",
+        "summary": "Write a curve, and read it back",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "number": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "type": {
+                    "type": "integer",
+                    "description": "The curve type, as enumerated."
+                  },
+                  "x_units": {
+                    "type": "integer"
+                  },
+                  "y_units": {
+                    "type": "integer"
+                  },
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    "maxItems": 100,
+                    "description": "X and Y of each point."
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "direct",
+                      "select",
+                      "direct_no_ack"
+                    ],
+                    "default": "direct",
+                    "description": "How each write is sent, as for `operate`."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "number",
+                  "type",
+                  "x_units",
+                  "y_units",
+                  "points"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "number": 1,
+                "type": 2,
+                "x_units": 129,
+                "y_units": 2,
+                "points": [
+                  [
+                    920,
+                    300
+                  ],
+                  [
+                    980,
+                    0
+                  ],
+                  [
+                    1020,
+                    0
+                  ],
+                  [
+                    1080,
+                    -300
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "accepted": {
+                              "description": "True when every write was accepted, false when one was refused, null when one was not answered.",
+                              "oneOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "matches": {
+                              "type": "boolean",
+                              "description": "Whether the curve read back is the curve written."
+                            },
+                            "stopped_at": {
+                              "description": "The write that was not accepted, after which none was made.",
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "selector",
+                                    "fields",
+                                    "points"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "steps": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Operated"
+                              }
+                            },
+                            "curve": {
+                              "$ref": "#/components/schemas/Curve"
+                            }
+                          },
+                          "required": [
+                            "accepted",
+                            "matches",
+                            "stopped_at",
+                            "steps",
+                            "curve"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Three writes, in the order IEEE 1815.2 clause 6.1.3 lays the curve block out: the selector; the type, the number of points and the units of X and Y; then X and Y of each point. Each is made only when the one before it was accepted. The curve is then read back whatever happened. Values travel as the whole numbers given, since the units the curve declares say how they scale. Refused as `not_allowed` unless the service was started to command. Sent once: a write whose answer did not arrive is reported as not known, and never sent again. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
+      }
+    },
+    "/api/der.compare": {
+      "post": {
+        "operationId": "der.compare",
+        "summary": "Compare what an outstation serves with its Device Profile document",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "document": {
+                    "type": "string",
+                    "description": "The document's XML. The one given with `--device-profile` when left out."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "declared": {
+                              "type": "integer",
+                              "description": "Points declared."
+                            },
+                            "served": {
+                              "type": "integer",
+                              "description": "Points declared and served."
+                            },
+                            "absent": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Declared"
+                              }
+                            },
+                            "undeclared": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "$ref": "#/components/schemas/PointType"
+                                  },
+                                  "index": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535
+                                  },
+                                  "name": {
+                                    "oneOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "index",
+                                  "name"
+                                ]
+                              }
+                            },
+                            "class_0": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "$ref": "#/components/schemas/PointType"
+                                  },
+                                  "index": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 65535
+                                  },
+                                  "name": {
+                                    "oneOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "event_class": {
+                                    "description": "The class its events are reported in, 0 for none, as declared.",
+                                    "oneOf": [
+                                      {
+                                        "type": "integer",
+                                        "enum": [
+                                          0,
+                                          1,
+                                          2,
+                                          3
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "class_0": {
+                                    "description": "Whether a class 0 read carries it, as declared.",
+                                    "oneOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "deadband": {
+                                    "description": "In transmitted units, as declared.",
+                                    "oneOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "carried": {
+                                    "type": "boolean",
+                                    "description": "Whether the class 0 read carried it."
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "index",
+                                  "name",
+                                  "event_class",
+                                  "class_0",
+                                  "deadband",
+                                  "carried"
+                                ]
+                              }
+                            },
+                            "points": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Declared"
+                              },
+                              "description": "Every point declared and served, with its class and deadband as declared."
+                            },
+                            "exchanges": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/ExchangeSummary"
+                              }
+                            }
+                          },
+                          "required": [
+                            "declared",
+                            "served",
+                            "absent",
+                            "undeclared",
+                            "class_0",
+                            "points"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads class 0, then output status, then every declared point neither returned. A declared point no read returned is absent; a point returned that is not declared is undeclared; a served point a class 0 read does or does not carry, against what is declared, is listed under `class_0`. A point's event class and deadband cannot be read from an outstation, so they are given as declared. Needs no profile."
       }
     },
     "/api/stop": {
@@ -3540,7 +5015,16 @@
                       "disable_unsolicited",
                       "repeat",
                       "trace",
+                      "capture",
                       "clear",
+                      "der.read",
+                      "der.write",
+                      "der.enable",
+                      "der.disable",
+                      "der.functions",
+                      "der.curve",
+                      "der.write_curve",
+                      "der.compare",
                       "stop"
                     ]
                   },
@@ -3637,7 +5121,7 @@
       "get": {
         "operationId": "events_stream",
         "summary": "What happens unasked, as server-sent events",
-        "description": "A stream that stays open. Each event's data is a JSON object with an `event` field: `frame`, `exchange`, `unsolicited`, `connection` or `outstations`, and the `outstation` it is about.",
+        "description": "A stream that stays open. Each event's data is a JSON object with an `event` field: `frame`, `exchange`, `unsolicited`, `connection` or `outstations`, and the `outstation` it is about. A subscriber that falls 10,000 updates behind has its waiting updates replaced by one `lost` event whose `dropped` field says how many were dropped; read the state again, for example with `status`, `values`, `events` and `trace`. A stream that has not accepted a write for 60 seconds is closed.",
         "tags": [
           "Service"
         ],
@@ -3945,6 +5429,10 @@
                 "type": "null"
               }
             ]
+          },
+          "device_profile": {
+            "type": "boolean",
+            "description": "Whether the outstation was given a Device Profile document for `der.compare`."
           }
         },
         "required": [
@@ -4582,6 +6070,635 @@
           "application",
           "summary"
         ]
+      },
+      "DerPoint": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Kind and index, as in `AO87`."
+          },
+          "type": {
+            "$ref": "#/components/schemas/PointType"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "name": {
+            "type": "string",
+            "description": "The name as the profile's tables have it."
+          },
+          "label": {
+            "type": "string",
+            "description": "The first sentence of the name, without the values it lists."
+          },
+          "units": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "multiplier": {
+            "description": "The transmitted number times this is the engineering value.",
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "minimum": {
+            "description": "In engineering units.",
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maximum": {
+            "description": "In engineering units.",
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "states": {
+            "description": "A binary point's two states by name: 0, then 1.",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mirror": {
+            "description": "The input that reads an output back, by address.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "type",
+          "index",
+          "name",
+          "label",
+          "units",
+          "mirror"
+        ],
+        "description": "One point of the DER profile."
+      },
+      "DerReading": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PointType"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "units": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "description": "In engineering units: the transmitted number through the point's multiplier, or a state. Null when the point was not reported.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "raw": {
+            "description": "The value as it travelled.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "description": "A binary point's state, by the name the tables give it.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flags": {
+            "description": "The flag bits that are set, by name. Null for a variation that carries no flag octet, which is not the same as none being set.",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "good",
+              "offline",
+              "comm_lost",
+              "restart",
+              "no_flags",
+              "not_reported"
+            ],
+            "description": "What the flags say: `good` is ONLINE. `offline` is a value sent without ONLINE, which is how a disabled function's inputs travel. `not_reported` is a point the outstation did not return."
+          },
+          "time_ms": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "type",
+          "index",
+          "name",
+          "value",
+          "raw",
+          "flags",
+          "quality"
+        ],
+        "description": "One point of the DER profile, as the outstation reported it."
+      },
+      "DerFunction": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Its name in lower case, as in `volt-var`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "What the tables say it is for."
+          },
+          "enable": {
+            "type": "string",
+            "description": "The binary output that enables it."
+          },
+          "status": {
+            "description": "The binary input that reports whether it is enabled.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "supports": {
+            "type": "string",
+            "description": "The binary input that says whether it is supported."
+          },
+          "supported": {
+            "description": "What the outstation says. Null when it did not report it.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "description": "What the outstation says. Null when it did not report it.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DerPoint"
+            }
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "curve_settings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The settings that name a curve by its number."
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "enable",
+          "supports",
+          "supported",
+          "enabled",
+          "settings"
+        ],
+        "description": "One DER function, and what the outstation says of it."
+      },
+      "Curve": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "description": "The curve the block shows.",
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type_name": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "count": {
+            "description": "The points in use.",
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x_units": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "x_units_name": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "y_units": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "y_units_name": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "description": "A state, a count or an analog value. A float with no number is sent as the string \"NaN\", \"Infinity\" or \"-Infinity\".",
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "description": "X and Y of each point, as transmitted: the units the curve declares say how to scale them."
+          },
+          "referenced": {
+            "description": "Whether a function names this curve, where the outstation says.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exchanges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exchange"
+            }
+          }
+        },
+        "required": [
+          "number",
+          "type",
+          "count",
+          "x_units",
+          "y_units",
+          "points",
+          "referenced"
+        ],
+        "description": "The curve the curve block shows, as the outstation reported it."
+      },
+      "Declared": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/PointType"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "name": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "event_class": {
+            "description": "The class its events are reported in, 0 for none, as declared.",
+            "oneOf": [
+              {
+                "type": "integer",
+                "enum": [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "class_0": {
+            "description": "Whether a class 0 read carries it, as declared.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deadband": {
+            "description": "In transmitted units, as declared.",
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "index",
+          "name",
+          "event_class",
+          "class_0",
+          "deadband"
+        ],
+        "description": "One point as a Device Profile document declares it."
+      },
+      "DerSwitched": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string",
+            "description": "The function's key."
+          },
+          "name": {
+            "type": "string"
+          },
+          "enable": {
+            "type": "boolean",
+            "description": "True for an enable."
+          },
+          "accepted": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "As for `operate`."
+          },
+          "enabled": {
+            "description": "Whether the outstation says the function is enabled, read afterwards. Null when it did not say.",
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DerReading"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operated": {
+            "$ref": "#/components/schemas/Operated"
+          }
+        },
+        "required": [
+          "function",
+          "name",
+          "enable",
+          "accepted",
+          "enabled",
+          "status",
+          "operated"
+        ],
+        "description": "A DER function enabled or disabled, and what its status input then said."
+      },
+      "ExchangeSummary": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "timeout",
+              "sent",
+              "abandoned"
+            ]
+          },
+          "indications": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "object_count": {
+            "type": "integer"
+          },
+          "elapsed_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "function",
+          "outcome",
+          "indications",
+          "object_count",
+          "elapsed_ms"
+        ],
+        "description": "One request, and how it ended, without its objects."
       },
       "Error": {
         "type": "object",

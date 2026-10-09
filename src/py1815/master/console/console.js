@@ -267,6 +267,9 @@ function renderHeader() {
   chip.textContent = outstation.connected ? "Connected" : "Not connected";
   chip.className = `chip ${outstation.connected ? "good" : "bad"}`;
   $("#connect-button").textContent = outstation.connected ? "Disconnect" : "Connect";
+  // The DER tab is for an outstation that was given a profile to name its points by.
+  $(".tabs [data-tab='der']").hidden = !outstation.profile;
+  if (!outstation.profile && state.tab === "der") showTab("overview");
 }
 
 // Whether this page can command is the service's to say, and is said plainly:
@@ -284,6 +287,7 @@ function renderControl() {
   pointHead = null;
   pointRows = new Map();
   if (state.tab === "points") renderPoints();
+  if (state.tab === "der") renderDer();
 }
 
 function showOperateFields() {
@@ -841,9 +845,10 @@ function renderAll() {
   if (state.tab === "points") renderPoints();
   if (state.tab === "log") renderLog();
   if (state.tab === "traffic") renderFrame();
+  if (state.tab === "der") renderDer();
 }
 
-const TABS = ["overview", "points", "commands", "events", "traffic", "log"];
+const TABS = ["overview", "points", "commands", "events", "traffic", "der", "log"];
 
 function showTab(name) {
   state.tab = name;
@@ -871,7 +876,39 @@ function scheduleRender() {
   });
 }
 
+// Reload what the page shows for the selected outstation, after updates were missed.
+// Events that arrive while a reload is under way, replayed once it ends,
+// so a snapshot taken before them does not overwrite them.
+let held = null;
+
+async function resynchronize(reason) {
+  note(reason, true);
+  if (held) return;
+  held = [];
+  try {
+    await refreshStatus();
+    if (state.selected) await select(state.selected);
+  } finally {
+    const replay = held;
+    held = null;
+    const shown = new Set(state.frames.map((frame) => frame.id));
+    for (const event of replay) {
+      // The reloaded trace may already hold a frame that arrived during the reload.
+      if (event.event === "frame" && shown.has(event.frame.id)) continue;
+      onServiceEvent(event);
+    }
+  }
+}
+
 function onServiceEvent(event) {
+  if (event.event === "lost") {
+    resynchronize(`Missed ${event.dropped} update(s) while the page was behind; reloaded`);
+    return;
+  }
+  if (held) {
+    held.push(event);
+    return;
+  }
   if (event.event === "outstations" || event.event === "connection") {
     if (event.event === "connection") {
       note(`${event.outstation}: ${event.connected ? "connected" : "connection ended"}`, !event.connected);
@@ -902,7 +939,15 @@ function onServiceEvent(event) {
 function listen() {
   const chip = $("#service-state");
   const source = new EventSource(TOKEN ? `events?token=${encodeURIComponent(TOKEN)}` : "events");
-  source.onopen = () => { chip.textContent = "Service running"; chip.className = "chip good"; refreshStatus(); };
+  let opened = false;
+  source.onopen = () => {
+    chip.textContent = "Service running";
+    chip.className = "chip good";
+    // A stream opened again after a break may have missed updates.
+    if (opened) resynchronize("Reconnected to the service; reloaded");
+    else refreshStatus();
+    opened = true;
+  };
   source.onerror = () => { chip.textContent = "Service unreachable"; chip.className = "chip bad"; };
   source.onmessage = (message) => onServiceEvent(JSON.parse(message.data));
 }
@@ -1037,6 +1082,20 @@ function wire() {
     });
   }
   $("#traffic-application").addEventListener("change", renderTraffic);
+  $("#traffic-save").addEventListener("click", async () => {
+    const name = state.selected;
+    let result;
+    try { result = await ask("capture saved", "capture"); } catch (error) { return; }
+    // The service sends the file in base64; the browser saves the octets.
+    const octets = Uint8Array.from(atob(result.pcap), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([octets], { type: "application/vnd.tcpdump.pcap" }));
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+    const link = el("a", { href: url, download: `${name}-${stamp}.pcap`, hidden: true });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   $("#traffic-clear").addEventListener("click", async () => {
     try { await ask("traffic cleared", "clear", { what: "trace" }); } catch (error) { return; }
     state.frames = [];
@@ -1050,6 +1109,7 @@ function wire() {
     renderEvents();
   });
   $("#log-clear").addEventListener("click", () => { state.log = []; renderLog(); });
+  wireDer();
 }
 
 document.body.append(tip);

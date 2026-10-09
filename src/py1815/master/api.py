@@ -44,7 +44,7 @@ from py1815.master.association import (
 from py1815.master.controls import Operated, Plan
 from py1815.master.operations import Operations, Steps
 from py1815.master.store import Store
-from py1815.master.tasks import Housekeeper, Tasks
+from py1815.master.tasks import WRITING, Housekeeper, Tasks
 from py1815.master.timesync import Synchronized, TimeSync
 from py1815.master.trace import RECEIVED, SENT, Trace
 
@@ -66,8 +66,64 @@ _UNSOLICITED_KEPT = 1000
 _READ_SIZE = 4096
 
 
+#: Seconds between log records saying an outstation is still not reachable.
+RETRY_REPORT_INTERVAL = 3600.0
+
+
+class RetryReport:
+    """Log failed reconnection attempts without filling the log.
+
+    The first failure is logged at INFO. Later failures are logged at DEBUG,
+    with one INFO record each ``interval`` seconds that counts them. An
+    outstation that is down for a day with a five-second retry then writes
+    about 25 INFO records instead of 17,000.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        interval: float = RETRY_REPORT_INTERVAL,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.name = name
+        self.attempts = 0
+        self._interval = interval
+        self._clock = clock
+        self._started = clock()
+        self._reported: float | None = None
+
+    def failed(self, error: OSError) -> int:
+        """Record one failed attempt, and return the level it was logged at."""
+        self.attempts += 1
+        now = self._clock()
+        if self._reported is None or now - self._reported >= self._interval:
+            self._reported = now
+            level = logging.INFO
+            minutes = (now - self._started) / 60
+            logger.log(
+                level,
+                "dnp3 master: %s is not reachable (%d failed attempt(s) in %.0f min): %s",
+                self.name,
+                self.attempts,
+                minutes,
+                error,
+            )
+        else:
+            level = logging.DEBUG
+            logger.log(level, "dnp3 master: %s is still not reachable: %s", self.name, error)
+        return level
+
+
 class NotConnected(ConnectionError):
     """A request was made of an outstation that has no connection."""
+
+
+def _address(name: Any) -> tuple[str, int] | None:
+    """Return a socket's address and port, or None when the socket did not give them."""
+    if isinstance(name, tuple) and len(name) >= 2:
+        return str(name[0]), int(name[1])
+    return None
 
 
 class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[Synchronized]]):
@@ -278,17 +334,22 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             if self.server_name is not None:
                 secure["server_hostname"] = self.server_name
         try:
-            self._reader, self._writer = await asyncio.wait_for(
+            reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(self.host, self.port, **secure), self._connect_timeout
             )
         except TimeoutError as exc:
             raise TimeoutError(
                 f"no connection to {self.host}:{self.port} within {self._connect_timeout} s"
             ) from exc
+        self._reader, self._writer = reader, writer
         self.association.connection_reset()
         self.association.take()
-        self.trace.reset()
+        self.trace.reset(
+            local=_address(writer.get_extra_info("sockname")),
+            peer=_address(writer.get_extra_info("peername")),
+        )
         self._receiving = asyncio.create_task(self._receive(), name=f"dnp3-master-{self.name}")
+        logger.info("dnp3 master: connected to %s at %s:%d", self.name, self.host, self.port)
         self._notify_connection(True)
         # Queue the startup tasks for the new connection.
         self._housekeeper.connected()
@@ -331,18 +392,23 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             )
 
     async def _reconnect(self, interval: float) -> None:
+        report = RetryReport(self.name)
         while True:
             await asyncio.sleep(interval)
             try:
                 await self._open()
             except OSError as exc:
-                logger.info("dnp3 master: %s is still not reachable: %s", self.name, exc)
+                report.failed(exc)
                 continue
             # The peer can close the new connection before _open() returns.
             # The receive loop does not start another worker while this one
             # is running, so keep retrying here.
             if self.connected:
-                logger.info("dnp3 master: connected to %s again", self.name)
+                logger.info(
+                    "dnp3 master: connected to %s again after %d failed attempt(s)",
+                    self.name,
+                    report.attempts,
+                )
                 self._reconnecting = None
                 return
             logger.info("dnp3 master: %s closed the new connection at once", self.name)
@@ -515,10 +581,21 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                     async with self._turn:
                         while (step := self._housekeeper.next()) is not None:
                             if step.plan is not None:
-                                await self._follow(step.plan, task=step.task)
+                                synchronized = await self._follow(step.plan, task=step.task)
+                                outcome = "written" if synchronized.written else "not written"
                             else:
-                                await self._exchange_in_turn(
+                                exchange = await self._exchange_in_turn(
                                     step.function, step.body, task=step.task
+                                )
+                                outcome = exchange.outcome.value
+                            if step.task in WRITING:
+                                # A write the master made by itself is a command
+                                # like any other, and goes in the log as one.
+                                logger.info(
+                                    "dnp3 master: automatic %s to %s: %s",
+                                    step.task,
+                                    self.name,
+                                    outcome,
                                 )
                 self._settled.set()
                 await self._attention.wait()

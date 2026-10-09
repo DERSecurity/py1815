@@ -1349,6 +1349,117 @@ called on that thread with the store itself.
 signatures but not a static type of their own, so a type checker sees them as returning
 anything.
 
+**D87 -- A capture is written from the trace, a frame to a segment, and not observed.**
+`py1815.master.capture` writes classic libpcap files, and a trace is written into one by
+`Recorder`: each link frame becomes one TCP segment of an IPv4 connection carried in
+Ethernet, at the time the trace recorded it. Each connection the master made is a TCP
+stream of its own, between the addresses and ports the socket reported, opened with a
+handshake and closed with FIN segments at the time of its last frame. IP and TCP
+checksums are computed, because Suricata drops a packet whose checksum fails and would
+then look like a parser with no objection. An address that is not IPv4 is written as
+127.0.0.1 with its real port, since a stream is told apart by its ports. Writing the file
+needs no capture tool, no privileges and no race between starting a capture and starting
+the traffic, and the interoperability sweep, which wrote its own file the same way, now
+uses this one. A capture's own clock, for a caller that gives no times, counts whole
+microseconds, so it does not drift. The file format and every checksum are pinned to
+octets worked out by hand.
+*Trade-off:* the file is a record of what the master sent and read, not of the network. It
+does not show where the operating system split the stream, acknowledgments or
+retransmissions, octets that never formed a frame (the trace keeps only frames), or a
+connection on which no frame crossed.
+
+**D88 -- A capture reaches a caller through the service, and a file is written as frames
+cross.** `capture` is an operation like any other, answered from the trace, so the
+console's Save capture button asks the service for it as everything else the console does
+is asked (D77) and a script gets the same file with the same words. JSON carries the file
+in base64. A trace keeps its last 5000 frames, so a capture of a long run is written as
+the run happens instead: `--capture FILE` on `console` and `serve`, and `capture` in the
+configuration, put every outstation's frames in one file as they are recorded, each packet
+flushed as it is written so a master that is killed leaves a file a dissector can open.
+Reading the capture changes nothing at the outstation, so a service that does not command
+answers it. A file that cannot be written stops the capture and logs why, and the DNP3
+connection carries on: the listener that writes the file runs inside the receive loop,
+and a full disk is not a reason to drop an outstation.
+*Trade-off:* base64 is a third larger than the file, and the service holds the file in
+memory while it answers; the file named on the command line is emptied when the master
+starts.
+
+**D89 -- A master that runs for days has bounded memory, rotated files and an audit log.**
+Every buffer the master keeps has a fixed limit. A subscriber that falls behind is not
+dropped, which used to leave a console showing "Service running" while it received
+nothing: its waiting updates are replaced by one `lost` update that says how many were
+dropped, and the console reloads. An event stream that has not accepted a write for 60
+seconds is closed, so the browser opens a new one. The capture file and an optional log
+file rotate by size and keep a set number of older files. A capture rotates only at a
+point the recorder marks between frames, and each connection open at that point starts
+again with a handshake in the new file, so every file reads on its own. The log records
+what the master was started with, each connection made and lost, and every command sent
+to an outstation with what was asked and what came of it; a command is recognized by the
+same check that refuses it without `--allow-control`, so a new commanding operation is
+logged without being listed. An outstation that stays unreachable is logged once when the
+retries begin and once an hour after.
+*Trade-off:* the master keeps no history of measurements, only of traffic; a connection
+cut by a rotation has no FIN in the old file; a subscriber told `lost` has to read
+everything again.
+
+**D90 -- The master names a DER's points by address or by the tables' name, and a name
+has to be one point.** `py1815.master.profile` reads the map `py1815.profile` resolves,
+so a script and the console speak in the profile's terms. A point is named by its
+address, as in `AO87`, or by its name in the tables, whole or by its first sentence,
+since the tables append a description to many names. The tables give one name to more
+than one point: an output and the input that reads it back share theirs, and so do
+points in different sections. A name is therefore looked for among the inputs first and
+then among the outputs, or among the outputs alone for a write, and a name that still
+matches two points is refused with both addresses rather than resolved by a guess. A
+function is the points the tables give its enable output's purpose under its heading,
+the grouping the outstation uses for D57, around the supports input paired with that
+output; any other purpose, such as `Nameplate`, names a group too.
+*Trade-off:* a caller who meets an ambiguous name has to fall back to the address.
+
+**D91 -- A write of the profile is a control in engineering units, refused before it is
+sent and verified only when asked.** An analog value is divided by the point's multiplier
+and sent as the nearest whole number, in the integer variation every Level 2 outstation
+takes; a float variation, which the profile has an outstation take unscaled, is sent only
+when asked for. A value outside the point's range, a name that is not an output, and a
+value of the wrong kind are refused before a frame is built. Everything else is
+`operate`'s: one request, sent once, an unanswered one reported as not known (D80), and
+refused in a service that does not command. `verify` reads the input that mirrors each
+output afterwards and calls it a match within one step of the multiplier, the error that
+rounding to a whole transmitted number allows. Enabling a function is a latch of its
+enable output followed by a read of the input that reports whether it is enabled.
+*Trade-off:* a device that ramps to a new setting may read back short of it, and
+`verify` reports that as a mismatch for the caller to judge.
+
+**D92 -- A curve is written in three steps in the order of clause 6.1.3, each only after
+the one before it was accepted.** The selector, then the type, the number of points and
+the units of X and Y, then X and Y of each point, and then the curve is read back. The
+fields and points land in whichever curve the block shows, so a field written after a
+refused selector would change the wrong curve, and points written after refused fields
+would change a curve an enabled function follows. They go as separate requests and not
+one: a select checks every control of a request before any is carried out, so fields
+selected beside their selector would be checked against the curve shown before it. The
+profile's operations on one outstation are carried out one at a time, so a second caller
+cannot move the selector between another's selector and points. Each operation is written
+once as a plan that yields one request at a time, so the master on a socket and the one
+wired to a session follow it alike.
+*Trade-off:* three round trips where one could carry the curve, and a caller's profile
+operations wait for each other's.
+
+**D93 -- What an outstation serves is learned by reading, and what cannot be read is
+reported as declared.** `der.compare` reads class 0, output status, and then every point
+a Device Profile document declares that neither returned. A point no read returned is
+absent; a point returned that is not declared is undeclared; class 0 membership is
+checked against the class 0 read. An outstation may refuse a whole read for one range
+that holds no point it serves (D63), and a profile names many points an outstation may
+leave out, so a read of the profile that is refused whole is made again one range at a
+time. A read changes nothing, so making it again is not the repetition D80 forbids. A
+point's event class and deadband cannot be asked of an outstation, so they are listed
+as the document declares them. A document that declares a document type is refused
+before it is parsed: a Device Profile needs none, and an entity declared there is how an
+XML document is made to grow without bound.
+*Trade-off:* an outstation that serves few of the profile's points is read in many
+small requests, and a wrong class or deadband is left for a person to notice.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1372,8 +1483,12 @@ Each layer is testable without the ones above it, and the session does no I/O.
 - `master.timesync` decides the two requests of a time synchronization, as `master.controls`
   decides those of a select and operate, and does no I/O.
 - `master.sync` is `master.api` for a caller with no event loop. It adds no behavior.
+- `master.profile` is the IEEE 1815.2 profile from the master's side: names, scaling,
+  functions and curves, each operation a plan of requests that whatever carries them runs.
 - `master.service` is the master's operations as JSON, and knows nothing of who is asking.
   The line socket, the HTTP server and the console are each a way to reach it.
+- `master.capture` writes pcap files and knows nothing of DNP3. `master.trace` turns the
+  frames it kept into that file's segments.
 
 ## Testing
 

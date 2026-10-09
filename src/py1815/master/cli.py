@@ -15,7 +15,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib.metadata
 import logging
+import logging.handlers
 import os
 import pathlib
 import secrets
@@ -28,11 +30,14 @@ from typing import Any
 
 from py1815.master import poll
 from py1815.master.api import DEFAULT_RECONNECT
-from py1815.master.config import ConfigError, MasterConfig, read
+from py1815.master.capture import CaptureFile
+from py1815.master.config import LOG_LEVELS, MEGABYTE, ConfigError, MasterConfig, read
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
-from py1815.profile import der, load
+from py1815.profile import der, device_profile, load
 from py1815.profile.model import Composition, MapError, PointMap
 from py1815.server import OutstationServer
+
+logger = logging.getLogger(__name__)
 
 DEMO_NAME = "simulated-der"
 
@@ -59,6 +64,11 @@ class Demo:
         await self._server.start()
         self._running = asyncio.create_task(self._advance(), name="dnp3-master-demo")
         self._service.set_profile(DEMO_NAME, self.simulation.outstation.point_map)
+        # The document the simulated DER publishes, so the console can compare
+        # what it serves with what it declares.
+        outstation = self.simulation.outstation
+        document = device_profile.build(outstation, outstation.session())
+        self._service.set_device_profile(DEMO_NAME, device_profile.render(document))
         await self._service.handle(
             {
                 "op": "add",
@@ -145,13 +155,32 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
         document = read(args.config)
         # Report a mistake in the file as the file's, before flags are applied.
         MasterConfig.from_mapping(document)
-    for key in ("allow_control", "bind", "tables", "connect_wait"):
+    for key in (
+        "allow_control",
+        "bind",
+        "tables",
+        "connect_wait",
+        "capture",
+        "capture_max_mb",
+        "capture_keep",
+        "log_file",
+        "log_max_mb",
+        "log_keep",
+        "log_level",
+    ):
         value = getattr(args, key, None)
         if value is not None:
             document[key] = value
 
     defaults = dict(document.get("defaults") or {})
-    for key in ("outstation_address", "master_address", "manual", "profile", "read_retries"):
+    for key in (
+        "outstation_address",
+        "master_address",
+        "manual",
+        "profile",
+        "read_retries",
+        "device_profile",
+    ):
         value = getattr(args, key, None)
         if value is not None:
             defaults[key] = value
@@ -196,6 +225,13 @@ async def _add_outstations(
         name = outstation.name
         if point_map is not None and outstation.profile:
             service.set_profile(name, point_map)
+        if outstation.device_profile is not None:
+            try:
+                document = pathlib.Path(outstation.device_profile).read_text(encoding="utf-8")
+                service.set_device_profile(name, document)
+            except (OSError, UnicodeDecodeError, ValueError) as error:
+                print(f"{name}: {outstation.device_profile}: {error}", file=sys.stderr)
+                return False
         answer = await service.handle(
             {"op": "add", "params": outstation.add_params(allow_control=config.allow_control)}
         )
@@ -210,6 +246,25 @@ async def _add_outstations(
                     asyncio.create_task(_keep_trying(service, name, config.connect_wait))
                 )
     return True
+
+
+def _service(config: MasterConfig) -> Service | None:
+    """Return the service the configuration describes.
+
+    Return None, having said why, when the capture file cannot be created.
+    """
+    capture = None
+    if config.capture is not None:
+        try:
+            capture = CaptureFile(
+                config.capture,
+                max_bytes=round(config.capture_max_mb * MEGABYTE),
+                keep=config.capture_keep,
+            )
+        except OSError as error:
+            print(f"cannot write the capture file: {error}", file=sys.stderr)
+            return None
+    return Service(allow_control=config.allow_control, capture=capture)
 
 
 async def run_console(
@@ -227,7 +282,9 @@ async def run_console(
     """
     if config is None:
         config = configuration(args)
-    service = Service(allow_control=config.allow_control)
+    service = _service(config)
+    if service is None:
+        return 2
     token = args.token or os.environ.get(TOKEN_VARIABLE) or None
     if token is None and args.new_token:
         token = secrets.token_urlsafe(16)
@@ -241,6 +298,7 @@ async def run_console(
         )
     except ValueError as error:
         print(str(error), file=sys.stderr)
+        await service.close()
         return 2
     demo = Demo(service, point_map, tick=args.tick) if point_map is not None else None
     profile = point_map if point_map is not None else profile_map
@@ -253,6 +311,8 @@ async def run_console(
         print(f"Satori DNP3 master console at {server.url}", flush=True)
         if config.allow_control:
             print("  commanding is on: this console can operate outputs", flush=True)
+        if config.capture is not None:
+            print(f"  writing every frame to {config.capture}", flush=True)
         if demo is not None:
             print(
                 f"  a simulated DER is listening on 127.0.0.1:{demo.port} "
@@ -281,12 +341,15 @@ async def run_service(
     if config is None:
         config = configuration(args)
     bind = config.bind or DEFAULT_LINE_BIND
-    service = Service(allow_control=config.allow_control)
+    service = _service(config)
+    if service is None:
+        return 2
     waiting: list[asyncio.Task[None]] = []
     try:
         server = LineServer(service, bind=bind)
     except ValueError as error:
         print(str(error), file=sys.stderr)
+        await service.close()
         return 2
     await server.start()
     try:
@@ -296,6 +359,8 @@ async def run_service(
             f"DNP3 master service listening on {bind.rpartition(':')[0]}:{server.port}",
             flush=True,
         )
+        if config.capture is not None:
+            print(f"  writing every frame to {config.capture}", flush=True)
         await service.stopped.wait()
     finally:
         for task in waiting:
@@ -326,6 +391,53 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         "clock and restart indication (default: read only)",
     )
     parser.add_argument(
+        "--capture",
+        default=None,
+        metavar="FILE",
+        help="write every frame sent and received to this pcap file as it crosses the "
+        "wire (default: no file)",
+    )
+    parser.add_argument(
+        "--capture-max-mb",
+        type=float,
+        default=None,
+        metavar="MB",
+        help="start a new capture file once the current one reaches this size (default: 100)",
+    )
+    parser.add_argument(
+        "--capture-keep",
+        type=int,
+        default=None,
+        metavar="FILES",
+        help="older capture files to keep after rotation (default: 10)",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        metavar="FILE",
+        help="also write the log to this file, rotated by size (default: terminal only)",
+    )
+    parser.add_argument(
+        "--log-max-mb",
+        type=float,
+        default=None,
+        metavar="MB",
+        help="start a new log file once the current one reaches this size (default: 10)",
+    )
+    parser.add_argument(
+        "--log-keep",
+        type=int,
+        default=None,
+        metavar="FILES",
+        help="older log files to keep after rotation (default: 5)",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=LOG_LEVELS,
+        default=None,
+        help="the lowest level written to the log file (default: info)",
+    )
+    parser.add_argument(
         "--outstation",
         action="append",
         default=[],
@@ -339,6 +451,13 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="the outstations are IEEE 1815.2 DER: name their points from the profile "
         "tables and show the profile points they have not reported",
+    )
+    parser.add_argument(
+        "--device-profile",
+        default=None,
+        metavar="FILE",
+        help="a DNP3 Device Profile document for the outstations, to compare what they "
+        "serve with (default: none)",
     )
     parser.add_argument(
         "--tables",
@@ -490,19 +609,91 @@ def _interrupt(_signal: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
+#: How each log record is written, to the terminal and to the file.
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging(config: MasterConfig, *, verbose: bool) -> logging.Handler | None:
+    """Set up the root logger: the terminal, and the rotating log file if configured.
+
+    The terminal shows warnings, or everything from INFO with ``verbose``.
+    The file gets ``log_level`` and above. Return the file's handler, or None
+    when there is no file. Raises ``OSError`` if the file cannot be opened.
+    """
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    terminal = logging.StreamHandler()
+    terminal.setLevel(logging.INFO if verbose else logging.WARNING)
+    terminal.setFormatter(logging.Formatter(LOG_FORMAT))
+    root.addHandler(terminal)
+    levels = [terminal.level]
+    file_handler: logging.Handler | None = None
+    if config.log_file is not None:
+        file_handler = logging.handlers.RotatingFileHandler(
+            config.log_file,
+            maxBytes=round(config.log_max_mb * MEGABYTE),
+            backupCount=config.log_keep,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(config.log_level.upper())
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        root.addHandler(file_handler)
+        levels.append(file_handler.level)
+    root.setLevel(min(levels))
+    return file_handler
+
+
+def _version() -> str:
+    try:
+        return importlib.metadata.version("py1815")
+    except importlib.metadata.PackageNotFoundError:
+        return "(not installed)"
+
+
+def _log_start(config: MasterConfig, command: str) -> None:
+    """Write what the master was started with, so a log file says what it covers."""
+    logger.info(
+        "dnp3 master: py1815 %s started (%s), commanding %s, capture %s",
+        _version(),
+        command,
+        "on" if config.allow_control else "off",
+        config.capture or "none",
+    )
+    for outstation in config.outstations:
+        logger.info(
+            "dnp3 master: outstation %s at %s:%d, link %d to %d",
+            outstation.name,
+            outstation.host,
+            outstation.port,
+            outstation.master_address,
+            outstation.outstation_address,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
     if args.command == "poll":
+        # A one-shot client: no configuration file and no log file.
+        logging.basicConfig(
+            level=logging.INFO if args.verbose else logging.WARNING, format=LOG_FORMAT
+        )
         return poll.run(args)
     try:
         config = configuration(args)
     except ConfigError as error:
         print(str(error), file=sys.stderr)
         return 2
+    if args.command != "config":
+        try:
+            log_file = configure_logging(config, verbose=args.verbose)
+        except OSError as error:
+            print(f"cannot write the log file: {error}", file=sys.stderr)
+            return 2
+        if log_file is not None:
+            print(f"  logging to {config.log_file}", flush=True)
+        _log_start(config, args.command)
     if args.command == "config":
         if args.out is None:
             sys.stdout.write(config.render())

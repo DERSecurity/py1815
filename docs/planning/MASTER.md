@@ -67,7 +67,7 @@ several tables of object sizes and several response parsers:
 | `profile/probe.py` | One integrity poll over a socket, confirming what asks for it. Behind `py1815-der poll` | Any association: no retries, no controls, no events over time |
 | `tests/ied_harness.py` | Drives a `Session` in process for the certification procedures: requests, confirmations, link frames, corrupted frames | A socket, a clock of its own, a public interface |
 | `tests/epri_harness.py` | The DER profile procedures on top of the same harness | The same |
-| `interop/sweep.py`, `interop/probe.py` | Every function code over a real connection, with a capture written by `interop/pcap.py` | Anything beyond one request and its reply |
+| `interop/sweep.py`, `interop/probe.py` | Every function code over a real connection, with a capture written by `py1815.master.capture` (once `interop/pcap.py`) | Anything beyond one request and its reply |
 
 **Missing.** Parsing a response (the application layer parses requests and
 builds responses, and not the reverse), decoding the objects a response
@@ -146,11 +146,11 @@ interface.
 | `master.timesync` | The LAN and non-LAN time synchronization procedures, as plans | Built |
 | `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | Built |
 | `master.deviations` | Misbehavior, applied between the association and the connection | |
-| `master.trace` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built, without the capture writer |
+| `master.trace`, `master.capture` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built |
 | `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built |
-| `master.profile` | The DER profile: names, units, functions, curves | |
+| `master.profile` | The DER profile: names, units, functions, curves | Built |
 | `master.cli` | `py1815-master` | Built: `console`, `serve`, `config` and `poll` |
-| `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, Log |
+| `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, DER, Log |
 
 ## The association
 
@@ -205,6 +205,9 @@ of M9 as D80, and M4 as D81. D82, reading named points by range, came out of
 the interoperability work and has no M number, and neither have D83 to D86,
 which came out of finishing items 2 to 6: what is tried again, broadcast and
 the time procedures, events left after a poll, and the blocking interface.
+D87 and D88, the capture writer and how a capture reaches a caller, record
+item 7, and D89 how a master runs for days. D90 to D93 record how the DER
+profile is spoken (item 10), and have no M number either.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -574,23 +577,47 @@ done means.
    exporting the trace, the `der.*` operations) as each is built.
 7. **The trace.** Recording, subscription, the capture writer moved out of
    `interop/`. *Done when* the dissector jobs read a capture the master wrote.
-   *Built:* recording, reading layer by layer, subscription. *Left:* the
-   capture writer.
+   *Built:* recording, reading layer by layer, subscription, and the capture
+   writer, now `py1815.master.capture` and used by the sweep (D87). A trace
+   exports itself as a pcap file, each connection a TCP stream of its own;
+   the service's `capture` operation returns that file and the console's
+   Traffic tab saves it; `--capture FILE` on `console` and `serve`, and
+   `capture` in the configuration, write every frame to a file as it crosses
+   the wire (D88). The parsers job reads a capture this master wrote, with
+   tshark and Suricata. A master left running for days keeps bounded
+   memory, rotates the capture and an optional log file by size, and logs
+   every command it sends (D89). *Left:* nothing. That job's first run is in CI:
+   Suricata 7.0.3 read the master's capture locally with no objection, and
+   no tshark was at hand.
 8. **Interoperability.** The independent outstations in CI. *Done when* both
    are read and commanded on every pull request. *Built:* an opendnp3
    outstation and a `dnp3` crate outstation, read and commanded by
    `interop/master_check.py` in two jobs of the interoperability workflow, with
    each control and the time write checked against the outstation's own log.
    It found the master reading named points with a qualifier opendnp3 rejects
-   (D82). *Left:* the dissectors reading a capture of what the master sends,
-   which waits on the capture writer in item 7; freezes, which neither
-   outstation's fixture serves; and TLS, which the master now speaks and is
-   tested over against this library's own listener only.
+   (D82). The parsers job also has the master read `interop/outstation.py`
+   (its startup sequence, event and class polls, a time write, a read of
+   named points, output status) and write a capture, which Wireshark's and
+   Suricata's dissectors read with the master's requests and confirmations
+   counted as well as the outstation's responses (`interop/master_capture.py`).
+   *Left:* freezes, which neither outstation's fixture serves; and TLS, which
+   the master now speaks and is tested over against this library's own
+   listener only.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
    certification procedures have been reproduced through it over a socket.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
     each function can be configured, enabled and read back by name against the
-    simulated DER.
+    simulated DER. *Built,* in `master.profile`, with every operation of the
+    table above, `verify`, and a `der.*` service operation for each: each
+    function the simulated DER implements is configured, enabled and read back
+    by name over a socket, and the rig's last rows play over the line socket
+    (D90 to D93). *Left:* the functions the simulated DER does not implement
+    (watt-var, frequency droop, the trip curves, enter service) are found and
+    written by name, and have been driven against no outstation that carries
+    them out; the schedules; checking a point's event class by the events it
+    produces, where the comparison now reports the declared class; and running
+    the profile's operations against an independent outstation, which needs
+    one that serves the profile.
 11. **The console.** The layout above, the demonstration command, the image.
     *Done when* a person can add an outstation, watch its points, operate an
     output, enable a function and read the traffic without a terminal.
@@ -598,7 +625,10 @@ done means.
     the traffic, with `console --demo`; the profile's points an outstation has
     not reported; operating an output, the time, the restart indication and
     the freezes, when started to command; the image; and tests that load it in
-    a browser. *Left:* the DER and Evaluate tabs, and the saved requests.
+    a browser; and the DER tab, with the nameplate, monitoring, each supported
+    function with its settings and an enable switch, the curve as a plot and a
+    table, and the comparison with a Device Profile document. *Left:* the
+    Evaluate tab, and the saved requests.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say.

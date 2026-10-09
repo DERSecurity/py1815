@@ -9,6 +9,10 @@ application layer.
 The reading is for people. Nothing in the master acts on it, so a frame it
 describes badly is a display fault and never a protocol one.
 
+A trace also knows which connection each frame crossed and the addresses of
+its two ends, so it can be exported as a pcap file (:meth:`Trace.capture`) or
+written to one as it is recorded (:class:`Recorder`), for a dissector to read.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -32,6 +36,7 @@ from py1815.application import (
     parse_header_list,
 )
 from py1815.decode import decode_objects
+from py1815.master.capture import DNP3_PORT, Address, Capture, Stream, ipv4
 from py1815.transport import FIN_MASK, FIR_MASK, SEQ_MASK, Reassembler, TransportError
 
 #: Frames kept before the oldest is dropped.
@@ -81,6 +86,9 @@ class Entry:
     application: dict[str, Any] | None
     #: One line that says what the frame is.
     summary: str
+    #: The connection the frame crossed: 1 for the trace's first, counting up
+    #: with each new one, and 0 for a frame recorded before any.
+    connection: int = 0
 
 
 def _link(frame: link.LinkFrame) -> dict[str, Any]:
@@ -193,6 +201,8 @@ class Trace:
         self._next = 1
         self._readers = {SENT: link.FrameReader(), RECEIVED: link.FrameReader()}
         self._reassemblers = {SENT: Reassembler(), RECEIVED: Reassembler()}
+        self._connection = 0
+        self._endpoints: dict[int, tuple[Address | None, Address | None]] = {}
         #: Called with each entry as it is recorded.
         self.listeners: list[Callable[[Entry], None]] = []
 
@@ -243,6 +253,7 @@ class Trace:
             transport=transport,
             application=application,
             summary=_summary(described, transport, application),
+            connection=self._connection,
         )
 
     def since(self, after: int = 0) -> list[Entry]:
@@ -253,11 +264,141 @@ class Trace:
         """Forget the frames kept. Ids carry on from where they were."""
         self._entries.clear()
 
-    def reset(self) -> None:
-        """Forget half a frame and half a fragment, as a new connection does."""
+    def reset(self, *, local: Address | None = None, peer: Address | None = None) -> None:
+        """Start a new connection: forget half a frame and half a fragment.
+
+        Args:
+            local: This master's address and port on the new connection.
+            peer: The outstation's address and port.
+        """
         self._readers = {SENT: link.FrameReader(), RECEIVED: link.FrameReader()}
         for reassembler in self._reassemblers.values():
             reassembler.reset()
+        self._connection += 1
+        # Keep the endpoints of the connections a kept frame crossed, and of
+        # the new one, and no others. A connection that closed before any
+        # frame would otherwise stay here for as long as the master runs.
+        needed = {entry.connection for entry in self._entries}
+        for connection in [number for number in self._endpoints if number not in needed]:
+            del self._endpoints[connection]
+        self._endpoints[self._connection] = (local, peer)
+
+    def endpoints(self, connection: int) -> tuple[Address | None, Address | None]:
+        """Return this master's and the outstation's address on a connection.
+
+        Either is None where it is not known: for frames recorded before any
+        connection, and for a connection whose addresses were not given.
+        """
+        return self._endpoints.get(connection, (None, None))
+
+    def capture(self, *, after: int = 0, port: int = DNP3_PORT) -> bytes:
+        """Return the frames kept as a pcap file.
+
+        Args:
+            after: Only frames whose id is greater.
+            port: The outstation's port, for a connection whose addresses are
+                not known.
+        """
+        capture = Capture()
+        recorder = Recorder(capture, self, port=port)
+        for entry in self.since(after):
+            recorder.record(entry)
+        recorder.close()
+        return capture.pcap()
 
     def __len__(self) -> int:
         return len(self._entries)
+
+
+#: Where a connection whose addresses are not known is placed in a capture.
+PLACEHOLDER_ADDRESS = "127.0.0.1"
+
+#: The first client port used for a connection whose own port is not known.
+#: Each connection takes the next one, so each is a stream of its own.
+PLACEHOLDER_PORT = 41000
+
+
+class Recorder:
+    """Write a trace's frames into a capture, one TCP connection per connection.
+
+    Give :meth:`record` each entry in order, or add it to the trace's
+    ``listeners`` to write frames as they are recorded. A connection's
+    handshake is written before its first frame, and its FIN exchange when a
+    frame of the next connection arrives or :meth:`close` is called, at the
+    time of its last frame.
+
+    A frame is one TCP segment. An address that is not IPv4, or that is not
+    known, is written as ``127.0.0.1``; a port that is not known is ``port``
+    for the outstation and one from 41000 up for the master.
+    """
+
+    def __init__(self, capture: Capture, trace: Trace, *, port: int = DNP3_PORT) -> None:
+        """
+        Args:
+            capture: Where the packets go.
+            trace: The trace the entries come from, for each connection's addresses.
+            port: The outstation's port, for a connection whose addresses are
+                not known.
+        """
+        self._capture = capture
+        self._trace = trace
+        self._port = port
+        self._stream: Stream | None = None
+        self._connection: int | None = None
+        self._generation = capture.generation
+        self._last = 0.0
+
+    def record(self, entry: Entry) -> None:
+        """Write one entry, opening a new connection first when it crossed one.
+
+        Before each entry the capture may start a new file. A connection that
+        was open in the old file then starts again with a handshake in the new
+        one, so each file reads on its own. The old file has no FIN for it.
+        """
+        self._capture.boundary()
+        if self._capture.generation != self._generation:
+            self._generation = self._capture.generation
+            self._stream = None
+            self._connection = None
+        if self._stream is None or entry.connection != self._connection:
+            self.close()
+            self._stream = self._open(entry.connection, entry.at)
+            self._connection = entry.connection
+        if entry.direction == SENT:
+            self._stream.sent(entry.octets, entry.at)
+        else:
+            self._stream.received(entry.octets, entry.at)
+        self._last = entry.at
+
+    def close(self) -> None:
+        """Write the FIN exchange of the open connection, if there is one.
+
+        A connection opened in a file the capture has since rotated away from
+        is forgotten instead: its FIN packets would land in the new file with
+        no handshake before them.
+        """
+        if self._stream is not None and self._capture.generation == self._generation:
+            self._stream.close(self._last)
+        self._stream = None
+        self._connection = None
+
+    def abandon(self) -> None:
+        """Forget the open connection without writing anything more."""
+        self._stream = None
+        self._connection = None
+
+    def _open(self, connection: int, at: float) -> Stream:
+        local, peer = self._trace.endpoints(connection)
+        fallback = PLACEHOLDER_PORT + connection % (0x10000 - PLACEHOLDER_PORT)
+        client = _address(local, fallback)
+        server = _address(peer, self._port)
+        stream = self._capture.stream(client=client, server=server)
+        stream.open(at)
+        return stream
+
+
+def _address(given: Address | None, port: int) -> Address:
+    if given is None:
+        return PLACEHOLDER_ADDRESS, port
+    host, known = given[0], given[1]
+    return ipv4(host) or PLACEHOLDER_ADDRESS, known

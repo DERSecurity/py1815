@@ -30,11 +30,6 @@ import socket
 import sys
 from dataclasses import dataclass, field
 
-# A sibling script rather than a package module: interop/ holds scripts the
-# jobs run directly, so the script's own directory is what puts this on the
-# path. tests/test_interop_fixture.py loads outstation.py the same way.
-from pcap import Capture
-
 from py1815 import link
 from py1815.application import (
     CON_MASK,
@@ -46,6 +41,7 @@ from py1815.application import (
     IINBit,
     QualifierCode,
 )
+from py1815.master.capture import Capture, Stream
 from py1815.transport import Reassembler, TransportError, segment
 
 #: Long enough that a reply which is coming has arrived on a loopback, short
@@ -486,7 +482,7 @@ def _fragment_of(reply: bytes) -> bytes:
 
 
 def _walk(
-    sock: socket.socket, capture: Capture | None, conversation: Conversation
+    sock: socket.socket, capture: Stream | None, conversation: Conversation
 ) -> tuple[str, int]:
     """Send a request and confirm each fragment until the outstation is done.
 
@@ -724,7 +720,9 @@ def run(host: str, port: int, pcap: str | None = None, summary: str | None = Non
     #: that logs application transactions will have a record for. The link-layer
     #: acknowledgments are replies too, and are not.
     application_replies = 0
-    capture = Capture(server_port=port) if pcap else None
+    recording = Capture() if pcap else None
+    #: The one TCP connection in the capture, as the sweep makes one connection.
+    capture = recording.stream(server=("127.0.0.1", port)) if recording is not None else None
     #: Learned from the first application reply rather than assumed. See _check.
     restart_expected: bool | None = None
 
@@ -788,9 +786,9 @@ def run(host: str, port: int, pcap: str | None = None, summary: str | None = Non
             failures.append((AFTER_RESTART_CLEARED.name, str(exc)))
             print(f"sweep: FAIL {AFTER_RESTART_CLEARED.name}: {exc}", file=sys.stderr)
 
-    if capture and pcap:
+    if recording is not None and capture is not None and pcap:
         capture.close()
-        print(f"sweep: wrote {capture.write(pcap)} packets to {pcap}")
+        print(f"sweep: wrote {recording.write(pcap)} packets to {pcap}")
 
     if summary:
         pathlib.Path(summary).write_text(

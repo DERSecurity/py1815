@@ -1,6 +1,6 @@
 """The master's configuration: every setting in one JSON document.
 
-A configuration has four top-level settings, a ``defaults`` object with the
+A configuration has five top-level settings, a ``defaults`` object with the
 settings shared by every outstation, and a list of ``outstations``. An
 outstation entry needs a ``name`` and a ``host``; any other setting it gives
 overrides the default.
@@ -83,6 +83,9 @@ class OutstationConfig:
     #: The outstation is an IEEE 1815.2 DER: name its points from the profile
     #: tables.
     profile: bool = False
+    #: Path of the outstation's DNP3 Device Profile document, which
+    #: ``der.compare`` compares what it serves with. None for none.
+    device_profile: str | None = None
     #: The automatic tasks. The two that write (``clear_restart`` and
     #: ``write_time``) only run when ``allow_control`` is on.
     tasks: Tasks = field(default_factory=Tasks)
@@ -123,6 +126,8 @@ class OutstationConfig:
                 values[key] = settings.boolean(value, at)
             elif key == "reconnect":
                 values[key] = None if value is None else settings.seconds(value, at)
+            elif key == "device_profile":
+                values[key] = None if value is None else settings.text(value, at)
             elif key == "tasks":
                 if not isinstance(value, Mapping):
                     raise ConfigError(f"{at} must be an object")
@@ -209,7 +214,27 @@ class OutstationConfig:
         return described
 
 
-_TOP_LEVEL = ("allow_control", "bind", "tables", "connect_wait", "defaults", "outstations")
+_TOP_LEVEL = (
+    "allow_control",
+    "bind",
+    "tables",
+    "connect_wait",
+    "capture",
+    "capture_max_mb",
+    "capture_keep",
+    "log_file",
+    "log_max_mb",
+    "log_keep",
+    "log_level",
+    "defaults",
+    "outstations",
+)
+
+#: The log levels a configuration may name.
+LOG_LEVELS = ("debug", "info", "warning")
+
+#: Octets in one megabyte, as the size settings count them.
+MEGABYTE = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -225,6 +250,20 @@ class MasterConfig:
     #: Seconds to keep trying to reach an outstation that is not there at
     #: startup. Zero tries once.
     connect_wait: float = 0.0
+    #: Path of a pcap file to write every frame to as it is sent or received,
+    #: or None for no file.
+    capture: str | None = None
+    #: Start a new capture file once the current one reaches this many
+    #: megabytes, keeping ``capture_keep`` older files.
+    capture_max_mb: float = 100.0
+    capture_keep: int = 10
+    #: Path of a log file, or None to log to the terminal only. The file is
+    #: rotated at ``log_max_mb`` megabytes, keeping ``log_keep`` older files.
+    log_file: str | None = None
+    log_max_mb: float = 10.0
+    log_keep: int = 5
+    #: The lowest level written to the log file: debug, info or warning.
+    log_level: str = "info"
     #: The settings an outstation has unless its own entry says otherwise.
     defaults: OutstationConfig = field(default_factory=OutstationConfig)
     outstations: tuple[OutstationConfig, ...] = ()
@@ -240,9 +279,25 @@ class MasterConfig:
         values: dict[str, Any] = {}
         if "allow_control" in given:
             values["allow_control"] = settings.boolean(given["allow_control"], "allow_control")
-        for key in ("bind", "tables"):
+        for key in ("bind", "tables", "capture", "log_file"):
             if given.get(key) is not None:
                 values[key] = settings.text(given[key], key)
+        for key in ("capture_max_mb", "log_max_mb"):
+            if key in given:
+                values[key] = settings.seconds(given[key], key, unit="megabytes")
+        if "capture_keep" in given:
+            values["capture_keep"] = settings.integer(
+                given["capture_keep"], "capture_keep", 0, 1000
+            )
+        if "log_keep" in given:
+            # At least 1: Python's rotating log handler does not rotate with 0,
+            # and the file would then grow without limit.
+            values["log_keep"] = settings.integer(given["log_keep"], "log_keep", 1, 1000)
+        if "log_level" in given:
+            level = given["log_level"]
+            if level not in LOG_LEVELS:
+                raise ConfigError(f"log_level must be one of {', '.join(LOG_LEVELS)}")
+            values["log_level"] = level
         if "connect_wait" in given:
             wait = given["connect_wait"]
             if (
@@ -306,6 +361,13 @@ class MasterConfig:
             "bind": self.bind,
             "tables": self.tables,
             "connect_wait": self.connect_wait,
+            "capture": self.capture,
+            "capture_max_mb": self.capture_max_mb,
+            "capture_keep": self.capture_keep,
+            "log_file": self.log_file,
+            "log_max_mb": self.log_max_mb,
+            "log_keep": self.log_keep,
+            "log_level": self.log_level,
             "defaults": shared,
             "outstations": outstations,
         }

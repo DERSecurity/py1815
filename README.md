@@ -83,7 +83,7 @@ reading the simulated DER, with the point tables fetched as above:
 
 ```
 py1815-master console --demo --open                   # reads
-py1815-master console --demo --open --allow-control   # and can operate outputs
+py1815-master console --demo --open --allow-control   # and can operate outputs and DER functions
 ```
 
 That starts a simulated IEEE 1815.2 DER, a master connected to it, and the console at
@@ -111,6 +111,9 @@ says some are waiting, and otherwise sends what you ask for from the Commands ta
 
 Every setting can also be kept in a JSON file. `py1815-master config` prints a complete one
 to edit, and `--config FILE` loads it. See `docs/master-config.md`.
+
+`--capture FILE` writes every frame the master sends and receives to a pcap file as it crosses
+the wire, for Wireshark; the console's Traffic tab saves what it holds as one too.
 
 Or with Docker, which needs nothing installed but Docker:
 
@@ -140,6 +143,9 @@ In the console:
 - **Commands** sends a scan, a read or any other request, and shows what came back.
 - **Events** lists changes as they are reported, and **Traffic** every frame, read layer by
   layer.
+- **DER**, for an outstation with a profile, shows its nameplate and measurements in
+  engineering units, each function with its settings and an enable switch, its curve as a
+  plot, and what it serves against its Device Profile document.
 
 The same master answers a script. Over HTTP, while the console is running:
 
@@ -165,10 +171,11 @@ asyncio.run(main())
 ```
 
 It polls, reads named points, takes unsolicited responses, sets the clock by either of the
-standard's procedures, sends broadcasts and operates outputs; the service and the console
-command an outstation only when started with `--allow-control`. It connects over TCP or TLS, and `py1815.master.sync` is the same master for a
-script with no event loop. `py1815-master poll` reads an outstation once and prints what it
-answered. See [The console](https://dersecurity.github.io/py1815/console/),
+standard's procedures, sends broadcasts, operates outputs and writes a DER's settings by
+name; the service and the console command an outstation only when started with
+`--allow-control`. It connects over TCP or TLS, and `py1815.master.sync` is the same master
+for a script with no event loop. `py1815-master poll` reads an outstation once and prints
+what it answered. See [The console](https://dersecurity.github.io/py1815/console/),
 [The master's API](https://dersecurity.github.io/py1815/master-api/), whose routes are
 described in an [OpenAPI document](src/py1815/master/console/openapi.json), and
 [The master](https://dersecurity.github.io/py1815/master/) for the Python interface.

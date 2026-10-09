@@ -12,9 +12,10 @@ are the same master from a browser and from another process.
     of the standard's procedures, clears the restart indication, freezes
     counters and sends broadcasts. Left alone it looks after an outstation as
     a master does: settles it on connecting, fetches the events it says it
-    has, and connects again when the connection is lost. It connects over TCP
-    or TLS. All of it from Python, with or without an event loop, from a JSON
-    service, or from a web console. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    has, and connects again when the connection is lost. It speaks to an
+    IEEE 1815.2 DER in the profile's terms, and connects over TCP or TLS. All
+    of it from Python, with or without an event loop, from a JSON service,
+    or from a web console. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -392,6 +393,57 @@ IIN1.0 in its next response to this master. Over TCP a broadcast reaches the
 one outstation at the other end of the connection, which acts on it as a
 broadcast.
 
+## An IEEE 1815.2 DER
+
+`Der` puts the profile's point map in front of an outstation, so a script names
+points as the profile does and reads and writes them in engineering units:
+
+```python
+from py1815.master.profile import Der
+from py1815.profile import load_map
+
+der = Der(lab, load_map())
+
+nameplate = await der.read(group="nameplate")
+for reading in nameplate.readings:
+    print(reading.point.name, reading.value, reading.point.units, reading.quality)
+
+written = await der.write({"AO87": 50}, verify=True)      # 50 percent, sent as 500
+print(written.accepted, written.verified)
+
+await der.write_curve(1, type=2, x_units=129, y_units=2,
+                      points=[(920, 300), (980, 0), (1020, 0), (1080, -300)])
+await der.write({"Volt-Var Curve Index": 1})
+switched = await der.enable("volt-var")
+print(switched.enabled)                                   # read back from its input
+```
+
+| Operation | Does |
+|---|---|
+| `read(*names, group=)` | Reads points by address (`AI148`) or name, or a group: a function, or everything of one purpose such as `nameplate` or `monitoring`. Returns `Readings`, each with its `value` in engineering units, `raw`, `state` and `quality` |
+| `write(values, verify=, mode=, variation=)` | Writes outputs by address or name in one request. A value is divided by the point's multiplier and sent as the nearest whole number; one outside the point's range raises `ValueError` before anything is sent. Returns `Written` |
+| `enable(function)`, `disable(function)` | Latches the function's enable output, then reads the input that reports whether it is enabled. Returns `Switched` |
+| `functions()` | Reads which functions the outstation supports and which are enabled. Returns `Functions` |
+| `curve(number=None)` | Reads the curve the curve block shows, selecting `number` first when given |
+| `write_curve(number, type=, x_units=, y_units=, points=)` | Writes the selector, then the fields, then the points, each only when the one before was accepted, and reads the curve back. Returns `CurveWritten` |
+| `compare(document)` | Compares what the outstation serves with a DNP3 Device Profile document. Returns `Comparison` |
+
+A name the tables give to more than one point, as an output and the input that
+reads it back often share one, is looked for among the inputs for a read and
+among the outputs for a write; one that still means two points raises
+`ValueError` naming both addresses. A function is found by its key
+(`volt-var-control`), its name, the purpose the tables give it (`Volt-Var`), or
+its enable output (`BO29`).
+
+`verify=True` reads the input that mirrors each output afterwards, and
+`Setpoint.matches` says whether it is within one step of the multiplier. Every
+write is a control: it is sent once, and one whose answer did not arrive is
+reported with `accepted` None and is not sent again. One profile operation is
+under way on an outstation at a time, so a curve's selector cannot be moved by
+another caller before its points are written.
+
+`LoopbackDer(loopback, point_map)` has the same operations on a `Loopback`.
+
 ## Driving an outstation by hand
 
 `manual=True` turns off every task and stops the master confirming anything.
@@ -477,6 +529,108 @@ py1815-master poll --host 192.0.2.10 --port 20000 --limit 20
 py1815-master poll --host 192.0.2.10 --tls-ca lab-ca.pem \
     --tls-certificate master.pem --tls-key master.key
 ```
+
+
+## Captures
+
+A trace can be saved as a pcap file, which Wireshark, tshark and Suricata read
+as it is:
+
+```python
+pathlib.Path("lab.pcap").write_bytes(lab.trace.capture())
+```
+
+Each frame is one TCP segment of an IPv4 connection, carried in Ethernet, at
+the time it was sent or received. Each connection the master made is a TCP
+stream of its own, between the addresses and ports it really had, opened with
+a handshake and closed with FIN segments. The file is written from the trace
+and not observed on the network, so it needs no capture tool and no
+privileges, and it holds exactly the frames the master sent and received. It
+does not show how the operating system split the stream into segments, or
+retransmissions and acknowledgments of its own. An address that is not IPv4
+is written as `127.0.0.1`, with its port kept. `capture(after=id)` keeps only
+the frames after one, as `since` does.
+
+To write every frame to a file as it crosses the wire, from the start of a
+run, give the command a file:
+
+```bash
+py1815-master serve --outstation lab=192.0.2.10:20000 --capture lab.pcap
+```
+
+`console` takes `--capture` as well, and the configuration file takes
+`"capture"`. Every outstation's frames go to the one file, each connection a
+stream of its own, and each packet is on disk as soon as it is written, so a
+master that is stopped or killed leaves a file Wireshark can open. The file is
+emptied when the master starts. From Python, a `CaptureFile` and a `Recorder`
+on a trace's `listeners` do the same:
+
+```python
+from py1815.master.capture import CaptureFile
+from py1815.master.trace import Recorder
+
+written = CaptureFile("lab.pcap")
+recorder = Recorder(written, lab.trace, port=lab.port)
+lab.trace.listeners.append(recorder.record)
+...
+recorder.close()  # ends the open connection in the file
+written.close()
+```
+
+The console's Traffic tab has a Save capture button, and the service a
+`capture` operation, that return what the trace holds.
+
+## Running for days
+
+The master is meant to stay connected for as long as it is left running. Every
+buffer it keeps in memory has a fixed limit, so its memory does not grow with
+time, and what is written to disk is rotated by size.
+
+| Kept | Limit | When full |
+|---|---|---|
+| The trace (frames), per outstation | 5,000 frames | The oldest is dropped |
+| The event store, per outstation | 10,000 events | The oldest is dropped |
+| Unsolicited responses, per outstation | 1,000 | The oldest is dropped |
+| The last value of each point | One per point | Replaced |
+| Updates waiting for a subscriber (the console, or a script on the line service) | 10,000 | Replaced by one `lost` update that says how many were dropped |
+| The console's frames, events and log, in the browser | 600, 1,000 and 300 | The oldest is dropped |
+
+A console that falls behind, for example in a laptop that slept, is sent a
+`lost` update and reloads what it shows. An event stream that has not accepted
+a write for 60 seconds is closed, and the browser opens a new one and reloads.
+
+For a record that outlives the trace, write it to disk:
+
+- `--capture FILE` writes every frame to a pcap file. The file is rotated at
+  `--capture-max-mb` megabytes (100 by default), keeping `--capture-keep` older
+  files (10 by default) named `FILE.1`, `FILE.2` and so on before the extension:
+  `master.pcap`, `master.1.pcap`. Each file opens with its connections' handshakes,
+  so it reads on its own.
+- `--log-file FILE` writes the log to a file, rotated at `--log-max-mb` megabytes
+  (10 by default), keeping `--log-keep` older files (5 by default). The file gets
+  `--log-level` and above (`info` by default); the terminal shows warnings only,
+  unless `--verbose`.
+
+The log records, at INFO:
+
+- What the master was started with, and each outstation's address.
+- Each connection made, lost and made again.
+- Every command sent to an outstation (operate, the time, the restart
+  indication, freeze, restart, and any request that is not a read), with all
+  the points and values asked for and whether the outstation accepted. A command
+  refused because the service was not started with `--allow-control` is logged
+  as a warning.
+- Each time the master clears the restart indication or writes the time by
+  itself, and how the request ended.
+
+An outstation that stays unreachable is logged once when the retries begin and
+then once an hour, with the number of attempts, instead of at every attempt.
+Each attempt is still logged at DEBUG.
+
+The master does not keep a history of measurements: it is a test tool, not a
+historian. Use the capture file for a complete record of what was exchanged.
+
+All of these settings are also in the [configuration file](master-config.md).
 
 ## From a browser, or from another process
 

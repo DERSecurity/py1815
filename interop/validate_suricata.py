@@ -8,9 +8,13 @@ on the same octets Wireshark reads, from a codebase with no relationship to
 either this library or the other parser.
 
 What this asserts is narrow on purpose: that a parser nobody here wrote can
-read every exchange the sweep produced, that it objects to none of the framing,
-and that it saw the function codes the sweep sent. It is not a correctness
+read every exchange in the capture, that it objects to none of the framing,
+and that it saw the function codes that were sent. It is not a correctness
 oracle for the responses -- the master-driven jobs are that.
+
+It reads two captures: the function code sweep's, and (``--kind master``) one
+of this library's master reading the same outstation, written by
+``master_capture.py``, where the requests under test are the master's.
 
 Exits non-zero, loudly, on anything it cannot verify.
 
@@ -48,34 +52,44 @@ FRAMING_EVENTS = {
 #: and failing on it would mean the sweep could never test a refusal.
 DECODE_ONLY_EVENTS = {"UNKNOWN_OBJECT"}
 
-#: How many of those the sweep is expected to provoke. Naming the event without
-#: bounding it would let a genuinely undecodable object appearing somewhere new
-#: pass unnoticed, which is the failure the checksum-verdict count guards
-#: against at the other end of this file. The sweep asks for three objects this
-#: parser does not decode: a file-transfer read, an analog-output write, and the
-#: internal-indication write that clears the restart bit.
-MAX_DECODE_ONLY_EVENTS = 3
+#: How many of those each capture is expected to provoke. Naming the event
+#: without bounding it would let a genuinely undecodable object appearing
+#: somewhere new pass unnoticed, which is the failure the checksum-verdict count
+#: guards against at the other end of this file. The sweep asks for three
+#: objects this parser does not decode: a file-transfer read, an analog-output
+#: write, and the internal-indication write that clears the restart bit. The
+#: master sends only the last.
+MAX_DECODE_ONLY_EVENTS = {"sweep": 3, "master": 1}
 
 #: Function codes that must appear for the capture to be the one this job
-#: expects. Not the full set the sweep sends: Suricata logs a record per
+#: expects. Not the full set that was sent: Suricata logs a record per
 #: application fragment it parses, and a bare confirmation is not one, so
 #: requiring everything would pin this job to a logging decision upstream.
 REQUIRED_FUNCTIONS = {
-    1: "read",
-    2: "write",
-    3: "select",
-    4: "operate",
-    5: "direct operate",
-    6: "direct operate, no acknowledgment",
-    13: "cold restart",
-    20: "enable unsolicited",
-    21: "disable unsolicited",
-    129: "response",
+    "sweep": {
+        1: "read",
+        2: "write",
+        3: "select",
+        4: "operate",
+        5: "direct operate",
+        6: "direct operate, no acknowledgment",
+        13: "cold restart",
+        20: "enable unsolicited",
+        21: "disable unsolicited",
+        129: "response",
+    },
+    "master": {
+        1: "read",
+        2: "write",
+        21: "disable unsolicited",
+        129: "response",
+    },
 }
 
 #: The sweep walks most of the function code space. A capture carrying only a
-#: handful would be a capture of something else.
-MINIMUM_DISTINCT_FUNCTIONS = 30
+#: handful would be a capture of something else. The master's has to carry
+#: the functions it is required to.
+MINIMUM_DISTINCT_FUNCTIONS = {"sweep": 30, "master": len(REQUIRED_FUNCTIONS["master"])}
 
 
 def fail(message: str) -> NoReturn:
@@ -87,8 +101,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("eve", help="path to Suricata's eve.json")
     parser.add_argument(
+        "--kind",
+        choices=sorted(REQUIRED_FUNCTIONS),
+        default="sweep",
+        help="which capture this is: the function code sweep, or the master's",
+    )
+    parser.add_argument(
         "--expect",
-        help="the sweep's summary, to check this parser saw every reply that was sent",
+        help="the summary written with the capture, to check this parser saw every "
+        "request and reply that was sent",
     )
     args = parser.parse_args()
 
@@ -133,7 +154,7 @@ def main() -> None:
 
     framing = {name: count for name, count in anomalies.items() if name in FRAMING_EVENTS}
     if framing:
-        fail(f"Suricata rejected the framing of this outstation's traffic: {framing}")
+        fail(f"Suricata rejected the framing of the traffic: {framing}")
 
     unexpected = {
         name: count
@@ -144,11 +165,11 @@ def main() -> None:
         fail(f"Suricata raised application-layer events nobody has accounted for: {unexpected}")
 
     decode_only = sum(count for name, count in anomalies.items() if name in DECODE_ONLY_EVENTS)
-    if decode_only > MAX_DECODE_ONLY_EVENTS:
+    if decode_only > MAX_DECODE_ONLY_EVENTS[args.kind]:
         fail(
             f"{decode_only} objects this parser could not decode, expected at most "
-            f"{MAX_DECODE_ONLY_EVENTS}; the allowlist is meant to cover the objects the "
-            "sweep asks for on purpose, not any new one"
+            f"{MAX_DECODE_ONLY_EVENTS[args.kind]}; the allowlist is meant to cover the "
+            f"objects the {args.kind} sends on purpose, not any new one"
         )
 
     responses = kinds.get("response", 0)
@@ -157,25 +178,31 @@ def main() -> None:
 
     if args.expect:
         expected = json.loads(pathlib.Path(args.expect).read_text(encoding="utf-8"))
-        wanted = expected["application_replies"]
-        if responses < wanted:
-            # A frame this parser will not accept is dropped rather than
-            # reported, so a missing record is how a checksum it rejected
-            # actually shows up. Counting its own records would not notice.
-            fail(
-                f"the outstation sent {wanted} application replies and this parser "
-                f"produced a record for {responses} of them; {wanted - responses} "
-                "were dropped rather than read"
-            )
+        # A frame this parser will not accept is dropped rather than reported,
+        # so a missing record is how a checksum it rejected actually shows up.
+        # Counting its own records would not notice.
+        counted = {
+            "application_replies": (responses, "the outstation sent", "application replies"),
+            "application_requests": (kinds.get("request", 0), "the master sent", "requests"),
+        }
+        for key, (found, who, what) in counted.items():
+            wanted = expected.get(key)
+            if wanted is not None and found < wanted:
+                fail(
+                    f"{who} {wanted} {what} and this parser produced a record for "
+                    f"{found} of them; {wanted - found} were dropped rather than read"
+                )
 
-    missing = {code: name for code, name in REQUIRED_FUNCTIONS.items() if code not in functions}
+    required = REQUIRED_FUNCTIONS[args.kind]
+    missing = {code: name for code, name in required.items() if code not in functions}
     if missing:
         fail(f"function codes absent from the capture: {sorted(missing.values())}")
 
-    if len(functions) < MINIMUM_DISTINCT_FUNCTIONS:
+    minimum = MINIMUM_DISTINCT_FUNCTIONS[args.kind]
+    if len(functions) < minimum:
         fail(
             f"only {len(functions)} distinct function codes in the capture, "
-            f"expected at least {MINIMUM_DISTINCT_FUNCTIONS}"
+            f"expected at least {minimum}"
         )
 
     print(
