@@ -13,12 +13,12 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from profile_fixtures import for_reference_der
+from profile_fixtures import paired_reference_der
 from test_master_service import JSON, _http
 
 from py1815.master import openapi
 from py1815.master.service import HttpServer, Service
-from py1815.profile import der, load
+from py1815.profile import der, device_profile, load
 from py1815.profile.model import Composition
 from py1815.server import OutstationServer
 
@@ -192,12 +192,19 @@ class TestTheValidatorItself:
 
 @pytest_asyncio.fixture
 async def live():
-    """The service over HTTP, with a simulated DER to add."""
-    point_map = load.resolve(for_reference_der(), Composition())
+    """The service over HTTP, with a simulated DER to add.
+
+    The DER's tables pair its points and group them into functions, so that
+    the examples of the DER profile's operations have something to act on.
+    """
+    point_map = load.resolve(paired_reference_der(), Composition())
     simulation = der.build(point_map)
     outstation = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
     # Started to command, so that every operation's example is carried out.
     service = Service(allow_control=True)
+    # The document the DER would publish, for der.compare to compare it with.
+    document = device_profile.build(simulation.outstation, simulation.outstation.session())
+    service.set_device_profile("lab", device_profile.render(document))
     http = HttpServer(service, bind="127.0.0.1:0")
     await outstation.start()
     await http.start()
@@ -244,6 +251,14 @@ ORDER = [
     "trace",
     "capture",
     "clear",
+    "der.functions",
+    "der.read",
+    "der.write",
+    "der.write_curve",
+    "der.curve",
+    "der.enable",
+    "der.disable",
+    "der.compare",
     "disconnect",
     "connect",
     "remove",

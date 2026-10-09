@@ -29,7 +29,7 @@ from py1815.master.api import DEFAULT_RECONNECT
 from py1815.master.capture import CaptureFile
 from py1815.master.config import ConfigError, MasterConfig, read
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
-from py1815.profile import der, load
+from py1815.profile import der, device_profile, load
 from py1815.profile.model import Composition, MapError, PointMap
 from py1815.server import OutstationServer
 
@@ -58,6 +58,11 @@ class Demo:
         await self._server.start()
         self._running = asyncio.create_task(self._advance(), name="dnp3-master-demo")
         self._service.set_profile(DEMO_NAME, self.simulation.outstation.point_map)
+        # The document the simulated DER publishes, so the console can compare
+        # what it serves with what it declares.
+        outstation = self.simulation.outstation
+        document = device_profile.build(outstation, outstation.session())
+        self._service.set_device_profile(DEMO_NAME, device_profile.render(document))
         await self._service.handle(
             {
                 "op": "add",
@@ -151,7 +156,7 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
             document[key] = value
 
     defaults = dict(document.get("defaults") or {})
-    for key in ("outstation_address", "master_address", "manual", "profile"):
+    for key in ("outstation_address", "master_address", "manual", "profile", "device_profile"):
         value = getattr(args, key, None)
         if value is not None:
             defaults[key] = value
@@ -189,6 +194,13 @@ async def _add_outstations(
         name = outstation.name
         if point_map is not None and outstation.profile:
             service.set_profile(name, point_map)
+        if outstation.device_profile is not None:
+            try:
+                document = pathlib.Path(outstation.device_profile).read_text(encoding="utf-8")
+                service.set_device_profile(name, document)
+            except (OSError, UnicodeDecodeError, ValueError) as error:
+                print(f"{name}: {outstation.device_profile}: {error}", file=sys.stderr)
+                return False
         answer = await service.handle(
             {"op": "add", "params": outstation.add_params(allow_control=config.allow_control)}
         )
@@ -364,6 +376,13 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="the outstations are IEEE 1815.2 DER: name their points from the profile "
         "tables and show the profile points they have not reported",
+    )
+    parser.add_argument(
+        "--device-profile",
+        default=None,
+        metavar="FILE",
+        help="a DNP3 Device Profile document for the outstations, to compare what they "
+        "serve with (default: none)",
     )
     parser.add_argument(
         "--tables",

@@ -16,7 +16,8 @@ console at `http://127.0.0.1:8815/`.
     Started as above, the console polls, reads named points, takes
     unsolicited responses and shows the traffic, and can change nothing. Add
     `--allow-control` and it can operate outputs, write the time, clear the
-    restart indication and freeze counters. The top of the page says which:
+    restart indication, freeze counters, and write a DER's settings and curves
+    and enable its functions. The top of the page says which:
     **Read only** or **Commanding on**. See [Commanding](#commanding).
 
 ## Starting it
@@ -53,6 +54,7 @@ JSON file and loaded with `--config`. See
 | `--output-interval SECONDS` | Repeats a read of output status. As often as the integrity poll unless given; 0 for never |
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
+| `--device-profile FILE` | A DNP3 Device Profile document for the outstations named, which the **DER** tab compares what they serve with |
 | `--bind HOST:PORT` | Where the console listens. `127.0.0.1:8815` unless given |
 | `--token TOKEN` | Required of every request to the service. Needed to listen on anything but this machine. Read from `PY1815_MASTER_TOKEN` when not given |
 | `--new-token` | With no token given, makes one for this run and prints the address that carries it |
@@ -115,7 +117,7 @@ for a minute to connect to an outstation that starts after the master does.
 ## What it shows
 
 Outstations are listed on the left, each with a lamp for its connection. The
-one selected has six tabs.
+one selected has six tabs, and a seventh, **DER**, when it was given a profile.
 
 | Tab | Shows |
 |---|---|
@@ -124,6 +126,7 @@ one selected has six tabs.
 | **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
 | **Traffic** | Every frame, and the one selected read layer by layer; saved as a capture |
+| **DER** | The outstation as an IEEE 1815.2 DER: its nameplate, what it is measuring, each function with its settings and an enable switch, the curve the curve block shows, and what it serves against its Device Profile document. Offered for an outstation with a profile |
 | **Log** | What the console asked for, and what came of it |
 
 ### Points
@@ -230,6 +233,51 @@ In the Points tab, each row of the binary and analog output tables has an
 
 Without `--allow-control` the form and the buttons are greyed out, and the
 service behind the page refuses the operations whoever asks.
+
+### DER
+
+For an outstation given a profile (`--profile`, or `console --demo`), the
+**DER** tab shows it in the profile's terms, every value in engineering units
+with its units and quality. Opening the tab reads what it shows, and **Read
+again** reads it afresh. Each of those is a read: nothing is written until you
+ask.
+
+| Card | Shows |
+|---|---|
+| **Nameplate** | The points the profile lists as the nameplate: ratings, voltage limits, storage capacity |
+| **Monitoring** | What the DER is measuring and reporting: available power, state of charge, the system meter |
+| **Functions** | Each function the outstation says it supports, with a switch that enables or disables it and says whether it is, and **Settings** to read its settings and write one. The functions it does not support are named underneath |
+| **Curve** | The curve the curve block shows, as a plot and a table of its points, with its type, its units and whether a function follows it |
+| **Device Profile document** | What the outstation serves against what a Device Profile document declares |
+
+A value marked `OFFLINE` was sent without the `ONLINE` flag. IEEE 1815.2 has a
+disabled function's inputs sent that way: the value is there and not in effect.
+Enabling the function brings them `ONLINE`.
+
+**Settings** reads the function's points and offers a form: choose a setting,
+give a value in its units, and **Write**. The value is scaled by the point's
+multiplier on its way, a value outside the point's range is refused before
+anything is sent, and **Read back and compare** reads the input that mirrors
+the setting afterwards and says whether it matches. The result says
+**Accepted**, **Refused** or **Not known**, as for an operate, and nothing is
+sent twice.
+
+The curve block shows one curve at a time. **Show** with a curve number
+selects another, which writes the selector, so it is a command. The plot and
+the table give the points as they travel: the units the curve declares say
+how they scale.
+
+**Compare with its Device Profile document** is offered when the outstation was
+given one with `--device-profile`, and **Compare with a Device Profile
+document** takes a file from your machine. The result counts the points
+declared, served, declared and absent, served and undeclared, and in or out of
+class 0 against the declaration, and lists each one that differs. A point's
+event class and deadband cannot be asked of an outstation, so they are listed
+as the document declares them. `console --demo` gives the simulated DER the
+document it publishes.
+
+Without `--allow-control` the switches, the settings form and **Show** are
+greyed out, and the service refuses the operations whoever asks.
 
 ### Traffic
 

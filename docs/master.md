@@ -11,8 +11,9 @@ are the same master from a browser and from another process.
     point. It operates outputs, sets the clock, clears the restart indication
     and freezes counters. Left alone it looks after an outstation as a master
     does: settles it on connecting, fetches the events it says it has, and
-    connects again when the connection is lost. All of it from Python, from a
-    JSON service, or from a web console. It has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    connects again when the connection is lost. It speaks to an IEEE 1815.2
+    DER in the profile's terms. All of it from Python, from a JSON service, or
+    from a web console. It has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -251,6 +252,57 @@ in tenths of a percent is 50 percent, and a float is the engineering value.
 What cannot be carried is refused with a `ValueError` before anything is sent:
 an output that is not a number, a value that does not fit the variation named,
 an operation that is not one.
+
+## An IEEE 1815.2 DER
+
+`Der` puts the profile's point map in front of an outstation, so a script names
+points as the profile does and reads and writes them in engineering units:
+
+```python
+from py1815.master.profile import Der
+from py1815.profile import load_map
+
+der = Der(lab, load_map())
+
+nameplate = await der.read(group="nameplate")
+for reading in nameplate.readings:
+    print(reading.point.name, reading.value, reading.point.units, reading.quality)
+
+written = await der.write({"AO87": 50}, verify=True)      # 50 percent, sent as 500
+print(written.accepted, written.verified)
+
+await der.write_curve(1, type=2, x_units=129, y_units=2,
+                      points=[(920, 300), (980, 0), (1020, 0), (1080, -300)])
+await der.write({"Volt-Var Curve Index": 1})
+switched = await der.enable("volt-var")
+print(switched.enabled)                                   # read back from its input
+```
+
+| Operation | Does |
+|---|---|
+| `read(*names, group=)` | Reads points by address (`AI148`) or name, or a group: a function, or everything of one purpose such as `nameplate` or `monitoring`. Returns `Readings`, each with its `value` in engineering units, `raw`, `state` and `quality` |
+| `write(values, verify=, mode=, variation=)` | Writes outputs by address or name in one request. A value is divided by the point's multiplier and sent as the nearest whole number; one outside the point's range raises `ValueError` before anything is sent. Returns `Written` |
+| `enable(function)`, `disable(function)` | Latches the function's enable output, then reads the input that reports whether it is enabled. Returns `Switched` |
+| `functions()` | Reads which functions the outstation supports and which are enabled. Returns `Functions` |
+| `curve(number=None)` | Reads the curve the curve block shows, selecting `number` first when given |
+| `write_curve(number, type=, x_units=, y_units=, points=)` | Writes the selector, then the fields, then the points, each only when the one before was accepted, and reads the curve back. Returns `CurveWritten` |
+| `compare(document)` | Compares what the outstation serves with a DNP3 Device Profile document. Returns `Comparison` |
+
+A name the tables give to more than one point, as an output and the input that
+reads it back often share one, is looked for among the inputs for a read and
+among the outputs for a write; one that still means two points raises
+`ValueError` naming both addresses. A function is found by its key
+(`volt-var-control`), its name, the purpose the tables give it (`Volt-Var`), or
+its enable output (`BO29`).
+
+`verify=True` reads the input that mirrors each output afterwards, and
+`Setpoint.matches` says whether it is within one step of the multiplier. Every
+write is a control: it is sent once, and one whose answer did not arrive is
+reported with `accepted` None and is not sent again. One profile operation is
+under way on an outstation at a time, so a curve's selector cannot be moved by
+another caller before its points are written.
+
+`LoopbackDer(loopback, point_map)` has the same operations on a `Loopback`.
 
 ## Driving an outstation by hand
 

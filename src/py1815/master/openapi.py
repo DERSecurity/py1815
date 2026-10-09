@@ -173,6 +173,11 @@ SCHEMAS: dict[str, Schema] = {
                 "type, or null when no profile was given.",
                 **_nullable(_PER_TYPE_COUNTS),
             },
+            "device_profile": {
+                "type": "boolean",
+                "description": "Whether the outstation was given a Device Profile document "
+                "for `der.compare`.",
+            },
         },
         required=[
             "name",
@@ -379,6 +384,173 @@ SCHEMAS: dict[str, Schema] = {
         },
         required=["id", "at", "direction", "octets", "link", "transport", "application", "summary"],
     ),
+    "DerPoint": _object(
+        {
+            "address": {"type": "string", "description": "Kind and index, as in `AO87`."},
+            "type": _ref("PointType"),
+            "index": _INDEX,
+            "name": {"type": "string", "description": "The name as the profile's tables have it."},
+            "label": {
+                "type": "string",
+                "description": "The first sentence of the name, without the values it lists.",
+            },
+            "units": _nullable(_STRING),
+            "multiplier": {
+                "description": "The transmitted number times this is the engineering value.",
+                **_nullable(_NUMBER),
+            },
+            "minimum": {"description": "In engineering units.", **_nullable(_NUMBER)},
+            "maximum": {"description": "In engineering units.", **_nullable(_NUMBER)},
+            "states": {
+                "description": "A binary point's two states by name: 0, then 1.",
+                **_nullable({"type": "array", "items": _STRING}),
+            },
+            "mirror": {
+                "description": "The input that reads an output back, by address.",
+                **_nullable(_STRING),
+            },
+        },
+        required=["address", "type", "index", "name", "label", "units", "mirror"],
+        description="One point of the DER profile.",
+    ),
+    "DerReading": _object(
+        {
+            "address": _STRING,
+            "type": _ref("PointType"),
+            "index": _INDEX,
+            "name": _STRING,
+            "label": _STRING,
+            "units": _nullable(_STRING),
+            "value": {
+                **_VALUE,
+                "description": "In engineering units: the transmitted number through the "
+                "point's multiplier, or a state. Null when the point was not reported.",
+            },
+            "raw": {**_VALUE, "description": "The value as it travelled."},
+            "state": {
+                "description": "A binary point's state, by the name the tables give it.",
+                **_nullable(_STRING),
+            },
+            "flags": _FLAGS,
+            "quality": {
+                "type": "string",
+                "enum": ["good", "offline", "comm_lost", "restart", "no_flags", "not_reported"],
+                "description": "What the flags say: `good` is ONLINE. `offline` is a value sent "
+                "without ONLINE, which is how a disabled function's inputs travel. "
+                "`not_reported` is a point the outstation did not return.",
+            },
+            "time_ms": _nullable(_INTEGER),
+        },
+        required=["address", "type", "index", "name", "value", "raw", "flags", "quality"],
+        description="One point of the DER profile, as the outstation reported it.",
+    ),
+    "DerFunction": _object(
+        {
+            "key": {"type": "string", "description": "Its name in lower case, as in `volt-var`."},
+            "name": _STRING,
+            "purpose": {"type": "string", "description": "What the tables say it is for."},
+            "enable": {"type": "string", "description": "The binary output that enables it."},
+            "status": {
+                "description": "The binary input that reports whether it is enabled.",
+                **_nullable(_STRING),
+            },
+            "supports": {
+                "type": "string",
+                "description": "The binary input that says whether it is supported.",
+            },
+            "supported": {
+                "description": "What the outstation says. Null when it did not report it.",
+                **_nullable(_BOOLEAN),
+            },
+            "enabled": {
+                "description": "What the outstation says. Null when it did not report it.",
+                **_nullable(_BOOLEAN),
+            },
+            "settings": {"type": "array", "items": _ref("DerPoint")},
+            "inputs": {"type": "array", "items": _STRING},
+            "curve_settings": {
+                "type": "array",
+                "items": _STRING,
+                "description": "The settings that name a curve by its number.",
+            },
+        },
+        required=["key", "name", "enable", "supports", "supported", "enabled", "settings"],
+        description="One DER function, and what the outstation says of it.",
+    ),
+    "Curve": _object(
+        {
+            "number": {"description": "The curve the block shows.", **_nullable(_INTEGER)},
+            "type": _nullable(_INTEGER),
+            "type_name": _nullable(_STRING),
+            "count": {"description": "The points in use.", **_nullable(_INTEGER)},
+            "x_units": _nullable(_INTEGER),
+            "x_units_name": _nullable(_STRING),
+            "y_units": _nullable(_INTEGER),
+            "y_units_name": _nullable(_STRING),
+            "points": {
+                "type": "array",
+                "items": {"type": "array", "items": _VALUE, "minItems": 2, "maxItems": 2},
+                "description": "X and Y of each point, as transmitted: the units the curve "
+                "declares say how to scale them.",
+            },
+            "referenced": {
+                "description": "Whether a function names this curve, where the outstation says.",
+                **_nullable(_BOOLEAN),
+            },
+            "exchanges": {"type": "array", "items": _ref("Exchange")},
+        },
+        required=["number", "type", "count", "x_units", "y_units", "points", "referenced"],
+        description="The curve the curve block shows, as the outstation reported it.",
+    ),
+    "Declared": _object(
+        {
+            "type": _ref("PointType"),
+            "index": _INDEX,
+            "name": _nullable(_STRING),
+            "event_class": {
+                "description": "The class its events are reported in, 0 for none, as declared.",
+                **_nullable({"type": "integer", "enum": [0, 1, 2, 3]}),
+            },
+            "class_0": {
+                "description": "Whether a class 0 read carries it, as declared.",
+                **_nullable(_BOOLEAN),
+            },
+            "deadband": {
+                "description": "In transmitted units, as declared.",
+                **_nullable(_NUMBER),
+            },
+        },
+        required=["type", "index", "name", "event_class", "class_0", "deadband"],
+        description="One point as a Device Profile document declares it.",
+    ),
+    "DerSwitched": _object(
+        {
+            "function": {"type": "string", "description": "The function's key."},
+            "name": _STRING,
+            "enable": {"type": "boolean", "description": "True for an enable."},
+            "accepted": {**_nullable(_BOOLEAN), "description": "As for `operate`."},
+            "enabled": {
+                "description": "Whether the outstation says the function is enabled, read "
+                "afterwards. Null when it did not say.",
+                **_nullable(_BOOLEAN),
+            },
+            "status": _nullable(_ref("DerReading")),
+            "operated": _ref("Operated"),
+        },
+        required=["function", "name", "enable", "accepted", "enabled", "status", "operated"],
+        description="A DER function enabled or disabled, and what its status input then said.",
+    ),
+    "ExchangeSummary": _object(
+        {
+            "function": _STRING,
+            "outcome": {"type": "string", "enum": _OUTCOMES},
+            "indications": _nullable({"type": "array", "items": _STRING}),
+            "object_count": _INTEGER,
+            "elapsed_ms": _NUMBER,
+        },
+        required=["function", "outcome", "indications", "object_count", "elapsed_ms"],
+        description="One request, and how it ended, without its objects.",
+    ),
     "Error": _object(
         {
             "kind": {
@@ -428,6 +600,20 @@ _CLASSES: Schema = {
     "description": "Event classes. All three when left out.",
 }
 _INTERVAL: Schema = {"type": "number", "exclusiveMinimum": 0, "description": "Seconds."}
+_MODE: Schema = {
+    "type": "string",
+    "enum": ["direct", "select", "direct_no_ack"],
+    "default": "direct",
+    "description": "How each write is sent, as for `operate`.",
+}
+_DER_PROFILE_NEEDED = (
+    " The outstation has to have been given a profile: `--profile`, or `profile` in its "
+    "configuration."
+)
+_DER_COMMANDS = (
+    " Refused as `not_allowed` unless the service was started to command. Sent once: a write "
+    "whose answer did not arrive is reported as not known, and never sent again."
+)
 
 #: Every operation of the service: what it does, what it takes, what it
 #: returns, and an example of its parameters.
@@ -852,6 +1038,277 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "result": _object({"cleared": _STRING}, required=["cleared"]),
         "example": {"outstation": "lab", "what": "trace"},
     },
+    "der.read": {
+        "summary": "Read points of the DER profile by name, or a named group",
+        "description": "In engineering units, with each point's quality. A point is named by "
+        "its address, as in `AI148`, or by its name or the name's first sentence; a name the "
+        "tables give to more than one point is refused with the addresses it could mean. A "
+        "group is a function, by key, name or purpose, or everything of one purpose, as in "
+        "`Nameplate` or `Monitoring`. One request, unless the outstation refuses it whole for "
+        "a range it does not serve: then each range is read again on its own, and a point no "
+        "read returned is `not_reported`." + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(
+            {
+                "names": {
+                    "type": "array",
+                    "items": _STRING,
+                    "description": "Points, by address or name.",
+                },
+                "group": {"type": "string", "description": "A function, or a purpose."},
+            }
+        ),
+        "result": _object(
+            {
+                "points": {"type": "array", "items": _ref("DerReading")},
+                "exchanges": {"type": "array", "items": _ref("Exchange")},
+            },
+            required=["points", "exchanges"],
+        ),
+        "example": {"outstation": "lab", "group": "volt-var"},
+    },
+    "der.write": {
+        "summary": "Write outputs of the DER profile by name, in engineering units",
+        "description": "One request, in the order given. An analog value is divided by the "
+        "point's multiplier and sent as the nearest whole number; one outside the point's "
+        "range is refused before anything is sent. With `verify`, the input that mirrors "
+        "each output is read afterwards and compared with what was asked, within one step "
+        "of the multiplier." + _DER_COMMANDS + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(
+            {
+                "points": {
+                    "type": "object",
+                    "additionalProperties": {"oneOf": [_NUMBER, _BOOLEAN, _STRING]},
+                    "minProperties": 1,
+                    "description": "Values by address or name: a number in engineering "
+                    "units, or for a binary output true, false, or a state by name.",
+                },
+                "verify": {"type": "boolean", "default": False},
+                "mode": _MODE,
+                "variation": {
+                    **_nullable({"type": "integer", "enum": [1, 2, 3, 4]}),
+                    "description": "1 or 2 sends the transmitted number as a 32- or 16-bit "
+                    "integer; 3 or 4 sends the engineering value as a float, which the profile "
+                    "has an outstation take unscaled. The narrowest integer when left out.",
+                },
+            },
+            required=["points"],
+        ),
+        "result": _object(
+            {
+                "accepted": {**_nullable(_BOOLEAN), "description": "As for `operate`."},
+                "verified": {
+                    "description": "True when every readback matched, false when one did "
+                    "not, null when not asked or not known.",
+                    **_nullable(_BOOLEAN),
+                },
+                "points": {
+                    "type": "array",
+                    "items": _object(
+                        {
+                            "address": _STRING,
+                            "type": _ref("PointType"),
+                            "index": _INDEX,
+                            "name": _STRING,
+                            "units": _nullable(_STRING),
+                            "requested": {**_VALUE, "description": "As asked for."},
+                            "sent": {**_VALUE, "description": "As it travelled."},
+                            "sent_value": {
+                                **_VALUE,
+                                "description": "What was sent, in engineering units.",
+                            },
+                            "status": _nullable(_STRING),
+                            "echoed": _BOOLEAN,
+                            "readback": _nullable(_ref("DerReading")),
+                            "matches": _nullable(_BOOLEAN),
+                        },
+                        required=["address", "requested", "sent", "status", "matches"],
+                    ),
+                },
+                "operated": _ref("Operated"),
+            },
+            required=["accepted", "verified", "points", "operated"],
+        ),
+        "example": {"outstation": "lab", "points": {"AO87": 50}, "verify": True},
+    },
+    "der.enable": {
+        "summary": "Enable a DER function, and read whether it is enabled",
+        "description": "Latches the function's enable output on, then reads the input that "
+        "reports whether the function is enabled." + _DER_COMMANDS + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(
+            {
+                "function": {
+                    "type": "string",
+                    "description": "By key, name, purpose, or its enable output's address.",
+                },
+                "mode": _MODE,
+            },
+            required=["function"],
+        ),
+        "result": _ref("DerSwitched"),
+        "example": {"outstation": "lab", "function": "volt-var"},
+    },
+    "der.disable": {
+        "summary": "Disable a DER function, and read whether it is enabled",
+        "description": "Latches the function's enable output off, then reads the input that "
+        "reports whether the function is enabled." + _DER_COMMANDS + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(
+            {"function": {"type": "string"}, "mode": _MODE},
+            required=["function"],
+        ),
+        "result": _ref("DerSwitched"),
+        "example": {"outstation": "lab", "function": "volt-var"},
+    },
+    "der.functions": {
+        "summary": "The DER functions, which are supported and which enabled",
+        "description": "Reads every function's supports input and enabled input, in one "
+        "request, and lists each function with its settings." + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(),
+        "result": _object(
+            {
+                "functions": {"type": "array", "items": _ref("DerFunction")},
+                "exchanges": {"type": "array", "items": _ref("Exchange")},
+            },
+            required=["functions", "exchanges"],
+        ),
+        "example": {"outstation": "lab"},
+    },
+    "der.curve": {
+        "summary": "Read the curve the curve block shows",
+        "description": "The block shows one curve at a time, the one its selector names. "
+        "Given `number`, the selector is written first, which is a control: refused as "
+        "`not_allowed` unless the service was started to command." + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(
+            {
+                "number": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Select this curve first.",
+                },
+                "mode": _MODE,
+            }
+        ),
+        "result": _object(
+            {"curve": _ref("Curve"), "selected": _nullable(_ref("Operated"))},
+            required=["curve", "selected"],
+        ),
+        "example": {"outstation": "lab"},
+    },
+    "der.write_curve": {
+        "summary": "Write a curve, and read it back",
+        "description": "Three writes, in the order IEEE 1815.2 clause 6.1.3 lays the curve "
+        "block out: the selector; the type, the number of points and the units of X and Y; "
+        "then X and Y of each point. Each is made only when the one before it was accepted. "
+        "The curve is then read back whatever happened. Values travel as the whole numbers "
+        "given, since the units the curve declares say how they scale."
+        + _DER_COMMANDS
+        + _DER_PROFILE_NEEDED,
+        "tag": "DER profile",
+        "params": _outstation(
+            {
+                "number": {"type": "integer", "minimum": 1},
+                "type": {"type": "integer", "description": "The curve type, as enumerated."},
+                "x_units": _INTEGER,
+                "y_units": _INTEGER,
+                "points": {
+                    "type": "array",
+                    "items": {"type": "array", "items": _INTEGER, "minItems": 2, "maxItems": 2},
+                    "maxItems": 100,
+                    "description": "X and Y of each point.",
+                },
+                "mode": _MODE,
+            },
+            required=["number", "type", "x_units", "y_units", "points"],
+        ),
+        "result": _object(
+            {
+                "accepted": {
+                    "description": "True when every write was accepted, false when one was "
+                    "refused, null when one was not answered.",
+                    **_nullable(_BOOLEAN),
+                },
+                "matches": {
+                    "type": "boolean",
+                    "description": "Whether the curve read back is the curve written.",
+                },
+                "stopped_at": {
+                    "description": "The write that was not accepted, after which none was made.",
+                    **_nullable({"type": "string", "enum": ["selector", "fields", "points"]}),
+                },
+                "steps": {"type": "array", "items": _ref("Operated")},
+                "curve": _ref("Curve"),
+            },
+            required=["accepted", "matches", "stopped_at", "steps", "curve"],
+        ),
+        "example": {
+            "outstation": "lab",
+            "number": 1,
+            "type": 2,
+            "x_units": 129,
+            "y_units": 2,
+            "points": [[920, 300], [980, 0], [1020, 0], [1080, -300]],
+        },
+    },
+    "der.compare": {
+        "summary": "Compare what an outstation serves with its Device Profile document",
+        "description": "Reads class 0, then output status, then every declared point neither "
+        "returned. A declared point no read returned is absent; a point returned that is "
+        "not declared is undeclared; a served point a class 0 read does or does not carry, "
+        "against what is declared, is listed under `class_0`. A point's event class and "
+        "deadband cannot be read from an outstation, so they are given as declared. Needs "
+        "no profile.",
+        "tag": "DER profile",
+        "params": _outstation(
+            {
+                "document": {
+                    "type": "string",
+                    "description": "The document's XML. The one given with "
+                    "`--device-profile` when left out.",
+                }
+            }
+        ),
+        "result": _object(
+            {
+                "declared": {"type": "integer", "description": "Points declared."},
+                "served": {"type": "integer", "description": "Points declared and served."},
+                "absent": {"type": "array", "items": _ref("Declared")},
+                "undeclared": {
+                    "type": "array",
+                    "items": _object(
+                        {"type": _ref("PointType"), "index": _INDEX, "name": _nullable(_STRING)},
+                        required=["type", "index", "name"],
+                    ),
+                },
+                "class_0": {
+                    "type": "array",
+                    "items": _object(
+                        {
+                            **SCHEMAS["Declared"]["properties"],
+                            "carried": {
+                                "type": "boolean",
+                                "description": "Whether the class 0 read carried it.",
+                            },
+                        },
+                        required=[*SCHEMAS["Declared"]["required"], "carried"],
+                    ),
+                },
+                "points": {
+                    "type": "array",
+                    "items": _ref("Declared"),
+                    "description": "Every point declared and served, with its class and "
+                    "deadband as declared.",
+                },
+                "exchanges": {"type": "array", "items": _ref("ExchangeSummary")},
+            },
+            required=["declared", "served", "absent", "undeclared", "class_0", "points"],
+        ),
+        "example": {"outstation": "lab"},
+    },
     "stop": {
         "summary": "End the service",
         "tag": "Service",
@@ -871,6 +1328,11 @@ _TAGS = [
     ),
     ("Unsolicited responses", "Reporting an outstation does without being polled."),
     ("Traffic", "The frames that crossed the wire."),
+    (
+        "DER profile",
+        "An IEEE 1815.2 DER's points by name and in engineering units, its functions, its "
+        "curves, and its Device Profile document.",
+    ),
     ("Service", "The service itself."),
 ]
 

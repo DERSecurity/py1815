@@ -64,6 +64,13 @@ disagree.
 | `POST /api/trace` | The frames sent and received |
 | `POST /api/capture` | The frames kept, as a pcap file in base64 |
 | `POST /api/clear` | Forgets the frames or the events kept |
+| `POST /api/der.read` | Points of the DER profile by name, or a named group, in engineering units |
+| `POST /api/der.write` | Outputs of the DER profile by name, in engineering units |
+| `POST /api/der.enable`, `POST /api/der.disable` | A DER function, and then whether it is enabled |
+| `POST /api/der.functions` | The DER functions, which are supported and which enabled |
+| `POST /api/der.curve` | The curve the curve block shows |
+| `POST /api/der.write_curve` | A curve: its selector, its fields and its points, then read back |
+| `POST /api/der.compare` | What the outstation serves, against its Device Profile document |
 | `POST /api/stop` | Ends the service |
 | `POST /api` | Any of the above as one message: see below |
 | `GET /events` | What happens unasked, as server-sent events |
@@ -143,9 +150,11 @@ py1815-master serve --allow-control
 
 Without that, every operation that changes an outstation is refused with
 `not_allowed` and nothing is sent: `operate`, `write_time`, `clear_restart`,
-`freeze`, `restart`, and a `request` by any function code other than `READ`,
-`ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE`. The two tasks
-that write are off as well. `status` says which it is, in `allow_control`.
+`freeze`, `restart`, `der.write`, `der.enable`, `der.disable`,
+`der.write_curve`, `der.curve` given a curve to select, and a `request` by any
+function code other than `READ`, `ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED`
+and `DELAY_MEASURE`. The two tasks that write are off as well. `status` says
+which it is, in `allow_control`.
 
 ```bash
 curl -s http://127.0.0.1:8815/api/operate -H 'Content-Type: application/json' \
@@ -181,6 +190,64 @@ control twice.
 A whole number is sent as an integer and anything else as a float, unless
 `variation` says which. An outstation that scales its points takes an integer
 as the transmitted value and a float as the engineering one.
+
+## The DER profile
+
+An outstation given a profile, with `--profile` or `profile` in its
+configuration, is an IEEE 1815.2 DER, and the `der.*` operations speak to it in
+the profile's terms. See [Commanding](#commanding) for the ones that write: each
+is a control, sent once, and refused with `not_allowed` by a service that does
+not command.
+
+```bash
+curl -s http://127.0.0.1:8815/api/der.read -H 'Content-Type: application/json'      -d '{"outstation": "lab", "names": ["AI148", "System Meter Active Power"]}'
+
+curl -s http://127.0.0.1:8815/api/der.write -H 'Content-Type: application/json'      -d '{"outstation": "lab", "points": {"AO87": 50}, "verify": true}'
+```
+
+```json
+{"id": null, "ok": true, "result": {
+  "accepted": true, "verified": true,
+  "points": [{"address": "AO87", "type": "ao", "index": 87, "units": "Percent of WMax",
+              "name": "Active Power Limit Maximum (Pos = Generation, Neg = Consumption)",
+              "requested": 50.0, "sent": 500, "sent_value": 50.0,
+              "status": "SUCCESS", "echoed": true, "matches": true,
+              "readback": {"address": "AI148", "value": 50.0, "raw": 500,
+                           "quality": "good", "flags": ["ONLINE"]}}],
+  "operated": {"mode": "direct", "operated": true, "accepted": true}}}
+```
+
+A point is named by its address, as in `AO87`, or by its name in the tables,
+whole or its first sentence, ignoring case. The tables give some names to more
+than one point: a read looks among the inputs first, a write among the outputs
+only, and a name that still means two points is refused with both addresses.
+
+| Operation | Takes | Does |
+|---|---|---|
+| `der.read` | `names`, `group`, or both | Reads the points in one request. A `group` is a function, by its key, name, purpose or enable output, or everything of one purpose, as in `Nameplate` or `Monitoring`. Each point comes back with its `value` in engineering units, its `raw` value, its `state` by name for a binary point, its `flags` and its `quality` |
+| `der.write` | `points`: values by name or address; `verify`, `mode`, `variation` | Writes the outputs in one request, in the order given. An analog value is divided by the point's multiplier and sent as the nearest whole number, and one outside the point's range is refused before anything is sent. A binary output takes `true`, `false`, or a state by name. With `verify` the input that mirrors each output is read afterwards, and `matches` says whether it is within one step of the multiplier |
+| `der.enable`, `der.disable` | `function`, `mode` | Latches the function's enable output on or off, then reads the input that reports whether it is enabled: `enabled` |
+| `der.functions` | | Reads every function's supports input and enabled input in one request, and lists each function with its settings, their units and ranges |
+| `der.curve` | `number`, `mode` | Reads the curve the curve block shows. Given `number`, writes the selector first, which commands |
+| `der.write_curve` | `number`, `type`, `x_units`, `y_units`, `points`, `mode` | Writes the selector, then the type, the number of points and the units, then X and Y of each point, each only when the one before it was accepted, and reads the curve back. `stopped_at` names the write that was not accepted, and `matches` says whether the curve read back is the one written |
+| `der.compare` | `document` | Compares what the outstation serves with a DNP3 Device Profile document: the one sent, or the one given with `--device-profile` |
+
+A read that the outstation refuses whole, because one range in it holds no
+point it serves, is made again a range at a time, and a point no read returned
+is `not_reported`. A disabled function's inputs come back `offline`: IEEE
+1815.2 has them sent without `ONLINE`.
+
+A curve's points are the numbers that travel. The tables give the curve block no
+multiplier, because the units the curve declares say how its points scale, and
+`type_name`, `x_units_name` and `y_units_name` give the names the tables list
+for each.
+
+`der.compare` reads class 0, output status, and then every declared point
+neither returned. `absent` lists what is declared and was not returned,
+`undeclared` what was returned and is not declared, and `class_0` the served
+points a class 0 read does or does not carry against the declaration. A point's
+event class and deadband cannot be asked of an outstation, so `points` lists
+them as declared. It needs no profile.
 
 ## Values
 

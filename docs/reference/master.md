@@ -16,6 +16,10 @@ guides; this is the reference.
 
 ::: py1815.master.controls
 
+## An IEEE 1815.2 DER
+
+::: py1815.master.profile
+
 ## What is done unasked
 
 ::: py1815.master.tasks

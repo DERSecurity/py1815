@@ -37,11 +37,28 @@ from py1815.master.api import Master, Outstation
 from py1815.master.association import Exchange, Unsolicited
 from py1815.master.capture import CaptureFile
 from py1815.master.controls import Mode, Operated, Plan, commands
+from py1815.master.profile import (
+    Curve,
+    Declared,
+    Der,
+    DerProfile,
+    Reading,
+    compare_plan,
+    curve_plan,
+    functions_plan,
+    read_device_profile,
+    read_plan,
+    switch_plan,
+    write_curve_plan,
+    write_plan,
+)
+from py1815.master.profile import address as point_address
+from py1815.master.profile import label as point_label
 from py1815.master.store import PointValue
 from py1815.master.tasks import WRITING, Tasks
 from py1815.master.trace import Entry, Recorder, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
-from py1815.profile.model import Kind, PointMap
+from py1815.profile.model import Kind, Point, PointMap
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +70,9 @@ DEFAULT_HTTP_BIND = "127.0.0.1:8815"
 #: Objects of one exchange described in full before the rest are only counted.
 _OBJECTS_DESCRIBED = 2000
 
-_MAX_REQUEST_BODY = 1 << 20
+#: Room for a Device Profile document sent for comparison, which for a DER
+#: serving most of the profile's points runs to more than a megabyte.
+_MAX_REQUEST_BODY = 4 << 20
 _MAX_HEADER = 16 << 10
 
 _FLAGS: dict[PointType, type[BinaryQuality] | type[AnalogQuality] | type[CounterQuality]] = {
@@ -177,6 +196,72 @@ def describe_value(
     }
 
 
+def _units(point: Point) -> str | None:
+    units = point.units
+    return None if units is None or units.strip().lower() in ("", "n/a", "none") else units
+
+
+def describe_point(profile: DerProfile, point: Point) -> dict[str, Any]:
+    """Describe a point of the profile: where it is, its name, its units and its range."""
+    low, high = DerProfile.limits(point) if point.kind.is_analog else (None, None)
+    mirror = profile.mirror(point) if point.kind.is_output else None
+    return {
+        "address": point_address(point),
+        "type": _KIND_TYPES[point.kind][0].value,
+        "index": point.index,
+        "name": point.name,
+        "label": split_enumeration(point_label(point))[0],
+        "units": _units(point),
+        "multiplier": point.multiplier,
+        "minimum": _number(low),
+        "maximum": _number(high),
+        "states": list(point.states) if point.states is not None else None,
+        "mirror": None if mirror is None else point_address(mirror),
+    }
+
+
+def describe_reading(reading: Reading) -> dict[str, Any]:
+    """Describe one point as an outstation reported it, in engineering units."""
+    point = reading.point
+    point_type = _KIND_TYPES[point.kind][0]
+    return {
+        "address": point_address(point),
+        "type": point_type.value,
+        "index": point.index,
+        "name": point.name,
+        "label": split_enumeration(point_label(point))[0],
+        "units": _units(point),
+        "value": _number(reading.value),
+        "raw": _number(reading.raw),
+        "state": reading.state,
+        "flags": flag_names(point_type, reading.flags),
+        "quality": reading.quality,
+        "time_ms": reading.time_ms,
+    }
+
+
+def _enumerated(point: Point, value: int | None) -> str | None:
+    """Return the name an enumerated point's name gives one of its values."""
+    if value is None:
+        return None
+    _label, values = split_enumeration(point.name)
+    for entry in values or ():
+        if entry["value"] == str(value):
+            return entry["name"]
+    return None
+
+
+def describe_declared(declared: Declared) -> dict[str, Any]:
+    return {
+        "type": declared.type.value,
+        "index": declared.index,
+        "name": declared.name,
+        "event_class": declared.event_class,
+        "class_0": declared.class_0,
+        "deadband": declared.deadband,
+    }
+
+
 def describe_entry(entry: Entry) -> dict[str, Any]:
     return {
         "id": entry.id,
@@ -222,6 +307,8 @@ class Service:
         self._capture_listeners: dict[str, Callable[[Entry], None]] = {}
         self._names: dict[str, dict[PointType, dict[int, str]]] = {}
         self._profiles: dict[str, PointMap] = {}
+        self._der_profiles: dict[str, DerProfile] = {}
+        self._device_profiles: dict[str, str] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.stopped = asyncio.Event()
         self._operations: dict[str, Callable[[Mapping[str, Any]], Awaitable[Any]]] = {
@@ -248,6 +335,14 @@ class Service:
             "trace": self._trace,
             "capture": self._capture,
             "clear": self._clear,
+            "der.read": self._der_read,
+            "der.write": self._der_write,
+            "der.enable": self._der_enable,
+            "der.disable": self._der_disable,
+            "der.functions": self._der_functions,
+            "der.curve": self._der_curve,
+            "der.write_curve": self._der_write_curve,
+            "der.compare": self._der_compare,
             "stop": self._stop,
         }
 
@@ -331,11 +426,31 @@ class Service:
         nobody has read yet, and a master cannot tell which from silence.
         """
         self._profiles[outstation] = point_map
+        self._der_profiles.pop(outstation, None)
         names: dict[PointType, dict[int, str]] = {point: {} for point in PointType}
         for (kind, index), point in point_map.points.items():
             for point_type in _KIND_TYPES[kind]:
                 names[point_type][index] = point.name
         self._names[outstation] = names
+
+    def set_device_profile(self, outstation: str, document: str) -> None:
+        """Give an outstation the Device Profile document that ``der.compare`` uses.
+
+        Raises ValueError for a document whose point lists cannot be read.
+        """
+        read_device_profile(document)
+        self._device_profiles[outstation] = document
+
+    def _der_profile(self, outstation: str) -> DerProfile:
+        found = self._der_profiles.get(outstation)
+        if found is None:
+            point_map = self._profiles.get(outstation)
+            if point_map is None:
+                raise BadRequest(
+                    f"{outstation} was given no profile; add it with --profile to name its points"
+                )
+            found = self._der_profiles[outstation] = DerProfile(point_map)
+        return found
 
     def _name(self, outstation: str, point: PointType | None, index: int | None) -> str | None:
         if point is None or index is None:
@@ -383,6 +498,7 @@ class Service:
             "reconnect": outstation.reconnect,
             "named": bool(self._names.get(outstation.name)),
             "profile": self._profile_counts(outstation.name),
+            "device_profile": outstation.name in self._device_profiles,
         }
 
     def _describe_exchange(self, outstation: Outstation, exchange: Exchange) -> dict[str, Any]:
@@ -579,6 +695,8 @@ class Service:
             recorder.close()
         self._names.pop(outstation.name, None)
         self._profiles.pop(outstation.name, None)
+        self._der_profiles.pop(outstation.name, None)
+        self._device_profiles.pop(outstation.name, None)
         self.publish({"event": "outstations"})
         return {"removed": outstation.name}
 
@@ -817,6 +935,237 @@ class Service:
         else:
             raise BadRequest("what is cleared is the trace or the events")
         return {"cleared": what}
+
+    # ---------------------------------------------------------- DER profile
+
+    def _der(self, params: Mapping[str, Any]) -> tuple[Outstation, DerProfile, Der]:
+        outstation = self._outstation(params)
+        profile = self._der_profile(outstation.name)
+        return outstation, profile, Der(outstation, profile)
+
+    @staticmethod
+    def _mode(params: Mapping[str, Any]) -> str:
+        return str(params.get("mode", Mode.DIRECT.value))
+
+    def _describe_curve(self, outstation: Outstation, curve: Curve) -> dict[str, Any]:
+        fields = {position: reading.point for position, reading in enumerate(curve.fields)}
+        return {
+            "number": curve.number,
+            "type": curve.type,
+            "type_name": _enumerated(fields[1], curve.type) if 1 in fields else None,
+            "count": curve.count,
+            "x_units": curve.x_units,
+            "x_units_name": _enumerated(fields[3], curve.x_units) if 3 in fields else None,
+            "y_units": curve.y_units,
+            "y_units_name": _enumerated(fields[4], curve.y_units) if 4 in fields else None,
+            "points": [[_number(x), _number(y)] for x, y in curve.points],
+            "referenced": curve.referenced,
+            "exchanges": [
+                self._describe_exchange(outstation, exchange)
+                for read in curve.reads
+                for exchange in read.exchanges
+            ],
+        }
+
+    async def _der_read(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation, profile, der = self._der(params)
+        names = params.get("names") or []
+        if isinstance(names, str) or not isinstance(names, list):
+            raise BadRequest("names is a list of point names or addresses")
+        group = params.get("group")
+        if not names and not group:
+            raise BadRequest("a read names points, or a group")
+        points = [profile.point(str(name)) for name in names]
+        if group:
+            points += [point for point in profile.group(str(group)) if point not in points]
+        readings = await der.run(read_plan(points))
+        return {
+            "points": [describe_reading(reading) for reading in readings.readings],
+            "exchanges": [
+                self._describe_exchange(outstation, exchange) for exchange in readings.exchanges
+            ],
+        }
+
+    async def _der_write(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation, profile, der = self._der(params)
+        points = params.get("points")
+        if not isinstance(points, Mapping) or not points:
+            raise BadRequest("a write names outputs, as an object of values by name")
+        variation = params.get("variation")
+        plan = write_plan(
+            profile,
+            points,
+            verify=bool(params.get("verify", False)),
+            mode=self._mode(params),
+            variation=None if variation is None else int(variation),
+        )
+        self._commanding("a profile write")
+        written = await der.run(plan)
+        described = []
+        for setpoint in written.setpoints:
+            point = setpoint.point
+            described.append(
+                {
+                    "address": point_address(point),
+                    "type": _KIND_TYPES[point.kind][0].value,
+                    "index": point.index,
+                    "name": point.name,
+                    "units": _units(point),
+                    "requested": _number(setpoint.requested),
+                    "sent": _number(setpoint.sent),
+                    "sent_value": _number(setpoint.sent_value),
+                    "status": None
+                    if setpoint.status.status is None
+                    else setpoint.status.status.name,
+                    "echoed": setpoint.status.echoed,
+                    "readback": None
+                    if setpoint.readback is None
+                    else describe_reading(setpoint.readback),
+                    "matches": setpoint.matches,
+                }
+            )
+        return {
+            "accepted": written.accepted,
+            "verified": written.verified,
+            "points": described,
+            "operated": self._describe_operated(outstation, written.operated),
+        }
+
+    async def _der_switch(self, params: Mapping[str, Any], enable: bool) -> dict[str, Any]:
+        outstation, profile, der = self._der(params)
+        name = params.get("function")
+        if not name or not isinstance(name, str):
+            raise BadRequest("the operation names a function")
+        plan = switch_plan(profile, name, enable, mode=self._mode(params))
+        self._commanding(f"{'enabling' if enable else 'disabling'} a function")
+        switched = await der.run(plan)
+        return {
+            "function": switched.function.key,
+            "name": switched.function.name,
+            "enable": enable,
+            "accepted": switched.accepted,
+            "enabled": switched.enabled,
+            "status": None if switched.status is None else describe_reading(switched.status),
+            "operated": self._describe_operated(outstation, switched.operated),
+        }
+
+    async def _der_enable(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        return await self._der_switch(params, True)
+
+    async def _der_disable(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        return await self._der_switch(params, False)
+
+    async def _der_functions(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation, profile, der = self._der(params)
+        found = await der.run(functions_plan(profile))
+        functions = []
+        for state in found.states:
+            function = state.function
+            functions.append(
+                {
+                    "key": function.key,
+                    "name": function.name,
+                    "purpose": function.purpose,
+                    "enable": point_address(function.enable),
+                    "status": None if function.status is None else point_address(function.status),
+                    "supports": point_address(function.supports),
+                    "supported": state.supported,
+                    "enabled": state.enabled,
+                    "settings": [describe_point(profile, point) for point in function.settings],
+                    "inputs": [point_address(point) for point in function.inputs],
+                    "curve_settings": [point_address(point) for point in function.curve_settings],
+                }
+            )
+        return {
+            "functions": functions,
+            "exchanges": [
+                self._describe_exchange(outstation, exchange)
+                for exchange in found.readings.exchanges
+            ],
+        }
+
+    async def _der_curve(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation, profile, der = self._der(params)
+        number = params.get("number")
+        plan = curve_plan(profile, number, mode=self._mode(params))
+        if number is not None:
+            self._commanding("selecting a curve")
+        selected, curve = await der.run(plan)
+        return {
+            "curve": self._describe_curve(outstation, curve),
+            "selected": None if selected is None else self._describe_operated(outstation, selected),
+        }
+
+    async def _der_write_curve(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation, profile, der = self._der(params)
+        for required in ("number", "type", "x_units", "y_units", "points"):
+            if params.get(required) is None:
+                raise BadRequest(f"a curve is written with {required}")
+        points = params["points"]
+        if isinstance(points, (str, Mapping)) or not isinstance(points, list):
+            raise BadRequest("points is a list of [x, y] pairs")
+        plan = write_curve_plan(
+            profile,
+            params["number"],
+            type=params["type"],
+            x_units=params["x_units"],
+            y_units=params["y_units"],
+            points=points,
+            mode=self._mode(params),
+        )
+        self._commanding("writing a curve")
+        written = await der.run(plan)
+        return {
+            "accepted": written.accepted,
+            "matches": written.matches,
+            "stopped_at": written.stopped_at,
+            "steps": [self._describe_operated(outstation, step) for step in written.steps],
+            "curve": self._describe_curve(outstation, written.readback),
+        }
+
+    async def _der_compare(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        document = params.get("document")
+        if document is None:
+            document = self._device_profiles.get(outstation.name)
+            if document is None:
+                raise BadRequest(
+                    f"{outstation.name} was given no Device Profile document; send one as "
+                    "document, or give it with --device-profile"
+                )
+        if not isinstance(document, str):
+            raise BadRequest("document is the Device Profile document's XML, as text")
+        plan = compare_plan(document)
+        # Compared by type and index, so it needs no profile: the names are the document's.
+        compared = await Der(outstation, PointMap({})).run(plan)
+
+        def named(point_type: PointType, index: int) -> str | None:
+            return self._name(outstation.name, point_type, index)
+
+        return {
+            "declared": len(compared.declared),
+            "served": len(compared.served),
+            "absent": [describe_declared(entry) for entry in compared.absent],
+            "undeclared": [
+                {"type": point_type.value, "index": index, "name": named(point_type, index)}
+                for point_type, index in compared.undeclared
+            ],
+            "class_0": [
+                {**describe_declared(entry), "carried": carried}
+                for entry, carried in compared.class_0
+            ],
+            "points": [describe_declared(entry) for entry in compared.served],
+            "exchanges": [
+                {
+                    "function": exchange.function.name,
+                    "outcome": exchange.outcome.value,
+                    "indications": iin_names(exchange.iin) if exchange.iin is not None else None,
+                    "object_count": len(exchange.objects),
+                    "elapsed_ms": round(exchange.elapsed * 1000, 1),
+                }
+                for exchange in compared.exchanges
+            ],
+        }
 
     async def _stop(self, _params: Mapping[str, Any]) -> dict[str, Any]:
         self.stopped.set()

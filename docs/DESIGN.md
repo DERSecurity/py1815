@@ -1317,6 +1317,64 @@ and a full disk is not a reason to drop an outstation.
 memory while it answers; the file named on the command line is emptied when the master
 starts and grows for as long as it runs.
 
+**D90 -- The master names a DER's points by address or by the tables' name, and a name
+has to be one point.** `py1815.master.profile` reads the map `py1815.profile` resolves,
+so a script and the console speak in the profile's terms. A point is named by its
+address, as in `AO87`, or by its name in the tables, whole or by its first sentence,
+since the tables append a description to many names. The tables give one name to more
+than one point: an output and the input that reads it back share theirs, and so do
+points in different sections. A name is therefore looked for among the inputs first and
+then among the outputs, or among the outputs alone for a write, and a name that still
+matches two points is refused with both addresses rather than resolved by a guess. A
+function is the points the tables give its enable output's purpose under its heading,
+the grouping the outstation uses for D57, around the supports input paired with that
+output; any other purpose, such as `Nameplate`, names a group too.
+*Trade-off:* a caller who meets an ambiguous name has to fall back to the address.
+
+**D91 -- A write of the profile is a control in engineering units, refused before it is
+sent and verified only when asked.** An analog value is divided by the point's multiplier
+and sent as the nearest whole number, in the integer variation every Level 2 outstation
+takes; a float variation, which the profile has an outstation take unscaled, is sent only
+when asked for. A value outside the point's range, a name that is not an output, and a
+value of the wrong kind are refused before a frame is built. Everything else is
+`operate`'s: one request, sent once, an unanswered one reported as not known (D80), and
+refused in a service that does not command. `verify` reads the input that mirrors each
+output afterwards and calls it a match within one step of the multiplier, the error that
+rounding to a whole transmitted number allows. Enabling a function is a latch of its
+enable output followed by a read of the input that reports whether it is enabled.
+*Trade-off:* a device that ramps to a new setting may read back short of it, and
+`verify` reports that as a mismatch for the caller to judge.
+
+**D92 -- A curve is written in three steps in the order of clause 6.1.3, each only after
+the one before it was accepted.** The selector, then the type, the number of points and
+the units of X and Y, then X and Y of each point, and then the curve is read back. The
+fields and points land in whichever curve the block shows, so a field written after a
+refused selector would change the wrong curve, and points written after refused fields
+would change a curve an enabled function follows. They go as separate requests and not
+one: a select checks every control of a request before any is carried out, so fields
+selected beside their selector would be checked against the curve shown before it. The
+profile's operations on one outstation are carried out one at a time, so a second caller
+cannot move the selector between another's selector and points. Each operation is written
+once as a plan that yields one request at a time, so the master on a socket and the one
+wired to a session follow it alike.
+*Trade-off:* three round trips where one could carry the curve, and a caller's profile
+operations wait for each other's.
+
+**D93 -- What an outstation serves is learned by reading, and what cannot be read is
+reported as declared.** `der.compare` reads class 0, output status, and then every point
+a Device Profile document declares that neither returned. A point no read returned is
+absent; a point returned that is not declared is undeclared; class 0 membership is
+checked against the class 0 read. An outstation may refuse a whole read for one range
+that holds no point it serves (D63), and a profile names many points an outstation may
+leave out, so a read of the profile that is refused whole is made again one range at a
+time. A read changes nothing, so making it again is not the repetition D80 forbids. A
+point's event class and deadband cannot be asked of an outstation, so they are listed
+as the document declares them. A document that declares a document type is refused
+before it is parsed: a Device Profile needs none, and an entity declared there is how an
+XML document is made to grow without bound.
+*Trade-off:* an outstation that serves few of the profile's points is read in many
+small requests, and a wrong class or deadband is left for a person to notice.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1337,6 +1395,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
 - `master.association` is the session's mirror: what is true of a conversation, from the end
   that asks. Like the session it does no I/O. `master.api` owns the socket, and
   `master.loopback` stands in for one by handing octets straight to a session.
+- `master.profile` is the IEEE 1815.2 profile from the master's side: names, scaling,
+  functions and curves, each operation a plan of requests that whatever carries them runs.
 - `master.service` is the master's operations as JSON, and knows nothing of who is asking.
   The line socket, the HTTP server and the console are each a way to reach it.
 - `master.capture` writes pcap files and knows nothing of DNP3. `master.trace` turns the
