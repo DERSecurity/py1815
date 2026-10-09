@@ -63,6 +63,7 @@ class TestDefaults:
                 "confirm": True,
                 "manual": False,
                 "profile": False,
+                "device_profile": None,
                 "tasks": ALL_TASKS,
                 "repeat": {"integrity": None, "events": None, "outputs": "with_integrity"},
             },
