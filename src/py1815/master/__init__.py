@@ -33,6 +33,7 @@ from py1815.master.association import (
     Unsolicited,
 )
 from py1815.master.controls import Command, Mode, Operated, PointStatus
+from py1815.master.deviations import Deviations
 from py1815.master.loopback import Loopback
 from py1815.master.operations import ALL
 from py1815.master.store import PointValue, Store
@@ -44,6 +45,7 @@ __all__ = [
     "Command",
     "Decoded",
     "DecodedObject",
+    "Deviations",
     "Exchange",
     "Loopback",
     "Master",

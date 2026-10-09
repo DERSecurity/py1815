@@ -255,6 +255,7 @@ ORDER = [
     "trace",
     "capture",
     "clear",
+    "deviate",
     "der.functions",
     "der.read",
     "der.write",

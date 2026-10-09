@@ -25,8 +25,10 @@ from typing import Any
 
 from py1815 import link
 from py1815.application import FunctionCode
+from py1815.master import deviations
 from py1815.master.association import Exchange, MasterAssociation, Unsolicited
 from py1815.master.controls import Operated, Plan
+from py1815.master.deviations import Deviations
 from py1815.master.operations import Operations, Steps
 from py1815.master.store import Store
 from py1815.master.tasks import Housekeeper, Tasks
@@ -80,6 +82,8 @@ class Loopback(Operations[Exchange, Operated, Synchronized]):
         )
         #: Exchanges sent by automatic tasks, in order.
         self.unasked: list[Exchange] = []
+        #: Protocol rules this master is breaking on purpose, off by default.
+        self.deviations = Deviations()
 
     def _now_ms(self) -> int:
         return super()._now_ms() if self._time_ms is None else self._time_ms()
@@ -160,18 +164,32 @@ class Loopback(Operations[Exchange, Operated, Synchronized]):
         self._keep_house()
         return received
 
-    def _pump(self, to_session: bytes) -> None:
-        """Carry octets back and forth until both sides are quiet."""
+    def _pump(self, to_session: bytes, *, kind: str = deviations.REQUEST) -> None:
+        """Carry octets back and forth until both sides are quiet.
+
+        A deviation is applied to what the association produced on its way to
+        the session, as it would be on its way to a socket: the first octets
+        are a request or a confirmation as ``kind`` says, and every reply the
+        association makes inside the loop is a confirmation.
+        """
+        to_session = self._deviate(to_session, kind=kind)
         for _ in range(_MAX_PASSES):
             if not to_session:
                 return
             to_master = self.session.receive(to_session) + self.session.initiate()
-            to_session = self.association.receive(to_master) if to_master else b""
+            reply = self.association.receive(to_master) if to_master else b""
+            to_session = self._deviate(reply, kind=deviations.CONFIRM)
         raise RuntimeError("the session and the association never stopped answering each other")
+
+    def _deviate(self, octets: bytes, *, kind: str) -> bytes:
+        """Apply any deviation to octets leaving the association. Empty stays empty."""
+        if not octets:
+            return octets
+        return b"".join(self.deviations.outbound(octets, kind=kind))
 
     def _pump_back(self, to_master: bytes) -> None:
         if to_master:
-            self._pump(self.association.receive(to_master))
+            self._pump(self.association.receive(to_master), kind=deviations.CONFIRM)
 
     def _collect(self) -> list[Unsolicited]:
         received = self.association.take_unsolicited()

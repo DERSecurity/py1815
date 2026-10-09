@@ -460,6 +460,31 @@ beside it is kept as given: `manual=True, confirm=True` sends nothing unasked
 but confirmations. Reconnecting is apart from it, since it sends nothing to
 the outstation; turn it off with `reconnect=None`.
 
+## Misbehaving on purpose
+
+A master that evaluates an outstation has to be able to do the wrong thing, so a test can
+see whether the outstation rejects what the standard says it must. A deviation is a named
+protocol rule the master breaks. Each is off until turned on, and it changes only what the
+master sends, never what it expects back:
+
+```python
+lab.deviations.corrupt_header_crc = True
+poll = await lab.integrity_poll()
+assert poll.outcome is Outcome.TIMEOUT   # the outstation ignored the bad frame
+lab.deviations.corrupt_header_crc = False
+```
+
+The deviations are: `silence` (send nothing), `repeat_request` (send each request twice),
+`corrupt_header_crc` and `corrupt_body_crc` (flip a frame's checksum), `truncate` (drop a
+frame's last octet), `overstate_length` (claim more than the frame carries),
+`break_transport_sequence` and `orphan_segment` (send a segment that reassembly should
+refuse), `withhold_confirmation` (send no confirmation), and `wrong_confirmation_sequence`
+(confirm a sequence the outstation did not send). They are applied to the frame the
+master built on its way out, so with every one off the master is conformant.
+
+Sending a request by broadcast, or by a function code an outstation does not implement, is
+an ordinary request rather than a deviation: use `broadcast` and `request`.
+
 ## Repeating a scan
 
 Nothing is sent on a schedule unless you ask for it:
