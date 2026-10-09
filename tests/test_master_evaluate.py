@@ -946,6 +946,7 @@ class TestPacketNumbers:
     def test_a_capture_already_rotated_before_the_check_names_no_packets(self):
         assert benches._packet_span((1, 10), (1, 18)) is None
 
+    @pytest.mark.usefixtures("tables")
     def test_the_evaluation_capture_does_not_rotate(self, tmp_path, monkeypatch):
         # The run builds a CaptureFile with no max_bytes, so a long evaluation
         # stays one file and the packet numbers keep identifying packets in it.
