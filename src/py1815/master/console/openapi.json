@@ -4517,7 +4517,7 @@
       "get": {
         "operationId": "events_stream",
         "summary": "What happens unasked, as server-sent events",
-        "description": "A stream that stays open. Each event's data is a JSON object with an `event` field: `frame`, `exchange`, `unsolicited`, `connection` or `outstations`, and the `outstation` it is about.",
+        "description": "A stream that stays open. Each event's data is a JSON object with an `event` field: `frame`, `exchange`, `unsolicited`, `connection` or `outstations`, and the `outstation` it is about. A subscriber that falls 10,000 updates behind has its waiting updates replaced by one `lost` event whose `dropped` field says how many were dropped; read the state again, for example with `status`, `values`, `events` and `trace`. A stream that has not accepted a write for 60 seconds is closed.",
         "tags": [
           "Service"
         ],

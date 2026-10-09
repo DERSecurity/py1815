@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import ipaddress
 import json
 import logging
@@ -133,6 +134,29 @@ def split_enumeration(name: str) -> tuple[str, list[dict[str, str]] | None]:
     label = _ENUMERATION_LEAD.sub("", label).strip()
     values = [{"value": value, "name": text.rstrip(" .,;")} for _start, value, text in entries]
     return label or name, values
+
+
+#: Updates a subscriber may fall behind by before the oldest are dropped.
+SUBSCRIBER_QUEUE = 10_000
+
+#: Seconds an event stream may take to accept a write before it is closed.
+#: A browser that stopped reading would otherwise hold the stream open for ever.
+STREAM_WRITE_TIMEOUT = 60.0
+
+#: Whether the operation being handled commanded an outstation.
+_commanded: contextvars.ContextVar[bool] = contextvars.ContextVar("commanded", default=False)
+
+
+def _outcome(result: Any) -> str:
+    """Summarize a command's result for the log."""
+    if isinstance(result, Mapping):
+        if "accepted" in result:
+            return {True: "accepted", False: "refused", None: "not known"}.get(
+                result["accepted"], str(result["accepted"])
+            )
+        if "outcome" in result:
+            return str(result["outcome"])
+    return "done"
 
 
 class ControlNotAllowed(Exception):
@@ -370,8 +394,16 @@ class Service:
                 raise BadRequest("params is a JSON object")
             if "outstation" in message and "outstation" not in params:
                 params = {**params, "outstation": message["outstation"]}
+            _commanded.set(False)
             result = await operation(params)
+            if _commanded.get():
+                self._audit(str(message.get("op")), params, _outcome(result))
         except ControlNotAllowed as error:
+            logger.warning(
+                "dnp3 master: refused %s for %s: commanding is off",
+                message.get("op") if isinstance(message, Mapping) else None,
+                params.get("outstation") if isinstance(params, Mapping) else None,
+            )
             return {
                 "id": identifier,
                 "ok": False,
@@ -385,6 +417,8 @@ class Service:
             text = str(error.args[0]) if isinstance(error, KeyError) and error.args else str(error)
             return {"id": identifier, "ok": False, "error": {"kind": "request", "message": text}}
         except OSError as error:
+            if _commanded.get():
+                self._audit(str(message.get("op")), params, f"failed: {error}")
             return {
                 "id": identifier,
                 "ok": False,
@@ -392,11 +426,20 @@ class Service:
             }
         return {"id": identifier, "ok": True, "result": result}
 
+    @staticmethod
+    def _audit(op: str, params: Mapping[str, Any], outcome: str) -> None:
+        """Log a command sent to an outstation, with what was asked and what came of it."""
+        asked = {key: value for key, value in params.items() if key != "outstation"}
+        text = json.dumps(asked, separators=(",", ":"), default=str)
+        logger.info(
+            "dnp3 master: command %s to %s %s: %s", op, params.get("outstation"), text, outcome
+        )
+
     # ---------------------------------------------------------- subscription
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         """A queue that receives everything that happens, until unsubscribed."""
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=10_000)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE)
         self._subscribers.add(queue)
         return queue
 
@@ -404,12 +447,26 @@ class Service:
         self._subscribers.discard(queue)
 
     def publish(self, event: dict[str, Any]) -> None:
+        """Send an event to every subscriber.
+
+        A subscriber that has fallen SUBSCRIBER_QUEUE updates behind has
+        its waiting updates replaced by one lost event that says how many
+        were dropped, and stays subscribed. It can then reload what it shows,
+        and memory stays bounded however long it lags.
+        """
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # A subscriber that stopped reading is dropped, not waited for.
-                self._subscribers.discard(queue)
+                dropped = 1
+                while not queue.empty():
+                    waiting = queue.get_nowait()
+                    # A lost update already waiting stands for all it dropped.
+                    dropped += waiting.get("dropped", 1) if waiting.get("event") == "lost" else 1
+                logger.warning(
+                    "dnp3 master: a subscriber fell behind; dropped %d update(s)", dropped
+                )
+                queue.put_nowait({"event": "lost", "dropped": dropped})
 
     # ----------------------------------------------------------- outstations
 
@@ -796,6 +853,7 @@ class Service:
     # ------------------------------------------------------------- commands
 
     def _commanding(self, what: str) -> None:
+        _commanded.set(True)
         if not self.allow_control:
             raise ControlNotAllowed(
                 f"{what} commands the outstation, and commanding is off. "
@@ -1533,6 +1591,15 @@ class HttpServer:
                 else:
                     payload = json.dumps(event, separators=(",", ":"))
                     writer.write(f"data: {payload}\n\n".encode())
-                await writer.drain()
+                try:
+                    await asyncio.wait_for(writer.drain(), STREAM_WRITE_TIMEOUT)
+                except TimeoutError:
+                    # The browser stopped reading. Close the stream: an
+                    # EventSource opens a new one, and the console reloads.
+                    logger.warning(
+                        "dnp3 master: closed an event stream that stopped reading for %g s",
+                        STREAM_WRITE_TIMEOUT,
+                    )
+                    return
         finally:
             self._service.unsubscribe(queue)

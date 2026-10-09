@@ -345,10 +345,21 @@ class Recorder:
         self._port = port
         self._stream: Stream | None = None
         self._connection: int | None = None
+        self._generation = capture.generation
         self._last = 0.0
 
     def record(self, entry: Entry) -> None:
-        """Write one entry, opening a new connection first when it crossed one."""
+        """Write one entry, opening a new connection first when it crossed one.
+
+        Before each entry the capture may start a new file. A connection that
+        was open in the old file then starts again with a handshake in the new
+        one, so each file reads on its own. The old file has no FIN for it.
+        """
+        self._capture.boundary()
+        if self._capture.generation != self._generation:
+            self._generation = self._capture.generation
+            self._stream = None
+            self._connection = None
         if self._stream is None or entry.connection != self._connection:
             self.close()
             self._stream = self._open(entry.connection, entry.at)
@@ -360,11 +371,16 @@ class Recorder:
         self._last = entry.at
 
     def close(self) -> None:
-        """Write the FIN exchange of the open connection, if there is one."""
-        if self._stream is not None:
+        """Write the FIN exchange of the open connection, if there is one.
+
+        A connection opened in a file the capture has since rotated away from
+        is forgotten instead: its FIN packets would land in the new file with
+        no handshake before them.
+        """
+        if self._stream is not None and self._capture.generation == self._generation:
             self._stream.close(self._last)
-            self._stream = None
-            self._connection = None
+        self._stream = None
+        self._connection = None
 
     def abandon(self) -> None:
         """Forget the open connection without writing anything more."""

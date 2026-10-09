@@ -876,7 +876,39 @@ function scheduleRender() {
   });
 }
 
+// Reload what the page shows for the selected outstation, after updates were missed.
+// Events that arrive while a reload is under way, replayed once it ends,
+// so a snapshot taken before them does not overwrite them.
+let held = null;
+
+async function resynchronize(reason) {
+  note(reason, true);
+  if (held) return;
+  held = [];
+  try {
+    await refreshStatus();
+    if (state.selected) await select(state.selected);
+  } finally {
+    const replay = held;
+    held = null;
+    const shown = new Set(state.frames.map((frame) => frame.id));
+    for (const event of replay) {
+      // The reloaded trace may already hold a frame that arrived during the reload.
+      if (event.event === "frame" && shown.has(event.frame.id)) continue;
+      onServiceEvent(event);
+    }
+  }
+}
+
 function onServiceEvent(event) {
+  if (event.event === "lost") {
+    resynchronize(`Missed ${event.dropped} update(s) while the page was behind; reloaded`);
+    return;
+  }
+  if (held) {
+    held.push(event);
+    return;
+  }
   if (event.event === "outstations" || event.event === "connection") {
     if (event.event === "connection") {
       note(`${event.outstation}: ${event.connected ? "connected" : "connection ended"}`, !event.connected);
@@ -907,7 +939,15 @@ function onServiceEvent(event) {
 function listen() {
   const chip = $("#service-state");
   const source = new EventSource(TOKEN ? `events?token=${encodeURIComponent(TOKEN)}` : "events");
-  source.onopen = () => { chip.textContent = "Service running"; chip.className = "chip good"; refreshStatus(); };
+  let opened = false;
+  source.onopen = () => {
+    chip.textContent = "Service running";
+    chip.className = "chip good";
+    // A stream opened again after a break may have missed updates.
+    if (opened) resynchronize("Reconnected to the service; reloaded");
+    else refreshStatus();
+    opened = true;
+  };
   source.onerror = () => { chip.textContent = "Service unreachable"; chip.className = "chip bad"; };
   source.onmessage = (message) => onServiceEvent(JSON.parse(message.data));
 }
