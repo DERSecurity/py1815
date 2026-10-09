@@ -33,7 +33,7 @@ from typing import Any
 
 from py1815 import link
 from py1815.application import IIN, FunctionCode
-from py1815.master import requests
+from py1815.master import deviations, requests
 from py1815.master.association import (
     DEFAULT_READ_RETRIES,
     DEFAULT_RESPONSE_TIMEOUT,
@@ -42,6 +42,7 @@ from py1815.master.association import (
     Unsolicited,
 )
 from py1815.master.controls import Operated, Plan
+from py1815.master.deviations import Deviations
 from py1815.master.operations import Operations, Steps
 from py1815.master.store import Store
 from py1815.master.tasks import WRITING, Housekeeper, Tasks
@@ -214,6 +215,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         self.on_unsolicited = on_unsolicited
         self.on_exchange = on_exchange
         self.on_connection = on_connection
+        #: The protocol rules the master is breaking on purpose, off by default.
+        #: Applied to what the association produced, on its way to the channel.
+        self.deviations = Deviations()
         #: How the exchanges so far ended, by outcome.
         self.counts: dict[str, int] = {}
         #: The last exchange that received anything, and when it ended.
@@ -446,9 +450,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 self.trace.record(RECEIVED, data)
                 reply = self.association.receive(data)
                 if reply:
-                    self.trace.record(SENT, reply)
-                    writer.write(reply)
-                    await writer.drain()
+                    await self._send(writer, reply, kind=deviations.CONFIRM)
                 self._deliver_unsolicited()
                 self._progress.set()
         except OSError as exc:
@@ -663,8 +665,18 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             raise
 
     async def _write(self, writer: asyncio.StreamWriter, octets: bytes) -> None:
-        self.trace.record(SENT, octets)
-        writer.write(octets)
+        await self._send(writer, octets, kind=deviations.REQUEST)
+
+    async def _send(self, writer: asyncio.StreamWriter, octets: bytes, *, kind: str) -> None:
+        """Send octets, after any deviation has had its way with them.
+
+        A deviation may change the octets, send them twice, or send nothing.
+        The trace records what actually crossed the wire, so a capture shows
+        the deviation rather than the request the association built.
+        """
+        for frame in self.deviations.outbound(octets, kind=kind):
+            self.trace.record(SENT, frame)
+            writer.write(frame)
         # A write that fails is seen by the receive loop as well, which ends
         # the exchange as abandoned.
         with contextlib.suppress(OSError):

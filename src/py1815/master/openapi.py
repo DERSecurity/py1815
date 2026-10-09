@@ -27,10 +27,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from py1815.master.controls import OPERATIONS as OPERATIONS_BY_NAME
+from py1815.master.deviations import Deviations
 from py1815.master.operations import BROADCASTS
 from py1815.master.requests import SCAN_KINDS
 from py1815.master.service import INDICATIONS
 from py1815.master.timesync import PROCEDURES
+
+#: Every deviation's name, for the ``deviate`` operation's description.
+DEVIATION_NAMES = Deviations.names()
 
 #: Where the document is committed, and served from.
 DOCUMENT = pathlib.Path(__file__).parent / "console" / "openapi.json"
@@ -1275,6 +1279,34 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "result": _object({"cleared": _STRING}, required=["cleared"]),
         "example": {"outstation": "lab", "what": "trace"},
     },
+    "deviate": {
+        "summary": "Turn named deviations on or off",
+        "description": "A deviation makes the master break a protocol rule on purpose, so a "
+        "test can see whether the outstation rejects what the standard says it must. Each is "
+        "applied to the octets the association produced, on their way to the outstation, and "
+        "is off until turned on. The names are "
+        + ", ".join(f"`{name}`" for name in DEVIATION_NAMES)
+        + ". `set` turns them on or off; `clear` turns every one off first.",
+        "tag": "Deviations",
+        "params": _outstation(
+            {
+                "set": {
+                    "type": "object",
+                    "additionalProperties": _BOOLEAN,
+                    "description": "Deviation names to true or false.",
+                },
+                "clear": {**_BOOLEAN, "description": "Turn every deviation off first."},
+            }
+        ),
+        "result": _object(
+            {
+                "deviations": {"type": "object", "additionalProperties": _BOOLEAN},
+                "on": {"type": "array", "items": _STRING},
+            },
+            required=["deviations", "on"],
+        ),
+        "example": {"outstation": "lab", "set": {"corrupt_header_crc": True}},
+    },
     "der.read": {
         "summary": "Read points of the DER profile by name, or a named group",
         "description": "In engineering units, with each point's quality. A point is named by "
@@ -1565,6 +1597,11 @@ _TAGS = [
     ),
     ("Unsolicited responses", "Reporting an outstation does without being polled."),
     ("Traffic", "The frames that crossed the wire."),
+    (
+        "Deviations",
+        "Protocol rules the master breaks on purpose, so a test can see whether the "
+        "outstation rejects what the standard says it must. Off until turned on.",
+    ),
     (
         "DER profile",
         "An IEEE 1815.2 DER's points by name and in engineering units, its functions, its "

@@ -38,6 +38,10 @@
       "description": "The frames that crossed the wire."
     },
     {
+      "name": "Deviations",
+      "description": "Protocol rules the master breaks on purpose, so a test can see whether the outstation rejects what the standard says it must. Off until turned on."
+    },
+    {
       "name": "DER profile",
       "description": "An IEEE 1815.2 DER's points by name and in engineering units, its functions, its curves, and its Device Profile document."
     },
@@ -3522,6 +3526,134 @@
         }
       }
     },
+    "/api/deviate": {
+      "post": {
+        "operationId": "deviate",
+        "summary": "Turn named deviations on or off",
+        "tags": [
+          "Deviations"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "set": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "boolean"
+                    },
+                    "description": "Deviation names to true or false."
+                  },
+                  "clear": {
+                    "type": "boolean",
+                    "description": "Turn every deviation off first."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "set": {
+                  "corrupt_header_crc": true
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "deviations": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "boolean"
+                              }
+                            },
+                            "on": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "deviations",
+                            "on"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "A deviation makes the master break a protocol rule on purpose, so a test can see whether the outstation rejects what the standard says it must. Each is applied to the octets the association produced, on their way to the outstation, and is off until turned on. The names are `silence`, `repeat_request`, `corrupt_header_crc`, `corrupt_body_crc`, `truncate`, `overstate_length`, `break_transport_sequence`, `orphan_segment`, `withhold_confirmation`, `wrong_confirmation_sequence`. `set` turns them on or off; `clear` turns every one off first."
+      }
+    },
     "/api/der.read": {
       "post": {
         "operationId": "der.read",
@@ -5017,6 +5149,7 @@
                       "trace",
                       "capture",
                       "clear",
+                      "deviate",
                       "der.read",
                       "der.write",
                       "der.enable",
