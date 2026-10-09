@@ -8,12 +8,14 @@ are the same master from a browser and from another process.
 !!! note "A first version"
     It polls by class, reads named points, confirms what asks to be
     confirmed, takes unsolicited responses and keeps the last value of every
-    point. It operates outputs, sets the clock, clears the restart indication
-    and freezes counters. Left alone it looks after an outstation as a master
-    does: settles it on connecting, fetches the events it says it has, and
-    connects again when the connection is lost. It speaks to an IEEE 1815.2
-    DER in the profile's terms. All of it from Python, from a JSON service, or
-    from a web console. It has no TLS yet. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
+    point. It operates outputs, sets the clock by a plain write or by either
+    of the standard's procedures, clears the restart indication, freezes
+    counters and sends broadcasts. Left alone it looks after an outstation as
+    a master does: settles it on connecting, fetches the events it says it
+    has, and connects again when the connection is lost. It speaks to an
+    IEEE 1815.2 DER in the profile's terms, and connects over TCP or TLS. All
+    of it from Python, with or without an event loop, from a JSON service,
+    or from a web console. [The plan](https://github.com/DERSecurity/py1815/blob/main/docs/planning/MASTER.md)
     says what follows.
 
 ## Over a socket
@@ -57,10 +59,12 @@ returns an `Outstation`, which is where the requests are:
 | `read(...)` | Named points, by type and index, or `ALL` of a type, in one request |
 | `operate(...)` | Outputs commanded, by type and index. See [Commanding outputs](#commanding-outputs) |
 | `write_time(ms)` | The outstation's clock, in milliseconds since the epoch, or now |
+| `synchronize_time(procedure)` | The outstation's clock, by the `"lan"` or `"non_lan"` procedure. See [Setting the clock](#setting-the-clock) |
 | `clear_restart()` | The restart indication, cleared |
 | `freeze(clear=, respond=)` | Every counter frozen, and cleared as it is if asked |
 | `restart(kind)` | A `"cold"` or a `"warm"` restart |
 | `request(function, body)` | Any function code, with the octets that follow it |
+| `broadcast(function, body, address=)` | Any function code, sent to a broadcast address. See [Broadcast](#broadcast) |
 
 Requests made at the same time take turns, in the order they were made. An
 outstation carries one request at a time.
@@ -101,6 +105,25 @@ An exception means the interface was misused or there was no connection:
 `connect` when the connection cannot be made, `ValueError` for a request that
 names nothing.
 
+### A read that is not answered
+
+A read that times out with nothing received can be sent again, as IEEE
+1815-2012 4.3 rule 16 has it: under the same sequence number, with the same
+octets, so an outstation that did answer the first is answering both.
+
+```python
+lab = await master.add("lab", host="192.0.2.10", read_retries=2)
+poll = await lab.integrity_poll()
+print(poll.retries)                # how many times it was sent again
+```
+
+None by default, as the DNP Users Group recommends for a master's application
+layer: a retry hides that the outstation did not answer, which is what a test
+of an outstation wants to see. Only a read is ever sent again. A control, a
+write, a freeze, a restart, a time synchronization and a broadcast are each
+sent once, whatever `read_retries` says, and a read whose answer has begun to
+arrive is not sent again.
+
 A decoded object carries its group, variation and index, its value, its flag
 octet, and its time when the outstation gave one. `flags` is `None` for a
 variation that has no flags, which is not the same as none being set. An
@@ -120,6 +143,7 @@ told not to. Each is a task:
 | `enable_unsolicited` | Asks the outstation to report the classes named without being polled | After startup | Off: no classes |
 | `events_when_indicated` | Polls for events | When a response says some are waiting | On |
 | `integrity_on_overflow` | Reads everything again | When a response says the event buffer overflowed | On |
+| `event_follow_ups` | Polls for events again, at once | When a poll's own response still says events are waiting, up to this many times in a row | 3 |
 
 ```python
 from py1815.master import Tasks
@@ -130,7 +154,17 @@ lab = await master.add(
     tasks=Tasks(enable_unsolicited=(1, 2, 3), write_time=False),
 )
 await lab.idle()
+
+lab.tasks = Tasks(events_when_indicated=False)   # changed while connected
 ```
+
+`write_time` writes the master's time as it stands unless
+`time_procedure` names one of the standard's procedures, `"lan"` or
+`"non_lan"`: see [Setting the clock](#setting-the-clock).
+
+Tasks can be changed at any time by setting `tasks`. What is done next
+follows the new settings, and a task that was due and is now off is not
+done; a startup sequence under way finishes.
 
 `add` and `connect` return as soon as the connection is made. What is done on
 connecting is done next, before anything you ask for and before any scan on a
@@ -145,9 +179,12 @@ Three things a task never does:
 
 - **Command an output.** No task selects or operates anything, and none sends
   a request between a select and its operate.
-- **Answer itself.** A task is not made due by the response to its own
-  request. An outstation that never clears an indication is asked about it at
-  most once for each response that carries it, and never in a stream.
+- **Answer itself without end.** A task is not made due by the response to
+  its own request, with one bounded exception: a poll whose response still
+  says events are waiting is followed by another, at most `event_follow_ups`
+  times in a row, and then not again until a poll finds nothing waiting. An
+  outstation that never clears an indication costs a few requests, never a
+  stream.
 - **Repeat a scan.** Nothing is sent on a schedule unless you ask for it with
   [`repeat_scan`](#repeating-a-scan).
 
@@ -162,8 +199,42 @@ lab = await master.add("lab", host="192.0.2.10", reconnect=1.0)   # every second
 lab = await master.add("lab", host="192.0.2.10", reconnect=None)  # never
 ```
 
-A connection you closed with `close()` is not made again, and a first
-connection that cannot be made still raises `OSError`.
+A connection you closed with `close()` is not made again.
+
+A first connection that cannot be made raises `OSError` at once, unless you
+ask the master to wait for the outstation:
+
+```python
+lab = await master.add("lab", host="192.0.2.10", wait=60)   # try for a minute
+await lab.connect(wait=60, every=2.0)                      # every two seconds
+```
+
+It tries once a second unless told otherwise, and raises the last error when
+the time is up.
+
+### Over TLS
+
+Give the outstation a TLS context, and the connection is made over TLS:
+
+```python
+from py1815.master.tls import TlsSettings
+
+tls = TlsSettings(
+    ca="lab-ca.pem",              # what the outstation's certificate is checked against
+    certificate="master.pem",     # what the master offers
+    key="master.key",
+    server_name="inverter.lab",   # when the certificate does not name the host
+)
+lab = await master.add(
+    "lab", host="192.0.2.10", port=20000, tls=tls.context(), server_name=tls.server_name
+)
+```
+
+Any `ssl.SSLContext` will do. An outstation that listens with TLS usually
+requires a certificate of the master, as this library's does. A key that is
+encrypted is opened with the password in the `PY1815_MASTER_KEY_PASSWORD`
+environment variable. A certificate that does not check out is an `OSError`
+from `add` or `connect`.
 
 ## The store
 
@@ -178,6 +249,21 @@ lab.store.events                   # the events received, oldest first
 
 A stored value says whether it came from an event (`from_event`), the time the
 outstation gave it (`time_ms`), and when it was received.
+
+### Waiting for something
+
+`wait_for` returns when a condition holds, and says whether it did:
+
+```python
+held = await lab.wait_for(lambda store: store.analog_output(87).value == 5000, timeout=10)
+held = await lab.wait_for(lambda _: lab.indications.is_set(IINBit.NEED_TIME), timeout=10)
+```
+
+The condition is looked at at once, and again each time a response or an
+unsolicited response has been stored, and when the connection is made or ends.
+Nothing is sent to make it hold. `lab.indications` is the indications of the
+last response of either kind. A timeout returns `False`; it is not an
+exception.
 
 ## Unsolicited responses
 
@@ -252,6 +338,60 @@ in tenths of a percent is 50 percent, and a float is the engineering value.
 What cannot be carried is refused with a `ValueError` before anything is sent:
 an output that is not a number, a value that does not fit the variation named,
 an operation that is not one.
+
+## Setting the clock
+
+`write_time()` sends the master's clock as it reads when the request is
+built, and the outstation is behind by however long the request took to
+arrive. IEEE 1815-2012 10.3.3 gives two procedures that correct for that, and
+`synchronize_time` follows either:
+
+```python
+done = await lab.synchronize_time("lan")
+print(done.written, done.accepted, done.time_ms)
+done = await lab.synchronize_time("non_lan")
+print(done.delay_ms)
+```
+
+| Procedure | Sends |
+|---|---|
+| `"lan"` | A request to record the current time, then a write of the time the master sent it (group 50 variation 3). The outstation adds what has passed since it arrived. The default, since the master speaks TCP |
+| `"non_lan"` | A delay measurement, then a write of the master's time plus half the round trip less the time the outstation says it held the request (group 50 variation 1) |
+
+The write is sent only if the first request was answered without an error
+indication; `written` says whether it was, and `accepted` whether the
+outstation took it. Neither request is ever sent again (10.3.4). The master
+takes its times when it builds each request, which is as close to the wire as
+a program above the operating system's sockets gets.
+
+The `write_time` task can use either procedure:
+`Tasks(time_procedure="lan")`.
+
+## Broadcast
+
+A request sent to a broadcast address reaches every outstation on the link,
+and none answers it:
+
+```python
+from py1815.master import requests
+
+sent = await lab.broadcast(FunctionCode.IMMED_FREEZE_NR, requests.freeze_counters())
+sent = await lab.broadcast(
+    FunctionCode.WRITE, requests.write_time(now_ms), address="shall_confirm"
+)
+```
+
+| `address` | Is | What the outstation does about the response that reports it |
+|---|---|---|
+| `"no_confirm"` | 0xFFFD | Does not ask for it to be confirmed |
+| `"shall_confirm"` | 0xFFFE | Asks for it to be confirmed |
+| `"optional_confirm"` | 0xFFFF | Either. The default, since every outstation takes it |
+
+The exchange ends as soon as the request is sent, with `outcome` `SENT` and
+`broadcast` naming the address. The outstation says it received one with
+IIN1.0 in its next response to this master. Over TCP a broadcast reaches the
+one outstation at the other end of the connection, which acts on it as a
+broadcast.
 
 ## An IEEE 1815.2 DER
 
@@ -355,6 +495,41 @@ for entry in lab.trace.since():
 
 That is a connection being made to an outstation that has just started: the
 four requests of startup, each answered.
+
+## Without an event loop
+
+`py1815.master.sync` is the same master for a script that has no event loop.
+Every request blocks until it is done:
+
+```python
+from py1815.master.sync import Master
+
+with Master() as master:
+    lab = master.add("lab", host="192.0.2.10")
+    lab.idle()
+    poll = lab.integrity_poll()
+    print(poll.outcome, lab.store.analog_input(4))
+    lab.wait_for(lambda store: store.analog_output(87) is not None, timeout=10)
+```
+
+The master runs on an event loop of its own in a thread it starts and stops,
+so the tasks, unsolicited responses and repeated scans carry on between calls.
+Its blocking methods are made from the asynchronous ones, and a test fails if
+an operation is added to one and not the other.
+
+## From the command line
+
+`py1815-master poll` reads an outstation once: one integrity poll, with
+confirmations and nothing else, and a summary and the analog inputs, named
+from the IEEE 1815.2 tables when this machine has them. `py1815-der poll` is
+the same command.
+
+```bash
+py1815-master poll --host 192.0.2.10 --port 20000 --limit 20
+py1815-master poll --host 192.0.2.10 --tls-ca lab-ca.pem \
+    --tls-certificate master.pem --tls-key master.key
+```
+
 
 ## Captures
 
@@ -481,6 +656,11 @@ master = Loopback(outstation.session())
 poll = master.integrity_poll()
 unasked = master.listen()      # what the session would send without being asked
 ```
+
+Retries and broadcasts work here as they do over a socket: a read with
+`master.association.read_retries` set is sent again when the session did not
+answer it, and a broadcast is handed to the session, which acts on it and
+answers nothing.
 
 A `Loopback` does nothing unasked unless it is given tasks. Given them,
 `start()` stands for the connection being made and returns the exchanges it

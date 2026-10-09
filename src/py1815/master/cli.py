@@ -4,7 +4,8 @@
 the service alone, a line of JSON at a time, for a test rig. Either may be
 given outstations to add at startup, and ``console --demo`` also starts a
 simulated IEEE 1815.2 DER in the same process and connects to it, so there is
-something to look at with nothing else running.
+something to look at with nothing else running. ``poll`` reads an outstation
+once and prints what it answered.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -27,6 +28,7 @@ import webbrowser
 from collections.abc import Sequence
 from typing import Any
 
+from py1815.master import poll
 from py1815.master.api import DEFAULT_RECONNECT
 from py1815.master.capture import CaptureFile
 from py1815.master.config import LOG_LEVELS, MEGABYTE, ConfigError, MasterConfig, read
@@ -122,16 +124,15 @@ async def _keep_trying(service: Service, name: str, seconds: float) -> None:
     """Connect to an outstation that was not there yet, for as long as was allowed.
 
     For a master started beside its outstation, which may be the first of the
-    two to be ready. It tries once a second and stops at the first success.
+    two to be ready. The service's ``connect`` does the trying, once a second.
     """
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        await asyncio.sleep(1.0)
-        answer = await service.handle({"op": "connect", "outstation": name})
-        if answer["ok"]:
-            print(f"{name}: connected", flush=True)
-            return
-    print(f"{name}: still not reachable after {seconds:g} s", file=sys.stderr)
+    answer = await service.handle(
+        {"op": "connect", "outstation": name, "params": {"wait": seconds}}
+    )
+    if answer["ok"]:
+        print(f"{name}: connected", flush=True)
+    else:
+        print(f"{name}: still not reachable after {seconds:g} s", file=sys.stderr)
 
 
 #: Where ``serve`` listens unless told otherwise.
@@ -172,10 +173,24 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
             document[key] = value
 
     defaults = dict(document.get("defaults") or {})
-    for key in ("outstation_address", "master_address", "manual", "profile", "device_profile"):
+    for key in (
+        "outstation_address",
+        "master_address",
+        "manual",
+        "profile",
+        "read_retries",
+        "device_profile",
+    ):
         value = getattr(args, key, None)
         if value is not None:
             defaults[key] = value
+    tls = {
+        name: getattr(args, f"tls_{name}")
+        for name in ("ca", "certificate", "key", "server_name")
+        if getattr(args, f"tls_{name}", None) is not None
+    }
+    if tls:
+        defaults["tls"] = {**(defaults.get("tls") or {}), **tls}
     if args.reconnect is not None:
         defaults["reconnect"] = args.reconnect or None
     if args.unsolicited is not None:
@@ -488,6 +503,15 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         "--master-address", type=int, default=None, help="link address (default: 1)"
     )
     parser.add_argument(
+        "--read-retries",
+        type=poll.count,
+        default=None,
+        metavar="N",
+        help="send a read that times out again this many times; nothing else is ever "
+        "sent again (default: 0)",
+    )
+    poll.add_tls_options(parser)
+    parser.add_argument(
         "--integrity-interval",
         type=float,
         default=None,
@@ -569,6 +593,15 @@ def _parser() -> argparse.ArgumentParser:
         "--out", type=pathlib.Path, default=None, help="write to this file instead of stdout"
     )
     _add_outstation_options(config)
+
+    polling = commands.add_parser(
+        "poll", help="run one integrity poll against an outstation and print what it answered"
+    )
+    poll.add_options(polling, default_port=20000)
+    polling.add_argument(
+        "--outstation-address", type=int, default=1024, help="link address (default: 1024)"
+    )
+    polling.add_argument("--master-address", type=int, default=1, help="link address (default: 1)")
     return parser
 
 
@@ -641,6 +674,12 @@ def _log_start(config: MasterConfig, command: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "poll":
+        # A one-shot client: no configuration file and no log file.
+        logging.basicConfig(
+            level=logging.INFO if args.verbose else logging.WARNING, format=LOG_FORMAT
+        )
+        return poll.run(args)
     try:
         config = configuration(args)
     except ConfigError as error:

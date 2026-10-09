@@ -70,11 +70,32 @@ READING_FUNCTIONS = frozenset(
 DEVICE_RESTART_INDEX = 7
 
 
-def write_time(milliseconds: int) -> bytes:
-    """The object of a time write: milliseconds since the epoch, UTC, in 48 bits."""
+#: The group of the time objects, and the variations a master writes.
+TIME_GROUP = 50
+ABSOLUTE_TIME = 1
+LAST_RECORDED_TIME = 3
+
+
+def _time_object(variation: int, milliseconds: int) -> bytes:
     if not 0 <= milliseconds < 1 << 48:
         raise ValueError("a time is milliseconds since the epoch, in 48 bits")
-    return bytes([50, 1, QualifierCode.UINT8_COUNT, 1]) + milliseconds.to_bytes(6, "little")
+    return bytes([TIME_GROUP, variation, QualifierCode.UINT8_COUNT, 1]) + milliseconds.to_bytes(
+        6, "little"
+    )
+
+
+def write_time(milliseconds: int) -> bytes:
+    """The object of a time write: milliseconds since the epoch, UTC, in 48 bits."""
+    return _time_object(ABSOLUTE_TIME, milliseconds)
+
+
+def write_recorded_time(milliseconds: int) -> bytes:
+    """The object of the write that ends the LAN procedure (IEEE 1815-2012 10.3.3.2).
+
+    Group 50 variation 3: the time, in milliseconds since the epoch, at which
+    the master sent the request to record the current time.
+    """
+    return _time_object(LAST_RECORDED_TIME, milliseconds)
 
 
 def clear_restart() -> bytes:

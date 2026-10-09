@@ -24,6 +24,8 @@ ALL_TASKS = {
     "enable_unsolicited": [],
     "events_when_indicated": True,
     "integrity_on_overflow": True,
+    "time_procedure": None,
+    "event_follow_ups": 3,
 }
 
 
@@ -57,7 +59,9 @@ class TestDefaults:
                 "outstation_address": 1024,
                 "master_address": 1,
                 "response_timeout": 5.0,
+                "read_retries": 0,
                 "connect_timeout": 5.0,
+                "tls": None,
                 "connect": True,
                 "reconnect": 5.0,
                 "confirm": True,

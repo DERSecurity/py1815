@@ -21,16 +21,18 @@ import contextvars
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import pathlib
 import re
 import secrets
+import ssl
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from py1815.application import FunctionCode
+from py1815.application import FunctionCode, IIN2Bit, IINBit
 from py1815.control import AnalogOutput
 from py1815.decode import DecodedObject, PointType
 from py1815.master import requests
@@ -38,6 +40,7 @@ from py1815.master.api import Master, Outstation
 from py1815.master.association import Exchange, Unsolicited
 from py1815.master.capture import CaptureFile
 from py1815.master.controls import Mode, Operated, Plan, commands
+from py1815.master.operations import DEFAULT_BROADCAST, broadcast_address
 from py1815.master.profile import (
     Curve,
     Declared,
@@ -55,8 +58,10 @@ from py1815.master.profile import (
 )
 from py1815.master.profile import address as point_address
 from py1815.master.profile import label as point_label
-from py1815.master.store import PointValue
+from py1815.master.store import PointValue, Store
 from py1815.master.tasks import WRITING, Tasks
+from py1815.master.timesync import LAN, PROCEDURES, Synchronized
+from py1815.master.tls import TlsSettings
 from py1815.master.trace import Entry, Recorder, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
 from py1815.profile.model import Kind, Point, PointMap
@@ -134,6 +139,139 @@ def split_enumeration(name: str) -> tuple[str, list[dict[str, str]] | None]:
     label = _ENUMERATION_LEAD.sub("", label).strip()
     values = [{"value": value, "name": text.rstrip(" .,;")} for _start, value, text in entries]
     return label or name, values
+
+
+#: Every indication by name, as ``wait_for`` takes it.
+INDICATIONS: dict[str, IINBit | IIN2Bit] = {
+    **{bit.name: bit for bit in IINBit},
+    **{bit.name: bit for bit in IIN2Bit},
+}
+
+
+def _number_given(value: Any, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise BadRequest(f"{where} is a number")
+    return float(value)
+
+
+def _keys(given: Any, where: str, allowed: tuple[str, ...]) -> Mapping[str, Any]:
+    if not isinstance(given, Mapping):
+        raise BadRequest(f"{where} is an object")
+    unknown = sorted(set(given) - set(allowed))
+    if unknown:
+        raise BadRequest(f"{where}.{unknown[0]} is not one of {', '.join(allowed)}")
+    return given
+
+
+class Condition:
+    """A condition ``wait_for`` is given as JSON, made a test of the store.
+
+    ``value`` holds once a point has been reported, and has the value named
+    when one is: ``equals``, within ``tolerance`` of it, ``at_least`` or
+    ``at_most``. ``event`` holds once an event arrives after the wait began,
+    of the type and index named when they are. ``indication`` holds once the
+    indication named is set, or clear when ``set`` is false.
+    """
+
+    def __init__(self, kind: str, given: Any, outstation: Outstation) -> None:
+        self._outstation = outstation
+        #: The point a ``value`` condition is about.
+        self.point: tuple[PointType, int] | None = None
+        #: The events that satisfied an ``event`` condition.
+        self.matched: tuple[DecodedObject, ...] = ()
+        tests = {"value": self._value, "event": self._event, "indication": self._indication}
+        self._test = tests[kind](given)
+
+    def __call__(self, store: Store) -> bool:
+        return self._test(store)
+
+    @staticmethod
+    def _point(given: Mapping[str, Any], where: str, *, required: bool) -> tuple[Any, Any]:
+        kind, index = given.get("type"), given.get("index")
+        if kind is None and index is None and not required:
+            return None, None
+        if kind not in _POINT_TYPES:
+            raise BadRequest(f"{where}.type is one of {', '.join(_POINT_TYPES)}")
+        if index is None and not required:
+            return _POINT_TYPES[kind], None
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= 0xFFFF:
+            raise BadRequest(f"{where}.index is 0 to 65535")
+        return _POINT_TYPES[kind], index
+
+    def _value(self, given: Any) -> Callable[[Store], bool]:
+        given = _keys(
+            given, "value", ("type", "index", "equals", "tolerance", "at_least", "at_most")
+        )
+        point, index = self._point(given, "value", required=True)
+        self.point = (point, index)
+        equals = given.get("equals")
+        if equals is not None and not isinstance(equals, bool):
+            equals = _number_given(equals, "value.equals")
+        tolerance = _number_given(given.get("tolerance", 0), "value.tolerance")
+        if tolerance < 0:
+            raise BadRequest("value.tolerance is zero or more")
+        bounds = [
+            (name, _number_given(given[name], f"value.{name}"))
+            for name in ("at_least", "at_most")
+            if given.get(name) is not None
+        ]
+
+        def test(store: Store) -> bool:
+            stored = store.get(point, index)
+            if stored is None:
+                return False
+            value = stored.value
+            numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
+            if equals is not None:
+                if isinstance(equals, bool) or not numeric:
+                    if value != equals:
+                        return False
+                elif not abs(float(value) - equals) <= tolerance:  # type: ignore[arg-type]
+                    return False
+            for name, bound in bounds:
+                if not numeric:
+                    return False
+                if name == "at_least" and not value >= bound:  # type: ignore[operator]
+                    return False
+                if name == "at_most" and not value <= bound:  # type: ignore[operator]
+                    return False
+            return True
+
+        return test
+
+    def _event(self, given: Any) -> Callable[[Store], bool]:
+        given = _keys(given, "event", ("type", "index"))
+        point, index = self._point(given, "event", required=False)
+        started = self._outstation.store.events_received
+
+        def test(store: Store) -> bool:
+            self.matched = tuple(
+                event
+                for event in store.events_since(started)
+                if (point is None or event.point is point)
+                and (index is None or event.index == index)
+            )
+            return bool(self.matched)
+
+        return test
+
+    def _indication(self, given: Any) -> Callable[[Store], bool]:
+        given = _keys(given, "indication", ("name", "set"))
+        name = given.get("name")
+        if name not in INDICATIONS:
+            raise BadRequest(f"indication.name is one of {', '.join(INDICATIONS)}")
+        bit = INDICATIONS[name]
+        wanted = given.get("set", True)
+        if not isinstance(wanted, bool):
+            raise BadRequest("indication.set is true or false")
+        outstation = self._outstation
+
+        def test(_store: Store) -> bool:
+            # With no response yet, the bit is neither set nor clear.
+            indications = outstation.indications
+            return indications is not None and indications.is_set(bit) == wanted
+
+        return test
 
 
 #: Updates a subscriber may fall behind by before the oldest are dropped.
@@ -331,6 +469,7 @@ class Service:
         self._capture_listeners: dict[str, Callable[[Entry], None]] = {}
         self._names: dict[str, dict[PointType, dict[int, str]]] = {}
         self._profiles: dict[str, PointMap] = {}
+        self._tls: dict[str, TlsSettings] = {}
         self._der_profiles: dict[str, DerProfile] = {}
         self._device_profiles: dict[str, str] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -343,6 +482,8 @@ class Service:
             "connect": self._connect,
             "disconnect": self._disconnect,
             "idle": self._idle,
+            "set_tasks": self._set_tasks,
+            "wait_for": self._wait_for,
             "scan": self._scan,
             "read": self._read,
             "values": self._values,
@@ -350,9 +491,11 @@ class Service:
             "request": self._request,
             "operate": self._operate,
             "write_time": self._write_time,
+            "synchronize_time": self._synchronize_time,
             "clear_restart": self._clear_restart,
             "freeze": self._freeze,
             "restart": self._restart,
+            "broadcast": self._broadcast,
             "enable_unsolicited": self._enable_unsolicited,
             "disable_unsolicited": self._disable_unsolicited,
             "repeat": self._repeat,
@@ -541,6 +684,8 @@ class Service:
             "port": outstation.port,
             "outstation_address": outstation.association.outstation_address,
             "master_address": outstation.association.master_address,
+            "read_retries": outstation.association.read_retries,
+            "tls": self._tls[outstation.name].describe() if outstation.name in self._tls else None,
             "connected": outstation.connected,
             "indications": iin_names(last.iin) if last is not None and last.iin else [],
             "last_response_at": outstation.last_response_at,
@@ -578,6 +723,8 @@ class Service:
             ],
             "elapsed_ms": round(exchange.elapsed * 1000, 1),
             "request": exchange.request.hex(),
+            "retries": exchange.retries,
+            "broadcast": None if exchange.broadcast is None else exchange.broadcast.name.lower(),
         }
 
     def attach(self, outstation: Outstation) -> None:
@@ -680,14 +827,25 @@ class Service:
         ):
             if params.get(key) is not None:
                 options[key] = kind(params[key])
+        if params.get("read_retries") is not None:
+            retries = params["read_retries"]
+            if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
+                raise BadRequest("read_retries is a count of retries, zero or more")
+            options["read_retries"] = retries
         if params.get("confirm") is not None:
             options["confirm"] = bool(params["confirm"])
         if "reconnect" in params:
             given = params["reconnect"]
             options["reconnect"] = None if given is None else float(given)
+        tls = self._tls_settings(params.get("tls"))
+        if tls is not None:
+            options["tls"] = self._tls_context(tls)
+            options["server_name"] = tls.server_name
         options["manual"] = manual = bool(params.get("manual", False))
         options["tasks"] = self._tasks(params.get("tasks"), manual)
         outstation = await self.master.add(name, connect=False, **options)
+        if tls is not None:
+            self._tls[name] = tls
         self.attach(outstation)
         intervals = {
             "integrity": params.get("integrity_interval"),
@@ -709,6 +867,23 @@ class Service:
                 self.publish({"event": "connection", "outstation": name, "connected": False})
                 raise
         return self._describe_outstation(outstation)
+
+    @staticmethod
+    def _tls_settings(given: Any) -> TlsSettings | None:
+        if given is None:
+            return None
+        if not isinstance(given, Mapping):
+            raise BadRequest("tls is an object of files and a name, or null for plain TCP")
+        return TlsSettings.from_mapping(given)
+
+    @staticmethod
+    def _tls_context(tls: TlsSettings) -> ssl.SSLContext:
+        """Make the context, and say a file that cannot be used is the caller's mistake."""
+        try:
+            return tls.context()
+        except (OSError, ssl.SSLError) as error:
+            # A missing or unreadable file, and not a connection that failed.
+            raise BadRequest(f"tls: {error}") from None
 
     def _tasks(self, given: Any, manual: bool) -> Tasks:
         """Build the task settings for a new outstation from the ``add`` parameters."""
@@ -752,6 +927,7 @@ class Service:
             recorder.close()
         self._names.pop(outstation.name, None)
         self._profiles.pop(outstation.name, None)
+        self._tls.pop(outstation.name, None)
         self._der_profiles.pop(outstation.name, None)
         self._device_profiles.pop(outstation.name, None)
         self.publish({"event": "outstations"})
@@ -759,7 +935,15 @@ class Service:
 
     async def _connect(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
-        await outstation.connect()
+        wait = params.get("wait")
+        if wait is not None and (
+            isinstance(wait, bool)
+            or not isinstance(wait, (int, float))
+            or not math.isfinite(wait)
+            or wait < 0
+        ):
+            raise BadRequest("wait is seconds to keep trying, zero or more")
+        await outstation.connect(wait=wait)
         return self._describe_outstation(outstation)
 
     async def _disconnect(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -773,6 +957,58 @@ class Service:
         outstation = self._outstation(params)
         await outstation.idle()
         return self._describe_outstation(outstation)
+
+    async def _set_tasks(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Change what the master does for an outstation unasked."""
+        outstation = self._outstation(params)
+        given = params.get("tasks")
+        if not isinstance(given, Mapping) or not given:
+            raise BadRequest("tasks is an object of choices by task")
+        # Refused for what is wrong with it before it is refused for not
+        # being allowed, so the two are told apart.
+        tasks = outstation.tasks.changed(given)
+        if not self.allow_control:
+            for name in WRITING:
+                if given.get(name):
+                    self._commanding(f"the {name} task")
+        outstation.tasks = tasks
+        self.publish({"event": "outstations"})
+        return self._describe_outstation(outstation)
+
+    async def _wait_for(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Wait until a condition on the store, an event or an indication holds."""
+        outstation = self._outstation(params)
+        timeout = params.get("timeout")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout < 0
+        ):
+            raise BadRequest("timeout is seconds to wait, zero or more")
+        named = [kind for kind in ("value", "event", "indication") if kind in params]
+        if len(named) != 1:
+            raise BadRequest("a wait names one condition: value, event or indication")
+        condition = Condition(named[0], params[named[0]], outstation)
+        started = time.monotonic()
+        held = await outstation.wait_for(condition, float(timeout))
+        result: dict[str, Any] = {
+            "held": held,
+            "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            "indications": iin_names(outstation.indications) if outstation.indications else [],
+            "point": None,
+            "events": [
+                describe_object(event, self._name(outstation.name, event.point, event.index))
+                for event in condition.matched
+            ],
+        }
+        if condition.point is not None:
+            point, index = condition.point
+            value = outstation.store.get(point, index)
+            if value is not None:
+                name = self._name(outstation.name, point, index)
+                result["point"] = describe_value(index, value, point, name)
+        return result
 
     async def _scan(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
@@ -828,8 +1064,8 @@ class Service:
             "total": len(outstation.store.events),
         }
 
-    async def _request(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        outstation = self._outstation(params)
+    @staticmethod
+    def _function_and_body(params: Mapping[str, Any]) -> tuple[FunctionCode, bytes]:
         function = params.get("function")
         try:
             code = (
@@ -843,6 +1079,11 @@ class Service:
             body = bytes.fromhex(str(params.get("body", "")))
         except ValueError:
             raise BadRequest("body is the octets after the function code, in hexadecimal") from None
+        return code, body
+
+    async def _request(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        code, body = self._function_and_body(params)
         if code not in requests.READING_FUNCTIONS:
             # Any other function code changes the outstation, and this is the
             # one operation that would otherwise send it unasked-about.
@@ -926,6 +1167,30 @@ class Service:
         self._commanding("a time write")
         return self._describe_exchange(outstation, await outstation.write_time(when))
 
+    async def _synchronize_time(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        procedure = params.get("procedure", LAN)
+        if procedure not in PROCEDURES:
+            raise BadRequest(f"{procedure!r} is not a time procedure; lan or non_lan")
+        self._commanding("setting the clock")
+        synchronized = await outstation.synchronize_time(str(procedure))
+        return self._describe_synchronized(outstation, synchronized)
+
+    def _describe_synchronized(
+        self, outstation: Outstation, synchronized: Synchronized
+    ) -> dict[str, Any]:
+        delay = synchronized.delay_ms
+        return {
+            "procedure": synchronized.procedure,
+            "written": synchronized.written,
+            "accepted": synchronized.accepted,
+            "delay_ms": None if delay is None else round(delay, 1),
+            "time_ms": synchronized.time_ms,
+            "exchanges": [
+                self._describe_exchange(outstation, exchange) for exchange in synchronized.exchanges
+            ],
+        }
+
     async def _clear_restart(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
         self._commanding("clearing the restart indication")
@@ -946,6 +1211,15 @@ class Service:
             raise BadRequest(f"{kind!r} is not a restart; cold or warm")
         self._commanding("a restart")
         return self._describe_exchange(outstation, await outstation.restart(kind))
+
+    async def _broadcast(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        code, body = self._function_and_body(params)
+        address = broadcast_address(params.get("address", DEFAULT_BROADCAST.name.lower()))
+        if code not in requests.READING_FUNCTIONS:
+            self._commanding(f"a {code.name} broadcast")
+        exchange = await outstation.broadcast(code, body, address=address)
+        return self._describe_exchange(outstation, exchange)
 
     @staticmethod
     def _classes(params: Mapping[str, Any]) -> list[int]:

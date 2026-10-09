@@ -21,20 +21,23 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from typing import Any
 
+from py1815 import link
 from py1815.application import FunctionCode
 from py1815.master.association import Exchange, MasterAssociation, Unsolicited
 from py1815.master.controls import Operated, Plan
-from py1815.master.operations import Operations
+from py1815.master.operations import Operations, Steps
 from py1815.master.store import Store
 from py1815.master.tasks import Housekeeper, Tasks
+from py1815.master.timesync import Synchronized, TimeSync
 from py1815.session import Session
 
 #: Passes of octets between the two before something is assumed to be looping.
 _MAX_PASSES = 10_000
 
 
-class Loopback(Operations[Exchange, Operated]):
+class Loopback(Operations[Exchange, Operated, Synchronized]):
     """A master association and a session, each handed what the other sent."""
 
     def __init__(
@@ -71,26 +74,42 @@ class Loopback(Operations[Exchange, Operated]):
         self.store = Store() if store is None else store
         self._clock = clock
         chosen = Tasks.none() if tasks is None else tasks
+        self._time_ms = time_ms
         self.housekeeper = (
             Housekeeper(chosen) if time_ms is None else Housekeeper(chosen, clock_ms=time_ms)
         )
         #: Exchanges sent by automatic tasks, in order.
         self.unasked: list[Exchange] = []
 
+    def _now_ms(self) -> int:
+        return super()._now_ms() if self._time_ms is None else self._time_ms()
+
     def start(self) -> list[Exchange]:
         """Run the startup tasks, as on a new connection, and return their exchanges."""
         self.housekeeper.connected()
         return self._keep_house()
 
-    def _exchange(self, function: FunctionCode, body: bytes) -> Exchange:
-        exchange = self._one(function, body)
+    def _exchange(
+        self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
+    ) -> Exchange:
+        exchange = self._one(function, body, broadcast=broadcast)
         self._keep_house()
         return exchange
 
-    def _one(self, function: FunctionCode, body: bytes, *, task: str | None = None) -> Exchange:
-        self._pump(self.association.request(function, body))
+    def _one(
+        self,
+        function: FunctionCode,
+        body: bytes,
+        *,
+        task: str | None = None,
+        broadcast: link.Broadcast | None = None,
+    ) -> Exchange:
+        self._pump(self.association.request(function, body, broadcast=broadcast))
         # Everything the session was going to say, it has said. An outstation
-        # that is silent here is silent, and waiting would not change it.
+        # that is silent here is silent, and waiting would not change it,
+        # though asking again might: a read with retries left is sent again.
+        while again := self.association.retry(at_once=True):
+            self._pump(again)
         self.association.give_up()
         exchange = self.association.take()
         assert exchange is not None
@@ -104,18 +123,30 @@ class Loopback(Operations[Exchange, Operated]):
     def _keep_house(self) -> list[Exchange]:
         made: list[Exchange] = []
         while (step := self.housekeeper.next()) is not None:
-            made.append(self._one(step.function, step.body, task=step.task))
+            if step.plan is not None:
+                made += self._follow(step.plan, task=step.task).exchanges
+            else:
+                made.append(self._one(step.function, step.body, task=step.task))
         self.unasked += made
         return made
+
+    def _follow(self, plan: Steps, *, task: str | None = None) -> Any:
+        done: list[Exchange] = []
+        while (step := plan.next(done)) is not None:
+            done.append(self._one(*step, task=task))
+        return plan.result(done)
 
     def _carry_out(self, plan: Plan) -> Operated:
         # Run pending tasks only after the whole plan, so nothing is sent
         # between a select and its operate.
-        done: list[Exchange] = []
-        while (step := plan.next(done)) is not None:
-            done.append(self._one(*step))
+        operated: Operated = self._follow(plan)
         self._keep_house()
-        return plan.result(done)
+        return operated
+
+    def _synchronize(self, plan: TimeSync) -> Synchronized:
+        synchronized: Synchronized = self._follow(plan)
+        self._keep_house()
+        return synchronized
 
     def listen(self) -> list[Unsolicited]:
         """Ask the session for what it would send unasked, and take it.

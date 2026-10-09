@@ -1,9 +1,9 @@
-"""A probe: one integrity poll of an outstation, to see that it answers.
+"""A short reader of the objects in an IEEE 1815.2 outstation's responses.
 
-Not a master. It asks the one question a master asks first -- every event
-class, then class 0 -- confirms each fragment, and reports what came back. It
-keeps no association, retries nothing and commands nothing, which is what
-makes it safe to point at anything and enough to show an outstation is alive.
+It was the parser of a probe that polled an outstation once; the poll is now
+the master's (:mod:`py1815.master.poll`). The parser stays because tests of
+the outstation read its responses with it: it is a second reading of the same
+octets, written apart from :mod:`py1815.decode`, with its own table of sizes.
 
 It reads the objects the IEEE 1815.2 profile selects and stops, saying so, at
 the first it does not know: an object's width is the only way to find the one
@@ -14,21 +14,10 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from py1815 import link
-from py1815.application import (
-    CON_MASK,
-    FIN_MASK,
-    RESPONSE_HEADER_SIZE,
-    SEQ_MASK,
-    FunctionCode,
-    QualifierCode,
-)
-from py1815.transport import Reassembler, segment
+from py1815.application import QualifierCode
 
 #: The octets one object of each group and variation occupies.
 _SIZES = {
@@ -60,15 +49,9 @@ _SIGNED_32 = {(30, 1), (32, 1), (32, 3), (40, 1)}
 _SIGNED_16 = {(30, 2), (32, 2), (32, 4), (40, 2)}
 _COUNTERS = {(20, 1), (21, 1), (21, 5), (23, 5)}
 
-#: Class 1, 2 and 3, then class 0: an integrity poll, events first so that a
-#: static value is not overwritten by an older event.
-_INTEGRITY = b"".join(
-    bytes([60, variation, QualifierCode.ALL_OBJECTS]) for variation in (2, 3, 4, 1)
-)
-
 
 class ProbeError(RuntimeError):
-    """The outstation did not answer, or answered something unreadable."""
+    """A response that could not be read."""
 
 
 @dataclass(frozen=True)
@@ -80,25 +63,6 @@ class Value:
     index: int
     value: float
     flags: int | None
-
-
-@dataclass
-class Poll:
-    """What an integrity poll returned."""
-
-    static: list[Value] = field(default_factory=list)
-    events: list[Value] = field(default_factory=list)
-    fragments: int = 0
-    #: The two indication octets of the last fragment.
-    indications: tuple[int, int] = (0, 0)
-
-    def group(self, group: int) -> list[Value]:
-        """Every static object of one group, in the order received."""
-        return [value for value in self.static if value.group == group]
-
-    def find(self, group: int, index: int) -> Value | None:
-        """One static object by group and index, or None if it was not sent."""
-        return next((v for v in self.static if v.group == group and v.index == index), None)
 
 
 def _value(group: int, variation: int, index: int, data: bytes) -> Value:
@@ -175,68 +139,3 @@ def parse_objects(body: bytes) -> tuple[list[Value], list[Value]]:
         if offset > len(body):
             raise ProbeError("a response ends inside an object")
     return static, events
-
-
-def _frames(fragment: bytes, *, outstation: int, master: int) -> bytes:
-    control = link.control_byte(
-        from_master=True, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
-    )
-    return b"".join(link.build(control, outstation, master, part) for part in segment(fragment))
-
-
-async def integrity_poll(
-    host: str,
-    port: int,
-    *,
-    outstation: int = 1024,
-    master: int = 1,
-    timeout: float = 5.0,
-) -> Poll:
-    """Connect, read every class once, confirm what asks for it, and disconnect."""
-    try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
-    except (TimeoutError, OSError) as exc:
-        raise ProbeError(f"cannot connect to {host}:{port}: {exc}") from exc
-
-    poll = Poll()
-    frames = link.FrameReader()
-    reassembler = Reassembler()
-
-    async def fragment() -> bytes:
-        while True:
-            data = await asyncio.wait_for(reader.read(4096), timeout)
-            if not data:
-                raise ProbeError("the outstation closed the connection")
-            for frame in frames.feed(data):
-                whole = reassembler.add(frame.payload)
-                if whole is not None:
-                    return whole
-
-    try:
-        request = bytes([0xC0, FunctionCode.READ]) + _INTEGRITY
-        writer.write(_frames(request, outstation=outstation, master=master))
-        await writer.drain()
-        while True:
-            try:
-                response = await fragment()
-            except TimeoutError as exc:
-                raise ProbeError(
-                    f"no answer from {host}:{port} as outstation {outstation} to master {master}"
-                ) from exc
-            if len(response) < RESPONSE_HEADER_SIZE:
-                raise ProbeError("a response is shorter than its own header")
-            poll.fragments += 1
-            poll.indications = (response[2], response[3])
-            static, events = parse_objects(response[RESPONSE_HEADER_SIZE:])
-            poll.static += static
-            poll.events += events
-            if response[0] & CON_MASK:
-                confirm = bytes([0xC0 | (response[0] & SEQ_MASK), FunctionCode.CONFIRM])
-                writer.write(_frames(confirm, outstation=outstation, master=master))
-                await writer.drain()
-            if response[0] & FIN_MASK:
-                return poll
-    finally:
-        writer.close()
-        with contextlib.suppress(OSError):
-            await writer.wait_closed()

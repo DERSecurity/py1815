@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar
 
+from py1815 import link
 from py1815.application import FunctionCode
 from py1815.decode import PointType
 from py1815.master import controls, requests
+from py1815.master.timesync import LAN, TimeSync
 
 #: What an operation returns: an :class:`~py1815.master.association.Exchange`,
 #: or an awaitable of one.
@@ -26,6 +28,52 @@ ResultT = TypeVar("ResultT")
 #: What an operate returns: an :class:`~py1815.master.controls.Operated`, or
 #: an awaitable of one.
 OperatedT = TypeVar("OperatedT")
+
+#: What a time synchronization returns: a
+#: :class:`~py1815.master.timesync.Synchronized`, or an awaitable of one.
+SyncedT = TypeVar("SyncedT")
+
+#: The broadcast addresses by name: what the outstation does about confirming
+#: the response that reports the broadcast (IEEE 1815-2012 table 4-13).
+BROADCASTS: dict[str, link.Broadcast] = {
+    address.name.lower(): address for address in link.Broadcast
+}
+
+#: The address a broadcast goes to unless another is named. The standard says
+#: to use it where any outstation predates the other two, so every
+#: outstation takes it.
+DEFAULT_BROADCAST = link.Broadcast.OPTIONAL_CONFIRM
+
+
+class Steps(Protocol):
+    """Requests decided one at a time, each from the answers to those before it.
+
+    A select and its operate, and a time synchronization, are carried out
+    this way, so every carrier follows one rule for when the second request
+    is sent.
+    """
+
+    def next(self, done: Sequence[Any]) -> tuple[FunctionCode, bytes] | None:
+        """Return the request to make after those in ``done``, or None."""
+
+    def result(self, done: Sequence[Any]) -> Any:
+        """Return what the requests made amount to."""
+
+
+def broadcast_address(address: link.Broadcast | int | str) -> link.Broadcast:
+    """Return a broadcast address given by name, by number or as itself."""
+    if isinstance(address, str):
+        try:
+            return BROADCASTS[address]
+        except KeyError:
+            raise ValueError(
+                f"{address!r} is not a broadcast address; one of {', '.join(BROADCASTS)}"
+            ) from None
+    try:
+        return link.Broadcast(address)
+    except ValueError:
+        raise ValueError(f"{address!r} is not a broadcast address: 0xFFFD to 0xFFFF") from None
+
 
 #: Every point of a type, where indices would otherwise be listed.
 ALL: Literal["all"] = "all"
@@ -40,15 +88,25 @@ def _event_classes(classes: Sequence[int]) -> Sequence[int]:
     return named
 
 
-class Operations(Generic[ResultT, OperatedT]):
+class Operations(Generic[ResultT, OperatedT, SyncedT]):
     """What a master can be asked to do."""
 
-    def _exchange(self, function: FunctionCode, body: bytes) -> ResultT:
+    def _exchange(
+        self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
+    ) -> ResultT:
         raise NotImplementedError
 
     def _carry_out(self, plan: controls.Plan) -> OperatedT:
         """Make the requests a plan calls for, one after another with none between."""
         raise NotImplementedError
+
+    def _synchronize(self, plan: TimeSync) -> SyncedT:
+        """Make the requests of a time synchronization, with none between them."""
+        raise NotImplementedError
+
+    def _now_ms(self) -> int:
+        """Return the master's clock, in milliseconds since the epoch."""
+        return round(time.time() * 1000)
 
     def operate(
         self,
@@ -84,8 +142,37 @@ class Operations(Generic[ResultT, OperatedT]):
 
     def write_time(self, milliseconds: int | None = None) -> ResultT:
         """Set the outstation's clock: milliseconds since the epoch, UTC, or now."""
-        when = round(time.time() * 1000) if milliseconds is None else int(milliseconds)
+        when = self._now_ms() if milliseconds is None else int(milliseconds)
         return self._exchange(FunctionCode.WRITE, requests.write_time(when))
+
+    def synchronize_time(self, procedure: str = LAN) -> SyncedT:
+        """Set the outstation's clock by one of the procedures of IEEE 1815-2012 10.3.3.
+
+        ``lan`` records the current time at the outstation and then writes
+        the time the master sent that request. ``non_lan`` measures the delay
+        and writes the master's time plus the delay. The write is sent only
+        if the first request was answered without an error indication, and
+        neither request is ever sent again. See :mod:`py1815.master.timesync`.
+        """
+        return self._synchronize(TimeSync(procedure, clock_ms=self._now_ms))
+
+    def broadcast(
+        self,
+        function: FunctionCode,
+        body: bytes = b"",
+        *,
+        address: link.Broadcast | int | str = DEFAULT_BROADCAST,
+    ) -> ResultT:
+        """Send a request to a broadcast address: every outstation on the link.
+
+        ``address`` is ``no_confirm`` (0xFFFD), ``shall_confirm`` (0xFFFE) or
+        ``optional_confirm`` (0xFFFF), which say whether an outstation asks
+        for its next response to be confirmed. No outstation answers a
+        broadcast, so the exchange ends as sent and the indication that one
+        arrived (IIN1.0) comes in the next response to a request of this
+        master's own. Nothing is sent again.
+        """
+        return self._exchange(function, body, broadcast=broadcast_address(address))
 
     def clear_restart(self) -> ResultT:
         """Clear the restart indication, which a master does once it has seen it."""

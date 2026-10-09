@@ -288,3 +288,101 @@ class TestTheMaster:
         async with Master() as master:
             lab = await master.add("lab", host="127.0.0.1", port=1, connect=False)
             assert not lab.connected
+
+
+async def _free_port() -> int:
+    """A port nothing listens on, for an outstation that starts later."""
+    closed = await asyncio.start_server(lambda reader, writer: None, "127.0.0.1", 0)
+    port = closed.sockets[0].getsockname()[1]
+    closed.close()
+    await closed.wait_closed()
+    return port
+
+
+class TestAFirstConnection:
+    """A connection that could not be made at first is tried again only when asked."""
+
+    @staticmethod
+    def _refusing(lab: Outstation) -> list[int]:
+        """Make every attempt of ``lab`` fail, each with its own number, and count them."""
+        attempts: list[int] = []
+
+        async def refused() -> None:
+            attempts.append(len(attempts) + 1)
+            raise ConnectionRefusedError(f"attempt {len(attempts)} refused")
+
+        lab._open = refused  # type: ignore[method-assign]
+        return attempts
+
+    @pytest.mark.asyncio
+    async def test_by_default_one_that_cannot_be_made_is_tried_once(self):
+        lab = Outstation("lab", host="127.0.0.1", port=1)
+        attempts = self._refusing(lab)
+        with pytest.raises(OSError, match="attempt 1 refused"):
+            await lab.connect()
+        assert attempts == [1]
+
+    @pytest.mark.asyncio
+    async def test_waiting_keeps_trying_until_the_outstation_is_there(self, simulation):
+        port = await _free_port()
+        lab = Outstation("lab", host="127.0.0.1", port=port, tasks=ASKED)
+        trying = asyncio.create_task(lab.connect(wait=10.0, every=0.05))
+        await asyncio.sleep(0.2)
+        assert not trying.done(), "still trying"
+        server = OutstationServer(simulation.outstation.session(), bind=f"127.0.0.1:{port}")
+        await server.start()
+        try:
+            async with asyncio.timeout(5):
+                await trying
+            assert lab.connected and (await lab.scan("class0")).complete
+        finally:
+            await lab.close()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_waiting_ends_with_the_last_error_when_the_time_is_up(self):
+        lab = Outstation("lab", host="127.0.0.1", port=1)
+        attempts = self._refusing(lab)
+        with pytest.raises(OSError) as raised:
+            await lab.connect(wait=0.3, every=0.1)
+        # At 0, 0.1, 0.2 and perhaps 0.3 seconds, and no attempt after the time.
+        assert len(attempts) in (3, 4)
+        assert str(raised.value) == f"attempt {len(attempts)} refused"
+        assert not lab.connected
+
+    @pytest.mark.asyncio
+    async def test_the_master_adds_one_once_it_is_reached(self, simulation, monkeypatch):
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        opened = Outstation._open
+        attempts: list[int] = []
+
+        async def refused_once(outstation: Outstation) -> None:
+            # The first attempt fails as if the outstation were not there yet.
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise ConnectionRefusedError("not there yet")
+            await opened(outstation)
+
+        monkeypatch.setattr(Outstation, "_open", refused_once)
+        try:
+            async with Master() as master:
+                lab = await master.add(
+                    "lab", host="127.0.0.1", port=server.port, tasks=ASKED, wait=5.0
+                )
+                assert lab.connected and master["lab"] is lab and len(attempts) == 2
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("options", "says"),
+        [
+            ({"wait": -1.0}, "wait is -1.0"),
+            ({"wait": float("inf")}, "wait is inf"),
+            ({"every": 0.0}, "every is 0.0"),
+        ],
+    )
+    async def test_a_wait_that_is_not_one_is_refused(self, options, says):
+        with pytest.raises(ValueError, match=says):
+            await Outstation("lab", host="127.0.0.1", port=1).connect(**options)

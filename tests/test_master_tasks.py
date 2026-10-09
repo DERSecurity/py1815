@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+from types import SimpleNamespace
 
 import pytest
 from profile_fixtures import for_reference_der
 
-from py1815.application import IIN, FunctionCode, IIN2Bit, IINBit
+from py1815 import link
+from py1815.application import IIN, FunctionCode, IIN2Bit, IINBit, null_response
 from py1815.master import (
     Loopback,
     Master,
@@ -29,6 +31,7 @@ from py1815.profile import der, load
 from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
 from py1815.server import OutstationServer
+from py1815.transport import Reassembler, segment
 
 RESTART = IIN(first=IINBit.DEVICE_RESTART)
 NEED_TIME = IIN(first=IINBit.NEED_TIME)
@@ -78,6 +81,8 @@ class TestTaskSettings:
             "enable_unsolicited": [],
             "events_when_indicated": True,
             "integrity_on_overflow": True,
+            "time_procedure": None,
+            "event_follow_ups": 3,
         }
 
     def test_none_disables_every_task(self):
@@ -110,6 +115,11 @@ class TestTaskSettings:
             ({"enable_unsolicited": ["1"]}, "1, 2 or 3"),
             ({"enable_unsolicited": [True]}, "1, 2 or 3"),
             ({"enable_unsolicited": [None]}, "1, 2 or 3"),
+            ({"time_procedure": "gps"}, "time_procedure is null, lan or non_lan"),
+            ({"time_procedure": 1}, "time_procedure is null, lan or non_lan"),
+            ({"event_follow_ups": -1}, "event_follow_ups is a count"),
+            ({"event_follow_ups": 1.5}, "event_follow_ups is a count"),
+            ({"event_follow_ups": True}, "event_follow_ups is a count"),
         ],
     )
     def test_changed_rejects_invalid_settings(self, given, says):
@@ -262,16 +272,92 @@ class TestStuckIndications:
         housekeeper.saw(OVERFLOW, answering=EVENT_POLL)
         assert _answered(housekeeper, OVERFLOW) == ["integrity"]
 
-    def test_poll_response_does_not_trigger_another_event_poll(self):
+    def test_a_stuck_events_bit_costs_the_follow_up_polls_once(self):
         housekeeper = Housekeeper()
         housekeeper.saw(EVENTS, answering=A_READ)
-        assert _answered(housekeeper, *[EVENTS] * 5) == ["events"]
+        # The poll the read called for, and three more because each poll's
+        # own response still said events were waiting.
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"] * 4
         housekeeper.saw(EVENTS, answering=INTEGRITY)
         housekeeper.saw(EVENTS, answering=EVENT_POLL)
-        assert housekeeper.due == ()
-        # The next response of any other kind that says so is what fetches them.
+        assert housekeeper.due == (), "spent until a poll says nothing is waiting"
+        # The next response of any other kind that says so still fetches them.
         housekeeper.saw(EVENTS, answering=A_READ)
-        assert housekeeper.due == ("events",)
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"]
+
+
+class TestLeftoverEvents:
+    """Events an outstation held back from a poll are fetched at once, a bounded number of times."""
+
+    def test_a_poll_whose_response_says_more_are_waiting_is_followed_by_another(self):
+        housekeeper = Housekeeper()
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert _answered(housekeeper, EVENTS, QUIET) == ["events", "events"]
+        assert housekeeper.due == ()
+
+    def test_an_integrity_poll_that_leaves_events_waiting_is_followed_by_an_event_poll(self):
+        housekeeper = Housekeeper()
+        housekeeper.connected()
+        assert _answered(housekeeper, QUIET, EVENTS, QUIET) == [
+            "disable_unsolicited",
+            "integrity",
+            "events",
+        ]
+
+    @pytest.mark.parametrize("bound", [0, 1, 3, 5])
+    def test_follow_up_polls_stop_at_the_bound(self, bound):
+        housekeeper = Housekeeper(Tasks(event_follow_ups=bound))
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"] * (1 + bound)
+
+    def test_a_poll_that_finds_nothing_waiting_restores_the_follow_ups(self):
+        housekeeper = Housekeeper(Tasks(event_follow_ups=2))
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"] * 3
+        housekeeper.saw(QUIET, answering=EVENT_POLL)
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"] * 3
+
+    def test_a_new_connection_restores_the_follow_ups(self):
+        housekeeper = Housekeeper(Tasks(startup=False, event_follow_ups=1))
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"] * 2
+        housekeeper.connected()
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert _answered(housekeeper, *[EVENTS] * 20) == ["events"] * 2
+
+    def test_with_no_follow_ups_a_poll_response_triggers_nothing(self):
+        housekeeper = Housekeeper(Tasks(event_follow_ups=0))
+        housekeeper.saw(EVENTS, answering=EVENT_POLL)
+        housekeeper.saw(EVENTS, answering=INTEGRITY)
+        assert housekeeper.due == ()
+
+    def test_no_follow_up_when_events_are_not_fetched_on_indication(self):
+        housekeeper = Housekeeper(Tasks(events_when_indicated=False))
+        housekeeper.saw(EVENTS, answering=EVENT_POLL)
+        assert housekeeper.due == ()
+
+
+class TestChangingTasks:
+    def test_new_settings_decide_what_is_queued_next(self):
+        housekeeper = Housekeeper()
+        housekeeper.tasks = Tasks(events_when_indicated=False)
+        housekeeper.saw(EVENTS, answering=A_READ)
+        assert housekeeper.due == ()
+
+    def test_a_due_task_turned_off_is_not_done(self):
+        housekeeper = Housekeeper()
+        housekeeper.saw(IIN(first=IINBit.DEVICE_RESTART | IINBit.NEED_TIME | IINBit.CLASS_1_EVENTS))
+        assert "write_time" in housekeeper.due
+        housekeeper.tasks = Tasks.none()
+        # The startup sequence the restart began finishes; nothing else is done.
+        assert housekeeper.due == ("disable_unsolicited", "integrity")
+
+    def test_a_due_task_left_on_is_still_done(self):
+        housekeeper = Housekeeper()
+        housekeeper.saw(NEED_TIME, answering=A_READ)
+        housekeeper.tasks = Tasks(clear_restart=False)
+        assert housekeeper.due == ("write_time",)
 
 
 class TestEventPolls:
@@ -386,6 +472,35 @@ def _names(exchanges) -> list[str]:
     return [exchange.task for exchange in exchanges]
 
 
+class AlwaysWaiting:
+    """An outstation that answers every request with no objects and class 1 events waiting."""
+
+    def __init__(self) -> None:
+        self.facts = SimpleNamespace(outstation_address=1024, master_address=1)
+        self.reads = 0
+        self._frames = link.FrameReader()
+        self._reassembler = Reassembler()
+
+    def receive(self, data: bytes) -> bytes:
+        out = b""
+        control = link.control_byte(
+            from_master=False, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+        )
+        for frame in self._frames.feed(data):
+            fragment = self._reassembler.add(frame.payload)
+            if fragment is None or fragment[1] == FunctionCode.CONFIRM:
+                continue
+            self.reads += fragment[1] == FunctionCode.READ
+            response = null_response(
+                sequence=fragment[0] & 0x0F, iin=IIN(first=IINBit.CLASS_1_EVENTS)
+            )
+            out += b"".join(link.build(control, 1, 1024, part) for part in segment(response))
+        return out
+
+    def initiate(self) -> bytes:
+        return b""
+
+
 class TestLoopback:
     def test_start_runs_startup_and_fills_the_store(self, simulation):
         simulation.advance(1.0)
@@ -477,9 +592,9 @@ class TestLoopback:
         sent = []
         request = master.association.request
 
-        def recording(function, body=b""):
+        def recording(function, body=b"", **options):
             sent.append(function)
-            return request(function, body)
+            return request(function, body, **options)
 
         master.association.request = recording
 
@@ -524,6 +639,20 @@ class TestLoopback:
             "enable_unsolicited",
         ]
         assert not session.restart_indication
+
+    def test_an_outstation_that_always_says_events_wait_is_polled_a_bounded_number_of_times(
+        self,
+    ):
+        stuck = AlwaysWaiting()
+        master = Loopback(stuck, tasks=Tasks(startup=False))  # type: ignore[arg-type]
+
+        master.read(binary_inputs=[0])
+        # The poll the read called for, and three that followed it at once.
+        assert _names(master.unasked) == ["events"] * 4 and stuck.reads == 5
+        del master.unasked[:]
+        master.read(binary_inputs=[0])
+        # The follow-ups are spent: one poll for the read, and none after it.
+        assert _names(master.unasked) == ["events"] and stuck.reads == 7
 
     def test_unconfirmed_events_do_not_cause_a_poll_loop(self, simulation):
         """Unconfirmed events stay buffered. That must cause one poll, not a loop."""
@@ -865,6 +994,25 @@ class TestOverTcp:
                 assert (await lab.scan("class0")).complete
             finally:
                 await again.stop()
+
+    @pytest.mark.asyncio
+    async def test_tasks_changed_while_connected_decide_what_is_done_next(self, simulation):
+        server = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
+        await server.start()
+        try:
+            async with Master() as master:
+                lab = await master.add("lab", host="127.0.0.1", port=server.port)
+                await lab.idle()
+                lab.tasks = Tasks(events_when_indicated=False)
+                simulation.advance(5.0)
+                asked = await lab.read(binary_inputs=[0])
+                await lab.idle()
+                assert asked.iin.first & 0x0E, "the outstation says events are waiting"
+                assert lab.tasks_due == () and lab.counts == {"complete": 5}
+                with pytest.raises(TypeError, match="tasks is a Tasks"):
+                    lab.tasks = {"startup": False}  # type: ignore[assignment]
+        finally:
+            await server.stop()
 
     @pytest.mark.asyncio
     async def test_idle_returns_when_connection_closes(self, simulation):

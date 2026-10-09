@@ -47,8 +47,10 @@ disagree.
 | `POST /api/status` | The outstations, and how each stands |
 | `POST /api/add` | Adds an outstation and connects to it |
 | `POST /api/remove` | Closes an outstation's connection and forgets it |
-| `POST /api/connect`, `POST /api/disconnect` | Its connection |
+| `POST /api/connect`, `POST /api/disconnect` | Its connection. `connect` keeps trying for `wait` seconds when given |
 | `POST /api/idle` | Waits until nothing the master does unasked is due or under way |
+| `POST /api/set_tasks` | Changes what the master does for an outstation unasked |
+| `POST /api/wait_for` | Waits until a value, an event or an indication is as named |
 | `POST /api/profile` | Every point of the profile an outstation is meant to serve |
 | `POST /api/scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3`, `outputs` |
 | `POST /api/read` | Named points, in one request |
@@ -57,8 +59,10 @@ disagree.
 | `POST /api/request` | Any request, by function code |
 | `POST /api/operate` | Outputs commanded, by type and index |
 | `POST /api/write_time`, `POST /api/clear_restart` | The clock, and the restart indication |
+| `POST /api/synchronize_time` | The clock, by the LAN or the non-LAN procedure of IEEE 1815-2012 |
 | `POST /api/freeze` | Counters frozen |
 | `POST /api/restart` | A cold or a warm restart |
+| `POST /api/broadcast` | Any request, sent to a broadcast address |
 | `POST /api/enable_unsolicited`, `POST /api/disable_unsolicited` | Reporting by event class |
 | `POST /api/repeat` | A scan on a schedule, or an end to one |
 | `POST /api/trace` | The frames sent and received |
@@ -104,7 +108,7 @@ names what it refused with.
 |---|---|
 | `complete` | The response arrived, to its final fragment |
 | `timeout` | Nothing more arrived in time. What did arrive is in the result |
-| `sent` | The request takes no response, and was sent |
+| `sent` | The request takes no response, or went to a broadcast address, and was sent |
 | `abandoned` | The request was given up on while it was outstanding: the connection ended, or the scan on a schedule that made it was set again |
 
 ## What the master does by itself
@@ -126,6 +130,20 @@ curl -s http://127.0.0.1:8815/api/add -H 'Content-Type: application/json' \
 | `tasks` | An object of choices by task: `startup`, `clear_restart`, `write_time`, `events_when_indicated` and `integrity_on_overflow`, each true or false, and `enable_unsolicited`, a list of event classes. A task left out stands at its default |
 | `manual` | True to send nothing that was not asked for: no task, and no confirmation. `tasks` and `confirm` given beside it are kept as given |
 | `reconnect` | Seconds between attempts to make a lost connection again. Five when left out, and null for never |
+| `read_retries` | Times a read that times out with nothing received is sent again, under the same sequence number. None when left out. No other request is ever sent again |
+| `tls` | Connect over TLS: an object of `ca`, `certificate`, `key` and `server_name`, files on the machine the service runs on. See [Configuring the master](master-config.md#tls) |
+
+Each exchange says, in `retries`, how many times its request was sent again,
+and in `broadcast`, the broadcast address it went to or null.
+
+`set_tasks` changes the tasks of an outstation already added. What it gives is
+merged with what the outstation has, and a task that was due and is turned off
+is not done:
+
+```bash
+curl -s http://127.0.0.1:8815/api/set_tasks -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab", "tasks": {"events_when_indicated": false}}'
+```
 
 `add` and `connect` answer as soon as the connection is made, and `idle`
 answers once what is done on connecting has been done. An outstation's entry in
@@ -137,7 +155,12 @@ Two of the tasks write to the outstation: `clear_restart` and `write_time`. In
 a service that was not [started to command](#commanding) they are off, and
 asking for either by name is refused as `not_allowed`. Such a service settles
 an outstation and leaves its restart indication and its clock as it found
-them. Started with `--allow-control`, it does both.
+them. Started with `--allow-control`, it does both. `set_tasks` refuses to turn
+either on in the same way.
+
+`connect` with `wait` keeps trying, once a second, for that many seconds when
+the connection cannot be made, and answers with the last connection error when
+the time is up. Without it the first failure is the answer.
 
 ## Commanding
 
@@ -149,12 +172,13 @@ py1815-master serve --allow-control
 ```
 
 Without that, every operation that changes an outstation is refused with
-`not_allowed` and nothing is sent: `operate`, `write_time`, `clear_restart`,
-`freeze`, `restart`, `der.write`, `der.enable`, `der.disable`,
-`der.write_curve`, `der.curve` given a curve to select, and a `request` by any
-function code other than `READ`, `ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED`
-and `DELAY_MEASURE`. The two tasks that write are off as well. `status` says
-which it is, in `allow_control`.
+`not_allowed` and nothing is sent: `operate`, `write_time`,
+`synchronize_time`, `clear_restart`, `freeze`, `restart`, `der.write`,
+`der.enable`, `der.disable`, `der.write_curve`, `der.curve` given a curve to
+select, and a `request` or a `broadcast` by any function code other than
+`READ`, `ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE`. The
+two tasks that write are off as well. `status` says which it is, in
+`allow_control`.
 
 ```bash
 curl -s http://127.0.0.1:8815/api/operate -H 'Content-Type: application/json' \
@@ -190,6 +214,34 @@ control twice.
 A whole number is sent as an integer and anything else as a float, unless
 `variation` says which. An outstation that scales its points takes an integer
 as the transmitted value and a float as the engineering one.
+
+### The clock, by procedure
+
+```bash
+curl -s http://127.0.0.1:8815/api/synchronize_time -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab", "procedure": "non_lan"}'
+```
+
+`procedure` is `lan`, the default, or `non_lan`. The answer has `written`,
+whether the write was sent, which it is only after the first request was
+answered without an error; `accepted`, whether the outstation took it;
+`delay_ms`, the one-way delay `non_lan` measured; `time_ms`, the time
+written; and `exchanges`, the two requests. Neither is ever sent again.
+
+### Broadcast
+
+```bash
+curl -s http://127.0.0.1:8815/api/broadcast -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab", "function": "IMMED_FREEZE_NR", "body": "140006",
+          "address": "shall_confirm"}'
+```
+
+The request goes to `address`: `no_confirm` (0xFFFD), `shall_confirm`
+(0xFFFE) or `optional_confirm` (0xFFFF, the default), which say whether the
+outstation asks for the response that reports the broadcast to be confirmed.
+No outstation answers, so the exchange's `outcome` is `sent`. It travels on
+the outstation's connection, and the outstation reports it with
+`BROADCAST` in its next response.
 
 ## The DER profile
 
@@ -272,6 +324,27 @@ A point of a profile, from `profile`:
 | `enumeration` | Those values, each a `value` and a `name`, or null |
 | `mandatory` | Whether the profile requires every outstation to implement it |
 | `section` | The heading the tables list it under |
+
+## Waiting for something
+
+`wait_for` answers when a condition holds, or at `timeout` seconds, and says
+which in `held`. Nothing is sent to make it hold. It takes exactly one of:
+
+| Condition | Holds once |
+|---|---|
+| `value` | The point `type` and `index` has been reported, with the value named when one is: `equals`, within `tolerance` of it, `at_least` or `at_most` |
+| `event` | An event arrives after the wait began, of the `type` and `index` given when they are |
+| `indication` | The indication `name` is set in the last response, or clear when `set` is false |
+
+```bash
+curl -s http://127.0.0.1:8815/api/wait_for -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab", "timeout": 10,
+          "value": {"type": "ao", "index": 87, "equals": 5000}}'
+```
+
+The answer has `held`, `elapsed_ms`, the last `indications`, the `point` a
+`value` condition names as it stands, and the `events` that satisfied an
+`event` condition.
 
 ## A capture
 
