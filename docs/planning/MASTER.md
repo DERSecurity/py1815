@@ -149,7 +149,8 @@ interface.
 | `master.trace`, `master.capture` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built |
 | `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built |
 | `master.profile` | The DER profile: names, units, functions, curves | Built |
-| `master.cli` | `py1815-master` | Built: `console`, `serve`, `config` and `poll` |
+| `master.bench`, `master.checks`, `master.evaluate` | What a check is, the catalog of them, and the report | Built: the DER profile procedure and the Device Profile comparison |
+| `master.cli` | `py1815-master` | Built: `console`, `serve`, `config`, `poll` and `evaluate` |
 | `master.console` | The web console's files | Built: Overview, Points, Commands, Events, Traffic, DER, Log |
 
 ## The association
@@ -207,7 +208,8 @@ which came out of finishing items 2 to 6: what is tried again, broadcast and
 the time procedures, events left after a poll, and the blocking interface.
 D87 and D88, the capture writer and how a capture reaches a caller, record
 item 7, and D89 how a master runs for days. D90 to D93 record how the DER
-profile is spoken (item 10), and have no M number either.
+profile is spoken (item 10), and D94 what a check is and how `evaluate` runs
+them (item 12). None has an M number.
 
 **M1. The master lives in this package, as `py1815.master`.** A separate
 distribution would need the layers below it published as a stable interface
@@ -631,7 +633,13 @@ done means.
     Evaluate tab, and the saved requests.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
-    and its report says what the in-process procedures say.
+    and its report says what the in-process procedures say. *Built:*
+    `py1815-master evaluate` with a printed and a JSON report, the DER
+    profile procedure as a check for each procedure, and the comparison with a Device Profile
+    document as one more (D94). `tests/test_master_evaluate.py` holds the
+    report over a socket to the in-process run, and has the simulated DER
+    misbehave to see each check fail. *Left:* checks built from the
+    deviations of item 9, which is not built.
 
 ## Sequencing
 

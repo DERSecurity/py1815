@@ -16,7 +16,7 @@ py1815-master console --config master.json
 ```
 
 `py1815-master config` prints every setting with its default filled in, so the
-file shows everything that can be changed. `console`, `serve` and `config` all
+file shows everything that can be changed. `console`, `serve`, `evaluate` and `config` all
 take `--config FILE`.
 
 ## The file
@@ -34,6 +34,12 @@ take `--config FILE`.
   "log_max_mb": 10.0,
   "log_keep": 5,
   "log_level": "info",
+  "evaluate": {
+    "settle": 5.0,
+    "curves": null,
+    "checks": null,
+    "report": null
+  },
   "defaults": {
     "port": 20000,
     "outstation_address": 1024,
@@ -99,6 +105,18 @@ Every setting is optional. A file that only lists outstations is valid.
 The console's token is not in the file, because it is a secret. Give it with
 `--token` or the `PY1815_MASTER_TOKEN` environment variable. The same goes for
 the password of a TLS key: see [`tls`](#tls).
+
+## Evaluation settings
+
+These go in `evaluate`, and are used by `py1815-master evaluate` only. See
+[Evaluating an outstation](master-evaluate.md).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `settle` | `5` | Seconds a check waits for the outstation to reach a state it was commanded to |
+| `curves` | `null` | How many curves the outstation stores. `null` finds out by selecting each in turn |
+| `checks` | `null` | The checks to run, as a list of identifiers or sets. `null` runs all of them |
+| `report` | `null` | Path of a file to write the report to as JSON. `null` writes no file |
 
 ## Outstation settings
 
@@ -193,6 +211,10 @@ own value.
 | `--log-max-mb MB` | `log_max_mb` |
 | `--log-keep FILES` | `log_keep` |
 | `--log-level LEVEL` | `log_level` |
+| `--settle SECONDS` | `evaluate.settle`. `evaluate` only, as are the next three |
+| `--curves N` | `evaluate.curves` |
+| `--check NAME` | Adds to `evaluate.checks`. May be repeated |
+| `--report FILE` | `evaluate.report` |
 | `--outstation NAME=HOST:PORT` | Adds an entry to `outstations`. May be repeated |
 | `--outstation-address N` | `defaults.outstation_address` |
 | `--master-address N` | `defaults.master_address` |

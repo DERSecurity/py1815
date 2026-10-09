@@ -29,8 +29,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from py1815.control import CommandStatus
-from py1815.master.bench import Bench, Check, Failed, NotApplicable, name
 from py1815.decode import PointType
+from py1815.master.bench import Bench, Check, Failed, NotApplicable, name
 from py1815.master.profile import POINT_TYPES, Function, Plan, address
 from py1815.profile import curves, der
 from py1815.profile.model import Kind, Point
@@ -204,7 +204,7 @@ def _toggle(bench: Bench, output: Point, back: Point, what: str) -> Plan[None]:
 
 
 def monitoring(bench: Bench) -> Plan[None]:
-    """Every supported measurement of the system meter is ONLINE and in range."""
+    """Check that every served point of the system meter is ONLINE and in range."""
     supported = bench.supported_in(Kind.AI, METER)
     if not supported:
         raise NotApplicable("the outstation serves no point of the system meter")
@@ -219,7 +219,7 @@ def monitoring(bench: Bench) -> Plan[None]:
 
 
 def alarms(bench: Bench) -> Plan[None]:
-    """Every supported alarm is ONLINE."""
+    """Check that every served alarm is ONLINE, and note the ones that are raised."""
     supported = [bench.map.point(Kind.BI, i) for i in ALARMS if bench.supported(Kind.BI, i)]
     if not supported:
         raise NotApplicable("the outstation serves none of the alarm points")
@@ -233,7 +233,7 @@ def alarms(bench: Bench) -> Plan[None]:
 
 
 def operating_states(bench: Bench) -> Plan[None]:
-    """Every supported operating state is ONLINE, and the states agree with each other."""
+    """Check that every served operating state is ONLINE and that the states agree."""
     supported = bench.supported_in(Kind.BI, STATES)
     if not supported:
         raise NotApplicable("the outstation serves none of the operating state points")
@@ -255,7 +255,7 @@ def operating_states(bench: Bench) -> Plan[None]:
 
 
 def connect_and_disconnect(bench: Bench) -> Plan[None]:
-    """The connect settings read back what was written, and the switch follows its command."""
+    """Check that the connect settings read back and the switch follows its command."""
     switch = bench.map.get(Kind.BO, der.BO_CONNECT)
     closed = None if switch is None else bench.readback(switch)
     if switch is None or closed is None:
@@ -300,10 +300,10 @@ def _service(bench: Bench) -> _Service:
     )
 
 
-def _run_to(bench: Bench, service: _Service, started: bool) -> Plan[None]:
+def _run_to(bench: Bench, points: _Service, started: bool) -> Plan[None]:
     """Start or stop the DER, and see it get there."""
     command, under_way = (
-        (service.start, service.starting) if started else (service.stop, service.stopping)
+        (points.start, points.starting) if started else (points.stop, points.stopping)
     )
     word = "start" if started else "stop"
     status = yield from bench.latch(command, True)
@@ -311,7 +311,7 @@ def _run_to(bench: Bench, service: _Service, started: bool) -> Plan[None]:
     if (yield from bench.state(under_way)):
         bench.note(f"the {word} was seen under way")
     reached, left = (
-        (service.started, service.stopped) if started else (service.stopped, service.started)
+        (points.started, points.stopped) if started else (points.stopped, points.started)
     )
     yield from bench.becomes(reached, True, f"the {word} did not complete")
     bench.require(not (yield from bench.state(left)), f"{name(left)} is still set after the {word}")
@@ -321,18 +321,18 @@ def _run_to(bench: Bench, service: _Service, started: bool) -> Plan[None]:
     )
 
 
-def _restore_run(bench: Bench, service: _Service, started: bool) -> None:
+def _restore_run(bench: Bench, points: _Service, started: bool) -> None:
     """Have the DER started or stopped again when the check ends, as it was found."""
 
     def plan() -> Plan[None]:
-        if (yield from bench.state(service.started)) is not started:
-            yield from _run_to(bench, service, started)
+        if (yield from bench.state(points.started)) is not started:
+            yield from _run_to(bench, points, started)
 
     bench.afterwards("whether the DER is started", plan)
 
 
 def service(bench: Bench) -> Plan[None]:
-    """The service settings read back, and a stop and a start are carried out."""
+    """Check that the service settings read back, then stop and start the DER."""
     points = _service(bench)
     settings = bench.supported_in(Kind.AO, SERVICE_SETTINGS)
     for output in (*settings, points.start, points.stop, points.may_start, points.may_stop):
@@ -369,7 +369,7 @@ def _permission_off(bench: Bench, permission: Point) -> Plan[None]:
 
 
 def start_without_permission(bench: Bench) -> Plan[None]:
-    """A start is refused while permission to start is withdrawn, and the DER stays stopped."""
+    """Check that a start is refused without permission and the DER stays stopped."""
     points = _service(bench)
     started = yield from bench.state(points.started)
     _restore_run(bench, points, started)
@@ -385,7 +385,7 @@ def start_without_permission(bench: Bench) -> Plan[None]:
 
 
 def stop_without_permission(bench: Bench) -> Plan[None]:
-    """A stop is refused while permission to stop is withdrawn, and the DER stays started."""
+    """Check that a stop is refused without permission and the DER stays started."""
     points = _service(bench)
     started = yield from bench.state(points.started)
     _restore_run(bench, points, started)
@@ -531,7 +531,7 @@ def _block(bench: Bench) -> _Block:
 
 
 def curve_reference(bench: Bench) -> Plan[None]:
-    """The referenced indicator is clear for a curve no function names, and set once one does."""
+    """Check that the referenced indicator is set only for a curve a function names."""
     block = _block(bench)
     yield from block.release()
     bench.afterwards("which curves the functions name", block.release)
@@ -580,7 +580,7 @@ def curve_reference(bench: Bench) -> Plan[None]:
 
 
 def curve_that_does_not_exist(bench: Bench) -> Plan[None]:
-    """A curve beyond the last one the outstation stores cannot be selected."""
+    """Check that a curve beyond the last one stored cannot be selected."""
     block = _block(bench)
     total = yield from block.count()
     if total is None:
@@ -617,7 +617,7 @@ def _disable_afterwards(bench: Bench, function: Function) -> None:
 
 
 def curve_locking(bench: Bench) -> Plan[None]:
-    """A curve named by an enabled function cannot be edited, and is left as it was."""
+    """Check that a curve named by an enabled function cannot be edited."""
     block = _block(bench)
     index, sample, _other, function, enabled = _lock_target(bench, block)
     total = yield from block.count()
@@ -681,7 +681,7 @@ def curve_locking(bench: Bench) -> Plan[None]:
 
 
 def curve_moved_under_function(bench: Bench) -> Plan[None]:
-    """An enabled function can be pointed at another curve, which frees the one it left."""
+    """Check that an enabled function can move to another curve, freeing the first."""
     block = _block(bench)
     index, first, second, function, enabled = _lock_target(bench, block)
     total = yield from block.count()
@@ -715,7 +715,7 @@ def curve_moved_under_function(bench: Bench) -> Plan[None]:
 
 
 def curve_type_mismatch(bench: Bench) -> Plan[None]:
-    """A function cannot be pointed at a curve of a type it does not follow."""
+    """Check that a function cannot name a curve of a type it does not follow."""
     block = _block(bench)
     kinds = {index: samples[0] for index, samples in block.settings.items()}
     pairs = [
@@ -756,7 +756,7 @@ def curve_type_mismatch(bench: Bench) -> Plan[None]:
 
 
 def curve_not_defined(bench: Bench) -> Plan[None]:
-    """A function cannot be pointed at a curve that has no type, or that does not exist."""
+    """Check that a function cannot name a curve with no type, or one that does not exist."""
     block = _block(bench)
     index = next(iter(block.settings))
     total = yield from block.count()
@@ -834,7 +834,7 @@ def _mode(bench: Bench, function: Function) -> _Mode:
 
 
 def _unsupported(bench: Bench, mode: _Mode) -> Plan[None]:
-    """A function that is not supported cannot be enabled, and serves none of its points."""
+    """Check that an unsupported function cannot be enabled and serves none of its points."""
     enable = mode.function.enable
     status = yield from bench.latch(enable, True)
     if status is CommandStatus.SUCCESS:
@@ -961,7 +961,7 @@ def mode_check(enable: int) -> Callable[[Bench], Plan[None]]:
 
 
 def device_profile(bench: Bench) -> Plan[None]:
-    """The outstation serves the points its Device Profile declares, and no others."""
+    """Check that the outstation serves the points its Device Profile declares, and no others."""
     if bench.device_profile is None:
         raise NotApplicable("no Device Profile document was given")
     comparison = yield from bench.compare(bench.device_profile)
