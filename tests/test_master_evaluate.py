@@ -294,6 +294,25 @@ class TestEachCheckCanFail:
         assert result.verdict is FAILED
         assert result.detail.startswith("AI540 (Synthetic AI540) is reported with flags 0x")
 
+    def test_meter_point_outside_its_range_fails_monitoring(self):
+        tables = _synthetic()
+        meter = (Kind.AI, 540)
+        limited = dataclasses.replace(tables.points[meter], minimum=0, maximum=10)
+        points = dataclasses.replace(tables, points={**tables.points, meter: limited})
+        # The device does not know the limit, so it reports the value as good.
+        result = _one(_faulty(tables, _stuck(Kind.AI, 540, 11.0)), points, "MON-001")
+        assert result.verdict is FAILED
+        assert result.detail == (
+            "AI540 (Synthetic AI540) reads 11, outside the range the tables give"
+        )
+
+    def test_inputs_reported_online_while_their_function_is_disabled_fail_it(self):
+        points = _synthetic()
+        simulation = der.build(points, disabled_offline=False)
+        result = _one(simulation, points, "APL-001", settle=1.0)
+        assert result.verdict is FAILED
+        assert result.detail.endswith("is reported with flags 0x01, and not as offline")
+
     def test_alarm_that_is_not_online_fails_alarm_reporting(self):
         points = _synthetic()
         result = _one(_faulty(points, _comm_lost(Kind.BI, 3)), points, "ALARM-001")
@@ -553,6 +572,16 @@ class TestTheDeviceProfile:
         result = _one(der.build(points), points, "PROFILE-001", device_profile=document)
         assert result.verdict is FAILED
         assert result.detail == f"declared and not served: AI{SUPPORTS + 12}"
+
+    def test_a_point_in_class_0_that_is_declared_out_of_it_fails(self):
+        tables = _synthetic()
+        meter = (Kind.AI, 540)
+        left_out = dataclasses.replace(tables.points[meter], event_class=None)
+        declared = dataclasses.replace(tables, points={**tables.points, meter: left_out})
+        document = self._document(der.build(declared))
+        result = _one(der.build(tables), tables, "PROFILE-001", device_profile=document)
+        assert result.verdict is FAILED
+        assert result.detail == "class 0 is not as declared: AI540 (in class 0)"
 
 
 # -------------------------------------------------------------------- the run
