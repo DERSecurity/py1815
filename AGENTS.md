@@ -17,6 +17,99 @@ how a release is cut, and is not repeated here.
 3. The plan for the area in [docs/planning/](docs/planning/), if there is one.
 4. [docs/testing.md](docs/testing.md), for how each kind of behavior is tested.
 
+## Quick reference
+
+### The stack
+
+- Python 3.11, 3.12 and 3.13. The standard library only at run time.
+- Build: `hatchling`. Tests: `pytest` with `pytest-asyncio` in strict mode and
+  `pytest-timeout`. Lint and format: `ruff`, line length 100. Types: `mypy` in strict mode.
+  Documentation: MkDocs 1.x with Material and mkdocstrings.
+- Two commands are installed: `py1815-der` (the DER outstation) and `py1815-master` (the
+  master, its service and its console).
+
+### Commands
+
+```bash
+pip install -e ".[dev]"                      # once; everything below needs it
+
+pytest -q                                    # the whole unit suite
+pytest tests/test_link.py -q                 # one file
+pytest tests/test_link.py -q -k "checksum"   # the tests whose names match
+
+ruff check src tests interop scripts         # lint
+ruff format src tests interop scripts        # format; add --check to only verify
+mypy src                                     # types
+
+python scripts/build_changelog.py --check    # the changelog fragments; --preview renders them
+python -m py1815.master.openapi --write      # regenerate the API document; CI runs --check
+mkdocs build --strict                        # the documentation; `mkdocs serve` to read it
+
+py1815-master console --demo                 # a simulated DER, the master and the console
+```
+
+Tests that need the IEEE 1815.2 point tables run when
+`conformance/ieee-1815-2-2025.json` is in the checkout, and skip when it is not. Git
+ignores that file. The interoperability jobs run in CI, not locally.
+
+### Boundaries
+
+**Always:**
+
+- Tie protocol behavior to a clause, a bulletin or a numbered decision.
+- Add a test that fails without the change, and pin wire behavior to literal octets.
+- Update the guides, the reference pages and the configuration pages in the same change.
+- Regenerate `openapi.json` when the API changes.
+- Add a changelog fragment for anything a user can observe.
+- Run the commands above before pushing.
+
+**Ask first:**
+
+- Adding a runtime dependency, or raising the minimum Python version.
+- Changing what the outstation or the master puts on the wire, or departing from the
+  standard.
+- Replacing a numbered decision, or renaming or removing public API.
+- Weakening, skipping or deleting a test.
+- Changing a CI workflow, the Dockerfile's published targets or the release process.
+- Anything that would connect to a real device.
+- A protocol fact you cannot find in the source documents.
+
+**Never:**
+
+- Commit standards text, the IEEE 1815.2 point tables, DNP Users Group documents, private
+  names, local paths or secrets.
+- Invent a clause number, a code, an enumeration value or a point index.
+- Send a control more than once, or write to an outstation without `--allow-control`.
+- Edit `openapi.json` or `CHANGELOG.md` by hand.
+- Push to `main`, force-push a shared branch, go around a check, or tag a release.
+- Add tool or AI attribution to a commit, a pull request or a comment.
+
+### What good looks like
+
+A protocol test states the octets it expects, with a comment that reads them:
+
+```python
+def test_consecutive_indices_are_one_8_bit_range(self):
+    # Group 30, variation 0, qualifier 0x00, start 2, stop 4.
+    assert requests.read_points({AI: [2, 3, 4]}) == bytes.fromhex("1E 00 00 02 04")
+```
+
+A comment says why and names its source:
+
+```python
+# Only a read is sent again after a timeout: asking twice changes nothing at the
+# outstation (IEEE 1815-2012 4.3 rule 16). A control sent twice may be carried out twice.
+```
+
+A docstring starts with what the function does:
+
+```python
+def mirror(self, point: Point) -> Point | None:
+    """Return the input that reads an output back, or None when the tables pair none."""
+```
+
+The rest of this page gives the rules in full.
+
 ## 1. Correctness comes first
 
 Correctness outranks features, speed, convenience and a tidy API. A change that is not
@@ -366,15 +459,8 @@ are still clear.
 
 ## 8. Before opening a pull request
 
-```bash
-ruff check src tests interop scripts
-ruff format --check src tests interop scripts
-mypy src
-python scripts/build_changelog.py --check
-python -m py1815.master.openapi --check
-pytest -q
-mkdocs build --strict
-```
+Run the commands in [Quick reference](#commands), with `--check` on the formatter and
+the API document.
 
 CI runs these on every pull request, on three versions of Python. It also runs the unit
 suite on 32-bit ARM, builds the Docker images and checks that they carry no point tables,
