@@ -30,6 +30,7 @@ from py1815.master import Outstation, cli
 from py1815.master import bench as benches
 from py1815.master.association import Exchange, Outcome
 from py1815.master.bench import Bench, Check, Failed, NoAnswer, NotApplicable, Result, Verdict
+from py1815.master.capture import CaptureFile
 from py1815.master.checks import CATALOG, MODES, SAMPLE_CURVES, select, valid_values
 from py1815.master.evaluate import Report, catalog_lines, evaluate, evaluate_loopback
 from py1815.master.loopback import Loopback
@@ -926,6 +927,50 @@ class TestSelecting:
     def test_identifiers_are_not_repeated(self):
         identifiers = [check.id for check in CATALOG]
         assert len(identifiers) == len(set(identifiers))
+
+
+class TestPacketNumbers:
+    def test_a_check_in_an_unrotated_capture_names_its_packets(self):
+        before, after = (0, 10), (0, 18)
+        assert benches._packet_span(before, after) == (11, 18)
+
+    def test_no_capture_is_no_packet_numbers(self):
+        assert benches._packet_span(None, None) is None
+
+    def test_a_capture_that_rotated_during_the_check_names_no_packets(self):
+        # The count is cumulative across files; Wireshark numbers restart per
+        # file, so a span over a rotation points at the wrong packets.
+        assert benches._packet_span((0, 10), (1, 4)) is None
+        assert benches._packet_span((0, 10), (2, 18)) is None
+
+    def test_a_capture_already_rotated_before_the_check_names_no_packets(self):
+        assert benches._packet_span((1, 10), (1, 18)) is None
+
+    def test_the_evaluation_capture_does_not_rotate(self, tmp_path, monkeypatch):
+        # The run builds a CaptureFile with no max_bytes, so a long evaluation
+        # stays one file and the packet numbers keep identifying packets in it.
+        built = {}
+        real = CaptureFile
+
+        def record(path, **kwargs):
+            built["kwargs"] = kwargs
+            return real(path, **kwargs)
+
+        monkeypatch.setattr("py1815.master.evaluate.CaptureFile", record)
+        with _Served() as port:
+            status = cli.main(
+                [
+                    "evaluate",
+                    "--outstation",
+                    f"lab=127.0.0.1:{port}",
+                    "--check",
+                    "MON-001",
+                    "--capture",
+                    str(tmp_path / "run.pcap"),
+                ]
+            )
+        assert status == 0
+        assert built["kwargs"] == {}, "no max_bytes and no keep: the capture does not rotate"
 
 
 # ----------------------------------------------------------------- the report

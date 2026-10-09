@@ -40,7 +40,7 @@ from py1815.master.api import Outstation
 from py1815.master.bench import DEFAULT_SETTLE, Bench, Check, NoAnswer, Result, Verdict
 from py1815.master.capture import CaptureFile
 from py1815.master.checks import CATALOG, select
-from py1815.master.config import MEGABYTE, MasterConfig, OutstationConfig
+from py1815.master.config import MasterConfig, OutstationConfig
 from py1815.master.profile import DerProfile
 from py1815.master.trace import Entry, Recorder
 from py1815.profile import load
@@ -267,11 +267,11 @@ async def _run(
     capture: CaptureFile | None = None
     recorder: Recorder | None = None
     if config.capture is not None:
-        capture = CaptureFile(
-            config.capture,
-            max_bytes=round(config.capture_max_mb * MEGABYTE),
-            keep=config.capture_keep,
-        )
+        # An evaluation is one bounded run, not a service that lasts for days,
+        # so its capture is one file that does not rotate. A packet's number
+        # is then its position in that file, which is what each result reports
+        # and what Wireshark shows. The log's rotation settings do not apply.
+        capture = CaptureFile(config.capture)
         recorder = Recorder(capture, outstation.trace, port=chosen.port)
         failed = False
 

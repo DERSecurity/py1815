@@ -67,7 +67,7 @@ note that IEEE 1815.2 replaced; where the two differ, the checks follow the stan
 |---|---|---|
 | `MON-001` | no | Every served point of the system meter is ONLINE and inside the range the tables give |
 | `ALARM-001` | no | Every served alarm is ONLINE |
-| `OP-001` | no | Every served operating state is ONLINE, started and stopped are not both set, and exactly one of BI18 to BI22 is |
+| `OP-001` | no | Every served operating state is ONLINE; started and stopped are not both set; and no more than one of BI18 to BI22 is set, with exactly one required when the outstation serves all five |
 | `CONN-001` | yes | The connect settings read back what was written, and the switch status follows a command to open and to close |
 | `SERV-001` | yes | The service settings read back, each permission follows its command, and a stop and a start are carried out and reported |
 | `SERV-001.2`, `SERV-001.3` | yes | A start, or a stop, is refused while its permission is withdrawn, and the DER stays as it was |

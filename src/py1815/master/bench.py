@@ -454,8 +454,11 @@ def _last_frame(target: Any) -> int | None:
     return None if trace is None else int(trace.last_id)
 
 
-def _last_packet(bench: Bench) -> int | None:
-    return None if bench.capture is None else int(bench.capture.packets)
+def _last_packet(bench: Bench) -> tuple[int, int] | None:
+    """Return the capture's generation and packet count, or None when there is no capture."""
+    if bench.capture is None:
+        return None
+    return int(bench.capture.generation), int(bench.capture.packets)
 
 
 def _span(first: int | None, last: int | None) -> tuple[int, int] | None:
@@ -463,6 +466,27 @@ def _span(first: int | None, last: int | None) -> tuple[int, int] | None:
     if first is None or last is None or last <= first:
         return None
     return first + 1, last
+
+
+def _packet_span(
+    first: tuple[int, int] | None, last: tuple[int, int] | None
+) -> tuple[int, int] | None:
+    """Return the packet numbers of a check, or None when they would not be reliable.
+
+    A packet number is the position of a packet in the capture file, which is
+    what Wireshark shows. A rotation restarts that numbering in a new file, so
+    a count that is cumulative across files no longer names a packet in any one
+    of them. The numbers are reported only when no rotation happened before or
+    during the check, which is always so for the evaluation's own capture; an
+    embedder who passed a capture that rotates gets None rather than a number
+    that points at the wrong packet.
+    """
+    if first is None or last is None:
+        return None
+    (first_gen, first_count), (last_gen, last_count) = first, last
+    if first_gen != 0 or last_gen != 0:
+        return None
+    return _span(first_count, last_count)
 
 
 @dataclass
@@ -522,7 +546,7 @@ def run_plan(
 def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
     bench.begin()
     first: int | None = yield _last_frame
-    first_packet = _last_packet(bench)
+    first_packet: tuple[int, int] | None = _last_packet(bench)
     started = time.monotonic()
     verdict, detail = Verdict.PASSED, ""
     try:
@@ -555,7 +579,7 @@ def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
         requests=bench.requests,
         seconds=time.monotonic() - started,
         frames=_span(first, last),
-        packets=_span(first_packet, _last_packet(bench)),
+        packets=_packet_span(first_packet, _last_packet(bench)),
     )
 
 
