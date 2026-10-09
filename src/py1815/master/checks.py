@@ -245,13 +245,14 @@ def operating_states(bench: Bench) -> Plan[None]:
             not (states[BI_STARTED] and states[BI_STOPPED]),
             f"BI{BI_STARTED} and BI{BI_STOPPED} report started and stopped at once",
         )
+    held = [f"BI{index}" for index in EXCLUSIVE_STATES if states.get(index)]
+    block = f"BI{EXCLUSIVE_STATES[0]} to BI{EXCLUSIVE_STATES[-1]}"
+    bench.require(
+        len(held) <= 1, f"no more than one of {block} may be set, and {', '.join(held)} are"
+    )
     if all(index in states for index in EXCLUSIVE_STATES):
-        held = [f"BI{index}" for index in EXCLUSIVE_STATES if states[index]]
-        bench.require(
-            len(held) == 1,
-            f"one of BI{EXCLUSIVE_STATES[0]} to BI{EXCLUSIVE_STATES[-1]} is to be set, "
-            f"and {', '.join(held) or 'none'} is",
-        )
+        # With the whole block served, the DER is in one of the states.
+        bench.require(held, f"one of {block} is to be set, and none is")
 
 
 def connect_and_disconnect(bench: Bench) -> Plan[None]:
@@ -361,9 +362,25 @@ def service(bench: Bench) -> Plan[None]:
                 yield from bench.becomes(back, True, "the stop is not read back")
 
 
-def _permission_off(bench: Bench, permission: Point) -> Plan[None]:
-    """Withdraw a permission until the check ends."""
-    bench.afterwards(name(permission), lambda: bench.latch(permission, True))
+def _withdraw(bench: Bench, points: _Service, permission: Point, started: bool) -> Plan[None]:
+    """Withdraw a permission until the check ends.
+
+    When the check ends the permission is given, the DER is started or
+    stopped again as ``started`` says, and only then is the permission
+    withdrawn again if that is how it was found. The DER cannot be put back
+    while the permission is withdrawn.
+    """
+    back = bench.readback(permission)
+    given = True if back is None else (yield from bench.state(back))
+
+    def restore() -> Plan[None]:
+        yield from bench.latch(permission, True)
+        if (yield from bench.state(points.started)) is not started:
+            yield from _run_to(bench, points, started)
+        if not given:
+            yield from bench.latch(permission, False)
+
+    bench.afterwards(f"{name(permission)} and whether the DER is started", restore)
     status = yield from bench.latch(permission, False)
     bench.accepted(status, f"a latch off of {name(permission)}")
 
@@ -375,7 +392,7 @@ def start_without_permission(bench: Bench) -> Plan[None]:
     _restore_run(bench, points, started)
     if started:
         yield from _run_to(bench, points, False)
-    yield from _permission_off(bench, points.may_start)
+    yield from _withdraw(bench, points, points.may_start, started)
     status = yield from bench.latch(points.start, True)
     bench.refused(status, "a start without permission", CommandStatus.BLOCKED)
     yield from bench.pause(min(bench.settle, 3.0))
@@ -391,7 +408,7 @@ def stop_without_permission(bench: Bench) -> Plan[None]:
     _restore_run(bench, points, started)
     if not started:
         yield from _run_to(bench, points, True)
-    yield from _permission_off(bench, points.may_stop)
+    yield from _withdraw(bench, points, points.may_stop, started)
     status = yield from bench.latch(points.stop, True)
     bench.refused(status, "a stop without permission", CommandStatus.BLOCKED)
     bench.require(
@@ -461,6 +478,23 @@ class _Block:
             reading = yield from self.bench.online(reading_of)
             values.append(float(reading.raw or 0))
         return values
+
+    def fields(self) -> Plan[list[float]]:
+        """Return the selected curve's type, point count and units, as transmitted."""
+        values = []
+        for reading_of in self.inputs[: curves.FIELDS]:
+            reading = yield from self.bench.online(reading_of)
+            values.append(float(reading.raw or 0))
+        return values
+
+    def unchanged(self, fields: list[float], points: list[float], after: str) -> Plan[None]:
+        """Require the selected curve's fields and first points to be what they were."""
+        now_fields = yield from self.fields()
+        now_points = yield from self.points(len(points) // 2)
+        number = int((yield from self.bench.value(self.selected)))
+        self.bench.require(
+            (now_fields, now_points) == (fields, points), f"curve {number} changed {after}"
+        )
 
     def point_to(self, setting: int, number: int) -> Plan[CommandStatus]:
         """Have a function name a curve, or none with zero. Return the status."""
@@ -641,6 +675,7 @@ def curve_locking(bench: Bench) -> Plan[None]:
         f"curve {locked} is not reported as referenced while {function.name} names it",
     )
     watched = min(_WATCHED_POINTS, len(sample.points))
+    fields = yield from block.fields()
     before = yield from block.points(watched)
 
     first_x = block.outputs[curves.FIELDS]
@@ -659,8 +694,7 @@ def curve_locking(bench: Bench) -> Plan[None]:
             f"a write to a field of the locked curve {locked}",
             CommandStatus.AUTOMATION_INHIBIT,
         )
-    after = yield from block.points(watched)
-    bench.require(after == before, f"curve {locked} changed while it was locked")
+    yield from block.unchanged(fields, before, "while it was locked")
 
     # Another curve is not locked by this one being in use.
     yield from block.show(free)
@@ -706,12 +740,15 @@ def curve_moved_under_function(bench: Bench) -> Plan[None]:
     status = yield from bench.set(first_x, 111)
     bench.accepted(status, "a write to a point of curve 1, which the function left")
     yield from block.show(2)
+    fields = yield from block.fields()
+    before = yield from block.points(min(_WATCHED_POINTS, len(second.points)))
     status = yield from bench.set(first_x, 111)
     bench.refused(
         status,
         "a write to a point of curve 2, which the function now names",
         CommandStatus.AUTOMATION_INHIBIT,
     )
+    yield from block.unchanged(fields, before, "after a refused write")
 
 
 def curve_type_mismatch(bench: Bench) -> Plan[None]:
@@ -745,10 +782,12 @@ def curve_type_mismatch(bench: Bench) -> Plan[None]:
     # Nor can a curve be turned into another type under a function that names it.
     yield from block.show(1)
     type_field = block.outputs[curves.TYPE]
+    fields = yield from block.fields()
     status = yield from bench.set(type_field, kinds[second].type)
     bench.refused(
         status, "changing the type of a curve a function names", CommandStatus.NOT_SUPPORTED
     )
+    yield from block.unchanged(fields, [], "after a refused change of its type")
     status = yield from block.point_to(first, 0)
     bench.accepted(status, f"a write of 0 to AO{first}")
     status = yield from bench.set(type_field, kinds[second].type)

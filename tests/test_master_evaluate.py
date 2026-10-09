@@ -24,9 +24,11 @@ from test_epri_coverage import ALL, NOT_APPLICABLE
 from test_epri_der_procedures import IMPLEMENTED
 from test_epri_der_procedures import MODES as EPRI_MODES
 
+from py1815.application import FunctionCode
 from py1815.control import CommandStatus
 from py1815.master import Outstation, cli
 from py1815.master import bench as benches
+from py1815.master.association import Exchange, Outcome
 from py1815.master.bench import Bench, Check, Failed, NoAnswer, NotApplicable, Result, Verdict
 from py1815.master.checks import CATALOG, MODES, SAMPLE_CURVES, select, valid_values
 from py1815.master.evaluate import Report, catalog_lines, evaluate, evaluate_loopback
@@ -334,7 +336,34 @@ class TestEachCheckCanFail:
         points = _synthetic()
         result = _one(_faulty(points, _stuck(Kind.BI, 22, True)), points, "OP-001")
         assert result.verdict is FAILED
-        assert result.detail.startswith("one of BI18 to BI22 is to be set, and BI")
+        assert result.detail.startswith("no more than one of BI18 to BI22 may be set, and BI")
+
+    def test_two_exclusive_states_at_once_fail_when_only_part_of_the_block_is_served(self):
+        tables = _synthetic()
+        device = dataclasses.replace(
+            tables,
+            points={a: p for a, p in tables.points.items() if a != (Kind.BI, 22)},
+        )
+
+        def change(binding: Binding, _reference: der.ReferenceDer) -> None:
+            del binding.readers[(Kind.BI, 22)]
+            binding.readers[(Kind.BI, 21)] = lambda: True
+
+        result = _one(_faulty(device, change), tables, "OP-001")
+        assert result.verdict is FAILED
+        assert result.detail.startswith("no more than one of BI18 to BI22 may be set, and BI")
+        assert result.detail.endswith("BI21 are")
+
+    def test_no_exclusive_state_set_fails_when_the_whole_block_is_served(self):
+        points = _synthetic()
+
+        def none_set(binding: Binding, _reference: der.ReferenceDer) -> None:
+            for index in range(18, 23):
+                binding.readers[(Kind.BI, index)] = lambda: False
+
+        result = _one(_faulty(points, none_set), points, "OP-001")
+        assert result.verdict is FAILED
+        assert result.detail == "one of BI18 to BI22 is to be set, and none is"
 
     def test_switch_status_that_does_not_follow_fails_connect(self):
         points = _synthetic()
@@ -396,6 +425,29 @@ class TestEachCheckCanFail:
         assert simulation.der.started, "the DER is started again when the check ends"
         assert simulation.der.settings[(Kind.BO, der.BO_PERMIT_STOP)]
 
+    @pytest.mark.parametrize(
+        "check, permission",
+        [("SERV-001.2", der.BO_PERMIT_START), ("SERV-001.3", der.BO_PERMIT_STOP)],
+    )
+    def test_permission_found_withdrawn_is_left_withdrawn_and_the_der_started(
+        self, check, permission
+    ):
+        points = _synthetic()
+        simulation = der.build(points)
+
+        def withdraw(bench: Bench) -> Plan[None]:
+            yield from bench.latch(permission, False)
+
+        report = _in_process(
+            simulation,
+            points,
+            checks=[Check("SETUP", "withdraw the permission", True, withdraw), *select([check])],
+        )
+        result = report.results[1]
+        assert result.verdict is PASSED, result.detail
+        assert not simulation.der.settings[(Kind.BO, permission)]
+        assert simulation.der.started
+
     def test_refusal_with_another_status_is_noted_and_does_not_fail(self, monkeypatch):
         def start(self: der.ReferenceDer, value: float) -> CommandStatus | None:
             return CommandStatus.LOCAL if value else None
@@ -451,6 +503,38 @@ class TestEachCheckCanFail:
         result = _one(simulation, points, check)
         assert result.verdict is FAILED and result.detail == says
         assert not simulation.der.settings[(Kind.BO, der.BO_ENABLE_VOLT_WATT)]
+
+    @pytest.mark.parametrize(
+        "check, position, says",
+        [
+            ("CURVE-002", curves.X_UNITS, "curve 1 changed while it was locked"),
+            ("CURVE-002", curves.FIELDS + 1, "curve 1 changed while it was locked"),
+            ("CURVE-002.2", curves.FIELDS, "curve 2 changed after a refused write"),
+            ("CURVE-003", curves.TYPE, "curve 1 changed after a refused change of its type"),
+        ],
+    )
+    def test_refused_write_that_changes_the_curve_anyway_fails(self, check, position, says):
+        points = _synthetic()
+        address = (Kind.AO, der.AO_CURVE_SELECTOR + 1 + position)
+
+        def change(binding: Binding, reference: der.ReferenceDer) -> None:
+            output = binding.outputs[address]
+
+            def check_and_write(value: float) -> CommandStatus | None:
+                answer = output.check(value)
+                if answer is not None:
+                    # Refuse the write, and carry it out all the same.
+                    current = reference.curves.current
+                    if position < curves.FIELDS:
+                        current.fields[position] = float(value)
+                    else:
+                        current.values[position - curves.FIELDS] = float(value)
+                return answer
+
+            binding.outputs[address] = dataclasses.replace(output, check=check_and_write)
+
+        result = _one(_faulty(points, change), points, check)
+        assert result.verdict is FAILED and result.detail == says
 
     def _following_any(self, monkeypatch, *types: int) -> PointMap:
         """Have every curve function follow the given curve types as well as its own."""
@@ -682,6 +766,60 @@ class TestTheRun:
         assert result.verdict is PASSED
         assert result.notes == ("the switch could not be put back: the outstation refused",)
 
+    def test_survey_read_that_is_not_answered_is_an_error_and_not_a_report(self):
+        points = _synthetic()
+        simulation = der.build(points)
+
+        class Deaf(Loopback):
+            """A master whose read of output status is never answered."""
+
+            def scan(self, kind: str) -> Exchange:
+                if kind == "outputs":
+                    return Exchange(FunctionCode.READ, 0, b"", Outcome.TIMEOUT)
+                return super().scan(kind)
+
+        loopback = Deaf(simulation.outstation.session(need_time=False))
+        with pytest.raises(NoAnswer, match="did not answer every read of the points it serves"):
+            evaluate_loopback(loopback, points, checks=select(["MON-001"]))
+
+    def _dropping(self) -> Callable[[], Plan[None]]:
+        def plan() -> Plan[None]:
+            def gone(_target: Any) -> None:
+                raise ConnectionError("reset by peer")
+
+            yield gone
+
+        return plan
+
+    def test_connection_lost_while_putting_back_fails_the_check_and_stops_the_run(self):
+        def changes(bench: Bench) -> Plan[None]:
+            bench.afterwards("the switch", self._dropping())
+            yield from ()
+
+        def reads(bench: Bench) -> Plan[None]:
+            yield from bench.obtain(bench.map.point(Kind.BI, 14))
+
+        report, _ = _bench_run(
+            [Check("A", "changes", False, changes), Check("B", "reads", False, reads)]
+        )
+        a, b = report.results
+        assert a.verdict is FAILED
+        assert a.detail == ("the connection was lost before everything was put back: reset by peer")
+        assert b.verdict is NOT_RUN
+
+    def test_connection_lost_while_putting_back_keeps_why_the_check_failed(self):
+        def fails(bench: Bench) -> Plan[None]:
+            bench.afterwards("the switch", self._dropping())
+            raise Failed("the switch did not move")
+            yield  # pragma: no cover
+
+        report, _ = _bench_run([Check("A", "fails", False, fails)])
+        (result,) = report.results
+        assert result.verdict is FAILED and result.detail == "the switch did not move"
+        assert result.notes == (
+            "the connection was lost before everything was put back: reset by peer",
+        )
+
     def test_what_one_check_notes_and_counts_is_not_carried_to_the_next(self):
         def first(bench: Bench) -> Plan[None]:
             bench.note("seen")
@@ -804,6 +942,7 @@ class TestTheReport:
                 "MON-001", "Monitoring", PASSED, notes=("24 points",), requests=24, frames=(1, 39)
             ),
             Result("SERV-001", "Service", FAILED, "BI15 did not stop", requests=9, frames=(40, 57)),
+            Result("CONN-001", "Connect", FAILED, "it stuck", frames=(58, 60), packets=(61, 63)),
             Result("VV-001", "Volt-var", NOT_RUN, "it writes"),
         ),
     )
@@ -818,17 +957,20 @@ class TestTheReport:
             "SERV-001  FAILED          Service",
             "          BI15 did not stop",
             "          frames 40 to 57",
+            "CONN-001  FAILED          Connect",
+            "          it stuck",
+            "          packets 61 to 63 of the capture",
             "VV-001    not run         Volt-var",
             "          it writes",
             "",
-            "3 checks: 1 passed, 1 failed, 1 not run",
+            "4 checks: 1 passed, 2 failed, 1 not run",
         ]
 
     def test_json_carries_the_same_results(self):
         described = json.loads(self.REPORT.render())
         assert described["summary"] == {
             "passed": 1,
-            "failed": 1,
+            "failed": 2,
             "not_applicable": 0,
             "not_run": 1,
         }
@@ -843,7 +985,9 @@ class TestTheReport:
             "requests": 9,
             "seconds": 0.0,
             "frames": [40, 57],
+            "packets": None,
         }
+        assert described["results"][2]["packets"] == [61, 63]
 
     def test_a_report_has_failed_when_one_check_has(self):
         assert self.REPORT.failed
@@ -959,10 +1103,22 @@ class TestTheCommand:
         assert described["outstation"] == f"lab at 127.0.0.1:{port}, outstation 1024"
         (result,) = described["results"]
         assert result["id"] == "MON-001" and result["verdict"] == "passed"
-        packets = capture.read_bytes()
-        assert packets[:4] == bytes.fromhex("d4c3b2a1"), "a pcap file"
-        # The handshake, then a packet for each frame up to the check's last.
-        assert len(packets) > 24 + 16 * result["frames"][1]
+        content = capture.read_bytes()
+        assert content[:4] == bytes.fromhex("d4c3b2a1"), "a pcap file"
+        payloads, at = [], 24
+        while at < len(content):
+            length = int.from_bytes(content[at + 8 : at + 12], "little")
+            # Ethernet, IPv4 and TCP headers are 54 octets; the rest is DNP3.
+            payloads.append(content[at + 16 + 54 : at + 16 + length])
+            at += 16 + length
+        first, last = result["packets"]
+        assert last - first == result["frames"][1] - result["frames"][0]
+        # The numbers are Wireshark's: counted from 1, with the handshake counted.
+        assert first == result["frames"][0] + 3
+        assert all(payload[:2] == b"\x05\x64" for payload in payloads[first - 1 : last])
+        assert payloads[first - 2][:2] == b"\x05\x64", "the survey's last frame comes before"
+        assert payloads[:3] == [b"", b"", b""], "the handshake carries no DNP3"
+        assert len(payloads) >= last
 
     def test_the_device_profile_given_is_compared(self, tmp_path, capsys):
         with _Served() as port:

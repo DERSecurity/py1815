@@ -213,7 +213,7 @@ own value.
 | `--log-level LEVEL` | `log_level` |
 | `--settle SECONDS` | `evaluate.settle`. `evaluate` only, as are the next three |
 | `--curves N` | `evaluate.curves` |
-| `--check NAME` | Adds to `evaluate.checks`. May be repeated |
+| `--check NAME` | Replaces `evaluate.checks` with the checks named. May be repeated |
 | `--report FILE` | `evaluate.report` |
 | `--outstation NAME=HOST:PORT` | Adds an entry to `outstations`. May be repeated |
 | `--outstation-address N` | `defaults.outstation_address` |

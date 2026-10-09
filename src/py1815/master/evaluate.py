@@ -116,7 +116,10 @@ class Report:
             if result.detail:
                 lines.append(f"{indent}{result.detail}")
             lines.extend(f"{indent}note: {note}" for note in result.notes)
-            if result.verdict is Verdict.FAILED and result.frames is not None:
+            if result.verdict is Verdict.FAILED and result.packets is not None:
+                first, last = result.packets
+                lines.append(f"{indent}packets {first} to {last} of the capture")
+            elif result.verdict is Verdict.FAILED and result.frames is not None:
                 lines.append(f"{indent}frames {result.frames[0]} to {result.frames[1]}")
         totals = ", ".join(
             f"{self.count(verdict)} {_WORDS[verdict].lower()}"
@@ -132,9 +135,12 @@ def _bench(
     settle: float,
     curves: int | None,
     device_profile: str | None,
+    capture: Any = None,
 ) -> Bench:
     profile = point_map if isinstance(point_map, DerProfile) else DerProfile(point_map)
-    return Bench(profile, settle=settle, curves=curves, device_profile=device_profile)
+    return Bench(
+        profile, settle=settle, curves=curves, device_profile=device_profile, capture=capture
+    )
 
 
 async def evaluate(
@@ -146,6 +152,7 @@ async def evaluate(
     settle: float = DEFAULT_SETTLE,
     curves: int | None = None,
     device_profile: str | None = None,
+    capture: Any = None,
     pause: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> Report:
     """Run checks against a connected outstation, and return the report.
@@ -162,12 +169,15 @@ async def evaluate(
         curves: How many curves the outstation stores. Found by selecting
             each in turn when not given.
         device_profile: The text of the outstation's Device Profile document.
+        capture: The :class:`~py1815.master.capture.Capture` the outstation's
+            frames are being written to. Each result then gives the numbers of
+            its packets in it.
         pause: Awaited with the seconds of each wait.
 
     Raises :class:`~py1815.master.bench.NoAnswer` when the outstation does
     not answer the first read.
     """
-    bench = _bench(point_map, settle, curves, device_profile)
+    bench = _bench(point_map, settle, curves, device_profile, capture)
     started = time.time()
     plan = benches.run_plan(bench, CATALOG if checks is None else checks, commanding=commanding)
     results = await benches.drive_async(outstation, plan, pause)
@@ -288,6 +298,7 @@ async def _run(
             settle=config.evaluate.settle,
             curves=config.evaluate.curves,
             device_profile=device_profile,
+            capture=capture,
         )
     finally:
         await outstation.close()

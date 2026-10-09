@@ -126,9 +126,14 @@ class Result:
     requests: int = 0
     seconds: float = 0.0
     #: The ids of the first and last frame of the check in the master's
-    #: trace, which are their positions in a capture of the run. None when
-    #: the check sent nothing or the master keeps no trace.
+    #: trace, which counts DNP3 frames from 1. None when the check sent
+    #: nothing or the master keeps no trace.
     frames: tuple[int, int] | None = None
+    #: The numbers of the first and last packet of the check in the capture
+    #: file, counted from 1 as Wireshark counts them. A capture also holds
+    #: each connection's handshake, so these are not the frame ids. None when
+    #: no capture is written or the check sent nothing.
+    packets: tuple[int, int] | None = None
 
     def describe(self) -> dict[str, Any]:
         """Return the result as a JSON-compatible dict."""
@@ -141,6 +146,7 @@ class Result:
             "requests": self.requests,
             "seconds": round(self.seconds, 3),
             "frames": None if self.frames is None else list(self.frames),
+            "packets": None if self.packets is None else list(self.packets),
         }
 
 
@@ -172,6 +178,7 @@ class Bench:
         settle: float = DEFAULT_SETTLE,
         curves: int | None = None,
         device_profile: str | None = None,
+        capture: Any = None,
     ) -> None:
         """
         Args:
@@ -182,7 +189,11 @@ class Bench:
                 by selecting each in turn.
             device_profile: The text of the outstation's Device Profile
                 document, or None when there is none.
+            capture: The :class:`~py1815.master.capture.Capture` the run's
+                frames are written to, or None. Each result then gives the
+                numbers of its packets in it.
         """
+        self.capture = capture
         self.profile = profile
         self.map = profile.map
         self.settle = settle
@@ -443,7 +454,12 @@ def _last_frame(target: Any) -> int | None:
     return None if trace is None else int(trace.last_id)
 
 
-def _frames(first: int | None, last: int | None) -> tuple[int, int] | None:
+def _last_packet(bench: Bench) -> int | None:
+    return None if bench.capture is None else int(bench.capture.packets)
+
+
+def _span(first: int | None, last: int | None) -> tuple[int, int] | None:
+    """Return the numbers after ``first`` up to ``last``, or None when there are none."""
     if first is None or last is None or last <= first:
         return None
     return first + 1, last
@@ -476,6 +492,10 @@ def run_plan(
         raise NoAnswer(f"the connection was lost: {error}") from error
     if not survey.exchanges[0].fragments:
         raise NoAnswer("the outstation did not answer a class 0 read")
+    if any(not exchange.fragments for exchange in survey.exchanges):
+        # A point missing because a read went unanswered would be taken as
+        # a point the outstation does not serve.
+        raise NoAnswer("the outstation did not answer every read of the points it serves")
     kinds = {point_type: kind for kind, point_type in POINT_TYPES.items()}
     bench.served = frozenset(
         (kinds[point_type], index) for point_type, index in survey.served if point_type in kinds
@@ -502,6 +522,7 @@ def run_plan(
 def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
     bench.begin()
     first: int | None = yield _last_frame
+    first_packet = _last_packet(bench)
     started = time.monotonic()
     verdict, detail = Verdict.PASSED, ""
     try:
@@ -517,7 +538,12 @@ def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
         try:
             yield from bench.put_back()
         except _LOST as error:
-            bench.note(f"the connection was lost before everything was put back: {error}")
+            said = f"the connection was lost before everything was put back: {error}"
+            if verdict is Verdict.FAILED:
+                # Keep why the check failed, and say this as well.
+                bench.note(said)
+            else:
+                verdict, detail = Verdict.FAILED, said
             run.lost = "the connection was lost during an earlier check"
     last: int | None = yield _last_frame
     return Result(
@@ -528,7 +554,8 @@ def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
         notes=bench.notes,
         requests=bench.requests,
         seconds=time.monotonic() - started,
-        frames=_frames(first, last),
+        frames=_span(first, last),
+        packets=_span(first_packet, _last_packet(bench)),
     )
 
 

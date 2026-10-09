@@ -126,8 +126,8 @@ left unwritten and noted.
 
 ## What a run leaves behind
 
-A check puts back what one command restores: the connect switch, the two permissions, and
-whether the DER is started. Settings and curves stay as the check last wrote them. Every
+A check puts back what one command restores, as it found it: the connect switch, the two
+permissions, and whether the DER is started. Settings and curves stay as the check last wrote them. Every
 function a check enabled is disabled when the check ends, including a function that was
 enabled when the run began, which the report notes. No function names a curve afterwards.
 
@@ -155,16 +155,22 @@ When something cannot be put back, the report says so in a note on that check.
       "notes": ["the stop was seen under way", "the start was seen under way"],
       "requests": 90,
       "seconds": 1.61,
-      "frames": [318, 551]
+      "frames": [318, 551],
+      "packets": [321, 554]
     }
   ]
 }
 ```
 
 `--capture FILE` writes every frame of the run to a pcap file, as it does for the
-console. `frames` is the first and last frame of a check, counted from 1 in the order
-they crossed the wire. The printed report gives the same range for a check that failed,
-so the exchange that failed it can be found in Wireshark.
+console. `packets` is the first and last packet of a check in that file, by the number
+Wireshark shows for each. It is `null` when no capture is written. The printed report
+gives the same range for a check that failed, so the exchange that failed it can be
+found.
+
+`frames` counts DNP3 frames from 1 in the order they crossed the wire, as the master's
+trace does. A capture also holds each connection's TCP handshake, so a frame's number is
+not its packet's.
 
 ## Settings
 
@@ -181,7 +187,7 @@ py1815-master evaluate lab --config master.json --allow-control \
 |---|---|---|
 | `NAME` | | The outstation to evaluate, when the configuration has more than one |
 | `--list` | | Print the checks and exit. Nothing is sent |
-| `--check NAME` | `evaluate.checks` | Run only this check or set. May be repeated. All of them when not given |
+| `--check NAME` | `evaluate.checks` | Run only this check or set. May be repeated, and replaces the list in the file. All of them when not given |
 | `--settle SECONDS` | `evaluate.settle` | How long to wait for the outstation to reach a state it was commanded to. 5 when not given |
 | `--curves N` | `evaluate.curves` | How many curves the outstation stores. Found by selecting each when not given |
 | `--report FILE` | `evaluate.report` | Also write the report as JSON |
