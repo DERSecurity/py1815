@@ -1,6 +1,7 @@
 """The master's configuration: every setting in one JSON document.
 
-A configuration has five top-level settings, a ``defaults`` object with the
+A configuration has its top-level settings, an ``evaluate`` object with the
+settings of ``py1815-master evaluate``, a ``defaults`` object with the
 settings shared by every outstation, and a list of ``outstations``. An
 outstation entry needs a ``name`` and a ``host``; any other setting it gives
 overrides the default.
@@ -17,8 +18,8 @@ overrides the default.
     }
 
 ``py1815-master config`` prints the complete document, with every default
-filled in, for editing. ``py1815-master console --config FILE`` and
-``py1815-master serve --config FILE`` load one.
+filled in, for editing. ``console``, ``serve`` and ``evaluate`` load one with
+``--config FILE``.
 
 Unknown settings and values of the wrong type are errors that name where they
 are, so a typing mistake is reported instead of ignored.
@@ -38,6 +39,7 @@ from py1815 import settings
 from py1815.master import requests
 from py1815.master.api import DEFAULT_CONNECT_TIMEOUT, DEFAULT_RECONNECT
 from py1815.master.association import DEFAULT_READ_RETRIES, DEFAULT_RESPONSE_TIMEOUT
+from py1815.master.bench import DEFAULT_SETTLE
 from py1815.master.tasks import WRITING, Tasks
 from py1815.master.tls import TlsSettings
 from py1815.settings import ConfigError, read
@@ -214,6 +216,51 @@ class OutstationConfig:
         return described
 
 
+@dataclass(frozen=True)
+class EvaluateConfig:
+    """The settings of ``py1815-master evaluate``."""
+
+    #: Seconds to wait for the outstation to reach a state it was commanded to.
+    settle: float = DEFAULT_SETTLE
+    #: How many curves the outstation stores, or None to find out by
+    #: selecting each in turn.
+    curves: int | None = None
+    #: The checks to run, by identifier or set, or None for all of them.
+    checks: tuple[str, ...] | None = None
+    #: Path to write the report to as JSON, or None for no file.
+    report: str | None = None
+
+    @classmethod
+    def from_mapping(cls, given: Any, where: str = "evaluate") -> EvaluateConfig:
+        """Build the settings from a decoded JSON object."""
+        allowed = [each.name for each in fields(cls)]
+        values: dict[str, Any] = {}
+        for key, value in settings.section(given, where, allowed).items():
+            at = f"{where}.{key}"
+            if key == "settle":
+                values[key] = settings.seconds(value, at)
+            elif key == "curves":
+                values[key] = None if value is None else settings.integer(value, at, 1, 65535)
+            elif key == "report":
+                values[key] = None if value is None else settings.text(value, at)
+            elif value is not None:
+                if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Sequence):
+                    raise ConfigError(f"{at} must be a list of check names, or null for all")
+                values[key] = tuple(
+                    settings.text(each, f"{at}[{position}]") for position, each in enumerate(value)
+                )
+        return cls(**values)
+
+    def describe(self) -> dict[str, Any]:
+        """Return every setting as a JSON-compatible dict."""
+        return {
+            "settle": self.settle,
+            "curves": self.curves,
+            "checks": None if self.checks is None else list(self.checks),
+            "report": self.report,
+        }
+
+
 _TOP_LEVEL = (
     "allow_control",
     "bind",
@@ -226,6 +273,7 @@ _TOP_LEVEL = (
     "log_max_mb",
     "log_keep",
     "log_level",
+    "evaluate",
     "defaults",
     "outstations",
 )
@@ -264,6 +312,8 @@ class MasterConfig:
     log_keep: int = 5
     #: The lowest level written to the log file: debug, info or warning.
     log_level: str = "info"
+    #: The settings of ``py1815-master evaluate``.
+    evaluate: EvaluateConfig = field(default_factory=EvaluateConfig)
     #: The settings an outstation has unless its own entry says otherwise.
     defaults: OutstationConfig = field(default_factory=OutstationConfig)
     outstations: tuple[OutstationConfig, ...] = ()
@@ -308,6 +358,8 @@ class MasterConfig:
             ):
                 raise ConfigError("connect_wait must be a number of seconds, zero or more")
             values["connect_wait"] = float(wait)
+        if "evaluate" in given:
+            values["evaluate"] = EvaluateConfig.from_mapping(given["evaluate"])
 
         shared = given.get("defaults", {})
         for required in ("name", "host"):
@@ -368,6 +420,7 @@ class MasterConfig:
             "log_max_mb": self.log_max_mb,
             "log_keep": self.log_keep,
             "log_level": self.log_level,
+            "evaluate": self.evaluate.describe(),
             "defaults": shared,
             "outstations": outstations,
         }
@@ -377,4 +430,12 @@ class MasterConfig:
         return settings.render(self.describe())
 
 
-__all__ = ["REPEATED", "WITH_INTEGRITY", "ConfigError", "MasterConfig", "OutstationConfig", "read"]
+__all__ = [
+    "REPEATED",
+    "WITH_INTEGRITY",
+    "ConfigError",
+    "EvaluateConfig",
+    "MasterConfig",
+    "OutstationConfig",
+    "read",
+]

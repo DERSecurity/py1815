@@ -54,6 +54,7 @@ class TestDefaults:
             "log_max_mb": 10.0,
             "log_keep": 5,
             "log_level": "info",
+            "evaluate": {"settle": 5.0, "curves": None, "checks": None, "report": None},
             "defaults": {
                 "port": 20000,
                 "outstation_address": 1024,
@@ -217,6 +218,13 @@ class TestErrors:
             ({"defaults": {"tasks": {"enable_unsolicited": [1.9]}}}, "defaults.tasks:"),
             ({"defaults": {"tasks": {"enable_unsolicited": [None]}}}, "defaults.tasks:"),
             ({"defaults": {"manual": 1}}, "defaults.manual must be true or false"),
+            ({"evaluate": []}, "evaluate must be an object"),
+            ({"evaluate": {"settel": 1}}, "evaluate.settel is not a setting"),
+            ({"evaluate": {"settle": 0}}, "evaluate.settle must be greater than 0"),
+            ({"evaluate": {"curves": 0}}, "evaluate.curves must be a whole number from 1"),
+            ({"evaluate": {"checks": "MON-001"}}, "evaluate.checks must be a list"),
+            ({"evaluate": {"checks": [""]}}, "evaluate.checks[0] must be a non-empty string"),
+            ({"evaluate": {"report": 5}}, "evaluate.report must be a non-empty string"),
             ({"defaults": {"tasks": []}}, "defaults.tasks must be an object"),
             ({"defaults": {"tasks": {"polling": True}}}, "defaults.tasks: 'polling' is not a task"),
             ({"defaults": {"tasks": {"enable_unsolicited": [4]}}}, "defaults.tasks:"),
@@ -380,7 +388,43 @@ class TestCommandLine:
         assert cli.main(["config", "--config", str(path)]) == 0
         assert json.loads(capsys.readouterr().out) == json.loads(path.read_text(encoding="utf-8"))
 
-    @pytest.mark.parametrize("command", ["console", "serve", "config"])
+    def test_evaluate_flags_override_the_evaluate_section_of_the_file(self, tmp_path):
+        path = _file(
+            tmp_path,
+            {"evaluate": {"settle": 2, "curves": 4, "checks": ["der"], "report": "old.json"}},
+        )
+        from_file = cli.configuration(_args("evaluate", "--config", path)).evaluate
+        assert from_file.describe() == {
+            "settle": 2.0,
+            "curves": 4,
+            "checks": ["der"],
+            "report": "old.json",
+        }
+        flagged = cli.configuration(
+            _args(
+                "evaluate",
+                "--config",
+                path,
+                "--settle",
+                "9",
+                "--curves",
+                "10",
+                "--check",
+                "MON-001",
+                "--check",
+                "OP-001",
+                "--report",
+                "new.json",
+            )
+        ).evaluate
+        assert flagged.describe() == {
+            "settle": 9.0,
+            "curves": 10,
+            "checks": ["MON-001", "OP-001"],
+            "report": "new.json",
+        }
+
+    @pytest.mark.parametrize("command", ["console", "serve", "config", "evaluate"])
     def test_a_bad_file_stops_every_command_with_its_message(self, command, tmp_path, capsys):
         path = _file(tmp_path, {"defaults": {"prot": 20000}})
         assert cli.main([command, "--config", path]) == 2

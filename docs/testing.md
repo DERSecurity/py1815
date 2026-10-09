@@ -252,6 +252,13 @@ including that its inputs are sent without the ONLINE flag while it is disabled.
 one it does not, the procedure checks that the function says so, cannot be enabled, and
 serves none of its points.
 
+The same procedures are what `py1815-master evaluate` runs against any outstation
+([Evaluating an outstation](master-evaluate.md)). `tests/test_master_evaluate.py`
+runs them over a socket against the simulated DER and requires the report to say
+what this suite says: every procedure passes and the same functions are supported.
+It then makes the simulated DER misbehave in one way at a time and requires the
+check for that to fail.
+
 `tests/test_epri_coverage.py` lists every procedure in the report as tested or not
 applicable, and records where the suite departs from the report. The report predates
 IEEE 1815.2; where they differ (the status for a write to a locked curve, which input a
