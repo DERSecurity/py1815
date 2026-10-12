@@ -613,8 +613,10 @@ done means.
    orphan segment, a withheld confirmation, and a wrong confirmation sequence. Each has a
    test of the octets it changes, and a bad header checksum, a bad data checksum and an
    orphan segment are each met with silence through the socket master (IEEE 1815-2012
-   6.6.2.5 and clause 7). *Left:* confirming late, a second master address, an endless
-   series, and moving the existing harnesses onto the master.
+   9.2.4.3 and 8.2.4; the invalid CRC procedure of section 6.6.2 of the IED Certification
+   Procedure). Also built: a second master address, a confirmation sent after the next
+   request, and a series whose final segment never comes. *Left:* moving the existing
+   harnesses onto the master.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
     each function can be configured, enabled and read back by name against the
     simulated DER. *Built,* in `master.profile`, with every operation of the
@@ -646,8 +648,13 @@ done means.
     profile procedure as a check for each procedure, and the comparison with a Device Profile
     document as one more (D94). `tests/test_master_evaluate.py` holds the
     report over a socket to the in-process run, and has the simulated DER
-    misbehave to see each check fail. *Left:* checks built from the
-    deviations of item 9 (now built in `master.deviations`).
+    misbehave to see each check fail. Also built: a set of checks made from
+    the deviations of item 9, run with `--allow-deviations` (D96), each shown to
+    fail against an outstation that answers what it has to discard or clears
+    events it was not confirmed (`tests/test_master_evaluate_deviations.py`).
+    *Left:* checks that need a deviation not yet made: the select rules, a
+    request while an unsolicited response is unconfirmed, and a control or a
+    freeze repeated.
 
 ## Sequencing
 

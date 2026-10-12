@@ -474,20 +474,38 @@ assert poll.outcome is Outcome.TIMEOUT   # the outstation ignored the bad frame
 lab.deviations.corrupt_header_crc = False
 ```
 
-The deviations are: `silence` (send nothing), `repeat_request` (send each request twice),
-`corrupt_header_crc` and `corrupt_body_crc` (flip a frame's checksum), `truncate` (drop a
-frame's last octet), `overstate_length` (claim more than the frame carries),
-`break_transport_sequence` and `orphan_segment` (send a segment that reassembly should
-refuse), `withhold_confirmation` (send no confirmation), and `wrong_confirmation_sequence`
-(confirm a sequence the outstation did not send). They are applied to the frame the
-master built on its way out, so with every one off the master is conformant.
+| Deviation | What the master does |
+|---|---|
+| `silence` | Sends nothing |
+| `repeat_request` | Sends each request twice, octet for octet |
+| `second_master_address` | Sends every frame from the next master address above its own |
+| `corrupt_header_crc`, `corrupt_body_crc` | Flips a checksum of a request's first frame |
+| `truncate` | Drops the last octet of a request's first frame |
+| `overstate_length` | Claims more user data than a request's first frame carries |
+| `break_transport_sequence` | Sends a request's first segment with a sequence number out of order |
+| `orphan_segment` | Sends a request's first segment as a continuation, with no first segment |
+| `endless_series` | Sends a request's last segment with its final bit clear, so the series never ends |
+| `withhold_confirmation` | Sends no application confirmation |
+| `late_confirmation` | Sends each application confirmation after its next request, and not when the response arrives |
+| `wrong_confirmation_sequence` | Confirms a sequence number the outstation did not send |
 
-The two confirmation deviations act on the application confirmation. A link-layer
-acknowledgment the master sends with it is sent as built.
+They are applied to the frame the master built on its way out, so with every one off the
+master is conformant.
 
-A deviation that changes a frame changes the first frame of a request. A frame that is
-already full cannot claim a greater length, so `overstate_length` drops that frame's last
-data block instead. When several are on, each is applied to the same frame.
+The three confirmation deviations act on the application confirmation. A link-layer
+acknowledgment the master sends with it is sent as built. A confirmation held back by
+`late_confirmation` is dropped when the deviation is turned off.
+
+A frame that is already full cannot claim a greater length, so `overstate_length` drops
+that frame's last data block instead. When several are on, each is applied in turn.
+
+Whether an outstation answers a master it was not told of is its own choice, which its
+Device Profile states. With `second_master_address` on, a response is addressed to that
+other master, so the request ends as a timeout either way and the trace shows whether
+anything came back.
+
+`py1815-master evaluate --allow-deviations` runs checks built from these and reports a
+verdict for each. See [The deviation set](master-evaluate.md#the-deviation-set).
 
 The trace and a capture keep what the master sent. A frame that no outstation accepts is
 listed as written, with what is wrong with it:

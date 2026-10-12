@@ -252,6 +252,12 @@ including that its inputs are sent without the ONLINE flag while it is disabled.
 one it does not, the procedure checks that the function says so, cannot be enabled, and
 serves none of its points.
 
+The checks that have the master break a protocol rule are tested the same two ways in
+`tests/test_master_evaluate_deviations.py`: each passes against the simulated DER, in
+process and over a socket, and each fails against an outstation made to answer a frame or
+a segment it has to discard, to stop answering after a damaged frame, or to clear events
+it was not sent the right confirmation for.
+
 The same procedures are what `py1815-master evaluate` runs against any outstation
 ([Evaluating an outstation](master-evaluate.md)). `tests/test_master_evaluate.py`
 runs them over a socket against the simulated DER and requires the report to say

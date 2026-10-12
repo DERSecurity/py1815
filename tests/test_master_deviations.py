@@ -5,11 +5,12 @@ an outstation rejects what the standard says it must. Each is tested two ways:
 the octets it changes, against a frame written out here, and that the master
 sends what the association built when the deviation is off.
 
-Three certification procedures are reproduced through the socket master with a
-deviation on: a frame with a corrupt header checksum, a frame with a corrupt
-data checksum, and a segment with no first segment are each met with silence,
-as IEEE 1815-2012 6.6.2.5 and clause 7 require, so an integrity poll times out;
-with the deviation off the same poll completes.
+Three faults are sent through the socket master with a deviation on: a frame
+with a corrupt header checksum, a frame with a corrupt data checksum, and a
+segment with no first segment are each met with silence, as IEEE 1815-2012
+9.2.4.3 and 8.2.4 require, so an integrity poll times out; with the deviation
+off the same poll completes. The first two are the invalid CRC procedure of
+section 6.6.2 of the DNP Users Group's IED Certification Procedure.
 """
 
 from __future__ import annotations
@@ -495,10 +496,11 @@ async def served(simulation):
 
 @pytest.mark.asyncio
 class TestOverASocket:
-    """Three certification procedures reproduced through the socket master."""
+    """Faults an outstation has to meet with silence, sent through the socket master."""
 
     async def test_a_corrupt_header_checksum_is_met_with_silence(self, served):
-        # IEEE 1815-2012 6.6.2.5: a frame whose header CRC fails draws no answer.
+        # A frame whose header CRC fails draws no answer: IEEE 1815-2012 9.2.4.3, and
+        # the invalid CRC procedure of section 6.6.2 of the IED Certification Procedure.
         served.deviations.set("corrupt_header_crc", True)
         poll = await served.integrity_poll()
         assert poll.outcome is Outcome.TIMEOUT and not poll.fragments
@@ -506,7 +508,7 @@ class TestOverASocket:
         assert (await served.integrity_poll()).complete
 
     async def test_a_corrupt_data_checksum_is_met_with_silence(self, served):
-        # IEEE 1815-2012 6.6.2.5: a frame whose data-block CRC fails draws no answer.
+        # A frame whose data-block CRC fails draws no answer, by the same two sources.
         served.deviations.set("corrupt_body_crc", True)
         poll = await served.integrity_poll()
         assert poll.outcome is Outcome.TIMEOUT and not poll.fragments
@@ -514,7 +516,7 @@ class TestOverASocket:
         assert (await served.integrity_poll()).complete
 
     async def test_a_segment_with_no_first_segment_is_met_with_silence(self, served):
-        # IEEE 1815-2012 clause 7: reassembly refuses a continuation that begins
+        # IEEE 1815-2012 8.2.4, Table 8-1: reassembly discards a continuation that begins
         # no fragment, so the request is never delivered and nothing answers.
         served.deviations.set("orphan_segment", True)
         poll = await served.integrity_poll()

@@ -1491,9 +1491,10 @@ produced, on their way to the channel, so the association's own code has no bran
 does the wrong thing: with every deviation off, the octets are sent as built, and no flag
 left on can bend the conformant path. A frame-level deviation is built and corrupted
 here rather than inside the link layer, so the layer that reads a frame is never taught to
-write a bad one. Ten are named: send nothing; repeat a request; corrupt a header or a
-data-block checksum; truncate a frame; overstate its length; break the transport sequence;
-orphan a segment; withhold a confirmation; confirm the wrong sequence. The socket master
+write a bad one. They are named: send nothing; repeat a request; speak from a second
+master address; corrupt a header or a data-block checksum; truncate a frame; overstate its
+length; break the transport sequence; orphan a segment; leave a series unfinished;
+withhold a confirmation; confirm late; confirm the wrong sequence. The socket master
 and the loopback apply the same ones, and the service's `deviate` turns them on and off.
 A deviation that is on always changes what is sent: a frame whose length octet is already
 at its highest value cannot overstate it, so that frame loses its last data block instead.
@@ -1503,11 +1504,42 @@ deviations on the loop's thread, as it does the store and the trace.
 The trace keeps each write as it was made, so a frame that no reader accepts is in the
 trace and in a capture with what is wrong with it. The trace reads what the master sent
 without the reader a receiver uses, which drops such a frame and holds a short one.
+A late confirmation is sent after the master's next request and not after a wait, so it
+needs no clock and is the same over a socket and in process: by then the outstation has
+taken the request as the failure of the confirmation (IEEE 1815-2012 Table 6-1). An endless
+series is a request whose last segment has its final bit clear, which leaves the outstation
+assembling; it is not segments sent without end.
 *Trade-off:* breaking the transport sequence of a request that fits one segment changes
 nothing an outstation rejects, since a lone segment is a complete fragment at any sequence;
-it bites a fragment of several segments, which a master seldom sends. Confirming late, a
-second master address, and an endless series are not here yet; a request by broadcast or
-by an unknown function is an ordinary operation (`broadcast`, `request`), not a deviation.
+it bites a fragment of several segments, which a master seldom sends. A request by
+broadcast or by an unknown function is an ordinary operation (`broadcast`, `request`), not
+a deviation.
+
+**D96 -- A check that has the master break a protocol rule needs its own permission, and
+requires only what a document requires.** `evaluate` gains a set of checks built from the
+deviations of D95. They write nothing to the outstation, so `--allow-control` is the wrong
+switch for them, and they send it malformed traffic, so they are not run by default
+either: a check marked as deviating is reported as not run unless the run was started with
+`--allow-deviations`, the way a check that writes is without `--allow-control` (D94). Each
+requires what a document states. A frame with a bad checksum or length draws no answer
+(IEEE 1815-2012 9.2.4.3; the invalid CRC procedure of section 6.6.2 of the IED
+Certification Procedure). A segment that is not a first segment is discarded while nothing
+is being assembled, and a first segment replaces a series under way (IEEE 1815-2012 8.2.4,
+Table 8-1, as TB2013-003 restates it). Events are kept when the confirmation is withheld,
+has the wrong sequence number, or arrives after the next request (IEEE 1815-2012 Table
+6-1; sections 8.5.2.2.4, 8.5.3.2.4 and 8.5.4.2.4 of the certification procedure). A check
+sends a well-formed read before it deviates and requires an answer, so the silence that
+follows is about the deviation, and turns the master's deviations back to what they were
+when it ends, whether or not the connection is still there. After a damaged frame up to
+three well-formed reads are sent before the outstation is said not to have recovered,
+because a receiver that waits for the octets a short frame promised takes them from the
+next frame. No check is made for a second master address: whether an outstation filters
+by source address is optional and stated in its Device Profile (section 6.6.1 of the
+certification procedure), so the deviation is a tool and not a verdict.
+*Trade-off:* a master cannot make an outstation raise an event, so the event checks work
+on the events the outstation happens to hold and are not applicable when it holds none;
+and they cannot tell an event with no time from a later one at the same point, so the
+last step, that a confirmed event is not reported again, is made only for timed events.
 
 ## Layering
 

@@ -69,6 +69,8 @@ disagree.
 | `POST /api/capture` | The frames kept, as a pcap file in base64 |
 | `POST /api/clear` | Forgets the frames or the events kept |
 | `POST /api/deviate` | Turns named deviations on or off: protocol rules the master breaks on purpose |
+| `POST /api/checks` | The checks an evaluation can run |
+| `POST /api/evaluate` | Runs checks against an outstation, and answers with the report |
 | `POST /api/der.read` | Points of the DER profile by name, or a named group, in engineering units |
 | `POST /api/der.write` | Outputs of the DER profile by name, in engineering units |
 | `POST /api/der.enable`, `POST /api/der.disable` | A DER function, and then whether it is enabled |
@@ -373,6 +375,7 @@ data is a JSON object:
 | `exchange` | A request ends: asked for, repeated, or made for a task | `outstation`, `exchange` |
 | `unsolicited` | An unsolicited response arrives | `outstation`, `indications`, `objects` |
 | `connection` | A connection is made or ends | `outstation`, `connected` |
+| `check` | A check of an evaluation ends | `outstation`, `result` |
 | `outstations` | An outstation is added or removed | |
 | `lost` | This subscriber fell 10,000 updates behind, and the waiting updates were dropped | `dropped`: how many |
 
@@ -388,6 +391,31 @@ lack of `--allow-control` at WARNING.
 ```bash
 curl -N http://127.0.0.1:8815/events
 ```
+
+## An evaluation
+
+`evaluate` runs the checks of [Evaluating an outstation](master-evaluate.md) against an
+outstation that was given a profile, and answers with the report when the last check has
+ended. `checks` lists them.
+
+```bash
+curl -s http://127.0.0.1:8815/api/evaluate -H 'Content-Type: application/json' \
+    -d '{"outstation": "lab", "checks": ["MON-001", "deviation"], "allow_deviations": true}'
+```
+
+| Parameter | Meaning |
+|---|---|
+| `checks` | Check identifiers or sets. All of them when left out |
+| `allow_deviations` | Run the checks that have the master break a protocol rule. False when left out |
+| `settle` | Seconds to wait for the outstation to reach a state it was commanded to. 5 when left out |
+| `curves` | How many curves the outstation stores. Found by selecting each when left out |
+
+The answer is the report `py1815-master evaluate --report` writes. A run takes as long as
+its checks do, which is minutes for all of them, so each result is also sent as a `check`
+event as its check ends. A check that writes is run only when the service was started
+with `--allow-control`, and is then written to the master's log as a command. A check
+that may not be run is reported as `not_run`. One evaluation runs against an outstation
+at a time, and a second is refused while it does.
 
 ## One message at a time
 
