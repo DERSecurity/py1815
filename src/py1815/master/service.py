@@ -502,6 +502,7 @@ class Service:
             "trace": self._trace,
             "capture": self._capture,
             "clear": self._clear,
+            "deviate": self._deviate,
             "der.read": self._der_read,
             "der.write": self._der_write,
             "der.enable": self._der_enable,
@@ -1267,6 +1268,37 @@ class Service:
         else:
             raise BadRequest("what is cleared is the trace or the events")
         return {"cleared": what}
+
+    async def _deviate(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Turn named deviations on or off, and report which are on.
+
+        ``set`` is an object of deviation names to true or false; ``clear``
+        turns every deviation off first. With neither, the current state is
+        returned unchanged. A request with anything wrong in it changes
+        nothing.
+        """
+        outstation = self._outstation(params)
+        clear = params.get("clear", False)
+        if not isinstance(clear, bool):
+            raise BadRequest("clear is true or false")
+        changes = params.get("set", {})
+        if not isinstance(changes, Mapping):
+            raise BadRequest("set is an object of deviation names to true or false")
+        names = outstation.deviations.names()
+        for name, state in changes.items():
+            if name not in names:
+                raise BadRequest(f"set.{name} is not a deviation; one of {', '.join(names)}")
+            if not isinstance(state, bool):
+                raise BadRequest(f"set.{name} is true or false")
+        # Every name and state has been checked, so the change is made whole.
+        if clear:
+            outstation.deviations.clear()
+        for name, state in changes.items():
+            outstation.deviations.set(name, state)
+        return {
+            "deviations": outstation.deviations.describe(),
+            "on": list(outstation.deviations.on()),
+        }
 
     # ---------------------------------------------------------- DER profile
 

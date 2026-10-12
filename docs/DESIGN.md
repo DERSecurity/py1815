@@ -1483,6 +1483,32 @@ it is for a device on a bench. A check that needs the device itself to be made t
 something, such as raise an alarm, is not in the catalog. Only volt-var and volt-watt
 curves are written, since those are the curve types with a sample here.
 
+**D95 -- Misbehavior is named, off by default, and applied to octets outside the
+association.** A deviation makes the master break a protocol rule on purpose, so a test can
+see whether an outstation rejects what the standard says it must, as the certification
+procedures do against a session in process. Each is applied to the octets the association
+produced, on their way to the channel, so the association's own code has no branch that
+does the wrong thing: with every deviation off, the octets are sent as built, and no flag
+left on can bend the conformant path. A frame-level deviation is built and corrupted
+here rather than inside the link layer, so the layer that reads a frame is never taught to
+write a bad one. Ten are named: send nothing; repeat a request; corrupt a header or a
+data-block checksum; truncate a frame; overstate its length; break the transport sequence;
+orphan a segment; withhold a confirmation; confirm the wrong sequence. The socket master
+and the loopback apply the same ones, and the service's `deviate` turns them on and off.
+A deviation that is on always changes what is sent: a frame whose length octet is already
+at its highest value cannot overstate it, so that frame loses its last data block instead.
+A confirmation deviation acts on the frame that carries the application confirmation and
+leaves a link-layer reply sent with it as built. The blocking master reads and changes the
+deviations on the loop's thread, as it does the store and the trace.
+The trace keeps each write as it was made, so a frame that no reader accepts is in the
+trace and in a capture with what is wrong with it. The trace reads what the master sent
+without the reader a receiver uses, which drops such a frame and holds a short one.
+*Trade-off:* breaking the transport sequence of a request that fits one segment changes
+nothing an outstation rejects, since a lone segment is a complete fragment at any sequence;
+it bites a fragment of several segments, which a master seldom sends. Confirming late, a
+second master address, and an endless series are not here yet; a request by broadcast or
+by an unknown function is an ordinary operation (`broadcast`, `request`), not a deviation.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1508,6 +1534,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
 - `master.sync` is `master.api` for a caller with no event loop. It adds no behavior.
 - `master.profile` is the IEEE 1815.2 profile from the master's side: names, scaling,
   functions and curves, each operation a plan of requests that whatever carries them runs.
+- `master.deviations` is named misbehavior: it transforms the octets the association
+  produced on their way to the channel, and the association never knows.
 - `master.bench` is what a check is and how a list of them is run. `master.checks` is the
   catalog, and knows the DER profile. `master.evaluate` is the report and the command.
 - `master.service` is the master's operations as JSON, and knows nothing of who is asking.

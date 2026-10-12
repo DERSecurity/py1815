@@ -18,6 +18,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
+import struct
 import time
 from collections import Counter, deque
 from collections.abc import Callable
@@ -45,6 +46,10 @@ DEFAULT_CAPACITY = 5000
 SENT, RECEIVED = "tx", "rx"
 
 _CLASS_NAMES = {1: "class 0", 2: "class 1", 3: "class 2", 4: "class 3"}
+
+#: A frame's header before its checksum: the start octets, the length, the
+#: control octet, the destination and the source.
+_HEADER_FIELDS = struct.Struct("<2sBBHH")
 
 #: Requests whose body is object headers and nothing else, so the headers can
 #: be listed without knowing any object's width.
@@ -78,7 +83,8 @@ class Entry:
     #: ``"tx"`` for a frame this master sent, ``"rx"`` for one it received.
     direction: str
     octets: bytes
-    #: The data link layer's reading of the frame.
+    #: The data link layer's reading of the frame. For octets this master sent
+    #: that are not a valid frame, the header as written and a ``problem``.
     link: dict[str, Any]
     #: The transport header, when the frame carries user data.
     transport: dict[str, Any] | None
@@ -106,6 +112,24 @@ def _link(frame: link.LinkFrame) -> dict[str, Any]:
         "source": frame.source,
         "user_data": len(frame.payload),
     }
+
+
+def _malformed(octets: bytes, problem: str) -> dict[str, Any]:
+    """Return the header fields of octets that are not a valid frame, and what is wrong.
+
+    The fields are read as written and are not verified. ``user_data`` is the
+    count the length octet describes, which may be more than the octets carry.
+    Each field is None when the octets are too short to hold a header.
+    """
+    described: dict[str, Any] = dict.fromkeys(
+        ("from_master", "primary", "function", "destination", "source", "user_data")
+    )
+    if len(octets) >= _HEADER_FIELDS.size and octets.startswith(link.START):
+        _, length, control, destination, source = _HEADER_FIELDS.unpack_from(octets)
+        described = _link(link.LinkFrame(control, destination, source, b""))
+        described["user_data"] = max(0, length - link.MIN_LENGTH)
+    described["problem"] = problem
+    return described
 
 
 def _groups(body: bytes) -> tuple[list[str], str | None]:
@@ -212,14 +236,49 @@ class Trace:
         Received octets arrive split wherever the network split them, so a
         frame is recorded when its last octet has arrived and not before.
         """
-        recorded = []
-        for frame in self._readers[direction].feed(octets):
-            entry = self._entry(direction, frame)
-            self._entries.append(entry)
-            recorded.append(entry)
-            for listener in list(self.listeners):
-                listener(entry)
-        return recorded
+        return [
+            self._keep(self._entry(direction, frame))
+            for frame in self._readers[direction].feed(octets)
+        ]
+
+    def record_write(self, octets: bytes) -> list[Entry]:
+        """Record one write this master made, whether or not it is valid frames.
+
+        A deviation can make the master write a frame that no reader accepts:
+        a checksum that does not verify, or fewer octets than the length octet
+        describes. :meth:`record` reads octets the way a receiver does, so it
+        drops such a frame, and holds a short one and reads the next write as
+        the rest of it. A write that is not whole valid frames is kept here as
+        one entry, with the octets as written and what is wrong with them, so
+        the trace and a capture made from it show what crossed the wire.
+        """
+        frames = link.FrameReader().feed(octets)
+        if sum(link.frame_size(len(frame.payload)) for frame in frames) == len(octets):
+            return [self._keep(self._entry(SENT, frame)) for frame in frames]
+        problem = "the octets are not whole frames"
+        try:
+            link.parse(octets)
+        except link.LinkFrameError as error:
+            problem = str(error)
+        entry_id, self._next = self._next, self._next + 1
+        entry = Entry(
+            id=entry_id,
+            at=self._clock(),
+            direction=SENT,
+            octets=octets,
+            link=_malformed(octets, problem),
+            transport=None,
+            application=None,
+            summary=f"not a valid frame: {problem}",
+            connection=self._connection,
+        )
+        return [self._keep(entry)]
+
+    def _keep(self, entry: Entry) -> Entry:
+        self._entries.append(entry)
+        for listener in list(self.listeners):
+            listener(entry)
+        return entry
 
     def _entry(self, direction: str, frame: link.LinkFrame) -> Entry:
         described = _link(frame)

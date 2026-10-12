@@ -31,6 +31,12 @@ reference.
 
 ::: py1815.master.checks
 
+## Deviations
+
+[Misbehaving on purpose](../master.md#misbehaving-on-purpose) is the guide.
+
+::: py1815.master.deviations
+
 ## What is done unasked
 
 ::: py1815.master.tasks

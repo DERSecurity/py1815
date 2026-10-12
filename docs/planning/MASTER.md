@@ -145,7 +145,7 @@ interface.
 | `master.sync` | The same interface for a caller with no event loop | Built |
 | `master.timesync` | The LAN and non-LAN time synchronization procedures, as plans | Built |
 | `master.tasks` | The startup sequence, the scans, the reactions to indications, as data | Built |
-| `master.deviations` | Misbehavior, applied between the association and the connection | |
+| `master.deviations` | Misbehavior, applied between the association and the connection | Built |
 | `master.trace`, `master.capture` | Every frame with its time and direction, read layer by layer; the capture writer, moved from `interop/` | Built |
 | `master.service` | The JSON service: the same operations over a local socket and over HTTP | Built |
 | `master.profile` | The DER profile: names, units, functions, curves | Built |
@@ -606,7 +606,15 @@ done means.
    the master now speaks and is tested over against this library's own
    listener only.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
-   certification procedures have been reproduced through it over a socket.
+   certification procedures have been reproduced through it over a socket. *Built,* in
+   `master.deviations` (D95), applied by the socket master and the loopback and turned on
+   by the service's `deviate`: silence, a repeated request, a corrupt header or data
+   checksum, a truncated frame, an overstated length, a broken transport sequence, an
+   orphan segment, a withheld confirmation, and a wrong confirmation sequence. Each has a
+   test of the octets it changes, and a bad header checksum, a bad data checksum and an
+   orphan segment are each met with silence through the socket master (IEEE 1815-2012
+   6.6.2.5 and clause 7). *Left:* confirming late, a second master address, an endless
+   series, and moving the existing harnesses onto the master.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
     each function can be configured, enabled and read back by name against the
     simulated DER. *Built,* in `master.profile`, with every operation of the
@@ -639,7 +647,7 @@ done means.
     document as one more (D94). `tests/test_master_evaluate.py` holds the
     report over a socket to the in-process run, and has the simulated DER
     misbehave to see each check fail. *Left:* checks built from the
-    deviations of item 9, which is not built.
+    deviations of item 9 (now built in `master.deviations`).
 
 ## Sequencing
 
