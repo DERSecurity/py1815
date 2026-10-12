@@ -221,7 +221,7 @@ function foundNodes(result, run) {
       `${result.requests} request(s), ${result.seconds} s`,
       frames && !gone ? [", ", el("button", { class: "link", "data-frames": result.id, text: `frames ${frames[0]} to ${frames[1]}`,
         title: "Show these frames in the Traffic tab", onclick: () => evaluateFrames(result) })] : null,
-      frames && gone ? `, frames ${frames[0]} to ${frames[1]}, which the master no longer keeps` : null) : null,
+      frames && gone ? `, frames ${frames[0]} to ${frames[1]}, not all of which the master still keeps` : null) : null,
   ];
 }
 
@@ -406,8 +406,10 @@ async function evaluateFrames(result) {
     return;
   }
   if (state.selected !== name) return;
+  // The trace drops its oldest frames, so the answer can begin after the
+  // check did. Part of a check's frames is not shown as all of them.
   const frames = trace.frames.filter((frame) => frame.id <= last);
-  if (!frames.length) {
+  if (!frames.length || frames[0].id !== first || frames[frames.length - 1].id !== last) {
     run.gone.add(result.id);
     renderEvaluate();
     return;

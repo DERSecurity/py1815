@@ -219,6 +219,8 @@ class Bench:
         self._afterwards: list[tuple[str, Callable[[], Plan[Any]]]] = []
         #: The master's deviations as the check found them, once it has changed any.
         self._deviations: dict[str, bool] | None = None
+        #: Whether the check began with every deviation turned off.
+        self._isolated = False
 
     # ------------------------------------------------------------ a check's own
 
@@ -229,6 +231,7 @@ class Bench:
         self._notes = []
         self._afterwards = []
         self._deviations = None
+        self._isolated = False
 
     def note(self, text: str) -> None:
         """Record something the report should say about this check."""
@@ -443,14 +446,48 @@ class Bench:
             raise NotApplicable("the master in use cannot break a protocol rule")
 
     def conform(self) -> Plan[None]:
-        """Put the master's deviations back as the check found them."""
-        yield self.restore
+        """Turn off every deviation the check turned on."""
+        yield self._conform
+
+    def _conform(self, target: Any) -> None:
+        deviations = getattr(target, "deviations", None)
+        if deviations is None or self._deviations is None:
+            return
+        deviations.clear()
+        if not self._isolated:
+            for each, state in self._deviations.items():
+                deviations.set(each, state)
+
+    def isolate(self, target: Any) -> Any:
+        """Begin a check that deviates: hold the master, with every deviation off.
+
+        A deviation someone left on would damage the well-formed requests the
+        check compares against, so each is turned off until the check ends.
+        A master that sends on its own is held as well, so that no automatic
+        task, repeated scan or other caller sends a request while one of the
+        check's deviations is on, or between two of its steps. Returns what
+        the master's own hold returns, to be awaited where it is awaitable.
+        """
+        deviations = getattr(target, "deviations", None)
+        if deviations is not None and self._deviations is None:
+            self._deviations = deviations.describe()
+            self._isolated = True
+            deviations.clear()
+        reserve = getattr(target, "_reserve", None)
+        return None if reserve is None else reserve()
 
     def restore(self, target: Any) -> None:
-        """Put a master's deviations back as the check found them. Sends nothing."""
+        """Put a master back as the check found it. Sends nothing.
+
+        The deviations are set as they were before the check, and a master
+        the check held is let go.
+        """
+        release = getattr(target, "_release", None)
+        if release is not None:
+            release()
         if self._deviations is None:
             return
-        before, self._deviations = self._deviations, None
+        before, self._deviations, self._isolated = self._deviations, None, False
         target.deviations.clear()
         for each, state in before.items():
             target.deviations.set(each, state)
@@ -592,7 +629,8 @@ def run_plan(
 ) -> Plan[tuple[Result, ...]]:
     """Carry out checks in order, and return how each ended.
 
-    The run begins by reading which points the outstation serves. A check
+    The run begins by reading which points the outstation serves, with every
+    deviation of the master off. A check
     that writes is not run unless ``commanding`` is set, and a check that has
     the master break a protocol rule is not run unless ``deviating`` is set.
     When the connection is lost the check under way fails and the rest are
@@ -601,10 +639,18 @@ def run_plan(
     Raises :class:`NoAnswer` when the outstation does not answer the first read.
     """
     wanted = [(POINT_TYPES[point.kind], point.index) for point in bench.map.points.values()]
+    # What the outstation serves is read with every deviation off: a
+    # deviation someone left on would make a served point look absent.
+    yield bench.isolate
+    lost: OSError | None = None
+    survey = None
     try:
         survey = yield from survey_plan(wanted)
     except _LOST as error:
-        raise NoAnswer(f"the connection was lost: {error}") from error
+        lost = error
+    yield bench.restore
+    if survey is None:
+        raise NoAnswer(f"the connection was lost: {lost}") from lost
     if not survey.exchanges[0].fragments:
         raise NoAnswer("the outstation did not answer a class 0 read")
     if any(not exchange.fragments for exchange in survey.exchanges):
@@ -649,6 +695,8 @@ def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
     started = time.monotonic()
     verdict, detail = Verdict.PASSED, ""
     try:
+        if check.deviates:
+            yield bench.isolate
         yield from check.procedure(bench)
     except NotApplicable as reason:
         verdict, detail = Verdict.NOT_APPLICABLE, str(reason)
@@ -658,8 +706,8 @@ def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
         verdict, detail = Verdict.FAILED, f"the connection was lost: {error}"
         run.lost = "the connection was lost during an earlier check"
     # A deviation left on would bend every request that follows, the ones that
-    # put things back included. Turning one off sends nothing, so it is done
-    # whether or not the connection is still there.
+    # put things back included. Turning one off and letting the master go send
+    # nothing, so both are done whether or not the connection is still there.
     yield bench.restore
     if run.lost is None:
         try:

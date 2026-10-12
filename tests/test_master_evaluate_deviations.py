@@ -16,6 +16,7 @@ sections 8.5.2.2.4, 8.5.3.2.4 and 8.5.4.2.4 of the certification procedure).
 
 from __future__ import annotations
 
+import asyncio
 import struct
 from typing import Any
 
@@ -24,12 +25,16 @@ import pytest_asyncio
 from profile_fixtures import paired_reference_der
 
 from py1815 import crc, link, transport
-from py1815.master import MasterAssociation, Outstation
-from py1815.master.bench import Bench, Check, Failed, Result, Verdict
-from py1815.master.checks import CATALOG, DEVIATION, DEVIATION_CHECKS, select
+from py1815.application import AppControl, FunctionCode, Response
+from py1815.decode import DecodedObject, PointType
+from py1815.master import Deviations, MasterAssociation, Outstation
+from py1815.master import bench as benches
+from py1815.master.association import Exchange, Outcome
+from py1815.master.bench import Bench, Check, Failed, NotApplicable, Result, Verdict
+from py1815.master.checks import CATALOG, DEVIATION, DEVIATION_CHECKS, events_kept, select
 from py1815.master.evaluate import Report, evaluate, evaluate_loopback
 from py1815.master.loopback import Loopback
-from py1815.master.profile import Plan
+from py1815.master.profile import DerProfile, Plan
 from py1815.master.tasks import Tasks
 from py1815.profile import der, load
 from py1815.profile.model import Composition, PointMap
@@ -235,6 +240,97 @@ class TestAgainstTheSimulatedDer:
         )
 
 
+class TestAMasterWithDeviationsLeftOn:
+    def test_a_check_begins_with_them_off_and_ends_with_them_on_again(self):
+        # A header checksum left corrupt would damage the well-formed read the
+        # check makes first, and the check would fail for it.
+        points = _points()
+        loopback = Loopback(_session(points))
+        loopback.deviations.corrupt_header_crc = True
+        report = evaluate_loopback(loopback, points, checks=select(["LINK-002"]), deviating=True)
+        (result,) = report.results
+        assert (result.verdict, result.detail) == (PASSED, "")
+        assert loopback.deviations.on() == ("corrupt_header_crc",)
+
+    def test_a_check_made_with_no_mark_keeps_what_was_on_and_adds_its_own(self):
+        seen: list[tuple[str, ...]] = []
+
+        def procedure(bench: Bench) -> Plan[None]:
+            yield from bench.deviate("truncate")
+            yield lambda target: seen.append(target.deviations.on())
+            yield from bench.conform()
+            yield lambda target: seen.append(target.deviations.on())
+
+        points = _points()
+        loopback = Loopback(_session(points))
+        loopback.deviations.repeat_request = True
+        check = Check("X-001", "A check made for this test", False, procedure)
+        evaluate_loopback(loopback, points, checks=[check])
+        assert seen == [("repeat_request", "truncate"), ("repeat_request",)]
+        assert loopback.deviations.on() == ("repeat_request",)
+
+
+def _event(index: int, value: int, time_ms: int | None) -> DecodedObject:
+    """An analog input event, as the decoder reports one."""
+    return DecodedObject(
+        group=32,
+        variation=3,
+        index=index,
+        value=value,
+        flags=0x01,
+        time_ms=time_ms,
+        synchronized=None,
+        point=PointType.ANALOG_INPUT,
+        event=True,
+        raw=b"",
+    )
+
+
+class _Scripted:
+    """A master whose event reads return what a test wrote out, in order.
+
+    It stands in for the master and the outstation together, so that a test
+    can say exactly which events each read reports.
+    """
+
+    def __init__(self, *reads: list[DecodedObject]) -> None:
+        self.deviations = Deviations()
+        self.association = MasterAssociation()
+        self._reads = list(reads)
+
+    def scan(self, kind: str) -> Exchange:
+        assert kind == "events"
+        objects = tuple(self._reads.pop(0))
+        response = Response(AppControl(con=bool(objects)), FunctionCode.RESPONSE, None)
+        return Exchange(
+            FunctionCode.READ, 0, b"", Outcome.COMPLETE, fragments=(response,), objects=objects
+        )
+
+
+class TestEventsThatAreEqual:
+    A = _event(4, 100, 1_700_000_000_000)
+    B = _event(5, 7, 1_700_000_000_500)
+
+    def _carry_out(self, *reads: list[DecodedObject]) -> None:
+        bench = Bench(DerProfile(_points()))
+        plan = events_kept("withhold_confirmation", "no confirmation was sent")(bench)
+        benches.drive(_Scripted(*reads), plan, lambda seconds: None)
+
+    def test_an_event_reported_twice_has_to_be_reported_twice_again(self):
+        # Two events equal in every field, and one of them missing from the
+        # second read: an event was cleared without a confirmation.
+        with pytest.raises(Failed, match="1 of 3 events were not reported again"):
+            self._carry_out([self.A, self.B, self.A], [self.A, self.B])
+
+    def test_the_same_events_in_another_order_are_the_same_events(self):
+        both = [self.A, self.B, self.A]
+        self._carry_out(both, [self.A, self.A, self.B], both, [])
+
+    def test_no_events_is_not_applicable(self):
+        with pytest.raises(NotApplicable, match="no events to report"):
+            self._carry_out([])
+
+
 class TestTheMasterAfterwards:
     def _check(self, procedure: Any) -> Check:
         return Check("X-001", "A check made for this test", False, procedure, deviates=True)
@@ -408,3 +504,57 @@ class TestOverASocket:
             if entry.id <= last and "problem" in entry.link
         ]
         assert [entry.link["problem"] for entry in damaged] == ["header CRC does not match"]
+
+    async def test_a_request_from_another_task_waits_while_the_outstation_is_held(self, served):
+        _, outstation = served
+        await outstation._reserve()
+        waiting = asyncio.create_task(outstation.scan("class0"))
+        await asyncio.sleep(0.2)
+        assert not waiting.done(), "another task's request was sent while the outstation was held"
+        assert (await outstation.scan("class0")).complete, "the holder's own request goes ahead"
+        outstation._release()
+        assert (await asyncio.wait_for(waiting, 5)).complete
+        outstation._release()  # Letting go of an outstation that is not held does nothing.
+        assert (await outstation.scan("class0")).complete
+
+    async def test_a_check_that_deviates_holds_the_outstation_until_it_ends(self, served):
+        points, outstation = served
+        elsewhere: list[asyncio.Task[Any]] = []
+
+        def procedure(bench: Bench) -> Plan[None]:
+            yield from bench.deviate("silence")
+            # A request from another task, as an automatic task or another
+            # caller would make one while the check is under way.
+            yield lambda target: elsewhere.append(asyncio.create_task(target.scan("class0")))
+            yield from bench.pause(0.3)
+            yield lambda target: elsewhere.append(elsewhere[0].done())
+
+        check = Check("X-001", "A check made for this test", False, procedure, deviates=True)
+        await evaluate(outstation, points, checks=[check], deviating=True)
+        assert elsewhere[1] is False, "the request waited for the check to end"
+        answered = await asyncio.wait_for(elsewhere[0], 5)
+        assert answered.complete, "and was sent with no deviation on"
+
+    async def test_a_run_that_is_cancelled_leaves_the_master_conformant_and_let_go(self, served):
+        points, outstation = served
+
+        def procedure(bench: Bench) -> Plan[None]:
+            yield from bench.deviate("silence")
+            yield from bench.pause(30)
+
+        check = Check("X-001", "A check made for this test", False, procedure, deviates=True)
+        outstation.deviations.repeat_request = True
+        run = asyncio.create_task(evaluate(outstation, points, checks=[check], deviating=True))
+        for _ in range(100):
+            if outstation.deviations.silence:
+                break
+            await asyncio.sleep(0.05)
+        assert outstation.deviations.silence, "the check is under way"
+
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+
+        assert outstation.deviations.on() == ("repeat_request",)
+        outstation.deviations.clear()
+        assert (await asyncio.wait_for(outstation.scan("class0"), 5)).complete

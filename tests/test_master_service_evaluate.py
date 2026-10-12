@@ -166,6 +166,8 @@ class TestEvaluating:
             ({"checks": ["MON-1"]}, "'mon-1' is not a check"),
             ({"allow_deviations": "yes"}, "allow_deviations is true or false"),
             ({"settle": 0}, "settle is a number of seconds greater than 0"),
+            ({"settle": float("inf")}, "settle is a number of seconds greater than 0"),
+            ({"settle": float("nan")}, "settle is a number of seconds greater than 0"),
             ({"curves": 0}, "curves is a whole number of at least 1"),
         ],
     )

@@ -328,6 +328,42 @@ class TestRunning:
         assert await page.evaluate("state.range.frames.map((frame) => frame.id)") == list(
             range(first, last + 1)
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kept", ["none", "all but the first"])
+    async def test_frames_the_master_no_longer_keeps_in_full_are_not_offered(self, console, kept):
+        page = console.page
+        await _run(page, "MON-001")
+        await page.wait_for(
+            f"{_row('MON-001')}.querySelector('.check-verdict')?.textContent === 'passed'"
+        )
+        first, last = await page.evaluate("evaluation.runs.get('lab').report.results[0].frames")
+        if kept == "none":
+            await console.ask("clear", what="trace")
+        else:
+            # The trace drops its oldest frames first. The page is given the
+            # answer the service gives once the check's first frame is gone.
+            await page.evaluate(
+                "const answered = ask;"
+                "ask = async (label, op, params) => {"
+                "  const answer = await answered(label, op, params);"
+                "  if (op === 'trace') answer.frames.shift();"
+                "  return answer;"
+                "};"
+            )
+
+        await page.click("#evaluate-checks button[data-frames='MON-001']")
+
+        await page.wait_for(f"{_row('MON-001')}.textContent.includes('still keeps')")
+        assert f"frames {first} to {last}, not all of which the master still keeps" in (
+            await page.evaluate(f"{_row('MON-001')}.textContent")
+        )
+        assert await page.evaluate("state.tab") == "evaluate" and await page.evaluate(
+            "state.range === null"
+        )
+        assert await page.evaluate(
+            "document.querySelector(\"#evaluate-checks button[data-frames='MON-001']\") === null"
+        )
         assert await page.count("#traffic-table tbody tr") == min(300, last - first + 1)
         assert await page.evaluate("state.frame.id") in range(first, last + 1)
 

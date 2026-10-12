@@ -26,7 +26,7 @@ import math
 import ssl
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
 from types import TracebackType
 from typing import Any
@@ -248,6 +248,8 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         self._settled.set()
         #: One request at a time, in the order asked.
         self._turn = asyncio.Lock()
+        #: The task holding the outstation across several requests, if one is.
+        self._reserved_by: asyncio.Task[Any] | None = None
 
     # ------------------------------------------------------------ connection
 
@@ -505,24 +507,54 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
 
     # -------------------------------------------------------------- requests
 
+    @contextlib.asynccontextmanager
+    async def _taking_turn(self) -> AsyncIterator[None]:
+        """Take the turn to send, or go ahead when the calling task holds the outstation."""
+        if self._reserved_by is not None and self._reserved_by is asyncio.current_task():
+            yield
+            return
+        async with self._turn:
+            yield
+
+    async def _reserve(self) -> None:
+        """Hold the outstation for the calling task until :meth:`_release`.
+
+        Until then every request from another task waits its turn: the
+        automatic tasks, a repeated scan, and any other caller. A check that
+        has the master break a protocol rule holds the outstation, so that no
+        request but its own is sent while a deviation is on, and none comes
+        between its steps. Confirmations of unsolicited responses are not
+        requests and are still sent.
+        """
+        if self._reserved_by is asyncio.current_task():
+            return
+        await self._turn.acquire()
+        self._reserved_by = asyncio.current_task()
+
+    def _release(self) -> None:
+        """Let other tasks send again. Does nothing when the outstation is not held."""
+        if self._reserved_by is not None:
+            self._reserved_by = None
+            self._turn.release()
+
     async def _exchange(
         self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
     ) -> Exchange:
-        async with self._turn:
+        async with self._taking_turn():
             return await self._exchange_in_turn(function, body, broadcast=broadcast)
 
     async def _carry_out(self, plan: Plan) -> Operated:
         # One turn for the whole plan: an operate has to follow its select
         # with no other request between them, and a scan on a schedule would
         # otherwise be free to take the gap.
-        async with self._turn:
+        async with self._taking_turn():
             result: Operated = await self._follow(plan)
             return result
 
     async def _synchronize(self, plan: TimeSync) -> Synchronized:
         # One turn, so that nothing comes between the two requests and the
         # time the write carries is as fresh as it can be.
-        async with self._turn:
+        async with self._taking_turn():
             result: Synchronized = await self._follow(plan)
             return result
 
@@ -580,7 +612,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 if self._housekeeper.due:
                     # Hold the request lock for the whole batch, so the
                     # startup sequence is not interleaved with other requests.
-                    async with self._turn:
+                    async with self._taking_turn():
                         while (step := self._housekeeper.next()) is not None:
                             if step.plan is not None:
                                 synchronized = await self._follow(step.plan, task=step.task)

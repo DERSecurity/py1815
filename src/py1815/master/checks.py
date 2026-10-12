@@ -31,6 +31,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -1073,8 +1074,26 @@ def _key(event: DecodedObject) -> tuple[object, ...]:
     return (kind, event.index, event.value, event.flags, event.time_ms)
 
 
-def _events(exchange: Exchange) -> dict[tuple[object, ...], DecodedObject]:
-    return {_key(each): each for each in exchange.objects if each.event}
+def _events(exchange: Exchange) -> list[DecodedObject]:
+    return [each for each in exchange.objects if each.event]
+
+
+def _missing(
+    wanted: Sequence[DecodedObject], found: Sequence[DecodedObject]
+) -> list[DecodedObject]:
+    """Return the events of ``wanted`` that ``found`` does not hold.
+
+    Two events can be equal in every field, so each event found accounts for
+    one event wanted and no more.
+    """
+    left = Counter(_key(each) for each in found)
+    missing = []
+    for event in wanted:
+        if left[_key(event)]:
+            left[_key(event)] -= 1
+        else:
+            missing.append(event)
+    return missing
 
 
 def _said(events: Sequence[DecodedObject]) -> str:
@@ -1111,8 +1130,7 @@ def events_kept(deviation: str, what: str) -> Callable[[Bench], Plan[None]]:
             "the response that carried the events did not ask for a confirmation",
         )
 
-        again = _events((yield from bench.events()))
-        missing = [event for key, event in reported.items() if key not in again]
+        missing = _missing(reported, _events((yield from bench.events())))
         bench.require(
             not missing,
             f"{len(missing)} of {len(reported)} events were not reported again though "
@@ -1120,8 +1138,7 @@ def events_kept(deviation: str, what: str) -> Callable[[Bench], Plan[None]]:
         )
 
         yield from bench.conform()
-        confirmed = _events((yield from bench.events()))
-        missing = [event for key, event in reported.items() if key not in confirmed]
+        missing = _missing(reported, _events((yield from bench.events())))
         bench.require(
             not missing,
             f"{len(missing)} of {len(reported)} events were gone before they were "
@@ -1130,12 +1147,12 @@ def events_kept(deviation: str, what: str) -> Callable[[Bench], Plan[None]]:
 
         # An event with no time can be equal to a later event at the same
         # point, so only the timed ones can be told to have been cleared.
-        timed = {key: event for key, event in reported.items() if event.time_ms is not None}
+        timed = [event for event in reported if event.time_ms is not None]
         if not timed:
             bench.note("the events carry no time, so their clearing could not be checked")
             return
-        afterwards = _events((yield from bench.events()))
-        repeated = [event for key, event in timed.items() if key in afterwards]
+        afterwards = {_key(each) for each in _events((yield from bench.events()))}
+        repeated = [event for event in timed if _key(event) in afterwards]
         bench.require(
             not repeated,
             f"{len(repeated)} events were reported again after they were confirmed: "

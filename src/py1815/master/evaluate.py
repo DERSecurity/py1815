@@ -200,7 +200,13 @@ async def evaluate(
         deviating=deviating,
         on_result=on_result,
     )
-    results = await benches.drive_async(outstation, plan, pause)
+    try:
+        results = await benches.drive_async(outstation, plan, pause)
+    finally:
+        # A run that is cancelled or fails part way through a check never
+        # reaches the end of that check. Its deviations are turned off and
+        # the master is let go here, which sends nothing.
+        bench.restore(outstation)
     name = getattr(outstation, "name", "outstation")
     return Report(str(name), started, commanding, bench.map.edition, results, deviating)
 
@@ -227,7 +233,10 @@ def evaluate_loopback(
     plan = benches.run_plan(
         bench, CATALOG if checks is None else checks, commanding=commanding, deviating=deviating
     )
-    results = benches.drive(loopback, plan, advance or (lambda seconds: None))
+    try:
+        results = benches.drive(loopback, plan, advance or (lambda seconds: None))
+    finally:
+        bench.restore(loopback)
     return Report("loopback", started, commanding, bench.map.edition, results, deviating)
 
 

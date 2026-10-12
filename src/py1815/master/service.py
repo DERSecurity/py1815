@@ -1344,7 +1344,12 @@ class Service:
         if not isinstance(deviating, bool):
             raise BadRequest("allow_deviations is true or false")
         settle = params.get("settle", DEFAULT_SETTLE)
-        if isinstance(settle, bool) or not isinstance(settle, (int, float)) or not settle > 0:
+        if (
+            isinstance(settle, bool)
+            or not isinstance(settle, (int, float))
+            or not math.isfinite(settle)
+            or not settle > 0
+        ):
             raise BadRequest("settle is a number of seconds greater than 0")
         curves = params.get("curves")
         if curves is not None and (
