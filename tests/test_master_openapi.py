@@ -256,6 +256,8 @@ ORDER = [
     "capture",
     "clear",
     "deviate",
+    "checks",
+    "evaluate",
     "der.functions",
     "der.read",
     "der.write",

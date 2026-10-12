@@ -486,6 +486,66 @@ SCHEMAS: dict[str, Schema] = {
         },
         required=["id", "at", "direction", "octets", "link", "transport", "application", "summary"],
     ),
+    "Check": _object(
+        {
+            "id": {"type": "string", "description": "The check's identifier, as in `MON-001`."},
+            "title": _STRING,
+            "set": {"type": "string", "description": "The set the check belongs to."},
+            "writes": {
+                "type": "boolean",
+                "description": "Whether the check writes to the outstation.",
+            },
+            "deviates": {
+                "type": "boolean",
+                "description": "Whether the check has the master break a protocol rule.",
+            },
+        },
+        required=["id", "title", "set", "writes", "deviates"],
+        description="One check `evaluate` can run.",
+    ),
+    "CheckResult": _object(
+        {
+            "id": _STRING,
+            "title": _STRING,
+            "verdict": {
+                "type": "string",
+                "enum": ["passed", "failed", "not_applicable", "not_run"],
+            },
+            "detail": {
+                "type": "string",
+                "description": "Why the check failed, was not applicable or was not run. "
+                "Empty when it passed.",
+            },
+            "notes": {
+                "type": "array",
+                "items": _STRING,
+                "description": "What the check saw that does not decide the verdict.",
+            },
+            "requests": {"type": "integer", "description": "Requests the check sent."},
+            "seconds": _NUMBER,
+            "frames": {
+                "description": "The ids of the check's first and last frame in the trace.",
+                **_nullable({"type": "array", "items": _INTEGER}),
+            },
+            "packets": {
+                "description": "The check's first and last packet in a capture file. Null "
+                "when the evaluation writes none.",
+                **_nullable({"type": "array", "items": _INTEGER}),
+            },
+        },
+        required=[
+            "id",
+            "title",
+            "verdict",
+            "detail",
+            "notes",
+            "requests",
+            "seconds",
+            "frames",
+            "packets",
+        ],
+        description="How one check ended.",
+    ),
     "DerPoint": _object(
         {
             "address": {"type": "string", "description": "Kind and index, as in `AO87`."},
@@ -1312,6 +1372,84 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         ),
         "example": {"outstation": "lab", "set": {"corrupt_header_crc": True}},
     },
+    "checks": {
+        "summary": "The checks an evaluation can run",
+        "description": "Each check with its set, whether it writes to the outstation and "
+        "whether it has the master break a protocol rule, in the order `evaluate` runs them.",
+        "tag": "Evaluation",
+        "params": _object({}),
+        "result": _object(
+            {"checks": {"type": "array", "items": _ref("Check")}}, required=["checks"]
+        ),
+        "example": {},
+    },
+    "evaluate": {
+        "summary": "Run checks against an outstation, and report a verdict for each",
+        "description": "Carries out the checks named, or all of them, and answers with the "
+        "report when the last has ended. Each result is also sent as a `check` event as its "
+        "check ends. A check that writes to the outstation is run only when the service was "
+        "started to command, and a check that has the master break a protocol rule only when "
+        "`allow_deviations` is true. A check that may not be run is reported as `not_run`. "
+        "One evaluation runs against an outstation at a time." + _DER_PROFILE_NEEDED,
+        "tag": "Evaluation",
+        "params": _outstation(
+            {
+                "checks": {
+                    "description": "Check identifiers or sets, as `checks` lists them. All "
+                    "of them when null or left out.",
+                    **_nullable({"type": "array", "items": _STRING}),
+                },
+                "allow_deviations": {
+                    **_BOOLEAN,
+                    "default": False,
+                    "description": "Run the checks that have the master break a protocol rule.",
+                },
+                "settle": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Seconds to wait for the outstation to reach a state it "
+                    "was commanded to. 5 when left out.",
+                },
+                "curves": {
+                    "description": "How many curves the outstation stores. Found by "
+                    "selecting each in turn when null or left out.",
+                    **_nullable({"type": "integer", "minimum": 1}),
+                },
+            }
+        ),
+        "result": _object(
+            {
+                "tool": _STRING,
+                "version": _STRING,
+                "outstation": _STRING,
+                "started": {"type": "string", "description": "When the run began, in UTC."},
+                "allow_control": _BOOLEAN,
+                "allow_deviations": _BOOLEAN,
+                "tables": {
+                    "type": "string",
+                    "description": "The edition of the profile tables the checks used.",
+                },
+                "summary": {
+                    "type": "object",
+                    "additionalProperties": _INTEGER,
+                    "description": "How many checks ended with each verdict.",
+                },
+                "results": {"type": "array", "items": _ref("CheckResult")},
+            },
+            required=[
+                "tool",
+                "version",
+                "outstation",
+                "started",
+                "allow_control",
+                "allow_deviations",
+                "tables",
+                "summary",
+                "results",
+            ],
+        ),
+        "example": {"outstation": "lab", "checks": ["MON-001", "LINK-001"]},
+    },
     "der.read": {
         "summary": "Read points of the DER profile by name, or a named group",
         "description": "In engineering units, with each point's quality. A point is named by "
@@ -1606,6 +1744,11 @@ _TAGS = [
         "Deviations",
         "Protocol rules the master breaks on purpose, so a test can see whether the "
         "outstation rejects what the standard says it must. Off until turned on.",
+    ),
+    (
+        "Evaluation",
+        "Checks of an outstation, each with a verdict. See the guide to evaluating an "
+        "outstation for what each check requires.",
     ),
     (
         "DER profile",
