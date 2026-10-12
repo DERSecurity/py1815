@@ -828,7 +828,9 @@ class TestWithAToken:
             await page.evaluate("getComputedStyle(document.querySelector('.masthead')).display")
             == "flex"
         )
-        assert await page.evaluate("(state.points.ai || new Map()).size") > 0
+        # The points come from the response to the first poll, which can arrive
+        # after the title and the service state are shown.
+        await page.wait_for("(state.points.ai || new Map()).size > 0")
         assert page.errors == []
 
     @pytest.mark.asyncio
