@@ -143,6 +143,20 @@ class _SelfConfirming(_Wrapped):
         return out
 
 
+class _Unclearing(_Wrapped):
+    """An outstation that never clears an event: it does not read confirmations."""
+
+    def receive(self, octets: bytes) -> bytes:
+        kept = b""
+        for frame in link.FrameReader().feed(octets):
+            payload = frame.payload
+            # Function code 0, CONFIRM, after the transport and application control octets.
+            if len(payload) >= 3 and payload[2] == 0x00:
+                continue
+            kept += link.build(frame.control, frame.destination, frame.source, payload)
+        return bytes(self._session.receive(kept)) if kept else b""
+
+
 # ------------------------------------------------------------------- the set
 
 
@@ -305,6 +319,13 @@ class TestAnOutstationThatMisbehaves:
         result = _one(_SelfConfirming(_session(points)), points, name)
         assert result.verdict is FAILED
         assert "events were not reported again though " + though in result.detail, result
+
+    @pytest.mark.parametrize("name", EVENTS)
+    def test_one_that_reports_events_again_after_they_were_confirmed_fails(self, name):
+        points = _points()
+        result = _one(_Unclearing(_session(points)), points, name)
+        assert result.verdict is FAILED
+        assert "events were reported again after they were confirmed" in result.detail, result
 
     def test_one_that_answers_no_read_at_all_fails_before_anything_is_bent(self):
         class _Hushed(_Wrapped):
