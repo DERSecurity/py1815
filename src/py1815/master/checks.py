@@ -20,6 +20,12 @@ a switch, a permission, started or stopped. Settings, curves and which
 functions are enabled are left as the check last wrote them, with every
 function it enabled disabled again.
 
+The deviation set has the master break a protocol rule on purpose
+(:mod:`py1815.master.deviations`) and requires what the standard requires of
+the outstation: silence for a frame or a segment it has to discard, and
+events kept until the right confirmation arrives. These checks write nothing
+to the outstation. They are run only when the run is allowed to deviate.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -29,8 +35,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from py1815.control import CommandStatus
-from py1815.decode import PointType
-from py1815.master.bench import Bench, Check, Failed, NotApplicable, name
+from py1815.decode import DecodedObject, PointType
+from py1815.master.association import Exchange
+from py1815.master.bench import RECOVERY_READS, Bench, Check, Failed, NotApplicable, name
 from py1815.master.profile import POINT_TYPES, Function, Plan, address
 from py1815.profile import curves, der
 from py1815.profile.model import Kind, Point
@@ -1030,6 +1037,167 @@ def device_profile(bench: Bench) -> Plan[None]:
     bench.require(not problems, "; ".join(problems))
 
 
+# ------------------------------------------------------- the deviation checks
+
+#: The name of the set of checks that have the master break a protocol rule.
+DEVIATION = "deviation"
+
+#: Events named in a failure before the rest are counted.
+_EVENTS_NAMED = 4
+
+
+def not_answered(
+    deviation: str, what: str, *, reads: int = RECOVERY_READS
+) -> Callable[[Bench], Plan[None]]:
+    """Return the check that a request sent with one deviation on draws no answer.
+
+    A well-formed read is answered first, so that the silence that follows is
+    about the deviation. With the deviation on, a read has to go unanswered.
+    With it off again, one of the next ``reads`` reads has to be answered, so
+    the silence was about that one request and not a receiver that stopped.
+    """
+
+    def procedure(bench: Bench) -> Plan[None]:
+        yield from bench.answers("the check began", reads=1)
+        yield from bench.deviate(deviation)
+        yield from bench.unanswered(what)
+        yield from bench.conform()
+        yield from bench.answers(what, reads=reads)
+
+    return procedure
+
+
+def _key(event: DecodedObject) -> tuple[object, ...]:
+    """Return what makes an event the same event when it is reported again."""
+    kind = event.group if event.point is None else event.point
+    return (kind, event.index, event.value, event.flags, event.time_ms)
+
+
+def _events(exchange: Exchange) -> dict[tuple[object, ...], DecodedObject]:
+    return {_key(each): each for each in exchange.objects if each.event}
+
+
+def _said(events: Sequence[DecodedObject]) -> str:
+    """Name a few events by point type and index, and count the rest."""
+    named = [
+        f"{'group ' + str(each.group) if each.point is None else each.point.value} {each.index}"
+        for each in events[:_EVENTS_NAMED]
+    ]
+    more = len(events) - len(named)
+    return ", ".join(named) + (f" and {more} more" if more > 0 else "")
+
+
+def events_kept(deviation: str, what: str) -> Callable[[Bench], Plan[None]]:
+    """Return the check that events are kept until the right confirmation arrives.
+
+    The events are read with one confirmation deviation on, so the outstation
+    does not receive the confirmation it asked for. Read again, it has to
+    report every one of them again (IEEE 1815-2012 Table 6-1, and 4.6.6 rule
+    9). With the deviation off they are read once more and confirmed, and a
+    read after that must not report them.
+    """
+
+    def procedure(bench: Bench) -> Plan[None]:
+        if not (yield from bench.confirming()):
+            raise NotApplicable("the master is set to send no confirmations")
+        yield from bench.deviate(deviation)
+        first = yield from bench.events()
+        reported = _events(first)
+        if not reported:
+            raise NotApplicable("the outstation had no events to report")
+        bench.note(f"{len(reported)} events were read and {what}")
+        bench.require(
+            any(fragment.control.con for fragment in first.fragments),
+            "the response that carried the events did not ask for a confirmation",
+        )
+
+        again = _events((yield from bench.events()))
+        missing = [event for key, event in reported.items() if key not in again]
+        bench.require(
+            not missing,
+            f"{len(missing)} of {len(reported)} events were not reported again though "
+            f"{what}: {_said(missing)}",
+        )
+
+        yield from bench.conform()
+        confirmed = _events((yield from bench.events()))
+        missing = [event for key, event in reported.items() if key not in confirmed]
+        bench.require(
+            not missing,
+            f"{len(missing)} of {len(reported)} events were gone before they were "
+            f"confirmed: {_said(missing)}",
+        )
+
+        # An event with no time can be equal to a later event at the same
+        # point, so only the timed ones can be told to have been cleared.
+        timed = {key: event for key, event in reported.items() if event.time_ms is not None}
+        if not timed:
+            bench.note("the events carry no time, so their clearing could not be checked")
+            return
+        afterwards = _events((yield from bench.events()))
+        repeated = [event for key, event in timed.items() if key in afterwards]
+        bench.require(
+            not repeated,
+            f"{len(repeated)} events were reported again after they were confirmed: "
+            f"{_said(repeated)}",
+        )
+
+    return procedure
+
+
+def _deviating(identifier: str, title: str, procedure: Callable[[Bench], Plan[None]]) -> Check:
+    return Check(identifier, title, False, procedure, DEVIATION, deviates=True)
+
+
+DEVIATION_CHECKS: tuple[Check, ...] = (
+    _deviating(
+        "LINK-001",
+        "A frame with a bad header checksum is not answered",
+        not_answered("corrupt_header_crc", "a frame with a bad header checksum"),
+    ),
+    _deviating(
+        "LINK-002",
+        "A frame with a bad data checksum is not answered",
+        not_answered("corrupt_body_crc", "a frame with a bad data checksum"),
+    ),
+    _deviating(
+        "LINK-003",
+        "A frame cut short is not answered",
+        not_answered("truncate", "a frame one octet short"),
+    ),
+    _deviating(
+        "LINK-004",
+        "A frame that claims more than it carries is not answered",
+        not_answered("overstate_length", "a frame whose length claims more than it carries"),
+    ),
+    _deviating(
+        "TRANSPORT-001",
+        "A segment with no first segment is discarded",
+        not_answered("orphan_segment", "a segment with no first segment before it", reads=1),
+    ),
+    _deviating(
+        "TRANSPORT-002",
+        "A series that never ends gives way to a new first segment",
+        not_answered("endless_series", "a request whose final segment never came", reads=1),
+    ),
+    _deviating(
+        "CONFIRM-001",
+        "Events are kept when no confirmation arrives",
+        events_kept("withhold_confirmation", "no confirmation was sent"),
+    ),
+    _deviating(
+        "CONFIRM-002",
+        "Events are kept when the confirmation has the wrong sequence number",
+        events_kept("wrong_confirmation_sequence", "the wrong sequence number was confirmed"),
+    ),
+    _deviating(
+        "CONFIRM-003",
+        "Events are kept when the confirmation arrives after the next request",
+        events_kept("late_confirmation", "the confirmation was sent after the next request"),
+    ),
+)
+
+
 # ----------------------------------------------------------------- the catalog
 
 CATALOG: tuple[Check, ...] = (
@@ -1067,6 +1235,7 @@ CATALOG: tuple[Check, ...] = (
         Check(identifier, f"The function enabled by BO{enable}", True, mode_check(enable))
         for identifier, enable in MODES.items()
     ),
+    *DEVIATION_CHECKS,
 )
 
 
@@ -1086,4 +1255,16 @@ def select(wanted: Sequence[str] | None) -> tuple[Check, ...]:
     return tuple(check for check in CATALOG if check.id.casefold() in names or check.group in names)
 
 
-__all__ = ["CATALOG", "MODES", "SAMPLE_CURVES", "Check", "SampleCurve", "select", "valid_values"]
+__all__ = [
+    "CATALOG",
+    "DEVIATION",
+    "DEVIATION_CHECKS",
+    "MODES",
+    "SAMPLE_CURVES",
+    "Check",
+    "SampleCurve",
+    "events_kept",
+    "not_answered",
+    "select",
+    "valid_values",
+]

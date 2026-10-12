@@ -24,7 +24,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from py1815 import crc, link, transport
 from py1815.application import FunctionCode
@@ -131,6 +131,38 @@ def orphan_segment(frame: bytes) -> bytes:
     return _rebuild(frame, bytes([parsed.payload[0] & ~transport.FIR_MASK]) + parsed.payload[1:])
 
 
+def endless_series(frame: bytes) -> bytes:
+    """Clear the final-segment bit, so the series the segment belongs to never ends.
+
+    The outstation is left assembling a fragment whose last segment does not
+    come. A new first segment ends that (IEEE 1815-2012 8.2.4, Table 8-1).
+    """
+    parsed = link.parse(frame)
+    if not parsed.payload:
+        return frame
+    return _rebuild(frame, bytes([parsed.payload[0] & ~transport.FIN_MASK]) + parsed.payload[1:])
+
+
+def second_master_address(frame: bytes) -> bytes:
+    """Change the frame's source address to another master's, header checksum recomputed.
+
+    The address is the next one above the master's own that is a station
+    address and is not the outstation's. Whether an outstation answers a
+    master it was not told of is its own choice, which its Device Profile
+    states, so a response to this is addressed to that other master.
+    """
+    if len(frame) < link.HEADER_SIZE:
+        return frame
+    destination = int.from_bytes(frame[4:6], "little")
+    source = int.from_bytes(frame[6:8], "little")
+    other = next(
+        candidate
+        for candidate in (source + 1, source + 2, source - 1, source - 2)
+        if link.is_valid_address(candidate) and candidate != destination
+    )
+    return crc.encode(frame[:6] + other.to_bytes(2, "little")) + frame[link.HEADER_SIZE :]
+
+
 def wrong_application_sequence(frame: bytes) -> bytes:
     """Change the application sequence number of the fragment the frame carries.
 
@@ -161,17 +193,23 @@ def _is_confirmation(frame: bytes) -> bool:
     return len(payload) >= 3 and payload[2] == FunctionCode.CONFIRM
 
 
+#: Which frames of a request a deviation changes.
+_FIRST, _LAST, _EVERY = "first", "last", "every"
+
 #: The deviations that change a request frame, in the order they are applied
-#: when several are on. The two that rewrite the transport header parse the
-#: frame, so they run while its checksums still verify. The header checksum is
-#: flipped last, after the deviation that recomputes it.
-_REQUEST_TRANSFORMS: tuple[tuple[str, Callable[[bytes], bytes]], ...] = (
-    ("break_transport_sequence", break_transport_sequence),
-    ("orphan_segment", orphan_segment),
-    ("overstate_length", overstate_length),
-    ("corrupt_body_crc", corrupt_body_crc),
-    ("truncate", truncate),
-    ("corrupt_header_crc", corrupt_header_crc),
+#: when several are on, and the frames each changes. The ones that rewrite the
+#: transport header parse the frame, so they run while its checksums still
+#: verify. The header checksum is flipped last, after the deviations that
+#: recompute it.
+_REQUEST_TRANSFORMS: tuple[tuple[str, Callable[[bytes], bytes], str], ...] = (
+    ("break_transport_sequence", break_transport_sequence, _FIRST),
+    ("orphan_segment", orphan_segment, _FIRST),
+    ("endless_series", endless_series, _LAST),
+    ("second_master_address", second_master_address, _EVERY),
+    ("overstate_length", overstate_length, _FIRST),
+    ("corrupt_body_crc", corrupt_body_crc, _FIRST),
+    ("truncate", truncate, _FIRST),
+    ("corrupt_header_crc", corrupt_header_crc, _FIRST),
 )
 
 
@@ -189,6 +227,8 @@ class Deviations:
     silence: bool = False
     #: Send each request twice, octet for octet.
     repeat_request: bool = False
+    #: Send every frame from another master's address.
+    second_master_address: bool = False
     #: Flip the header checksum of the first frame of each request.
     corrupt_header_crc: bool = False
     #: Flip the last data-block checksum of the first frame of each request.
@@ -203,10 +243,19 @@ class Deviations:
     #: Send the first segment of each request as a continuation, so the
     #: request has no first segment.
     orphan_segment: bool = False
+    #: Send the last segment of each request with its final bit clear, so
+    #: the series never ends.
+    endless_series: bool = False
     #: Withhold every application confirmation the master would send.
     withhold_confirmation: bool = False
+    #: Send each application confirmation after the master's next request,
+    #: and not when the response arrives.
+    late_confirmation: bool = False
     #: Confirm a sequence number the outstation did not send.
     wrong_confirmation_sequence: bool = False
+
+    #: Confirmations held back by ``late_confirmation`` until the next request.
+    _held: list[bytes] = field(default_factory=list, init=False, repr=False, compare=False)
 
     #: Deviations that act on a request the master initiated.
     _ON_REQUEST = (
@@ -216,9 +265,10 @@ class Deviations:
         "overstate_length",
         "break_transport_sequence",
         "orphan_segment",
+        "endless_series",
     )
     #: Deviations that act on a confirmation the master sends in reply.
-    _ON_CONFIRM = ("withhold_confirmation", "wrong_confirmation_sequence")
+    _ON_CONFIRM = ("withhold_confirmation", "late_confirmation", "wrong_confirmation_sequence")
 
     @classmethod
     def names(cls) -> tuple[str, ...]:
@@ -226,6 +276,7 @@ class Deviations:
         return (
             "silence",
             "repeat_request",
+            "second_master_address",
             *cls._ON_REQUEST,
             *cls._ON_CONFIRM,
         )
@@ -245,9 +296,10 @@ class Deviations:
         setattr(self, name, bool(state))
 
     def clear(self) -> None:
-        """Turn every deviation off."""
+        """Turn every deviation off, and forget any confirmation held back."""
         for name in self.names():
             setattr(self, name, False)
+        self._held.clear()
 
     def describe(self) -> dict[str, bool]:
         """Every deviation and whether it is on, as a JSON-compatible dict."""
@@ -260,44 +312,80 @@ class Deviations:
         the master is to send nothing, and is ``[octets]`` with every
         deviation off. A deviation that changes a frame returns each link
         frame as a write of its own, so a trace can keep the changed frame
-        apart from the others. A request deviation changes the first frame.
-        A confirmation deviation acts on each frame that carries an
-        application confirmation and leaves a link-layer reply as built. A
-        repeated request holds its writes twice.
+        apart from the others. A request deviation changes the first frame,
+        except ``endless_series``, which changes the last, and
+        ``second_master_address``, which changes every frame. A confirmation
+        deviation acts on each frame that carries an application confirmation
+        and leaves a link-layer reply as built. A repeated request holds its
+        writes twice. A confirmation held back by ``late_confirmation``
+        follows the next request.
         """
         if kind not in KINDS:
             raise ValueError(f"{kind!r} is not an outbound kind; one of {', '.join(KINDS)}")
+        if not self.late_confirmation:
+            # A confirmation held while the deviation was on is not sent once it is off.
+            self._held.clear()
         if self.silence:
             return []
         if kind == CONFIRM:
-            if not (self.withhold_confirmation or self.wrong_confirmation_sequence):
-                return [octets]
-            # A link-layer reply sent with the confirmation is not a
-            # confirmation, and is sent as built.
-            writes = []
-            for frame in _split(octets):
-                if not _is_confirmation(frame):
-                    writes.append(frame)
-                elif not self.withhold_confirmation:
-                    writes.append(wrong_application_sequence(frame))
-            return writes
-        transforms = [transform for name, transform in _REQUEST_TRANSFORMS if getattr(self, name)]
-        writes = self._change_first(octets, transforms) if transforms else [octets]
+            return self._confirmation(octets)
+        changes = [
+            (transform, which)
+            for name, transform, which in _REQUEST_TRANSFORMS
+            if getattr(self, name)
+        ]
+        writes = self._change(octets, changes) if changes else [octets]
         if self.repeat_request:
-            return writes * 2
+            writes = writes * 2
+        if self._held:
+            writes, self._held = writes + self._held, []
+        return writes
+
+    def _confirmation(self, octets: bytes) -> list[bytes]:
+        """Return the writes to make in place of what the association sends in reply."""
+        deviating = (
+            self.withhold_confirmation
+            or self.late_confirmation
+            or self.wrong_confirmation_sequence
+            or self.second_master_address
+        )
+        if not deviating:
+            return [octets]
+        writes = []
+        for frame in _split(octets):
+            if self.second_master_address:
+                frame = second_master_address(frame)
+            if not _is_confirmation(frame):
+                # A link-layer reply sent with the confirmation is not a
+                # confirmation, and is sent as built.
+                writes.append(frame)
+                continue
+            if self.withhold_confirmation:
+                continue
+            if self.wrong_confirmation_sequence:
+                frame = wrong_application_sequence(frame)
+            if self.late_confirmation:
+                self._held.append(frame)
+            else:
+                writes.append(frame)
         return writes
 
     @staticmethod
-    def _change_first(octets: bytes, transforms: list[Callable[[bytes], bytes]]) -> list[bytes]:
-        """Return the link frames of ``octets``, the first one changed by each transform.
+    def _change(octets: bytes, changes: list[tuple[Callable[[bytes], bytes], str]]) -> list[bytes]:
+        """Return the link frames of ``octets``, changed by each transform in turn.
 
         A request is almost always one frame. A long request is several, and
-        the deviation changes the first, which is where a transport or header
-        fault is seen first.
+        a deviation changes the first, which is where a transport or header
+        fault is seen first, unless it is one that names the last frame or
+        every frame.
         """
         frames = _split(octets)
-        for transform in transforms:
-            frames[0] = transform(frames[0])
+        for transform, which in changes:
+            if which == _EVERY:
+                frames = [transform(frame) for frame in frames]
+            else:
+                position = 0 if which == _FIRST else -1
+                frames[position] = transform(frames[position])
         return frames
 
 
@@ -309,8 +397,10 @@ __all__ = [
     "break_transport_sequence",
     "corrupt_body_crc",
     "corrupt_header_crc",
+    "endless_series",
     "orphan_segment",
     "overstate_length",
+    "second_master_address",
     "truncate",
     "wrong_application_sequence",
 ]
