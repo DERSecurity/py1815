@@ -35,7 +35,9 @@ from py1815.server import OutstationServer
 _FRAGMENT = bytes([0xC0, 0x01, 0x3C, 0x02, 0x06])  # app control, READ, class 1 all
 _TRANSPORT = bytes([transport.FIR_MASK | transport.FIN_MASK | 0])  # FIR, FIN, seq 0
 _PAYLOAD = _TRANSPORT + _FRAGMENT
-_FRAME = link.build(0xC4, 1024, 1, _PAYLOAD)
+# The frame, written out: the header, its CRC (CA 8A), the six octets of user
+# data, and their CRC (54 E0).
+_FRAME = bytes.fromhex("05 64 0B C4 00 04 01 00 CA 8A C0 C0 01 3C 02 06 54 E0")
 
 # A link acknowledgment from the master (1) to the outstation (1024): a header
 # with control 0x80 (from a master, secondary, ACK) and no user data.
@@ -60,6 +62,36 @@ class TestTheTransforms:
         # The fixture parses, so the transforms start from a valid frame.
         parsed = _valid(_FRAME)
         assert parsed.payload == _PAYLOAD and parsed.destination == 1024
+        assert link.build(0xC4, 1024, 1, _PAYLOAD) == _FRAME
+
+    @pytest.mark.parametrize(
+        ("transform", "octets"),
+        [
+            # The first octet of the header CRC, CA, becomes 35.
+            (dev.corrupt_header_crc, "05 64 0B C4 00 04 01 00 35 8A C0 C0 01 3C 02 06 54 E0"),
+            # The last octet of the data-block CRC, E0, becomes 1F.
+            (dev.corrupt_body_crc, "05 64 0B C4 00 04 01 00 CA 8A C0 C0 01 3C 02 06 54 1F"),
+            # The last octet is gone.
+            (dev.truncate, "05 64 0B C4 00 04 01 00 CA 8A C0 C0 01 3C 02 06 54"),
+            # The length octet, 0B, becomes 1B, and the header CRC is 0B F2.
+            (dev.overstate_length, "05 64 1B C4 00 04 01 00 0B F2 C0 C0 01 3C 02 06 54 E0"),
+            # The transport header, C0, becomes C1: sequence 1. The CRC is B3 55.
+            (
+                dev.break_transport_sequence,
+                "05 64 0B C4 00 04 01 00 CA 8A C1 C0 01 3C 02 06 B3 55",
+            ),
+            # The transport header, C0, becomes 80: FIR clear. The CRC is 29 4E.
+            (dev.orphan_segment, "05 64 0B C4 00 04 01 00 CA 8A 80 C0 01 3C 02 06 29 4E"),
+            # The application control, C0, becomes C1: sequence 1. The CRC is 52 C3.
+            (
+                dev.wrong_application_sequence,
+                "05 64 0B C4 00 04 01 00 CA 8A C0 C1 01 3C 02 06 52 C3",
+            ),
+        ],
+        ids=lambda value: getattr(value, "__name__", None),
+    )
+    def test_a_transform_of_the_fixture_is_these_octets(self, transform, octets):
+        assert transform(_FRAME) == bytes.fromhex(octets)
 
     def test_corrupt_header_crc_flips_only_the_header_checksum(self):
         out = dev.corrupt_header_crc(_FRAME)

@@ -3546,9 +3546,39 @@
                   },
                   "set": {
                     "type": "object",
-                    "additionalProperties": {
-                      "type": "boolean"
+                    "properties": {
+                      "silence": {
+                        "type": "boolean"
+                      },
+                      "repeat_request": {
+                        "type": "boolean"
+                      },
+                      "corrupt_header_crc": {
+                        "type": "boolean"
+                      },
+                      "corrupt_body_crc": {
+                        "type": "boolean"
+                      },
+                      "truncate": {
+                        "type": "boolean"
+                      },
+                      "overstate_length": {
+                        "type": "boolean"
+                      },
+                      "break_transport_sequence": {
+                        "type": "boolean"
+                      },
+                      "orphan_segment": {
+                        "type": "boolean"
+                      },
+                      "withhold_confirmation": {
+                        "type": "boolean"
+                      },
+                      "wrong_confirmation_sequence": {
+                        "type": "boolean"
+                      }
                     },
+                    "additionalProperties": false,
                     "description": "Deviation names to true or false."
                   },
                   "clear": {

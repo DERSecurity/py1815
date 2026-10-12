@@ -178,6 +178,9 @@ for a script with no event loop. `py1815-master poll` reads an outstation once a
 what it answered, and `py1815-master evaluate` runs the DER profile's test procedures
 against one and reports a verdict for each
 ([Evaluating an outstation](https://dersecurity.github.io/py1815/master-evaluate/)).
+To test what an outstation refuses, the master can break a named protocol rule on purpose,
+such as a bad checksum or a withheld confirmation
+([Misbehaving on purpose](https://dersecurity.github.io/py1815/master/#misbehaving-on-purpose)).
 See [The console](https://dersecurity.github.io/py1815/console/),
 [The master's API](https://dersecurity.github.io/py1815/master-api/), whose routes are
 described in an [OpenAPI document](src/py1815/master/console/openapi.json), and
@@ -251,7 +254,7 @@ variations are served and named in the device profile.
 | Events | `events` | Class 1 to 3 buffers, deadbands and confirmation |
 | Session | `session` | One master association: octets in, octets out |
 | DER profile | `profile` | The IEEE 1815.2 point map, a builder that turns a map and a binding into an outstation, and a simulated DER |
-| Master | `master`, `decode` | A master for exercising outstations, over TCP or TLS: it polls, reads named points, takes unsolicited responses and keeps what it was told, sets the clock, broadcasts, and operates outputs by direct operate or by select and operate, from Python (asynchronous or blocking), a JSON service, or a web console (`py1815-master console`). The service commands only when started with `--allow-control`. A first version |
+| Master | `master`, `decode` | A master for exercising outstations, over TCP or TLS: it polls, reads named points, takes unsolicited responses and keeps what it was told, sets the clock, broadcasts, operates outputs by direct operate or by select and operate, and breaks named protocol rules on purpose to test what an outstation refuses, from Python (asynchronous or blocking), a JSON service, or a web console (`py1815-master console`). The service commands only when started with `--allow-control`. A first version |
 
 Each layer is testable without the ones above it. The session does no I/O at all -- it takes
 the bytes that arrived and returns the bytes to send -- so protocol behavior is pinned against

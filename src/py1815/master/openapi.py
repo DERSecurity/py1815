@@ -1296,7 +1296,8 @@ OPERATIONS: dict[str, dict[str, Any]] = {
             {
                 "set": {
                     "type": "object",
-                    "additionalProperties": _BOOLEAN,
+                    "properties": dict.fromkeys(DEVIATION_NAMES, _BOOLEAN),
+                    "additionalProperties": False,
                     "description": "Deviation names to true or false.",
                 },
                 "clear": {**_BOOLEAN, "description": "Turn every deviation off first."},

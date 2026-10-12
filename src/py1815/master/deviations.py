@@ -189,17 +189,19 @@ class Deviations:
     silence: bool = False
     #: Send each request twice, octet for octet.
     repeat_request: bool = False
-    #: Flip the header checksum of each request frame.
+    #: Flip the header checksum of the first frame of each request.
     corrupt_header_crc: bool = False
-    #: Flip a data-block checksum of each request frame.
+    #: Flip the last data-block checksum of the first frame of each request.
     corrupt_body_crc: bool = False
-    #: Drop the last octet of each request frame.
+    #: Drop the last octet of the first frame of each request.
     truncate: bool = False
-    #: Claim a length larger than the request frame carries.
+    #: Claim a length larger than the first frame of each request carries.
     overstate_length: bool = False
-    #: Send each request with its transport sequence number out of order.
+    #: Send the first segment of each request with a transport sequence
+    #: number that is out of order.
     break_transport_sequence: bool = False
-    #: Send each request as a continuation segment with no first segment.
+    #: Send the first segment of each request as a continuation, so the
+    #: request has no first segment.
     orphan_segment: bool = False
     #: Withhold every application confirmation the master would send.
     withhold_confirmation: bool = False
