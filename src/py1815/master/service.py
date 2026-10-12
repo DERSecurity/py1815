@@ -1320,7 +1320,7 @@ class Service:
 
     # ------------------------------------------------------------ evaluation
 
-    async def _checks(self, params: Mapping[str, Any]) -> dict[str, Any]:
+    async def _checks(self, _params: Mapping[str, Any]) -> dict[str, Any]:
         """List the checks ``evaluate`` can run, in the order it runs them."""
         return {"checks": [describe_check(check) for check in CATALOG]}
 
