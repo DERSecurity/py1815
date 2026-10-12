@@ -200,7 +200,9 @@ class TestTheDeviations:
         first, second = d.outbound(full + _FRAME, kind=dev.REQUEST)
         assert first == full[:-12] and second == _FRAME
 
-    @pytest.mark.parametrize("pair", list(itertools.combinations(Deviations._ON_REQUEST, 2)))
+    @pytest.mark.parametrize(
+        "pair", list(itertools.combinations(Deviations._ON_REQUEST, 2)), ids=" and ".join
+    )
     def test_two_request_deviations_on_together_change_the_request(self, pair):
         d = Deviations()
         for name in pair:
@@ -392,6 +394,7 @@ class TestOverASocket:
             ({"clear": True, "set": {"silence": True, "repeat_request": 1}}, "set.repeat_request"),
             ({"clear": True, "set": ["silence"]}, "set is an object"),
         ],
+        ids=["clear is a string", "an unknown name", "a state is a number", "set is a list"],
     )
     async def test_a_deviate_request_with_a_mistake_in_it_changes_nothing(
         self, params, says, served
