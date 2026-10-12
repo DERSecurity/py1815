@@ -530,6 +530,18 @@ py1815-master poll --host 192.0.2.10 --tls-ca lab-ca.pem \
     --tls-certificate master.pem --tls-key master.key
 ```
 
+`py1815-master evaluate` runs checks against an IEEE 1815.2 DER and prints a
+verdict for each: the monitoring, alarm and state points, the connect switch,
+stop and start, curves, and each of the profile's functions. It only reads
+unless started with `--allow-control`. See
+[Evaluating an outstation](master-evaluate.md).
+
+```bash
+py1815-master evaluate --outstation lab=192.0.2.10:20000
+py1815-master evaluate --outstation lab=192.0.2.10:20000 --allow-control \
+    --report lab.json --capture lab.pcap
+```
+
 
 ## Captures
 

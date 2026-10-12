@@ -5,7 +5,8 @@ the service alone, a line of JSON at a time, for a test rig. Either may be
 given outstations to add at startup, and ``console --demo`` also starts a
 simulated IEEE 1815.2 DER in the same process and connects to it, so there is
 something to look at with nothing else running. ``poll`` reads an outstation
-once and prints what it answered.
+once and prints what it answered. ``evaluate`` runs checks against an
+outstation and reports a verdict for each.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -28,8 +29,9 @@ import webbrowser
 from collections.abc import Sequence
 from typing import Any
 
-from py1815.master import poll
+from py1815.master import evaluate, poll
 from py1815.master.api import DEFAULT_RECONNECT
+from py1815.master.bench import DEFAULT_SETTLE
 from py1815.master.capture import CaptureFile
 from py1815.master.config import LOG_LEVELS, MEGABYTE, ConfigError, MasterConfig, read
 from py1815.master.service import DEFAULT_HTTP_BIND, HttpServer, LineServer, Service
@@ -171,6 +173,16 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
         value = getattr(args, key, None)
         if value is not None:
             document[key] = value
+
+    evaluating = dict(document.get("evaluate") or {})
+    for key, flag in (("settle", "settle"), ("curves", "curves"), ("report", "report")):
+        value = getattr(args, flag, None)
+        if value is not None:
+            evaluating[key] = value
+    if getattr(args, "check", None):
+        evaluating["checks"] = list(args.check)
+    if evaluating:
+        document["evaluate"] = evaluating
 
     defaults = dict(document.get("defaults") or {})
     for key in (
@@ -594,6 +606,54 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_outstation_options(config)
 
+    evaluating = commands.add_parser(
+        "evaluate",
+        help="run checks against an outstation and report a verdict for each",
+        description="Run checks against one outstation. Checks that write to it run only "
+        "with --allow-control: they change its settings, enable and disable its functions, "
+        "and stop and start it. Exit status: 0 when no check failed, 1 when one did, 2 when "
+        "the run could not be made.",
+    )
+    evaluating.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="the outstation to evaluate, when more than one is configured",
+    )
+    evaluating.add_argument(
+        "--list", action="store_true", help="print the checks and exit; nothing is sent"
+    )
+    evaluating.add_argument(
+        "--check",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="run only this check or set of checks, by a name --list prints; may be "
+        "repeated (default: all)",
+    )
+    evaluating.add_argument(
+        "--settle",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="how long to wait for the outstation to reach a state it was commanded to "
+        f"(default: {DEFAULT_SETTLE:g})",
+    )
+    evaluating.add_argument(
+        "--curves",
+        type=int,
+        default=None,
+        metavar="N",
+        help="how many curves the outstation stores (default: found by selecting each)",
+    )
+    evaluating.add_argument(
+        "--report",
+        default=None,
+        metavar="FILE",
+        help="also write the report to this file as JSON (default: no file)",
+    )
+    _add_outstation_options(evaluating)
+
     polling = commands.add_parser(
         "poll", help="run one integrity poll against an outstation and print what it answered"
     )
@@ -701,6 +761,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.out.write_text(config.render(), encoding="utf-8", newline="\n")
             print(f"wrote {args.out}")
         return 0
+    if args.command == "evaluate":
+        return evaluate.run(args, config)
 
     point_map: PointMap | None = None
     demo = args.command == "console" and args.demo

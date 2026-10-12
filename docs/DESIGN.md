@@ -1460,6 +1460,29 @@ XML document is made to grow without bound.
 *Trade-off:* an outstation that serves few of the profile's points is read in many
 small requests, and a wrong class or deadband is left for a person to notice.
 
+**D94 -- An evaluation is a list of checks, each a plan with a verdict, and it sends only
+what a master may send.** A check is a named procedure written once as a plan of requests
+(D92), so `py1815-master evaluate` runs the same check over a socket against a device and
+the tests run it in process against a session. A check fails by saying what the
+outstation did, and is not applicable when the outstation does not serve what it needs.
+A check that writes is run only when the run may command, by the switch the service
+uses (D80). The run begins by reading which points the outstation serves, as `der.compare`
+does (D93), and a point is supported when it was served, so no conformance statement is
+needed. The first set is EPRI's test procedure for the DER profile, which until now ran
+only in process against the simulated DER. Run against any device, three things differ
+from that suite. A command that is to be refused must be refused and change nothing, but
+the status it is refused with is noted and not required, since the outstation chooses
+it. What a device takes time to do is read again every half second for a settling time,
+where the suite moves a simulated clock. And a function the outstation says it does not
+support is checked for that, where the suite knows which functions the simulation has.
+A check puts back what one command restores: a switch, a permission, started or
+stopped. The number of curves an outstation stores is found by selecting each until one
+is refused.
+*Trade-off:* a run that commands changes a device's settings and stops and starts it, so
+it is for a device on a bench. A check that needs the device itself to be made to do
+something, such as raise an alarm, is not in the catalog. Only volt-var and volt-watt
+curves are written, since those are the curve types with a sample here.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1485,6 +1508,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
 - `master.sync` is `master.api` for a caller with no event loop. It adds no behavior.
 - `master.profile` is the IEEE 1815.2 profile from the master's side: names, scaling,
   functions and curves, each operation a plan of requests that whatever carries them runs.
+- `master.bench` is what a check is and how a list of them is run. `master.checks` is the
+  catalog, and knows the DER profile. `master.evaluate` is the report and the command.
 - `master.service` is the master's operations as JSON, and knows nothing of who is asking.
   The line socket, the HTTP server and the console are each a way to reach it.
 - `master.capture` writes pcap files and knows nothing of DNP3. `master.trace` turns the

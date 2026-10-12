@@ -256,6 +256,11 @@ class Trace:
             connection=self._connection,
         )
 
+    @property
+    def last_id(self) -> int:
+        """The id of the newest frame recorded, or 0 when none has been."""
+        return self._next - 1
+
     def since(self, after: int = 0) -> list[Entry]:
         """Every entry kept whose id is greater than ``after``, oldest first."""
         return [entry for entry in self._entries if entry.id > after]

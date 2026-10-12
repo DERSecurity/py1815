@@ -776,9 +776,12 @@ def read_plan(points: Sequence[Point]) -> Plan[Readings]:
     return steps()
 
 
-def _carry_out(plan: controls.Plan) -> Step:
-    # The carrier's own method, so the requests of the plan are made in one
-    # turn, as an operate made directly would be.
+def carry_out(plan: controls.Plan) -> Step:
+    """Return the step that carries out a control plan in one turn.
+
+    The carrier's own method is used, so nothing is sent between a select and
+    its operate.
+    """
     return lambda target: target._carry_out(plan)  # pylint: disable=protected-access
 
 
@@ -822,7 +825,7 @@ def write_plan(
     mirrors = [profile.mirror(point) for point, _requested, _sent in planned]
 
     def steps() -> Plan[Written]:
-        operated: Operated = yield _carry_out(plan)
+        operated: Operated = yield carry_out(plan)
         verification: Readings | None = None
         if verify:
             wanted = [mirror for mirror in mirrors if mirror is not None]
@@ -849,7 +852,7 @@ def switch_plan(
     plan = controls.Plan([controls.binary(function.enable.index, enable)], mode)
 
     def steps() -> Plan[Switched]:
-        operated: Operated = yield _carry_out(plan)
+        operated: Operated = yield carry_out(plan)
         readback: Readings | None = None
         status: Reading | None = None
         if function.status is not None:
@@ -920,7 +923,7 @@ def curve_plan(
     def steps() -> Plan[tuple[Operated | None, Curve]]:
         selected: Operated | None = None
         if selection is not None:
-            selected = yield _carry_out(selection)
+            selected = yield carry_out(selection)
         curve = yield from _read_curve(profile, inputs)
         return selected, curve
 
@@ -1016,7 +1019,7 @@ def write_curve_plan(
     def steps() -> Plan[CurveWritten]:
         done: list[Operated] = []
         for plan in plans:
-            operated: Operated = yield _carry_out(plan)
+            operated: Operated = yield carry_out(plan)
             done.append(operated)
             if operated.accepted is not True:
                 break
@@ -1152,6 +1155,47 @@ def read_device_profile(text: str) -> tuple[Declared, ...]:
     return tuple(declared)
 
 
+@dataclass(frozen=True)
+class Survey:
+    """Which points an outstation reported when asked for everything it serves."""
+
+    #: Every point reported by any of the reads.
+    served: frozenset[tuple[PointType, int]]
+    #: The points the class 0 read carried.
+    class_0: frozenset[tuple[PointType, int]]
+    exchanges: tuple[Exchange, ...]
+
+
+def survey_plan(wanted: Iterable[tuple[PointType, int]]) -> Plan[Survey]:
+    """Read which points an outstation serves.
+
+    A class 0 read, then a read of output status, then a read by range of
+    every point in ``wanted`` that neither returned. An outstation that does
+    not answer the class 0 read is asked nothing more.
+    """
+    wanted = tuple(wanted)
+
+    def steps() -> Plan[Survey]:
+        class_0: Exchange = yield lambda target: target.scan("class0")
+        if not class_0.fragments:
+            return Survey(frozenset(), frozenset(), (class_0,))
+        outputs: Exchange = yield lambda target: target.scan("outputs")
+        carried = set(_static(class_0.objects))
+        seen = carried | set(_static(outputs.objects))
+        exchanges = [class_0, outputs]
+        missing: dict[PointType, list[int]] = {}
+        for key in wanted:
+            if key not in seen:
+                missing.setdefault(key[0], []).append(key[1])
+        if missing:
+            found, looked = yield from _read_points(missing)
+            exchanges += looked
+            seen |= set(found)
+        return Survey(frozenset(seen), frozenset(carried), tuple(exchanges))
+
+    return steps()
+
+
 def compare_plan(document: str) -> Plan[Comparison]:
     """Compare what an outstation serves with what its Device Profile document declares.
 
@@ -1165,19 +1209,8 @@ def compare_plan(document: str) -> Plan[Comparison]:
     by_point = {(entry.type, entry.index): entry for entry in declared}
 
     def steps() -> Plan[Comparison]:
-        class_0: Exchange = yield lambda target: target.scan("class0")
-        outputs: Exchange = yield lambda target: target.scan("outputs")
-        carried = set(_static(class_0.objects))
-        seen = carried | set(_static(outputs.objects))
-        exchanges = [class_0, outputs]
-        missing: dict[PointType, list[int]] = {}
-        for key in by_point:
-            if key not in seen:
-                missing.setdefault(key[0], []).append(key[1])
-        if missing:
-            found, looked = yield from _read_points(missing)
-            exchanges += looked
-            seen |= set(found)
+        survey = yield from survey_plan(by_point)
+        carried, seen, exchanges = survey.class_0, survey.served, survey.exchanges
         absent = tuple(entry for key, entry in by_point.items() if key not in seen)
         undeclared = tuple(sorted((key for key in seen if key not in by_point), key=_order))
         served = tuple(entry for key, entry in by_point.items() if key in seen)
@@ -1186,7 +1219,7 @@ def compare_plan(document: str) -> Plan[Comparison]:
             for entry in served
             if entry.class_0 is not None and entry.class_0 != ((entry.type, entry.index) in carried)
         )
-        return Comparison(declared, absent, undeclared, misplaced, served, tuple(exchanges))
+        return Comparison(declared, absent, undeclared, misplaced, served, exchanges)
 
     return steps()
 
@@ -1365,6 +1398,7 @@ __all__ = [
     "Reading",
     "Readings",
     "Setpoint",
+    "Survey",
     "Switched",
     "Written",
     "address",

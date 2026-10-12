@@ -1,8 +1,9 @@
 # Master
 
 A master for exercising outstations. [The master](../master.md),
-[The console](../console.md) and [The master's API](../master-api.md) are the
-guides; this is the reference.
+[The console](../console.md), [The master's API](../master-api.md) and
+[Evaluating an outstation](../master-evaluate.md) are the guides; this is the
+reference.
 
 ## Over a socket
 
@@ -19,6 +20,16 @@ guides; this is the reference.
 ## An IEEE 1815.2 DER
 
 ::: py1815.master.profile
+
+## Evaluating an outstation
+
+[Evaluating an outstation](../master-evaluate.md) is the guide.
+
+::: py1815.master.evaluate
+
+::: py1815.master.bench
+
+::: py1815.master.checks
 
 ## What is done unasked
 
