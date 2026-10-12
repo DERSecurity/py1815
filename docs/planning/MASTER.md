@@ -651,8 +651,11 @@ done means.
     the freezes, when started to command; the image; and tests that load it in
     a browser; and the DER tab, with the nameplate, monitoring, each supported
     function with its settings and an enable switch, the curve as a plot and a
-    table, and the comparison with a Device Profile document. *Left:* the
-    Evaluate tab, and the saved requests.
+    table, and the comparison with a Device Profile document; the Evaluate
+    tab, with the checks to run, each verdict as its check ends, the report
+    to save and a switch for each deviation; and the Requests tab, with saved
+    requests sent once or repeated by the page (D97). *Left:* nothing of the
+    layout above.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say. *Built:*

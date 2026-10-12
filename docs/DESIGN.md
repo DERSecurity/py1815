@@ -1541,6 +1541,23 @@ on the events the outstation happens to hold and are not applicable when it hold
 and they cannot tell an event with no time from a later one at the same point, so the
 last step, that a confirmed event is not reported again, is made only for timed events.
 
+**D97 -- The console runs an evaluation through the service, and keeps saved requests in
+the browser.** The Evaluate tab asks the service's `checks` and `evaluate` operations and
+holds none of the checks: `evaluate` answers with the report when the last check has
+ended and publishes each result as a `check` event, so the page shows a run that takes
+minutes without polling. One evaluation runs against an outstation at a time. A check
+that writes is run only by a service started to command and is written to the command
+log, as every operation that writes is (D80); a check that deviates is run only when the
+request allows it (D96). A saved request is a reader's own note, a function code and its
+object headers, and not the master's state or the outstation's, so the Requests tab keeps
+the list in the browser's storage, sends each through the `request` operation that
+already exists, and repeats one on the page's own timer. The service gains nothing to
+store and no second way to send a request.
+*Trade-off:* a repeated request stops when the page is closed, and a list saved in one
+browser is not in another. The master's own repeated scans, which outlive the page, are
+still the Commands tab's. An evaluation started from the console writes no capture file,
+so its results name their frames in the trace and not packets.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
