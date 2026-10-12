@@ -23,8 +23,9 @@ The blocking methods are generated from the asynchronous ones and not written
 out a second time: the list of them is :data:`BLOCKING`, and a test holds it to
 the asynchronous interface, so neither can gain an operation the other lacks.
 Anything else on an outstation is read in the loop's thread: a method is
-called there, and the store and the trace are reached through a view that
-does the same, so nothing is read while the loop is changing it.
+called there, and the store, the trace and the deviations are reached through
+a view that does the same, so nothing is read while the loop is changing it
+and nothing is changed while the loop is reading it.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -40,6 +41,7 @@ from types import TracebackType
 from typing import Any, TypeVar
 
 from py1815.master import api
+from py1815.master.deviations import Deviations
 from py1815.master.operations import Operations
 from py1815.master.store import Store
 from py1815.master.tasks import Tasks
@@ -128,6 +130,14 @@ class _InLoop:
             return method
         return value
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # The view's own two attributes are set here. Any other is the
+        # target's, and is set on the loop's thread.
+        if name in ("_runner", "_target"):
+            object.__setattr__(self, name, value)
+        else:
+            self._runner.call(setattr, self._target, name, value)
+
     def __len__(self) -> int:
         return self._runner.call(len, self._target)
 
@@ -160,6 +170,15 @@ class Outstation:
     def trace(self) -> Trace:
         """The trace, read on the master's thread."""
         return _InLoop(self._runner, self._outstation.trace)  # type: ignore[return-value]
+
+    @property
+    def deviations(self) -> Deviations:
+        """The deviations, read and changed on the master's thread.
+
+        The loop reads them each time it sends, so a change made on the
+        caller's thread could be seen half made.
+        """
+        return _InLoop(self._runner, self._outstation.deviations)  # type: ignore[return-value]
 
     @property
     def tasks(self) -> Tasks:

@@ -1497,6 +1497,9 @@ orphan a segment; withhold a confirmation; confirm the wrong sequence. The socke
 and the loopback apply the same ones, and the service's `deviate` turns them on and off.
 A deviation that is on always changes what is sent: a frame whose length octet is already
 at its highest value cannot overstate it, so that frame loses its last data block instead.
+A confirmation deviation acts on the frame that carries the application confirmation and
+leaves a link-layer reply sent with it as built. The blocking master reads and changes the
+deviations on the loop's thread, as it does the store and the trace.
 The trace keeps each write as it was made, so a frame that no reader accepts is in the
 trace and in a capture with what is wrong with it. The trace reads what the master sent
 without the reader a receiver uses, which drops such a frame and holds a short one.

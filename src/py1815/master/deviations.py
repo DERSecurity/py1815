@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from py1815 import crc, link, transport
+from py1815.application import FunctionCode
 
 #: What an outbound write is: a request the master initiated, or a confirmation
 #: it is sending in reply to something the outstation sent. A deviation names
@@ -145,6 +146,21 @@ def wrong_application_sequence(frame: bytes) -> bytes:
     return _rebuild(frame, parsed.payload[:1] + bytes([changed]) + parsed.payload[2:])
 
 
+def _is_confirmation(frame: bytes) -> bool:
+    """Return whether a link frame carries an application confirmation.
+
+    The association can answer one frame with a link-layer reply and an
+    application confirmation together. A frame with no user data, or with
+    another function code after its transport and application control octets,
+    is not a confirmation.
+    """
+    try:
+        payload = link.parse(frame).payload
+    except link.LinkFrameError:
+        return False
+    return len(payload) >= 3 and payload[2] == FunctionCode.CONFIRM
+
+
 #: The deviations that change a request frame, in the order they are applied
 #: when several are on. The two that rewrite the transport header parse the
 #: frame, so they run while its checksums still verify. The header checksum is
@@ -185,7 +201,7 @@ class Deviations:
     break_transport_sequence: bool = False
     #: Send each request as a continuation segment with no first segment.
     orphan_segment: bool = False
-    #: Withhold every confirmation the master would send.
+    #: Withhold every application confirmation the master would send.
     withhold_confirmation: bool = False
     #: Confirm a sequence number the outstation did not send.
     wrong_confirmation_sequence: bool = False
@@ -241,20 +257,28 @@ class Deviations:
         ``kind`` is :data:`REQUEST` or :data:`CONFIRM`. The list is empty when
         the master is to send nothing, and is ``[octets]`` with every
         deviation off. A deviation that changes a frame returns each link
-        frame as a write of its own, the first one changed, so a trace can
-        keep the changed frame apart from the frames after it. A repeated
-        request holds its writes twice.
+        frame as a write of its own, so a trace can keep the changed frame
+        apart from the others. A request deviation changes the first frame.
+        A confirmation deviation acts on each frame that carries an
+        application confirmation and leaves a link-layer reply as built. A
+        repeated request holds its writes twice.
         """
         if kind not in KINDS:
             raise ValueError(f"{kind!r} is not an outbound kind; one of {', '.join(KINDS)}")
         if self.silence:
             return []
         if kind == CONFIRM:
-            if self.withhold_confirmation:
-                return []
-            if self.wrong_confirmation_sequence:
-                return self._change_first(octets, [wrong_application_sequence])
-            return [octets]
+            if not (self.withhold_confirmation or self.wrong_confirmation_sequence):
+                return [octets]
+            # A link-layer reply sent with the confirmation is not a
+            # confirmation, and is sent as built.
+            writes = []
+            for frame in _split(octets):
+                if not _is_confirmation(frame):
+                    writes.append(frame)
+                elif not self.withhold_confirmation:
+                    writes.append(wrong_application_sequence(frame))
+            return writes
         transforms = [transform for name, transform in _REQUEST_TRANSFORMS if getattr(self, name)]
         writes = self._change_first(octets, transforms) if transforms else [octets]
         if self.repeat_request:

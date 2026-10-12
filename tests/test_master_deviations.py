@@ -21,7 +21,8 @@ import pytest_asyncio
 from profile_fixtures import for_reference_der
 
 from py1815 import crc, link, transport
-from py1815.master import Deviations, Loopback, Outcome, Outstation
+from py1815.application import FunctionCode
+from py1815.master import Deviations, Loopback, MasterAssociation, Outcome, Outstation
 from py1815.master import deviations as dev
 from py1815.master.service import Service
 from py1815.profile import der, load
@@ -35,6 +36,15 @@ _FRAGMENT = bytes([0xC0, 0x01, 0x3C, 0x02, 0x06])  # app control, READ, class 1 
 _TRANSPORT = bytes([transport.FIR_MASK | transport.FIN_MASK | 0])  # FIR, FIN, seq 0
 _PAYLOAD = _TRANSPORT + _FRAGMENT
 _FRAME = link.build(0xC4, 1024, 1, _PAYLOAD)
+
+# A link acknowledgment from the master (1) to the outstation (1024): a header
+# with control 0x80 (from a master, secondary, ACK) and no user data.
+_LINK_ACK = bytes.fromhex("05 64 05 80 00 04 01 00 6D C7")
+# An application confirmation of sequence 3: the transport header, application
+# control 0xC3 (FIR, FIN, sequence 3) and function code 0x00.
+_CONFIRMATION = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 C3 00 98 26")
+# The same confirmation with application control 0xC4, sequence 4.
+_CONFIRMATION_OF_4 = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 C4 00 F9 A1")
 
 
 def _valid(frame: bytes) -> link.LinkFrame:
@@ -164,14 +174,55 @@ class TestTheDeviations:
 
     def test_withhold_confirmation_drops_a_confirmation_and_leaves_a_request_alone(self):
         d = Deviations(withhold_confirmation=True)
-        assert d.outbound(_FRAME, kind=dev.CONFIRM) == []
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == []
         assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
 
     def test_wrong_confirmation_sequence_changes_a_confirmation_only(self):
         d = Deviations(wrong_confirmation_sequence=True)
         assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
-        (out,) = d.outbound(_FRAME, kind=dev.CONFIRM)
-        assert out == dev.wrong_application_sequence(_FRAME)
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == [_CONFIRMATION_OF_4]
+
+    def test_withhold_confirmation_still_sends_the_link_acknowledgment(self):
+        d = Deviations(withhold_confirmation=True)
+        assert d.outbound(_LINK_ACK + _CONFIRMATION, kind=dev.CONFIRM) == [_LINK_ACK]
+
+    def test_wrong_confirmation_sequence_changes_the_confirmation_after_a_link_acknowledgment(
+        self,
+    ):
+        d = Deviations(wrong_confirmation_sequence=True)
+        assert d.outbound(_LINK_ACK + _CONFIRMATION, kind=dev.CONFIRM) == [
+            _LINK_ACK,
+            _CONFIRMATION_OF_4,
+        ]
+
+    @pytest.mark.parametrize("name", Deviations._ON_CONFIRM)
+    def test_a_link_reply_with_no_confirmation_is_sent_as_built(self, name):
+        d = Deviations()
+        d.set(name, True)
+        assert d.outbound(_LINK_ACK, kind=dev.CONFIRM) == [_LINK_ACK]
+
+    def test_the_confirmation_of_a_response_in_a_confirmed_link_frame_is_the_frame_changed(self):
+        # An outstation that asks for a link acknowledgment and an application
+        # confirmation in one frame is answered with both, the acknowledgment
+        # first. The deviation has to act on the second.
+        association = MasterAssociation()
+        association.request(FunctionCode.READ, bytes.fromhex("3C 02 06"))
+        control = link.control_byte(
+            from_master=False, primary=True, function=link.PrimaryFunction.CONFIRMED_USER_DATA
+        )
+        # Transport FIR and FIN, then a response with FIR, FIN and CON, sequence 0.
+        response = link.build(control, 1, 1024, bytes.fromhex("C0 E0 81 00 00"))
+        reply = association.receive(response)
+        assert reply[: len(_LINK_ACK)] == _LINK_ACK
+        assert link.parse(reply[len(_LINK_ACK) :]).payload[1:] == bytes.fromhex("C0 00")
+
+        wrong = Deviations(wrong_confirmation_sequence=True)
+        acknowledgment, confirmation = wrong.outbound(reply, kind=dev.CONFIRM)
+        assert acknowledgment == _LINK_ACK
+        assert link.parse(confirmation).payload[1:] == bytes.fromhex("C1 00"), "sequence 1"
+        assert Deviations(withhold_confirmation=True).outbound(reply, kind=dev.CONFIRM) == [
+            _LINK_ACK
+        ]
 
     @pytest.mark.parametrize("name", Deviations._ON_REQUEST)
     def test_a_request_deviation_changes_a_request_and_not_a_confirmation(self, name):

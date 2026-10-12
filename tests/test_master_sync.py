@@ -10,7 +10,7 @@ import pytest
 from profile_fixtures import for_reference_der
 
 from py1815.application import FunctionCode
-from py1815.master import Outcome, PointType, Tasks, api, sync
+from py1815.master import Deviations, Outcome, PointType, Tasks, api, sync
 from py1815.master.operations import Operations
 from py1815.profile import der, load
 from py1815.profile.model import Composition
@@ -105,6 +105,39 @@ class TestAgainstAnOutstation:
             lab.repeat_scan("class0", 0.01)
             assert lab.wait_for(lambda _: lab.counts.get("complete", 0) > 6, 5.0)
             lab.repeat_scan("class0", None)
+
+    def test_deviations_are_read_and_changed_on_the_masters_thread(self, served):
+        class Recording(Deviations):
+            """Deviations that note the thread each change is made on."""
+
+            def __setattr__(self, name, value):
+                changed_on.append(threading.current_thread().name)
+                super().__setattr__(name, value)
+
+        changed_on: list[str] = []
+        with sync.Master() as master:
+            lab = master.add("lab", host="127.0.0.1", port=served.port, tasks=Tasks.none())
+            lab._outstation.deviations = Recording()
+            changed_on.clear()
+
+            lab.deviations.silence = True
+            assert lab.deviations.silence and lab.deviations.on() == ("silence",)
+            lab.deviations.set("truncate", True)
+            lab.deviations.clear()
+            assert not lab.deviations.any_on()
+            assert lab.integrity_poll().complete
+
+        assert changed_on and set(changed_on) == {"py1815-master"}
+
+    def test_a_deviation_set_through_the_blocking_master_changes_what_is_sent(self, served):
+        with sync.Master() as master:
+            lab = master.add(
+                "lab", host="127.0.0.1", port=served.port, tasks=Tasks.none(), response_timeout=0.3
+            )
+            lab.deviations.corrupt_header_crc = True
+            assert lab.integrity_poll().outcome is Outcome.TIMEOUT
+            lab.deviations.corrupt_header_crc = False
+            assert lab.integrity_poll().complete
 
     def test_a_command_and_a_broadcast_block_until_sent(self, served):
         with sync.Master() as master:

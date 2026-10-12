@@ -482,6 +482,9 @@ refuse), `withhold_confirmation` (send no confirmation), and `wrong_confirmation
 (confirm a sequence the outstation did not send). They are applied to the frame the
 master built on its way out, so with every one off the master is conformant.
 
+The two confirmation deviations act on the application confirmation. A link-layer
+acknowledgment the master sends with it is sent as built.
+
 A deviation that changes a frame changes the first frame of a request. A frame that is
 already full cannot claim a greater length, so `overstate_length` drops that frame's last
 data block instead. When several are on, each is applied to the same frame.
@@ -553,6 +556,8 @@ with Master() as master:
 
 The master runs on an event loop of its own in a thread it starts and stops,
 so the tasks, unsolicited responses and repeated scans carry on between calls.
+The store, the trace and the deviations are read and changed on that thread, so
+`lab.deviations.silence = True` takes effect between two sends and never during one.
 Its blocking methods are made from the asynchronous ones, and a test fails if
 an operation is added to one and not the other.
 
