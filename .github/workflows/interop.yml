@@ -43,6 +43,11 @@ on:
 # Both serve the same fixture and log every control and time write they
 # receive. interop/master_check.py checks what the master decodes against the
 # fixture, and what each outstation logged against what the master sent.
+#
+# Two things are checked against the Rust outstation only. It carries out
+# counter freezes and logs them, and it listens with TLS. opendnp3 answers a
+# freeze as a function it does not support, which is checked as a refusal, and
+# its Python bindings cannot open a TLS server.
 
 jobs:
   opendnp3-master:
@@ -354,6 +359,11 @@ jobs:
     # interop/master_check.py runs the checks. It compares what the master
     # decodes with the outstation's fixture, and what the outstation logs it
     # received with what the master sent.
+    #
+    # --no-freeze because opendnp3 answers a counter freeze as a function it
+    # does not support. The checks are then that the master reports each
+    # refusal, that the frozen counters read back unchanged, and that the
+    # stack's own log names each freeze sent with no response.
     steps:
       - uses: actions/checkout@v4
 
@@ -397,7 +407,7 @@ jobs:
         timeout-minutes: 3
         run: |
           .venv-master/bin/python -u interop/master_check.py --port 20000 \
-            --log outstation.log
+            --log outstation.log --no-freeze
 
       - name: Outstation log
         if: always()
@@ -419,6 +429,11 @@ jobs:
     # job should read the license for its own use; commercial licensing is at
     # https://stepfunc.io/contact. interop/rust-outstation/README.md says
     # more, and deleting that directory and this job removes this use of it.
+    #
+    # The checks run twice, against two outstation processes: once over plain
+    # TCP and once over TLS. The second process is needed because the checks
+    # change the outstation's points. The certificates are made in the job and
+    # are never in the repository.
     steps:
       - uses: actions/checkout@v4
 
@@ -472,9 +487,47 @@ jobs:
         timeout-minutes: 3
         run: python -u interop/master_check.py --port 20000 --log outstation.log
 
-      - name: Outstation log
+      - name: Make the certificates for TLS
+        run: |
+          openssl version
+          interop/make_certificates.sh "$RUNNER_TEMP/certs"
+
+      - name: Start the independent outstation with TLS
+        run: |
+          # master.test is the name the outstation accepts in the master's
+          # certificate. The certificate script gives the master that name.
+          interop/rust-outstation/target/debug/interop-rust-outstation 127.0.0.1:20001 \
+            "$RUNNER_TEMP/certs/authority.pem" "$RUNNER_TEMP/certs/outstation.pem" \
+            "$RUNNER_TEMP/certs/outstation.key" master.test \
+            > outstation-tls.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if grep -q 'outstation listening on .* with TLS' outstation-tls.log 2>/dev/null; then
+              echo "outstation listening with TLS"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "outstation did not bind within 30s"
+          cat outstation-tls.log
+          exit 1
+
+      - name: Read and command it over TLS with this library's master
+        # Bounded well inside the job, so a hang fails here with a log.
+        timeout-minutes: 3
+        run: |
+          # The outstation's certificate names outstation.test and not the
+          # address connected to, so the master is told the name to check.
+          python -u interop/master_check.py --port 20001 --log outstation-tls.log \
+            --tls-ca "$RUNNER_TEMP/certs/authority.pem" \
+            --tls-certificate "$RUNNER_TEMP/certs/master.pem" \
+            --tls-key "$RUNNER_TEMP/certs/master.key" \
+            --tls-server-name outstation.test
+
+      - name: Outstation logs
         if: always()
-        run: cat outstation.log || true
+        run: |
+          cat outstation.log || true
+          cat outstation-tls.log || true
 
   interop:
     name: interop

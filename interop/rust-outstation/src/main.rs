@@ -9,19 +9,32 @@
 //! `interop/master_check.py` and `interop/opendnp3_outstation.py` carry the
 //! same fixture.
 //!
-//! Every control and time write received is printed, one line each, in the
-//! format `master_check.py` reads from this process's log:
+//! Every control, freeze and time write received is printed, one line each, in
+//! the format `master_check.py` reads from this process's log:
 //!
 //! ```text
 //! control select bo 0 latch_on
 //! control operate ao 1 250
+//! freeze immediate all
+//! freeze clear 0 to 1
 //! time written 1700000000000
+//! ```
+//!
+//! With an address alone the outstation listens on plain TCP. With an
+//! authority, a certificate, a key and the master's name after the address, it
+//! listens with TLS and accepts only a master whose certificate the authority
+//! signed and that carries that name:
+//!
+//! ```text
+//! interop-rust-outstation 127.0.0.1:20000
+//! interop-rust-outstation 127.0.0.1:20000 authority.pem outstation.pem outstation.key master.test
 //! ```
 //!
 //! Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 
 use std::io::Write;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dnp3::app::control::{
@@ -29,7 +42,8 @@ use dnp3::app::control::{
     OpType, TripCloseCode,
 };
 use dnp3::app::measurement::{
-    AnalogInput, AnalogOutputStatus, BinaryInput, BinaryOutputStatus, Counter, Flags, Time,
+    AnalogInput, AnalogOutputStatus, BinaryInput, BinaryOutputStatus, Counter, Flags,
+    FrozenCounter, Time,
 };
 use dnp3::app::{NullListener, Timestamp};
 use dnp3::link::{EndpointAddress, LinkErrorMode};
@@ -37,14 +51,16 @@ use dnp3::outstation::database::{
     Add, AnalogInputConfig, AnalogOutputStatusConfig, BinaryInputConfig, BinaryOutputStatusConfig,
     CounterConfig, Database, DatabaseHandle, EventAnalogInputVariation,
     EventAnalogOutputStatusVariation, EventBinaryInputVariation, EventBinaryOutputStatusVariation,
-    EventBufferConfig, EventClass, EventCounterVariation, EventMode, StaticAnalogInputVariation,
-    StaticAnalogOutputStatusVariation, StaticBinaryInputVariation,
-    StaticBinaryOutputStatusVariation, StaticCounterVariation, Update, UpdateOptions,
+    EventBufferConfig, EventClass, EventCounterVariation, EventFrozenCounterVariation, EventMode,
+    FrozenCounterConfig, Get, StaticAnalogInputVariation, StaticAnalogOutputStatusVariation,
+    StaticBinaryInputVariation, StaticBinaryOutputStatusVariation, StaticCounterVariation,
+    StaticFrozenCounterVariation, Update, UpdateOptions,
 };
 use dnp3::outstation::{
-    ApplicationIin, ControlHandler, ControlSupport, OperateType, OutstationApplication,
-    OutstationConfig, OutstationInformation, RequestError,
+    ApplicationIin, ControlHandler, ControlSupport, FreezeIndices, FreezeType, OperateType,
+    OutstationApplication, OutstationConfig, OutstationInformation, RequestError,
 };
+use dnp3::tcp::tls::{MinTlsVersion, TlsServerConfig};
 use dnp3::tcp::{AddressFilter, Server};
 
 // ---- The fixture. Must match interop/master_check.py and interop/opendnp3_outstation.py.
@@ -60,6 +76,10 @@ const ANALOG_OFFLINE_INDEX: u16 = 3;
 const ANALOG_COUNT: u16 = 600;
 /// Counters 0 and 1.
 const COUNTERS: [u32; 2] = [100, 200];
+/// Frozen counters 0 and 1, as served before any freeze. A freeze copies each
+/// counter to the frozen counter of the same index, and a freeze-and-clear
+/// then sets the counter to 0.
+const FROZEN_COUNTERS: [u32; 2] = [7, 8];
 /// Binary and analog outputs 0 to 2 exist. Any other index is NOT_SUPPORTED.
 const OUTPUT_COUNT: u16 = 3;
 /// Analog output 2 refuses a value above the limit with OUT_OF_RANGE.
@@ -83,7 +103,8 @@ fn now() -> Time {
     Time::synchronized(since_epoch.as_millis() as u64)
 }
 
-/// Asks for the time until a master writes it, and records the write.
+/// Asks for the time until a master writes it, records the write, and carries
+/// out and logs every counter freeze.
 struct Application {
     need_time: bool,
 }
@@ -100,6 +121,50 @@ impl OutstationApplication for Application {
             need_time: self.need_time,
             ..Default::default()
         }
+    }
+
+    fn freeze_counter(
+        &mut self,
+        indices: FreezeIndices,
+        freeze_type: FreezeType,
+        database: &mut DatabaseHandle,
+    ) -> Result<(), RequestError> {
+        let (first, last, named) = match indices {
+            FreezeIndices::All => (0, COUNTERS.len() as u16 - 1, "all".to_string()),
+            FreezeIndices::Range(start, stop) => (start, stop, format!("{start} to {stop}")),
+        };
+        let clear = match freeze_type {
+            FreezeType::ImmediateFreeze => false,
+            FreezeType::FreezeAndClear => true,
+            _ => {
+                say(&format!("freeze other {named}"));
+                return Err(RequestError::NotSupported);
+            }
+        };
+        let name = if clear { "clear" } else { "immediate" };
+        say(&format!("freeze {name} {named}"));
+        if first > last || usize::from(last) >= COUNTERS.len() {
+            return Err(RequestError::ParameterError);
+        }
+        database.transaction(|db| {
+            for index in first..=last {
+                let counter: Option<Counter> = db.get(index);
+                let Some(counter) = counter else { continue };
+                db.update(
+                    index,
+                    &FrozenCounter::new(counter.value, counter.flags, now()),
+                    UpdateOptions::no_event(),
+                );
+                if clear {
+                    db.update(
+                        index,
+                        &Counter::new(0, counter.flags, now()),
+                        UpdateOptions::no_event(),
+                    );
+                }
+            }
+        });
+        Ok(())
     }
 }
 
@@ -293,6 +358,22 @@ fn load(db: &mut Database) {
         );
         db.update(index, &Counter::new(value, Flags::ONLINE, now()), quiet);
     }
+    for (index, value) in (0u16..).zip(FROZEN_COUNTERS) {
+        db.add(
+            index,
+            None,
+            FrozenCounterConfig::new(
+                StaticFrozenCounterVariation::Group21Var1,
+                EventFrozenCounterVariation::Group23Var1,
+                0,
+            ),
+        );
+        db.update(
+            index,
+            &FrozenCounter::new(value, Flags::ONLINE, now()),
+            quiet,
+        );
+    }
     for index in 0..OUTPUT_COUNT {
         db.add(
             index,
@@ -324,11 +405,35 @@ fn load(db: &mut Database) {
     }
 }
 
+/// Return the TLS configuration named by the arguments after the address, or
+/// None when there are none and the outstation listens on plain TCP.
+///
+/// The crate's TLS server always asks the master for a certificate. This form
+/// checks it against the authority and against the master's name.
+fn tls_from(arguments: &[String]) -> Result<Option<TlsServerConfig>, Box<dyn std::error::Error>> {
+    match arguments {
+        [] => Ok(None),
+        [authority, certificate, key, master_name] => Ok(Some(TlsServerConfig::full_pki(
+            Some(master_name.clone()),
+            Path::new(authority),
+            Path::new(certificate),
+            Path::new(key),
+            None,
+            MinTlsVersion::V12,
+        )?)),
+        _ => Err(
+            "usage: interop-rust-outstation [ADDRESS [AUTHORITY CERTIFICATE KEY MASTER_NAME]]"
+                .into(),
+        ),
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let endpoint: SocketAddr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:20000".to_string())
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let endpoint: SocketAddr = arguments
+        .first()
+        .map_or("127.0.0.1:20000", String::as_str)
         .parse()?;
 
     let config = OutstationConfig::new(
@@ -337,7 +442,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         EventBufferConfig::all_types(100),
     );
 
-    let mut server = Server::new_tcp_server(LinkErrorMode::Close, endpoint);
+    let tls = tls_from(arguments.get(1..).unwrap_or_default())?;
+    let carrier = if tls.is_some() { " with TLS" } else { "" };
+    let mut server = match tls {
+        Some(tls) => Server::new_tls_server(LinkErrorMode::Close, endpoint, tls),
+        None => Server::new_tcp_server(LinkErrorMode::Close, endpoint),
+    };
     let outstation = server.add_outstation(
         config,
         Box::new(Application { need_time: true }),
@@ -350,7 +460,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Kept until the process ends: dropping the handle shuts the server down.
     let _server = server.bind().await?;
-    say(&format!("outstation listening on {endpoint}"));
+    say(&format!("outstation listening on {endpoint}{carrier}"));
 
     std::future::pending::<()>().await;
     Ok(())

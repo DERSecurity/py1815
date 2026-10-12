@@ -602,9 +602,21 @@ done means.
    named points, output status) and write a capture, which Wireshark's and
    Suricata's dissectors read with the master's requests and confirmations
    counted as well as the outstation's responses (`interop/master_capture.py`).
-   *Left:* freezes, which neither outstation's fixture serves; and TLS, which
-   the master now speaks and is tested over against this library's own
-   listener only.
+   Both outstations serve frozen counters, which the master reads back. The
+   `dnp3` crate outstation carries out each freeze, with and without clearing
+   and with and without a response, and logs it: the frozen counters and the
+   cleared counters are read back and the log is checked. opendnp3 answers a
+   freeze as a function it does not support and gives no hook for one, so
+   against it the checks are that the master reports the refusal, that no
+   counter changed, and that the stack's own log names each freeze sent with
+   no response. The same checks also run over TLS against the `dnp3` crate
+   outstation, with certificates made in the job: the outstation checks the
+   master's certificate against an authority and a name, the master checks
+   the outstation's against the name it is given, and a master that offers no
+   certificate is refused. *Left:* a freeze carried out by a second
+   independent stack, and TLS against one. opendnp3 carries out no freeze, and
+   its Python bindings cannot open a TLS server, so neither can be closed with
+   the peers in use.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
    certification procedures have been reproduced through it over a socket. *Built,* in
    `master.deviations` (D95), applied by the socket master and the loopback and turned on

@@ -15,6 +15,18 @@ Every control and time write received is printed, one line each, in the format
     control operate ao 1 250
     time written 1700000000000
 
+Two things the Rust outstation does are missing here, because of the stack and
+its bindings and not by choice:
+
+- Counter freezes. The stack answers each freeze as a function it does not
+  support and gives the application no hook for one. The frozen counters are
+  served with fixed values, and ``master_check.py --no-freeze`` checks that the
+  master reports each refusal and that no counter changed. The stack's own log
+  names a freeze sent with no response, in a line that ends
+  ``Ignoring NR function code: IMMED_FREEZE_NR``.
+- TLS. The bindings list ``AddTLSServer``, but it takes a ``std::error_code``
+  that no Python value converts to, so it cannot be called.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -40,6 +52,11 @@ ANALOG_OFFLINE_INDEX = 3
 ANALOG_COUNT = 600
 #: Counters 0 and 1.
 COUNTERS = [100, 200]
+#: Frozen counters 0 and 1, as served before any freeze. A freeze copies each
+#: counter to the frozen counter of the same index, and a freeze-and-clear
+#: then sets the counter to 0. This stack carries out no freeze, so here the
+#: frozen counters keep these values: see the module docstring.
+FROZEN_COUNTERS = [7, 8]
 #: Binary and analog outputs 0 to 2 exist. Any other index is NOT_SUPPORTED.
 OUTPUT_COUNT = 3
 #: Analog output 2 refuses a value above this with OUT_OF_RANGE.
@@ -174,7 +191,7 @@ def configure(port: int, outstation_address: int, master_address: int) -> object
         numDoubleBinary=0,
         numAnalog=ANALOG_COUNT,
         numCounter=len(COUNTERS),
-        numFrozenCounter=0,
+        numFrozenCounter=len(FROZEN_COUNTERS),
         numBinaryOutputStatus=OUTPUT_COUNT,
         numAnalogOutputStatus=OUTPUT_COUNT,
         numTimeAndInterval=0,
@@ -198,6 +215,9 @@ def configure(port: int, outstation_address: int, master_address: int) -> object
     for index in range(len(COUNTERS)):
         database.counter[index].clazz = opendnp3.PointClass.Class3
         database.counter[index].svariation = opendnp3.StaticCounterVariation.Group20Var1
+    for index in range(len(FROZEN_COUNTERS)):
+        variation = opendnp3.StaticFrozenCounterVariation.Group21Var1
+        database.frozenCounter[index].svariation = variation
     for index in range(OUTPUT_COUNT):
         database.boStatus[index].svariation = opendnp3.StaticBinaryOutputStatusVariation.Group10Var2
         database.aoStatus[index].svariation = opendnp3.StaticAnalogOutputStatusVariation.Group40Var1
@@ -216,6 +236,8 @@ def load(outstation: object) -> None:
         builder.Update(opendnp3.Analog(value, opendnp3.Flags(flags)), index, quiet)
     for index, count in enumerate(COUNTERS):
         builder.Update(opendnp3.Counter(count), index, quiet)
+    for index, count in enumerate(FROZEN_COUNTERS):
+        builder.Update(opendnp3.FrozenCounter(count), index, quiet)
     for index in range(OUTPUT_COUNT):
         builder.Update(opendnp3.BinaryOutputStatus(False), index, quiet)
         builder.Update(opendnp3.AnalogOutputStatus(0.0), index, quiet)
