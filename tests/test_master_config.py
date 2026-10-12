@@ -54,7 +54,13 @@ class TestDefaults:
             "log_max_mb": 10.0,
             "log_keep": 5,
             "log_level": "info",
-            "evaluate": {"settle": 5.0, "curves": None, "checks": None, "report": None},
+            "evaluate": {
+                "settle": 5.0,
+                "curves": None,
+                "checks": None,
+                "report": None,
+                "allow_deviations": False,
+            },
             "defaults": {
                 "port": 20000,
                 "outstation_address": 1024,
@@ -225,6 +231,10 @@ class TestErrors:
             ({"evaluate": {"checks": "MON-001"}}, "evaluate.checks must be a list"),
             ({"evaluate": {"checks": [""]}}, "evaluate.checks[0] must be a non-empty string"),
             ({"evaluate": {"report": 5}}, "evaluate.report must be a non-empty string"),
+            (
+                {"evaluate": {"allow_deviations": "yes"}},
+                "evaluate.allow_deviations must be true or false",
+            ),
             ({"defaults": {"tasks": []}}, "defaults.tasks must be an object"),
             ({"defaults": {"tasks": {"polling": True}}}, "defaults.tasks: 'polling' is not a task"),
             ({"defaults": {"tasks": {"enable_unsolicited": [4]}}}, "defaults.tasks:"),
@@ -399,6 +409,7 @@ class TestCommandLine:
             "curves": 4,
             "checks": ["der"],
             "report": "old.json",
+            "allow_deviations": False,
         }
         flagged = cli.configuration(
             _args(
@@ -415,6 +426,7 @@ class TestCommandLine:
                 "OP-001",
                 "--report",
                 "new.json",
+                "--allow-deviations",
             )
         ).evaluate
         assert flagged.describe() == {
@@ -422,6 +434,7 @@ class TestCommandLine:
             "curves": 10,
             "checks": ["MON-001", "OP-001"],
             "report": "new.json",
+            "allow_deviations": True,
         }
 
     @pytest.mark.parametrize("command", ["console", "serve", "config", "evaluate"])

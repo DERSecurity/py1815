@@ -14,6 +14,7 @@ with the deviation off the same poll completes.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 
 import pytest
@@ -82,6 +83,13 @@ class TestTheTransforms:
             ),
             # The transport header, C0, becomes 80: FIR clear. The CRC is 29 4E.
             (dev.orphan_segment, "05 64 0B C4 00 04 01 00 CA 8A 80 C0 01 3C 02 06 29 4E"),
+            # The transport header, C0, becomes 40: FIN clear. The CRC is D7 F1.
+            (dev.endless_series, "05 64 0B C4 00 04 01 00 CA 8A 40 C0 01 3C 02 06 D7 F1"),
+            # The source address, 1, becomes 2. The header CRC is 61 3A.
+            (
+                dev.second_master_address,
+                "05 64 0B C4 00 04 02 00 61 3A C0 C0 01 3C 02 06 54 E0",
+            ),
             # The application control, C0, becomes C1: sequence 1. The CRC is 52 C3.
             (
                 dev.wrong_application_sequence,
@@ -133,6 +141,24 @@ class TestTheTransforms:
         with pytest.raises(link.LinkFrameError, match="length octet describes"):
             _valid(out)
 
+    def test_the_second_master_address_is_not_the_outstations_own(self):
+        # From master 1 to outstation 2, the next address up is the
+        # outstation's, so the one after it is used: 3.
+        to_outstation_2 = bytes.fromhex("05 64 0B C4 02 00 01 00 83 24") + _FRAME[10:]
+        assert _valid(to_outstation_2).destination == 2
+        assert dev.second_master_address(to_outstation_2) == (
+            bytes.fromhex("05 64 0B C4 02 00 03 00 66 3F") + _FRAME[10:]
+        )
+
+    def test_the_second_master_address_is_a_station_address(self):
+        # 65519 is the highest address a station may have, so the address
+        # below it is used: 65518.
+        from_the_highest = bytes.fromhex("05 64 0B C4 01 00 EF FF 61 3C") + _FRAME[10:]
+        assert _valid(from_the_highest).source == 65519
+        assert dev.second_master_address(from_the_highest) == (
+            bytes.fromhex("05 64 0B C4 01 00 EE FF 2F 97") + _FRAME[10:]
+        )
+
     def test_break_transport_sequence_changes_the_sequence_and_keeps_the_frame_valid(self):
         out = dev.break_transport_sequence(_FRAME)
         parsed = _valid(out)  # a valid frame: only the transport header is wrong
@@ -173,7 +199,8 @@ class TestTheDeviations:
         described = d.describe()
         assert set(described) == set(d.names())
         assert all(value is False for value in described.values())
-        assert len(d.names()) == 10
+        switches = {each.name for each in dataclasses.fields(d) if each.type == "bool"}
+        assert set(d.names()) == switches
 
     def test_set_turns_one_on_and_off_and_rejects_an_unknown_name(self):
         d = Deviations()
@@ -299,6 +326,46 @@ class TestTheDeviations:
         (out,) = d.outbound(_FRAME, kind=dev.REQUEST)
         assert out == bytes.fromhex("05 64 0B C4 00 04 01 00 CA 8A 80 C0 01 3C 02 06 29 B1")
 
+    def test_endless_series_changes_the_last_frame_of_a_request(self):
+        d = Deviations(endless_series=True)
+        first, last = d.outbound(_FRAME + _FRAME, kind=dev.REQUEST)
+        assert first == _FRAME and last == dev.endless_series(_FRAME)
+
+    def test_second_master_address_changes_every_frame_of_a_request_and_of_a_reply(self):
+        d = Deviations(second_master_address=True)
+        other = dev.second_master_address(_FRAME)
+        assert d.outbound(_FRAME + _FRAME, kind=dev.REQUEST) == [other, other]
+        assert d.outbound(_LINK_ACK + _CONFIRMATION, kind=dev.CONFIRM) == [
+            bytes.fromhex("05 64 05 80 00 04 02 00 C6 77"),
+            bytes.fromhex("05 64 08 C4 00 04 02 00 31 A9 C0 C3 00 98 26"),
+        ]
+
+    def test_a_late_confirmation_follows_the_next_request(self):
+        d = Deviations(late_confirmation=True)
+        assert d.outbound(_LINK_ACK + _CONFIRMATION, kind=dev.CONFIRM) == [_LINK_ACK]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME, _CONFIRMATION]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME], "it is sent once"
+
+    def test_a_late_confirmation_can_carry_the_wrong_sequence_as_well(self):
+        d = Deviations(late_confirmation=True, wrong_confirmation_sequence=True)
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == []
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME, _CONFIRMATION_OF_4]
+
+    def test_a_confirmation_held_back_is_not_sent_once_the_deviation_is_off(self):
+        d = Deviations(late_confirmation=True)
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == []
+        d.late_confirmation = False
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
+        d.late_confirmation = True
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME], "nor when it is on again"
+
+    def test_clear_forgets_a_confirmation_held_back(self):
+        d = Deviations(late_confirmation=True)
+        d.outbound(_CONFIRMATION, kind=dev.CONFIRM)
+        d.clear()
+        d.late_confirmation = True
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
+
     def test_repeat_request_repeats_every_write_of_a_changed_request(self):
         d = Deviations(repeat_request=True, corrupt_header_crc=True)
         bad = dev.corrupt_header_crc(_FRAME)
@@ -325,6 +392,8 @@ _SILENCING = (
     "truncate",
     "overstate_length",
     "orphan_segment",
+    "endless_series",
+    "second_master_address",
 )
 
 
@@ -451,6 +520,17 @@ class TestOverASocket:
         poll = await served.integrity_poll()
         assert poll.outcome is Outcome.TIMEOUT and not poll.fragments
         served.deviations.set("orphan_segment", False)
+        assert (await served.integrity_poll()).complete
+
+    async def test_a_request_from_a_second_master_is_in_the_trace_under_that_address(self, served):
+        # The simulated DER answers the one master it was told of, so the
+        # request draws nothing. Another outstation may answer it.
+        served.deviations.set("second_master_address", True)
+        poll = await served.integrity_poll()
+        assert poll.outcome is Outcome.TIMEOUT
+        sent = [entry for entry in served.trace.since() if entry.direction == "tx"]
+        assert sent[-1].link["source"] == 2 and "problem" not in sent[-1].link
+        served.deviations.set("second_master_address", False)
         assert (await served.integrity_poll()).complete
 
     async def test_the_deviate_operation_turns_them_on_through_the_service(self, served):
