@@ -328,6 +328,15 @@ class TestRunning:
         assert await page.evaluate("state.range.frames.map((frame) => frame.id)") == list(
             range(first, last + 1)
         )
+        assert await page.count("#traffic-table tbody tr") == min(300, last - first + 1)
+        assert await page.evaluate("state.frame.id") in range(first, last + 1)
+
+        await page.click("#traffic-range-clear")
+        assert await page.evaluate("state.range") is None
+        assert await page.evaluate(
+            "getComputedStyle(document.querySelector('#traffic-range')).display"
+        ) == ("none")
+        assert page.errors == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("kept", ["none", "all but the first"])
@@ -364,15 +373,6 @@ class TestRunning:
         assert await page.evaluate(
             "document.querySelector(\"#evaluate-checks button[data-frames='MON-001']\") === null"
         )
-        assert await page.count("#traffic-table tbody tr") == min(300, last - first + 1)
-        assert await page.evaluate("state.frame.id") in range(first, last + 1)
-
-        await page.click("#traffic-range-clear")
-        assert await page.evaluate("state.range") is None
-        assert await page.evaluate(
-            "getComputedStyle(document.querySelector('#traffic-range')).display"
-        ) == ("none")
-        assert page.errors == []
 
     @pytest.mark.asyncio
     async def test_the_report_is_offered_as_a_json_file(self, console):

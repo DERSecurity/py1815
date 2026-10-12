@@ -1529,8 +1529,14 @@ Table 8-1, as TB2013-003 restates it). Events are kept when the confirmation is 
 has the wrong sequence number, or arrives after the next request (IEEE 1815-2012 Table
 6-1; sections 8.5.2.2.4, 8.5.3.2.4 and 8.5.4.2.4 of the certification procedure). A check
 sends a well-formed read before it deviates and requires an answer, so the silence that
-follows is about the deviation, and turns the master's deviations back to what they were
-when it ends, whether or not the connection is still there. After a damaged frame up to
+follows is about the deviation. It begins with every deviation off and holds the master
+until it ends, so that a deviation left on does not damage its own well-formed reads and
+no automatic task or other caller sends a request while its deviation is on or between
+its steps; a socket master makes every other task wait for the turn the check holds. The
+master's deviations are put back as they were and the master is let go when the check
+ends, whether or not the connection is still there, and when a run is cancelled. Two
+events can be equal in every field, so events are compared as a count of each and not as
+a set. After a damaged frame up to
 three well-formed reads are sent before the outstation is said not to have recovered,
 because a receiver that waits for the octets a short frame promised takes them from the
 next frame. No check is made for a second master address: whether an outstation filters

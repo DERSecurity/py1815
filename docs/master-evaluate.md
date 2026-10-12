@@ -154,12 +154,21 @@ once more with a confirmation and must not be reported after that. Events that c
 time cannot be told from later events at the same point, so for those the last step is
 skipped and noted. A master set to send no confirmations cannot run these checks.
 
-Whatever deviations the master had on when a check began are on again when it ends.
+A check of this set begins with every deviation of the master off, so that one left on
+does not damage the well-formed reads the check compares against. It also holds the
+master until it ends: no automatic task, repeated scan or other caller sends that
+outstation a request while the check runs, so none is damaged by the check's deviation
+and none comes between its steps. Whatever deviations were on before the check are on
+again when it ends, and the same is so for a run that is cancelled part way.
+
+Two events can be equal in every field. An event that was reported twice has to be
+reported twice again.
 
 ### What counts as supported
 
 The run begins by reading which points the outstation serves: a class 0 read, a read of
-output status, and a read by range of every other point of the profile. A point is
+output status, and a read by range of every other point of the profile. These reads are
+made with every deviation of the master off. A point is
 supported when one of those reads returned it. A check reads only served points, and is
 not applicable when the points it is about are not served.
 

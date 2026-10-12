@@ -415,7 +415,8 @@ its checks do, which is minutes for all of them, so each result is also sent as 
 event as its check ends. A check that writes is run only when the service was started
 with `--allow-control`, and is then written to the master's log as a command. A check
 that may not be run is reported as `not_run`. One evaluation runs against an outstation
-at a time, and a second is refused while it does.
+at a time, and a second is refused while it does. While a check that deviates is under
+way, every other request to that outstation waits for the check to end.
 
 ## One message at a time
 

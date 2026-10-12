@@ -376,7 +376,8 @@ outstation supports it. When the last has ended, the report counts the verdicts:
 [Verdicts](master-evaluate.md#verdicts) defines them. A check that sent
 anything gives its requests, how long it took and its frames. Choosing the
 frames opens the **Traffic** tab narrowed to them, and **Show all frames**
-there widens it again. **Save report** saves the report as a JSON file, the
+there widens it again. The master keeps a limited number of frames, and when it
+no longer keeps all of a check's the row says so and offers no link. **Save report** saves the report as a JSON file, the
 one `py1815-master evaluate --report` writes.
 
 Two things decide which checks are run:
