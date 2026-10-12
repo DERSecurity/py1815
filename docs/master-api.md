@@ -68,6 +68,7 @@ disagree.
 | `POST /api/trace` | The frames sent and received |
 | `POST /api/capture` | The frames kept, as a pcap file in base64 |
 | `POST /api/clear` | Forgets the frames or the events kept |
+| `POST /api/deviate` | Turns named deviations on or off: protocol rules the master breaks on purpose |
 | `POST /api/der.read` | Points of the DER profile by name, or a named group, in engineering units |
 | `POST /api/der.write` | Outputs of the DER profile by name, in engineering units |
 | `POST /api/der.enable`, `POST /api/der.disable` | A DER function, and then whether it is enabled |

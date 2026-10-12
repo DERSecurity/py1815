@@ -23,6 +23,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from py1815 import crc, link, transport
@@ -69,9 +70,8 @@ def _rebuild(frame: bytes, payload: bytes) -> bytes:
     """Return ``frame`` with new user data, with every checksum recomputed.
 
     Used by the deviations that change the transport or application header,
-    which sit inside the user data: the result is a frame whose checksums all
-    verify and whose header does not, so what the deviation changed is the only
-    thing wrong with it.
+    which sit inside the user data. Every checksum of the result verifies, so
+    the changed header is the only thing wrong with the frame.
     """
     parsed = link.parse(frame)
     return link.build(parsed.control, parsed.destination, parsed.source, payload)
@@ -93,13 +93,19 @@ def truncate(frame: bytes) -> bytes:
 
 
 def overstate_length(frame: bytes) -> bytes:
-    """Raise the length octet above the frame's real size, header checksum recomputed.
+    """Make the length octet describe more user data than the frame carries.
 
-    The outstation reads a length its header checksum vouches for, then finds
-    fewer octets than it was promised.
+    The length octet is raised and the header checksum recomputed, so the
+    outstation reads a length its header checksum vouches for, then finds
+    fewer octets than it was promised. A length octet already at its highest
+    value cannot be raised, so that frame loses its last data block and keeps
+    its header as built.
     """
-    if len(frame) < link.HEADER_SIZE or frame[2] >= _MAX_LENGTH:
+    if len(frame) < link.HEADER_SIZE:
         return frame
+    if frame[2] >= _MAX_LENGTH:
+        block = link.DATA_BLOCK_SIZE + crc.SIZE
+        return frame[: -((len(frame) - link.HEADER_SIZE) % block or block)]
     header = bytearray(frame[:8])
     header[2] = min(_MAX_LENGTH, header[2] + 16)
     return crc.encode(bytes(header)) + frame[link.HEADER_SIZE :]
@@ -139,12 +145,26 @@ def wrong_application_sequence(frame: bytes) -> bytes:
     return _rebuild(frame, parsed.payload[:1] + bytes([changed]) + parsed.payload[2:])
 
 
+#: The deviations that change a request frame, in the order they are applied
+#: when several are on. The two that rewrite the transport header parse the
+#: frame, so they run while its checksums still verify. The header checksum is
+#: flipped last, after the deviation that recomputes it.
+_REQUEST_TRANSFORMS: tuple[tuple[str, Callable[[bytes], bytes]], ...] = (
+    ("break_transport_sequence", break_transport_sequence),
+    ("orphan_segment", orphan_segment),
+    ("overstate_length", overstate_length),
+    ("corrupt_body_crc", corrupt_body_crc),
+    ("truncate", truncate),
+    ("corrupt_header_crc", corrupt_header_crc),
+)
+
+
 @dataclass
 class Deviations:
     """The deviations a master has turned on, and the transform they make.
 
     Off by default. :meth:`outbound` is called with the octets the association
-    produced and returns the octets to send in their place: the same octets
+    produced and returns the writes to make in their place: the same octets
     when nothing is on, a corrupted frame, the request twice, or nothing at
     all.
     """
@@ -216,12 +236,14 @@ class Deviations:
         return {name: bool(getattr(self, name)) for name in self.names()}
 
     def outbound(self, octets: bytes, *, kind: str) -> list[bytes]:
-        """Return the frames to send in place of ``octets``.
+        """Return the writes to make in place of ``octets``.
 
         ``kind`` is :data:`REQUEST` or :data:`CONFIRM`. The list is empty when
-        the master is to send nothing, holds the octets twice for a repeated
-        request, and otherwise holds one frame, changed or unchanged. With
-        every deviation off it is ``[octets]``.
+        the master is to send nothing, and is ``[octets]`` with every
+        deviation off. A deviation that changes a frame returns each link
+        frame as a write of its own, the first one changed, so a trace can
+        keep the changed frame apart from the frames after it. A repeated
+        request holds its writes twice.
         """
         if kind not in KINDS:
             raise ValueError(f"{kind!r} is not an outbound kind; one of {', '.join(KINDS)}")
@@ -231,27 +253,26 @@ class Deviations:
             if self.withhold_confirmation:
                 return []
             if self.wrong_confirmation_sequence:
-                return [self._each(octets, wrong_application_sequence)]
+                return self._change_first(octets, [wrong_application_sequence])
             return [octets]
-        changed = octets
-        for name in self._ON_REQUEST:
-            if getattr(self, name):
-                changed = self._each(changed, globals()[name])
+        transforms = [transform for name, transform in _REQUEST_TRANSFORMS if getattr(self, name)]
+        writes = self._change_first(octets, transforms) if transforms else [octets]
         if self.repeat_request:
-            return [changed, changed]
-        return [changed]
+            return writes * 2
+        return writes
 
     @staticmethod
-    def _each(octets: bytes, transform: object) -> bytes:
-        """Apply a frame transform to the first frame of a request, the rest unchanged.
+    def _change_first(octets: bytes, transforms: list[Callable[[bytes], bytes]]) -> list[bytes]:
+        """Return the link frames of ``octets``, the first one changed by each transform.
 
-        A request is almost always one frame; a long one is several, and the
-        deviation changes the first, which is where a transport or header fault
-        is seen first.
+        A request is almost always one frame. A long request is several, and
+        the deviation changes the first, which is where a transport or header
+        fault is seen first.
         """
         frames = _split(octets)
-        frames[0] = transform(frames[0])  # type: ignore[operator]
-        return b"".join(frames)
+        for transform in transforms:
+            frames[0] = transform(frames[0])
+        return frames
 
 
 __all__ = [

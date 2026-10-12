@@ -14,6 +14,8 @@ with the deviation off the same poll completes.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 import pytest_asyncio
 from profile_fixtures import for_reference_der
@@ -76,6 +78,16 @@ class TestTheTransforms:
         # The header checksum vouches for the inflated length.
         assert crc.verify(out[: link.HEADER_SIZE])
         # Which then disagrees with how many octets the frame carries.
+        with pytest.raises(link.LinkFrameError, match="length octet describes"):
+            _valid(out)
+
+    def test_overstate_length_of_a_full_frame_drops_its_last_data_block(self):
+        # A frame of 250 user-data octets has length octet 0xFF, which cannot
+        # be raised. Its last data block is ten octets and a two-octet CRC.
+        full = link.build(0xC4, 1024, 1, bytes(250))
+        assert full[: link.HEADER_SIZE] == bytes.fromhex("05 64 FF C4 00 04 01 00 19 F1")
+        out = dev.overstate_length(full)
+        assert out == full[:-12], "the header is as built and the last block is gone"
         with pytest.raises(link.LinkFrameError, match="length octet describes"):
             _valid(out)
 
@@ -176,9 +188,36 @@ class TestTheDeviations:
     def test_a_request_deviation_changes_only_the_first_frame(self):
         two = _FRAME + _FRAME
         d = Deviations(corrupt_header_crc=True)
-        (out,) = d.outbound(two, kind=dev.REQUEST)
-        assert out[len(_FRAME) :] == _FRAME, "the second frame is untouched"
-        assert out[: len(_FRAME)] == dev.corrupt_header_crc(_FRAME)
+        first, second = d.outbound(two, kind=dev.REQUEST)
+        assert second == _FRAME, "the second frame is untouched, and is a write of its own"
+        assert first == dev.corrupt_header_crc(_FRAME)
+
+    def test_overstate_length_changes_a_request_whose_first_frame_is_full(self):
+        # A long request fills its first frame, so that frame's length octet is
+        # already 0xFF. The deviation still has to send something non-conformant.
+        full = link.build(0xC4, 1024, 1, bytes(250))
+        d = Deviations(overstate_length=True)
+        first, second = d.outbound(full + _FRAME, kind=dev.REQUEST)
+        assert first == full[:-12] and second == _FRAME
+
+    @pytest.mark.parametrize("pair", list(itertools.combinations(Deviations._ON_REQUEST, 2)))
+    def test_two_request_deviations_on_together_change_the_request(self, pair):
+        d = Deviations()
+        for name in pair:
+            d.set(name, True)
+        assert d.outbound(_FRAME, kind=dev.REQUEST) != [_FRAME]
+
+    def test_a_damaged_frame_still_carries_the_transport_change_made_with_it(self):
+        # The orphaned segment is built while the frame's checksums verify, and
+        # the data-block checksum is flipped afterwards.
+        d = Deviations(orphan_segment=True, corrupt_body_crc=True)
+        (out,) = d.outbound(_FRAME, kind=dev.REQUEST)
+        assert out == bytes.fromhex("05 64 0B C4 00 04 01 00 CA 8A 80 C0 01 3C 02 06 29 B1")
+
+    def test_repeat_request_repeats_every_write_of_a_changed_request(self):
+        d = Deviations(repeat_request=True, corrupt_header_crc=True)
+        bad = dev.corrupt_header_crc(_FRAME)
+        assert d.outbound(_FRAME + _FRAME, kind=dev.REQUEST) == [bad, _FRAME, bad, _FRAME]
 
 
 # ----------------------------------------------------- through the loopback
@@ -344,3 +383,53 @@ class TestOverASocket:
         )
         assert cleared["result"]["on"] == []
         assert (await served.integrity_poll()).complete
+
+    @pytest.mark.parametrize(
+        ("params", "says"),
+        [
+            ({"clear": "false"}, "clear is true or false"),
+            ({"clear": True, "set": {"silence": True, "nonsense": True}}, "set.nonsense is not"),
+            ({"clear": True, "set": {"silence": True, "repeat_request": 1}}, "set.repeat_request"),
+            ({"clear": True, "set": ["silence"]}, "set is an object"),
+        ],
+    )
+    async def test_a_deviate_request_with_a_mistake_in_it_changes_nothing(
+        self, params, says, served
+    ):
+        service = Service(allow_control=False)
+        service.master._outstations["lab"] = served
+        served.deviations.set("truncate", True)
+        answer = await service.handle({"op": "deviate", "outstation": "lab", "params": params})
+        assert not answer["ok"] and answer["error"]["kind"] == "request"
+        assert says in answer["error"]["message"]
+        assert served.deviations.on() == ("truncate",)
+
+    @pytest.mark.parametrize(
+        ("name", "problem"),
+        [
+            ("corrupt_header_crc", "header CRC does not match"),
+            ("corrupt_body_crc", "data block CRC at octet 10 does not match"),
+            ("truncate", "length octet describes"),
+            ("overstate_length", "length octet describes"),
+        ],
+    )
+    async def test_the_trace_keeps_a_frame_no_outstation_accepts(self, name, problem, served):
+        served.deviations.set(name, True)
+        await served.integrity_poll()
+        sent = [entry for entry in served.trace.since() if entry.direction == "tx"]
+        assert sent, "the deviated request is in the trace"
+        for entry in sent:
+            assert problem in entry.link["problem"]
+            assert entry.summary.startswith("not a valid frame: ")
+            with pytest.raises(link.LinkFrameError):
+                _valid(entry.octets)
+            assert entry.octets in served.trace.capture(), "and in the capture, as sent"
+
+        # A short frame is not held and read as the start of the next write:
+        # the next request is read as the frame the association built.
+        served.deviations.set(name, False)
+        after = served.trace.last_id
+        await served.integrity_poll()
+        following = [entry for entry in served.trace.since(after) if entry.direction == "tx"]
+        assert following[0].application["function"] == "READ"
+        assert "problem" not in following[0].link

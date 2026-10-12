@@ -1274,21 +1274,27 @@ class Service:
 
         ``set`` is an object of deviation names to true or false; ``clear``
         turns every deviation off first. With neither, the current state is
-        returned unchanged.
+        returned unchanged. A request with anything wrong in it changes
+        nothing.
         """
         outstation = self._outstation(params)
-        if params.get("clear"):
-            outstation.deviations.clear()
+        clear = params.get("clear", False)
+        if not isinstance(clear, bool):
+            raise BadRequest("clear is true or false")
         changes = params.get("set", {})
         if not isinstance(changes, Mapping):
             raise BadRequest("set is an object of deviation names to true or false")
+        names = outstation.deviations.names()
         for name, state in changes.items():
+            if name not in names:
+                raise BadRequest(f"set.{name} is not a deviation; one of {', '.join(names)}")
             if not isinstance(state, bool):
                 raise BadRequest(f"set.{name} is true or false")
-            try:
-                outstation.deviations.set(str(name), state)
-            except ValueError as error:
-                raise BadRequest(str(error)) from None
+        # Every name and state has been checked, so the change is made whole.
+        if clear:
+            outstation.deviations.clear()
+        for name, state in changes.items():
+            outstation.deviations.set(name, state)
         return {
             "deviations": outstation.deviations.describe(),
             "on": list(outstation.deviations.on()),

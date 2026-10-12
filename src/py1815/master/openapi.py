@@ -468,7 +468,11 @@ SCHEMAS: dict[str, Schema] = {
                 "description": "Sent by this master, or received.",
             },
             "octets": {"type": "string", "description": "The frame, in hex."},
-            "link": {"type": "object", "description": "The data link layer's reading."},
+            "link": {
+                "type": "object",
+                "description": "The data link layer's reading. It carries a `problem` when "
+                "the master sent octets that are not a valid frame.",
+            },
             "transport": _nullable(
                 {"type": "object", "description": "The transport header, on user data."}
             ),

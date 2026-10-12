@@ -6164,7 +6164,7 @@
           },
           "link": {
             "type": "object",
-            "description": "The data link layer's reading."
+            "description": "The data link layer's reading. It carries a `problem` when the master sent octets that are not a valid frame."
           },
           "transport": {
             "oneOf": [

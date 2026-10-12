@@ -110,6 +110,61 @@ class TestWhatAFrameSays:
         assert entry.octets == octets
 
 
+class TestAWriteThisMasterMade:
+    # A request from master 1 to outstation 1024: one transport segment (FIR,
+    # FIN, sequence 0) carrying a READ of class 1.
+    FRAME = bytes.fromhex("05 64 0B C4 00 04 01 00 CA 8A C0 C0 01 3C 02 06 54 E0")
+    # The same frame with its header CRC's first octet flipped.
+    BAD_HEADER_CRC = bytes.fromhex("05 64 0B C4 00 04 01 00 35 8A C0 C0 01 3C 02 06 54 E0")
+
+    def test_a_write_of_valid_frames_is_read_frame_by_frame(self):
+        trace = Trace()
+        first, second = trace.record_write(self.FRAME + self.FRAME)
+        assert first.octets == second.octets == self.FRAME
+        assert first.summary == "READ seq 0: class 1"
+        assert "problem" not in first.link
+
+    def test_a_frame_that_is_not_valid_is_kept_as_written_with_what_is_wrong(self):
+        trace = Trace(clock=Clock())
+        (entry,) = trace.record_write(self.BAD_HEADER_CRC)
+        assert (entry.id, entry.direction, entry.at) == (1, "tx", 51.0)
+        assert entry.octets == self.BAD_HEADER_CRC
+        assert entry.link == {
+            "from_master": True,
+            "primary": True,
+            "function": "UNCONFIRMED_USER_DATA",
+            "destination": OUTSTATION,
+            "source": MASTER,
+            "user_data": 6,
+            "problem": "header CRC does not match",
+        }
+        assert entry.transport is None and entry.application is None
+        assert entry.summary == "not a valid frame: header CRC does not match"
+        assert trace.since() == [entry]
+
+    def test_a_short_frame_does_not_take_octets_from_the_next_write(self):
+        trace = Trace()
+        (short,) = trace.record_write(self.FRAME[:-1])
+        assert short.octets == self.FRAME[:-1]
+        assert short.link["problem"] == "frame is 17 octets, and its length octet describes 18"
+        (whole,) = trace.record_write(self.FRAME)
+        assert whole.octets == self.FRAME and whole.summary == "READ seq 0: class 1"
+
+    def test_octets_too_short_for_a_header_have_no_header_fields(self):
+        trace = Trace()
+        (entry,) = trace.record_write(bytes.fromhex("05 64 0B"))
+        assert entry.link["problem"] == "frame is 3 octets, shorter than a header"
+        assert entry.link["function"] is None and entry.link["user_data"] is None
+
+    def test_a_listener_and_a_capture_are_given_the_frame_that_is_not_valid(self):
+        trace = Trace()
+        heard = []
+        trace.listeners.append(heard.append)
+        (entry,) = trace.record_write(self.BAD_HEADER_CRC)
+        assert heard == [entry]
+        assert self.BAD_HEADER_CRC in trace.capture()
+
+
 class TestKeeping:
     def _request(self, sequence: int) -> bytes:
         control = link.control_byte(

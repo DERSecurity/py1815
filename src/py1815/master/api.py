@@ -47,7 +47,7 @@ from py1815.master.operations import Operations, Steps
 from py1815.master.store import Store
 from py1815.master.tasks import WRITING, Housekeeper, Tasks
 from py1815.master.timesync import Synchronized, TimeSync
-from py1815.master.trace import RECEIVED, SENT, Trace
+from py1815.master.trace import RECEIVED, Trace
 
 logger = logging.getLogger(__name__)
 
@@ -671,12 +671,13 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         """Send octets, after any deviation has had its way with them.
 
         A deviation may change the octets, send them twice, or send nothing.
-        The trace records what actually crossed the wire, so a capture shows
-        the deviation rather than the request the association built.
+        The trace records each write as it was made, a frame no outstation
+        accepts included, so a capture shows the deviation rather than the
+        request the association built.
         """
-        for frame in self.deviations.outbound(octets, kind=kind):
-            self.trace.record(SENT, frame)
-            writer.write(frame)
+        for write in self.deviations.outbound(octets, kind=kind):
+            self.trace.record_write(write)
+            writer.write(write)
         # A write that fails is seen by the receive loop as well, which ends
         # the exchange as abandoned.
         with contextlib.suppress(OSError):

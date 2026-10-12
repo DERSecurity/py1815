@@ -1495,6 +1495,11 @@ write a bad one. Ten are named: send nothing; repeat a request; corrupt a header
 data-block checksum; truncate a frame; overstate its length; break the transport sequence;
 orphan a segment; withhold a confirmation; confirm the wrong sequence. The socket master
 and the loopback apply the same ones, and the service's `deviate` turns them on and off.
+A deviation that is on always changes what is sent: a frame whose length octet is already
+at its highest value cannot overstate it, so that frame loses its last data block instead.
+The trace keeps each write as it was made, so a frame that no reader accepts is in the
+trace and in a capture with what is wrong with it. The trace reads what the master sent
+without the reader a receiver uses, which drops such a frame and holds a short one.
 *Trade-off:* breaking the transport sequence of a request that fits one segment changes
 nothing an outstation rejects, since a lone segment is a complete fragment at any sequence;
 it bites a fragment of several segments, which a master seldom sends. Confirming late, a

@@ -482,6 +482,20 @@ refuse), `withhold_confirmation` (send no confirmation), and `wrong_confirmation
 (confirm a sequence the outstation did not send). They are applied to the frame the
 master built on its way out, so with every one off the master is conformant.
 
+A deviation that changes a frame changes the first frame of a request. A frame that is
+already full cannot claim a greater length, so `overstate_length` drops that frame's last
+data block instead. When several are on, each is applied to the same frame.
+
+The trace and a capture keep what the master sent. A frame that no outstation accepts is
+listed as written, with what is wrong with it:
+
+```python
+lab.deviations.corrupt_header_crc = True
+await lab.integrity_poll()
+print(lab.trace.since()[-1].summary)
+# not a valid frame: header CRC does not match
+```
+
 Sending a request by broadcast, or by a function code an outstation does not implement, is
 an ordinary request rather than a deviation: use `broadcast` and `request`.
 
