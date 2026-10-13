@@ -655,7 +655,10 @@ class Service:
         self._names[outstation] = names
 
     def set_device_profile(self, outstation: str, document: str) -> None:
-        """Give an outstation the Device Profile document that ``der.compare`` uses.
+        """Give an outstation its Device Profile document.
+
+        ``der.compare`` compares what the outstation serves with it, and
+        ``der.document`` lays it out for reading.
 
         Raises ValueError for a document whose point lists cannot be read.
         """

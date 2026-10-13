@@ -58,7 +58,7 @@ JSON file and loaded with `--config`. See
 | `--output-interval SECONDS` | Repeats a read of output status. As often as the integrity poll unless given; 0 for never |
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
-| `--device-profile FILE` | A DNP3 Device Profile document for the outstations named, which the **DER** tab compares what they serve with |
+| `--device-profile FILE` | A DNP3 Device Profile document for the outstations named, which the **DER** tab compares what they serve with, and lays out to read and to print |
 | `--bind HOST:PORT` | Where the console listens. `127.0.0.1:8815` unless given |
 | `--token TOKEN` | Required of every request to the service. Needed to listen on anything but this machine. Read from `PY1815_MASTER_TOKEN` when not given |
 | `--new-token` | With no token given, makes one for this run and prints the address that carries it |

@@ -475,7 +475,7 @@ refused with `--from`.
 | `--html FILE` | Also writes the document as an HTML page to read and to print |
 | `--from FILE` | Lays out this Device Profile XML file instead of building one. Used with `--html` |
 
-These four say what the command does with a document. They are not settings
+These flags say what the command does with a document. They are not settings
 of the outstation, so they have no place in the
 [configuration file](der-config.md).
 
