@@ -671,6 +671,14 @@ sequence number, which is what the protocol already asks of it.
 
 **D50 -- A broadcast is acted on, never answered, and reported in the next response.**
 Nothing is sent in reply to a broadcast at any layer, including a link acknowledgment. A
+master is to send a broadcast as user data that asks for no link confirmation. One sent
+as confirmed user data is acted on as well and still not acknowledged, since every device
+is to accept and process that function and none is to reply to a broadcast whichever
+function it carries (IEEE 1815-2012 9.2.4.1.3.6). It counts frames as confirmed data to
+the outstation's own address does: it is taken only after a link reset, and the same frame
+sent again, as a master that waits for an acknowledgment will send it, is not acted on a
+second time. A link reset or a link test sent to a broadcast address is still not acted
+on. A
 freeze and a time write are always carried out. A direct operate is carried out only when
 the session was built with `broadcast_controls=True`, because a control that reaches every
 outstation on a network at once is the caller's decision and not a default. The indication
