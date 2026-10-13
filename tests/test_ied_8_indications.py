@@ -84,6 +84,66 @@ class TestBroadcast:
         assert after.is_null and not after.iin1 & IIN1_BROADCAST
         assert self._frozen(dut) == [5, 5, 5], "and the freeze was carried out"
 
+    @pytest.mark.parametrize("address", [0xFFFF, 0xFFFE, 0xFFFD])
+    def test_8_6_5_2_a_broadcast_that_asks_for_a_link_confirmation_is_acted_on_and_not_answered(
+        self, address
+    ):
+        # A master is to send a broadcast as unconfirmed user data. One sent
+        # as confirmed user data is processed all the same and draws no reply
+        # of any kind (IEEE 1815-2012 9.2.4.1.3.6).
+        dut = Dut()
+        assert dut.master.link(0xC0).link_controls == [0x00], "the link is reset first"
+        # Control 0xF3: from a master, primary, FCB and FCV set, confirmed user data.
+        assert dut.master.request(FREEZE, FREEZE_ALL, destination=address, control=0xF3).silent
+        first = dut.master.read(classes(1)).fragment
+        assert first.iin1 & IIN1_BROADCAST, "the broadcast was received"
+        assert self._frozen(dut) == [5, 5, 5], "and the freeze was carried out"
+
+    def test_8_6_5_2_a_confirmed_broadcast_is_these_octets_and_clears_the_restart_indication(self):
+        dut = Dut()
+        dut.master.link(0xC0)
+        before = dut.master.read(classes(1)).fragment
+        assert before.iin1 & 0x80, "the restart indication is set after startup"
+        # A header for 9 octets of user data, control 0xF3, to 0xFFFF from 1;
+        # a transport header; and a WRITE of group 80 variation 1, index 7,
+        # with the value 0, under application sequence 2.
+        frame = bytes.fromhex("05 64 0E F3 FF FF 01 00 CB AC  C0 C2 02 50 01 00 07 07 00 08 65")
+        assert dut.master.raw(frame).silent
+        after = dut.master.read(classes(1)).fragment
+        assert not after.iin1 & 0x80, "the write was carried out"
+        assert after.iin1 & IIN1_BROADCAST
+
+    def test_8_6_5_2_a_confirmed_broadcast_sent_again_is_not_acted_on_again(self):
+        # No acknowledgment can be sent, so a master that waits for one sends
+        # the frame again with the same frame count bit. It is the frame
+        # already taken.
+        dut = Dut()
+        dut.master.link(0xC0)
+        frame = dut.master.frames(
+            bytes([0xC0, FREEZE]) + FREEZE_ALL, control=0xF3, destination=0xFFFF
+        )
+        assert dut.master.raw(frame).silent
+        first = dut.master.read(classes(1)).fragment
+        assert first.iin1 & IIN1_BROADCAST
+        if first.con:
+            dut.master.confirm(first)
+        assert not dut.master.read(classes(1)).fragment.iin1 & IIN1_BROADCAST
+
+        assert dut.master.raw(frame).silent
+        assert not dut.master.read(classes(1)).fragment.iin1 & IIN1_BROADCAST, "taken twice"
+
+        # The next frame carries the other frame count bit, and is taken.
+        following = dut.master.frames(
+            bytes([0xC1, FREEZE]) + FREEZE_ALL, control=0xD3, destination=0xFFFF
+        )
+        assert dut.master.raw(following).silent
+        assert dut.master.read(classes(1)).fragment.iin1 & IIN1_BROADCAST
+
+    def test_8_6_5_2_a_confirmed_broadcast_before_a_link_reset_is_not_acted_on(self):
+        dut = Dut()
+        assert dut.master.request(FREEZE, FREEZE_ALL, destination=0xFFFF, control=0xF3).silent
+        assert not dut.master.read(classes(1)).fragment.iin1 & IIN1_BROADCAST
+
     def test_8_6_5_3_the_confirming_broadcast_address(self):
         dut = Dut()
         dut.master.empty_events()

@@ -289,6 +289,35 @@ class TestAMasterNotKnownInAdvance:
         (response,) = _fragments(session.receive(_user_data(CLASS_0_READ, source=99)))
         assert response[2] & IINBit.BROADCAST
 
+    def _link_reset(self, source: int) -> bytes:
+        control = link.control_byte(
+            from_master=True, primary=True, function=link.PrimaryFunction.RESET_LINK_STATES
+        )
+        return link.build(control, OUTSTATION, source)
+
+    @pytest.mark.parametrize("confirmed", [False, True], ids=["unconfirmed", "confirmed"])
+    def test_a_link_reset_discards_a_half_broadcast(self, confirmed):
+        """Segments from before a link reset are not completed by one from after it."""
+        session = self._session()
+        first, last = self._record_time_in_two_segments()
+        session.receive(self._broadcast_segment(55, first))
+        assert _frames(session.receive(self._link_reset(55))), "the reset is acknowledged"
+        if confirmed:
+            # The first confirmed frame after a reset carries the frame count bit set.
+            control = link.control_byte(
+                from_master=True,
+                primary=True,
+                function=link.PrimaryFunction.CONFIRMED_USER_DATA,
+                fcb=True,
+                fcv=True,
+            )
+            after = link.build(control, link.Broadcast.NO_CONFIRM, 55, payload=last)
+        else:
+            after = self._broadcast_segment(55, last)
+        assert session.receive(after) == b""
+        (response,) = _fragments(session.receive(_user_data(CLASS_0_READ, source=55)))
+        assert not response[2] & IINBit.BROADCAST, "the two halves were joined across the reset"
+
     def test_the_facts_name_no_expected_address(self):
         session = self._session()
         assert session.facts.master_address is None

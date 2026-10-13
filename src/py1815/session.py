@@ -1487,16 +1487,30 @@ class Session:
 
         if frame.is_broadcast:
             # Nothing is ever sent in answer to a broadcast, at any layer: every
-            # outstation that heard it would answer at once. Only user data that
-            # asks for no link confirmation is processed at all.
+            # outstation that heard it would answer at once. A master is to
+            # send a broadcast as user data that asks for no link confirmation.
+            # One that asks for it all the same is still taken and still not
+            # answered (IEEE 1815-2012 9.2.4.1.3.6). It counts frames as any
+            # confirmed data does, so it is taken only once the link has been
+            # reset, and a frame sent again for want of the confirmation it
+            # cannot have is not acted on again.
             if function == link.PrimaryFunction.UNCONFIRMED_USER_DATA:
                 self._receive_broadcast(frame)
+            elif function == link.PrimaryFunction.CONFIRMED_USER_DATA:
+                if not self._link_reset:
+                    logger.info("dnp3: dropping a confirmed broadcast: the link has not been reset")
+                elif frame.fcb == self._expected_fcb:
+                    self._expected_fcb = not self._expected_fcb
+                    self._receive_broadcast(frame)
             return b""
 
         if function == link.PrimaryFunction.REQUEST_LINK_STATUS:
             return self._link_reply(link.SecondaryFunction.LINK_STATUS)
         if function == link.PrimaryFunction.RESET_LINK_STATES:
             self._reassembler.reset()
+            # A broadcast begun before the reset is from before it too, and a
+            # segment sent after it must not complete it.
+            self._broadcast_reassembler.reset()
             self._link_reset = True
             self._expected_fcb = True
             return self._link_reply(link.SecondaryFunction.ACK)
