@@ -17,8 +17,11 @@ import scala.collection.mutable
  *
  * @param timeToleranceMs how far an event's time may be from when the plugin generated it, and the longest delay a
  *                        delay measurement may report. The device's Device Profile states no figure for either.
+ * @param operateWaitMs   how long a check of an output allows a request to reach the device and be carried out. A
+ *                        request that draws no response, such as a broadcast or a direct operate without
+ *                        acknowledgment, gives the harness nothing to wait for before it asks.
  */
-final case class PluginSettings(command: FixtureCommand, timeToleranceMs: Long = 100)
+final case class PluginSettings(command: FixtureCommand, timeToleranceMs: Long = 100, operateWaitMs: Long = 1000)
 
 /** A step the outstation cannot perform, because it does not have the feature the step is for. */
 final class NotSupported(feature: String)
@@ -30,7 +33,8 @@ final class NotSupported(feature: String)
  * Performs on the py1815 outstation the steps the harness cannot perform over DNP3, and checks what the harness
  * received against what the device itself holds.
  *
- * Every method acts or checks at once through the device's control channel. None prompts: this implements
+ * Every method acts or checks through the device's control channel, at once except for a check of an output, which
+ * allows a request operateWaitMs to arrive. None prompts: this implements
  * IntegrationPlugin directly, so there is no default that waits on standard input. A step for a feature the
  * outstation does not have throws.
  */
@@ -141,9 +145,22 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     }
   }
 
+  // Ask the device what it has operated until wanted holds or operateWaitMs has passed, and say whether it held.
+  // The harness asks about an output as soon as it has sent the request. Where the request draws no response, the
+  // device may not have read it yet.
+  private def awaitOperations(wanted: () => Boolean): Boolean = {
+    val deadline = System.nanoTime() + settings.operateWaitMs * 1000000L
+    refreshOperations(device)
+    while (!wanted() && System.nanoTime() < deadline) {
+      Thread.sleep(10)
+      refreshOperations(device)
+    }
+    wanted()
+  }
+
   // The device operated the output once since the last check of it, and that one operation is now accounted for.
   private def operated(reporter: CheckReporter, kind: String, index: Int): Option[DeferredCheck] = {
-    refreshOperations(device)
+    awaitOperations(() => unchecked.exists(o => o.kind == kind && o.index == index))
     unchecked.filter(o => o.kind == kind && o.index == index).toList match {
       case one :: Nil =>
         unchecked -= one
@@ -157,11 +174,13 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     }
   }
 
+  // Waits the whole of operateWaitMs unless an operation shows sooner: a check made before the device has read the
+  // request would find nothing whatever the device goes on to do.
   private def notOperated(reporter: CheckReporter, kind: String): Option[DeferredCheck] = {
-    refreshOperations(device)
+    awaitOperations(() => unchecked.exists(_.kind == kind))
     val found = unchecked.filter(_.kind == kind).toList
     if (found.nonEmpty) throw new Exception(s"The device operated ${listed(found)}")
-    reporter.log(s"The device operated no $kind since the last check")
+    reporter.log(s"The device operated no $kind since the last check, watched for ${settings.operateWaitMs} ms")
     None
   }
 

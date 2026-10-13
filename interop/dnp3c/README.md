@@ -87,7 +87,10 @@ The plugin never answers a check from what dnp3c parsed alone. It asks the devic
 
 - **A control operated**, or did not: the device records every write that reaches an
   output. A check that an output operated needs exactly one such write since the last
-  check of that output.
+  check of that output. dnp3c asks as soon as it has sent the request, and a request that
+  draws no response, such as a broadcast, may not have reached the device yet. So the
+  plugin allows a request one second to be carried out, and a check that nothing operated
+  watches for that whole second before it says so.
 - **Values**: each value in a response is compared with the value the device holds for
   that point, and a class 0 response has to carry every installed input.
 - **Events**: the plugin generates events by changing inputs, and the device answers
