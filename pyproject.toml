@@ -121,6 +121,7 @@ exclude = [
     # downstream packager running the shipped suite would report it as a bug.
     "tests/test_interop_fixture.py",
     "tests/test_interop_capture.py",
+    "tests/test_conformance_fixture.py",
     # The same, for the changelog assembler under `scripts/`, which is release
     # tooling and is not shipped either.
     "tests/test_changelog_fragments.py",

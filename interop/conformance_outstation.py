@@ -239,6 +239,11 @@ class Device:
             self.power_cycles += 1
             await self._power_on()
 
+    async def settled(self) -> None:
+        """Wait until no power cycle is in progress."""
+        async with self._cycling:
+            pass
+
     async def _power_off(self) -> None:
         server, self._server = self._server, None
         if server is not None:
@@ -455,6 +460,14 @@ class ControlChannel:
         bound: int = self._server.sockets[0].getsockname()[1]
         return bound
 
+    @property
+    def host(self) -> str:
+        """The address the control channel is bound to."""
+        if self._server is None or not self._server.sockets:
+            raise RuntimeError("the control channel is not listening")
+        bound: str = self._server.sockets[0].getsockname()[0]
+        return bound
+
     async def start(self) -> None:
         """Listen on the loopback interface."""
         self._server = await asyncio.start_server(
@@ -511,6 +524,7 @@ class ControlChannel:
     async def op_state(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """Report the device's settings, inputs, outputs and operated controls."""
         del request
+        await self._device.settled()
         return self._device.state()
 
     async def op_power_cycle(self, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -535,6 +549,7 @@ class ControlChannel:
         pause = request.get("pause_ms", 0)
         if isinstance(pause, bool) or not isinstance(pause, int | float) or pause < 0:
             raise ValueError("'pause_ms' is a number of milliseconds, 0 or more")
+        await self._device.settled()
         done = []
         for position, change in enumerate(changes):
             if not isinstance(change, list) or len(change) != 3:
