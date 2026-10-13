@@ -678,7 +678,8 @@ function it carries (IEEE 1815-2012 9.2.4.1.3.6). It counts frames as confirmed 
 the outstation's own address does: it is taken only after a link reset, and the same frame
 sent again, as a master that waits for an acknowledgment will send it, is not acted on a
 second time. A link reset or a link test sent to a broadcast address is still not acted
-on. A
+on. A link reset sent to the outstation discards a broadcast left half received, as it
+does any other fragment, so segments from either side of the reset are never joined. A
 freeze and a time write are always carried out. A direct operate is carried out only when
 the session was built with `broadcast_controls=True`, because a control that reaches every
 outstation on a network at once is the caller's decision and not a default. The indication
