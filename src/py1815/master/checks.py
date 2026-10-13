@@ -38,7 +38,15 @@ from dataclasses import dataclass, field
 from py1815.control import CommandStatus
 from py1815.decode import DecodedObject, PointType
 from py1815.master.association import Exchange
-from py1815.master.bench import RECOVERY_READS, Bench, Check, Failed, NotApplicable, name
+from py1815.master.bench import (
+    POLL_SECONDS,
+    RECOVERY_READS,
+    Bench,
+    Check,
+    Failed,
+    NotApplicable,
+    name,
+)
 from py1815.master.profile import POINT_TYPES, Function, Plan, address
 from py1815.profile import curves, der
 from py1815.profile.model import Kind, Point
@@ -1121,6 +1129,14 @@ def events_kept(deviation: str, what: str) -> Callable[[Bench], Plan[None]]:
             raise NotApplicable("the master is set to send no confirmations")
         yield from bench.deviate(deviation)
         first = yield from bench.events()
+        # A master that polls for events has usually just taken them, so the
+        # check waits for the outstation to have some, for the settling time.
+        waited = 0.0
+        while not _events(first) and waited < bench.settle:
+            step = min(POLL_SECONDS, bench.settle - waited)
+            yield from bench.pause(step)
+            waited += step
+            first = yield from bench.events()
         reported = _events(first)
         if not reported:
             raise NotApplicable("the outstation had no events to report")

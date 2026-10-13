@@ -211,6 +211,25 @@ class TestAgainstTheSimulatedDer:
         (note,) = _one(_session(points), points, name).notes
         assert note.startswith("read 2 after ") and note.endswith("was the first to be answered")
 
+    def test_a_check_that_finds_no_events_waits_for_the_outstation_to_have_some(self):
+        # The first check confirms every event there is. The second finds
+        # none, waits, and is given the events the device raises meanwhile.
+        points = _points()
+        simulation = der.build(points)
+        report = evaluate_loopback(
+            Loopback(simulation.outstation.session(need_time=False)),
+            points,
+            checks=select(["CONFIRM-001", "CONFIRM-002"]),
+            deviating=True,
+            advance=simulation.advance,
+            settle=30,
+        )
+        first, second = report.results
+        assert (first.verdict, second.verdict) == (PASSED, PASSED), report.results
+        assert second.notes[0].endswith(
+            "events were read and the wrong sequence number was confirmed"
+        )
+
     def test_events_already_confirmed_leave_nothing_to_check(self):
         points = _points()
         first, second = _run(_session(points), points, "CONFIRM-001", "CONFIRM-002").results
@@ -300,7 +319,8 @@ class _Scripted:
 
     def scan(self, kind: str) -> Exchange:
         assert kind == "events"
-        objects = tuple(self._reads.pop(0))
+        # A read past the last one written out reports no events.
+        objects = tuple(self._reads.pop(0)) if self._reads else ()
         response = Response(AppControl(con=bool(objects)), FunctionCode.RESPONSE, None)
         return Exchange(
             FunctionCode.READ, 0, b"", Outcome.COMPLETE, fragments=(response,), objects=objects
