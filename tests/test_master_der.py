@@ -20,7 +20,7 @@ from profile_fixtures import MIRROR, paired_reference_der
 
 from py1815.master import cli
 from py1815.master.service import LineServer, Service
-from py1815.profile import der, device_profile, load
+from py1815.profile import der, device_profile, device_profile_view, load
 from py1815.profile.model import Composition, Kind, PointMap
 from py1815.server import OutstationServer
 
@@ -438,6 +438,150 @@ class TestComparison:
         service = Service()
         with pytest.raises(ValueError, match="not XML"):
             service.set_device_profile("lab", "<broken")
+
+
+#: A Device Profile small enough to state the whole of its layout.
+SMALL_PROFILE = (
+    '<DNP3DeviceProfileDocument xmlns="http://example.test/profile">'
+    "<documentHeader><documentName>Widget Profile</documentName></documentHeader>"
+    "<referenceDevice><configuration><linkConfig><dataLinkAddress>"
+    "<capabilities><range><minimum>0</minimum><maximum>65519</maximum></range></capabilities>"
+    "<currentValue><value>1024</value></currentValue>"
+    "</dataLinkAddress></linkConfig></configuration></referenceDevice>"
+    "</DNP3DeviceProfileDocument>"
+)
+
+NO_DOCUMENT = (
+    "lab was given no Device Profile document; send one as document, or give it with "
+    "--device-profile"
+)
+
+
+class TestTheDocumentLaidOut:
+    @pytest.mark.asyncio
+    async def test_the_document_given_to_the_service_is_laid_out_and_nothing_is_sent(
+        self, reading, outstation
+    ):
+        simulation, _ = outstation
+        served = simulation.outstation
+        reading.set_device_profile(
+            "lab", device_profile.render(device_profile.build(served, served.session()))
+        )
+        before = _sent(reading)
+
+        laid_out = await _result(reading, "der.document")
+
+        # The service only reads, and is not asked to do more: this is no command.
+        assert reading.allow_control is False
+        assert _sent(reading) == before
+        assert laid_out["title"] == "py1815 DER outstation Device Profile"
+        assert laid_out["notice"] == device_profile_view.NOTICE
+        assert [section["title"] for section in laid_out["sections"]] == [
+            "Document header",
+            "Configuration",
+            "Database",
+            "Implementation table",
+            "Data points list",
+        ]
+        tables = {table["title"]: table for table in laid_out["sections"][-1]["tables"]}
+        for kind, title in ((Kind.BI, "Binary input points"), (Kind.AO, "Analog output points")):
+            index = tables[title]["columns"].index("Index")
+            assert [row[index] for row in tables[title]["rows"]] == [
+                str(point.index) for point in served.served(kind)
+            ]
+        link = {table["title"]: table for table in laid_out["sections"][1]["tables"]}["Link config"]
+        assert link["columns"] == ["Item", "Capabilities", "Current value"]
+        assert link["rows"][0] == [
+            "Data link address",
+            "0 to 65519",
+            str(served.session().facts.outstation_address),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_document_sent_with_the_request_needs_no_outstation(self):
+        service = Service()
+        try:
+            answer = await service.handle(
+                {"op": "der.document", "params": {"document": SMALL_PROFILE}}
+            )
+        finally:
+            await service.close()
+        assert answer["ok"], answer
+        assert answer["result"] == {
+            "title": "Widget Profile",
+            "notice": device_profile_view.NOTICE,
+            "facts": [{"label": "Document name", "value": "Widget Profile"}],
+            "sections": [
+                {
+                    "title": "Configuration",
+                    "tables": [
+                        {
+                            "title": "Link config",
+                            "columns": ["Item", "Capabilities", "Current value"],
+                            "rows": [["Data link address", "0 to 65519", "1024"]],
+                        }
+                    ],
+                }
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_document_sent_is_the_one_laid_out_and_not_the_outstations(
+        self, reading, outstation
+    ):
+        simulation, _ = outstation
+        served = simulation.outstation
+        reading.set_device_profile(
+            "lab", device_profile.render(device_profile.build(served, served.session()))
+        )
+        laid_out = await _result(reading, "der.document", document=SMALL_PROFILE)
+        assert laid_out["title"] == "Widget Profile"
+
+    @pytest.mark.asyncio
+    async def test_an_outstation_given_no_document_says_so(self, reading):
+        answer = await _ask(reading, "der.document")
+        assert answer["error"] == {"kind": "request", "message": NO_DOCUMENT}
+        # The comparison says the same, in the same words.
+        assert (await _ask(reading, "der.compare"))["error"]["message"] == NO_DOCUMENT
+
+    @pytest.mark.asyncio
+    async def test_with_neither_a_document_nor_an_outstation_it_asks_for_one(self):
+        service = Service()
+        try:
+            answer = await service.handle({"op": "der.document", "params": {}})
+        finally:
+            await service.close()
+        assert answer["error"] == {
+            "kind": "request",
+            "message": "the operation needs an outstation",
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("document", "says"),
+        [
+            ("<broken", "the document is not XML: "),
+            ("plain words", "the document is not XML: "),
+            (
+                "<html><body/></html>",
+                "the document is not a Device Profile: its root element is html, "
+                "not DNP3DeviceProfileDocument",
+            ),
+            (
+                '<!DOCTYPE d [<!ENTITY a "aaaa">]><DNP3DeviceProfileDocument>&a;'
+                "</DNP3DeviceProfileDocument>",
+                "the document has a document type declaration",
+            ),
+            (42, "document is the Device Profile document's XML, as text"),
+        ],
+    )
+    async def test_a_document_that_is_not_a_device_profile_is_refused(
+        self, reading, document, says
+    ):
+        answer = await _ask(reading, "der.document", document=document)
+        assert not answer["ok"]
+        assert answer["error"]["kind"] == "request"
+        assert answer["error"]["message"].startswith(says), answer
 
 
 class TestTheCommandLine:

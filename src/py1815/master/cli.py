@@ -474,7 +474,7 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="FILE",
         help="a DNP3 Device Profile document for the outstations, to compare what they "
-        "serve with (default: none)",
+        "serve with and to lay out for reading (default: none)",
     )
     parser.add_argument(
         "--tables",

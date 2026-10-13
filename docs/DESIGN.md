@@ -1587,6 +1587,44 @@ browser is not in another. The master's own repeated scans, which outlive the pa
 still the Commands tab's. An evaluation started from the console writes no capture file,
 so its results name their frames in the trace and not packets.
 
+**D98 -- A Device Profile document is laid out for reading by this library's own reader,
+with labels made from the element names, and the service answers with the layout as data.**
+A Device Profile is XML, and what a person reads is the document it renders to. The DNP
+Users Group renders it with a stylesheet, and that stylesheet and the schema are the Users
+Group's, with no grant to redistribute them, so this repository carries neither
+(D48) and cannot copy the layout or the wording of either. The reader in
+`profile.device_profile_view` is therefore written from the shape of the XML alone. It
+knows the root element and a handful of names every edition shares: the document header,
+the revision history, the three parts a setting is stated in (`capabilities`,
+`currentValue`, `methods`), and the lists of points, files and implementation table rows.
+Everything else is laid out by its shape: an element with those parts is a row of a table
+of settings, elements that repeat are rows of a table with a column for each property,
+and anything else is a group laid out the same way in turn. A label is derived
+mechanically from the element's name, so `maxReceivedFragmentSize` reads "Max received
+fragment size" and a nested value is flattened into text, a minimum and a maximum into
+"0 to 65519". Deriving the labels is what lets one reader take every edition of the schema
+and a vendor's own extensions, compare local names only since each edition has its own
+namespace, and show an element it has never seen instead of dropping it. A table of
+published names would have to be the Users Group's, and would go out of date with the
+next edition. The reader states nothing the document does not: an absent value is an
+empty cell. The document is untrusted, as everything from outside is: a document type
+declaration is refused where it starts, so no entity can be defined to expand without
+bound or to name something to fetch (D93 refuses the same for the same reason), nothing
+the document refers to is followed, and its size, its element count and its nesting depth
+are bounded (D89). The service's `der.document` answers with the model, a title, facts
+and sections of tables, and not with a page: the console lays the same data out with its
+own elements and never sets markup from a string, a script gets the settings and points
+as rows, and the page that `py1815-der profile --html` writes is one more rendering of
+the model. The operation reads nothing from the outstation and sends nothing to it, so it
+is allowed in a service that was not started to command (D80).
+*Trade-off:* the labels are the schema's element names made readable and not the Users
+Group's published wording, so "Appl config" stands where their document has a fuller
+title, and the layout is not the official one: a reader who needs that renders the XML
+with the Users Group's stylesheet, which the document still names. A reader that knows
+no schema cannot say a document is invalid, and lays out a wrong document as faithfully
+as a right one. A file chosen in the console is read by the browser as UTF-8, where the
+command decodes a file as it declares.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1620,6 +1658,10 @@ Each layer is testable without the ones above it, and the session does no I/O.
   The line socket, the HTTP server and the console are each a way to reach it.
 - `master.capture` writes pcap files and knows nothing of DNP3. `master.trace` turns the
   frames it kept into that file's segments.
+- `profile.device_profile` writes the Device Profile document of an outstation built here,
+  from that outstation and its session. `profile.device_profile_view` reads the XML of any
+  Device Profile into facts, sections and tables, and writes them as a page. It knows a
+  few element names and no schema, and nothing of points, sessions or the wire.
 
 ## Testing
 

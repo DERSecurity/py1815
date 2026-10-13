@@ -5336,6 +5336,103 @@
         "description": "Reads class 0, then output status, then every declared point neither returned. A declared point no read returned is absent; a point returned that is not declared is undeclared; a served point a class 0 read does or does not carry, against what is declared, is listed under `class_0`. A point's event class and deadband cannot be read from an outstation, so they are given as declared. Needs no profile."
       }
     },
+    "/api/der.document": {
+      "post": {
+        "operationId": "der.document",
+        "summary": "Lay a Device Profile document out for reading",
+        "tags": [
+          "DER profile"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The outstation whose document is wanted. Not needed when `document` is sent."
+                  },
+                  "document": {
+                    "type": "string",
+                    "description": "The document's XML. The one the outstation was given with `--device-profile` when left out."
+                  }
+                }
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/DeviceProfileDocument"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads the XML of a DNP3 Device Profile document, of any edition of the schema, and answers with it as a title, header facts and sections of tables: the settings with their capabilities, current values and methods, the implementation table, and a table of points for each point type. The layout is this library's own and not the DNP Users Group's. Nothing is read from the outstation and nothing is sent to it, so the operation is allowed in a service that was not started to command, and needs no connection and no profile. A document that is not XML or not a Device Profile, that declares a document type, or that is larger than 8 MiB is refused as a `request` error that says which."
+      }
+    },
     "/api/stop": {
       "post": {
         "operationId": "stop",
@@ -5488,6 +5585,7 @@
                       "der.curve",
                       "der.write_curve",
                       "der.compare",
+                      "der.document",
                       "stop"
                     ]
                   },
@@ -7167,6 +7265,102 @@
           "deadband"
         ],
         "description": "One point as a Device Profile document declares it."
+      },
+      "DocumentTable": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "What the table holds. Empty for a section's own settings."
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The column headings. A table of settings has `Item`, `Capabilities` and `Current value`, `Methods` when a setting gives them, and `Stated` for anything else a setting holds. A table of points or of the implementation table has a column for each property its rows carry."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "A cell for every column. A cell that states several things separates them with a newline, and a cell the document says nothing for is empty."
+          }
+        },
+        "required": [
+          "title",
+          "columns",
+          "rows"
+        ],
+        "description": "One table of a Device Profile document."
+      },
+      "DocumentSection": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentTable"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "tables"
+        ],
+        "description": "One part of a Device Profile document, and the tables under it."
+      },
+      "DeviceProfileDocument": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The document's name, or the device's when it has none."
+          },
+          "notice": {
+            "type": "string",
+            "description": "Whose layout this is, in one line, to show with the document."
+          },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ]
+            },
+            "description": "What the header states, and the device's identification."
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentSection"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "notice",
+          "facts",
+          "sections"
+        ],
+        "description": "A Device Profile document laid out for reading: a title, header facts, and sections of tables. Every label is an element's own name made readable, and nothing is stated that the document does not state."
       },
       "DerSwitched": {
         "type": "object",
