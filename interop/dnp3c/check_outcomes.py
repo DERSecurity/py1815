@@ -302,7 +302,7 @@ def markdown(expected: dict[str, Any]) -> dict[str, str]:
         return found
 
     lacking = skipped_for("true")
-    options_off = _table(
+    off_table = _table(
         ["Option turned off", "Why", "Procedures skipped for it"],
         [
             [f"`{name}`", reason, _listed(lacking.get(name, [])) or "none"]
@@ -325,7 +325,7 @@ def markdown(expected: dict[str, Any]) -> dict[str, str]:
     )
     return {
         "sections": by_section,
-        "options": options_off,
+        "options": off_table,
         "without": for_devices_without,
         "failed": failed,
         "not-implemented": _listed(having("not implemented")),

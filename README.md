@@ -223,7 +223,7 @@ certification body:
 | DER functions (clause 6) | Their points are served. Their behavior is out of scope: what a DER does when a function is enabled belongs to the device or simulator bound behind the outstation. What the profile says of the points themselves is implemented: a function with no enable output bound reports "not supported" through its supports point, as 6.1.1 requires, and a disabled function's inputs are sent without the ONLINE flag. The simulated DER answers to active power limit, charge/discharge, constant vars, constant power factor, volt-var and volt-watt, far enough to exercise those points and no further |
 | Curves (6.1.3) | The curve block is implemented: ten curves behind the multiplexed block, with the selector, referenced-indicator, locking and curve-type rules. Following a curve is out of scope, and belongs to the DER behind the outstation. The simulated DER follows volt-var and volt-watt by straight lines between points; hysteresis is not followed |
 | Schedules, equipment block measurements | Resolved in the map, not simulated |
-| DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified |
+| DNP3 Subset Level 2 conformance | The DNP Users Group's IED certification procedures (version 3.1) are carried out in CI, section by section, against a Level 2 configuration. Self-assessed, not certified. CI also runs them with [dnp3c](https://github.com/stepfunc/dnp3c), the conformance test harness from Step Function I/O; [docs/conformance.md](https://github.com/DERSecurity/py1815/blob/main/docs/conformance.md) says how each procedure ends, including the ones that fail |
 | DER profile test procedure | EPRI's test procedure for the profile (report 3002016144) is carried out in CI against the simulated DER. The schedule procedure does not apply. Self-assessed |
 | Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is cataloged as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, disabling function codes, and the rules for unsolicited responses |
 | Unsolicited responses (optional in the profile) | Implemented, off by default: `py1815-der run --unsolicited`, or `session(unsolicited=True)` |
@@ -314,6 +314,12 @@ Two rules, both learned the hard way:
   a capture of the same traffic. The master is tested the other way round: in CI it reads and
   commands an opendnp3 outstation and a `dnp3` crate outstation, and each control is checked
   against what the outstation says it received. See `interop/` and [Acknowledgments](#acknowledgments).
+- **The certification procedures are carried out twice**, once by this project's own tests and
+  once by [dnp3c](https://github.com/stepfunc/dnp3c), the conformance test harness from
+  [Step Function I/O](https://stepfunc.io), which is other people's reading of the same
+  procedures. [docs/conformance.md](https://github.com/DERSecurity/py1815/blob/main/docs/conformance.md)
+  says how each of its procedures ends against this outstation, and which document each
+  difference turns on.
 
 ## Project Satori
 
@@ -351,6 +357,12 @@ What this library can say about interoperating rests on implementations other pe
   repository's public CI is in line with that license ([#48](https://github.com/DERSecurity/py1815/issues/48)). That statement is about this repository: anyone
   running the job from a fork, or using the crate anywhere else, should read the license for
   their own use. Commercial licensing is at <https://stepfunc.io/contact>.
+- **[dnp3c](https://github.com/stepfunc/dnp3c) by Step Function I/O** is the conformance test harness that
+  runs the Level 2 outstation certification procedures against this library in CI. It is licensed
+  under the [GNU General Public License v3.0 only](https://github.com/stepfunc/dnp3c/blob/main/LICENSE).
+  The plugin that drives it is a separate program in `interop/dnp3c/`, used only in this
+  repository's tests. Nothing of the tool or the plugin is in the library, its wheel or its
+  source distribution.
 - **[opendnp3](https://github.com/dnp3/opendnp3)** is the C++ master in the suite, and the C++ outstation that
   this library's master reads and commands. It found that the master read named points in a form a Level 2
   outstation need not accept. It is driven through the

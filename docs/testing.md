@@ -121,6 +121,14 @@ at the object level by the unit suite.
 The masters are other people's work, and this page leans on them, so they are
 credited here and not only in the directory that runs them.
 
+**[dnp3c](https://github.com/stepfunc/dnp3c)**, the conformance test harness, is also
+published by [Step Function I/O](https://stepfunc.io). It is licensed under the
+[GNU General Public License v3.0 only](https://github.com/stepfunc/dnp3c/blob/main/LICENSE),
+which is better read than summarized. The plugin that drives it is a separate program in
+`interop/dnp3c/` that links the tool's library and is used only in this repository's
+tests. Nothing of the tool or the plugin is linked into, distributed with, or depended on
+by this library, and neither the wheel nor the source distribution carries any of it.
+
 **[`dnp3`](https://github.com/stepfunc/dnp3)** is published by [Step Function I/O](https://stepfunc.io).
 It is used under their public [license](https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt), which is not an open-source
 license and is better read than summarized. Step Function I/O has said that
@@ -230,6 +238,41 @@ them by section number and describe what they check in their own words.
 
 This is the project's own assessment. It is not a certification, and the device
 profile the outstation generates does not claim one.
+
+### A harness this project did not write carries them out too
+
+The tests above are this project reading the procedures and then checking its own
+reading. [dnp3c](https://github.com/stepfunc/dnp3c), a conformance test harness published
+by [Step Function I/O](https://stepfunc.io), is other people's reading of the same
+procedures. The `dnp3c-conformance` job of the `interop` workflow runs every procedure it
+has against a Level 2 configuration of this outstation, served over TCP by
+`interop/conformance_outstation.py`.
+
+A certification procedure has steps a master cannot perform over DNP3: cycle power to the
+device, change an input, check that an output operated. dnp3c asks a person to do those,
+or a plugin. The plugin in `interop/dnp3c/` does them through a control channel the device
+serves beside its outstation, and checks each response against what the device itself
+holds: the values behind its inputs, the events it buffered and their times, and the
+writes that reached its outputs. Nothing is answered from what dnp3c parsed alone, and no
+step waits for a person.
+
+[Conformance run with dnp3c](conformance.md) says how every procedure ends: which pass,
+which are skipped and for what, which dnp3c does not implement, and which fail, with the
+document each failure turns on. That page is written from
+`interop/dnp3c/expected.json`, and the job compares every run with that record. A
+procedure that starts to fail, starts to pass or stops running fails the job until the
+record and the page are brought up to date. `tests/test_conformance_fixture.py` tests the
+control channel against the outstation it drives, and `tests/test_conformance_record.py`
+tests the comparison and holds the page to the record. Neither needs Java.
+
+The job is not one of the peers the `interop` gate waits for, because some procedures
+fail on every run and the job reports that as a failure. Read it before merging a change
+to the outstation.
+
+Setting the run up showed that a device needs three decisions the library leaves to
+whoever builds on it: whether a control sent to a broadcast address is carried out,
+whether a cold restart request is, and when to ask for the time again.
+`interop/conformance_outstation.py` says how each is decided and why.
 
 ## Bulletins and application notes are checked one document at a time
 
@@ -377,6 +420,11 @@ mypy src
 The interoperability jobs need peers that are not installed by the dev extras,
 so they run in continuous integration rather than locally. See
 `.github/workflows/interop.yml`.
+
+The conformance run needs Java 17 or newer and Maven. With those it runs locally in
+several minutes;
+[`interop/dnp3c/README.md`](https://github.com/DERSecurity/py1815/blob/main/interop/dnp3c/README.md)
+has the commands.
 
 The 32-bit run needs Docker with QEMU's ARM emulation registered. With that in
 place it is the command the `test-arm32` job runs:
