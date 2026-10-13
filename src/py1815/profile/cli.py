@@ -3,7 +3,8 @@
     py1815-der tables fetch      download the IEEE point tables and read them
     py1815-der run               serve a simulated DER as an IEEE 1815.2 outstation
     py1815-der poll              ask a running outstation for everything, once
-    py1815-der profile           write the outstation's DNP3 Device Profile document
+    py1815-der profile           write the outstation's DNP3 Device Profile document,
+                                 or lay a Device Profile document out as a page
     py1815-der config            print the complete configuration as JSON, for editing
 
 ``run``, ``points`` and ``profile`` take their settings from ``--config FILE``,
@@ -37,7 +38,7 @@ from typing import Any
 
 from py1815.control import CommandStatus
 from py1815.master import poll as master_poll
-from py1815.profile import der, device_profile, extract, load
+from py1815.profile import der, device_profile, device_profile_view, extract, load
 from py1815.profile.config import DerConfig
 from py1815.profile.model import Kind, MapError, PointMap
 from py1815.server import DEFAULT_PORT, OutstationServer
@@ -327,7 +328,48 @@ def _validate(document: str, schema: pathlib.Path) -> int:
     return 0
 
 
+def _write_page(document: str | bytes, path: pathlib.Path) -> int:
+    """Write a Device Profile document as an HTML page, or print why it cannot be laid out."""
+    try:
+        page = device_profile_view.page(device_profile_view.read(document))
+    except device_profile_view.DeviceProfileError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(page, encoding="utf-8", newline="\n")
+    print(f"wrote {path}", file=sys.stderr)
+    return 0
+
+
+def _profile_from(args: argparse.Namespace) -> int:
+    """Lay out a Device Profile document that already exists, such as a vendor's.
+
+    Nothing is built, so no configuration and no point tables are read.
+    """
+    for flag, given in (("--out", args.out), ("--validate", args.validate)):
+        if given is not None:
+            print(
+                f"{flag} applies to the document this command builds, and --from builds none",
+                file=sys.stderr,
+            )
+            return 2
+    if args.html is None:
+        print("--from lays out a document: give --html FILE for the page", file=sys.stderr)
+        return 2
+    try:
+        # Read as octets. An XML file names its own encoding, and the reader
+        # decodes it as declared. One octet past the limit is enough to refuse it.
+        with args.source.open("rb") as file:
+            document = file.read(device_profile_view.MAX_SIZE + 1)
+    except OSError as error:
+        print(f"cannot read {args.source}: {error}", file=sys.stderr)
+        return 2
+    return _write_page(document, args.html)
+
+
 def _profile(args: argparse.Namespace) -> int:
+    if args.source is not None:
+        return _profile_from(args)
     config = _configured(args)
     if config is None:
         return 2
@@ -366,6 +408,10 @@ def _profile(args: argparse.Namespace) -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(document, encoding="utf-8")
         print(f"wrote {args.out}", file=sys.stderr)
+    if args.html is not None:
+        status = _write_page(document, args.html)
+        if status:
+            return status
     return _validate(document, args.validate) if args.validate is not None else 0
 
 
@@ -565,12 +611,31 @@ def _parser() -> argparse.ArgumentParser:
     points.set_defaults(handler=_points)
 
     profile = commands.add_parser(
-        "profile", help="write the DNP3 Device Profile document for the simulated DER"
+        "profile",
+        help="write the DNP3 Device Profile document for the simulated DER, "
+        "or lay a Device Profile document out as a page",
     )
     _add_map_options(profile)
     _add_outstation_options(profile)
     _add_identity_options(profile)
     profile.add_argument("--out", type=pathlib.Path, default=None, help="write here, not to stdout")
+    profile.add_argument(
+        "--html",
+        type=pathlib.Path,
+        default=None,
+        metavar="FILE",
+        help="also write the document as an HTML page to read, and to print or save as PDF "
+        "from a browser; the layout is this library's own",
+    )
+    profile.add_argument(
+        "--from",
+        dest="source",
+        type=pathlib.Path,
+        default=None,
+        metavar="FILE",
+        help="lay out this Device Profile XML file, any vendor's, instead of building one; "
+        "used with --html, and needs no point tables",
+    )
     profile.add_argument(
         "--validate",
         type=pathlib.Path,

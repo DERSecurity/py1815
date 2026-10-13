@@ -46,6 +46,15 @@ consulted.
 
 ::: py1815.profile.device_profile
 
+## Device Profile, laid out
+
+Reads the XML of any Device Profile document into facts, sections and tables,
+and writes them as one HTML page. The guide's
+[Reading the document, and printing it](../der.md#reading-the-document-and-printing-it)
+says what the page holds.
+
+::: py1815.profile.device_profile_view
+
 ## Simulated DER
 
 ::: py1815.profile.der
