@@ -665,10 +665,10 @@ h3 { font-size: 14px; margin: 20px 0 6px; }
 .contents ol { margin: 4px 0 0; padding-left: 22px; columns: 2; }
 .contents a { color: inherit; }
 .scroll { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 13px; }
 th, td { border: 1px solid var(--rule); padding: 4px 8px; text-align: left; vertical-align: top; }
-th { background: var(--band); color: var(--ink); font-weight: 600; }
-td { white-space: pre-line; overflow-wrap: anywhere; }
+th { background: var(--band); color: var(--ink); font-weight: 600; white-space: nowrap; }
+td { white-space: pre-line; overflow-wrap: break-word; max-width: 46ch; }
 td:first-child { color: var(--ink); }
 table.wide { font-size: 12px; }
 .empty { color: var(--muted); }
@@ -677,7 +677,9 @@ table.wide { font-size: 12px; }
   body { max-width: none; padding: 0; font-size: 9.5pt; color: #000; }
   .contents { display: none; }
   .scroll { overflow: visible; }
-  table { font-size: 8.5pt; }
+  table { font-size: 8.5pt; width: 100%; min-width: 0; }
+  th { white-space: normal; }
+  td { max-width: none; }
   table.wide { font-size: 7.5pt; }
   thead { display: table-header-group; }
   tr, .facts { break-inside: avoid; page-break-inside: avoid; }

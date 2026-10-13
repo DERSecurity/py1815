@@ -240,6 +240,54 @@ class TestAFileFromDisk:
         assert page.errors == []
 
     @pytest.mark.asyncio
+    async def test_a_long_cell_does_not_squeeze_the_other_columns_of_its_table(self, console):
+        # One point with a long description, in a table with short columns
+        # beside it. Each heading has to stay on one line and each short
+        # column has to stay as wide as its heading.
+        long = "A description long enough to want most of the width of the page. " * 8
+        points = "".join(
+            f"<analogOutput><index>{index}</index><name>Point {index}</name>"
+            f"<description>{long if index == 1 else ''}</description>"
+            "<changeEventClass>none</changeEventClass>"
+            "<includedInClass0Response>never</includedInClass0Response>"
+            "<minTransmittedValue>-1000</minTransmittedValue>"
+            "<maxTransmittedValue>1000</maxTransmittedValue>"
+            "<scaleFactor>0.1</scaleFactor><units>Percent</units></analogOutput>"
+            for index in range(3)
+        )
+        text = (
+            '<DNP3DeviceProfileDocument xmlns="http://www.dnp.org/DNP3/DeviceProfile">'
+            "<documentHeader><documentName>Wide Profile</documentName></documentHeader>"
+            "<referenceDevice><dataPointsList><analogOutputPoints>"
+            f"<dataPoints>{points}</dataPoints>"
+            "</analogOutputPoints></dataPointsList></referenceDevice>"
+            "</DNP3DeviceProfileDocument>"
+        )
+        page = console.page
+        await _choose(page, "wide.xml", text)
+        await page.wait_for(
+            "document.querySelector('#der-document-view h2')?.textContent === 'Wide Profile'"
+        )
+
+        headings = await page.evaluate(
+            "[...document.querySelectorAll('#der-document-view .document-table th')].map((th) => {"
+            " const range = document.createRange(); range.selectNodeContents(th);"
+            " return { text: th.textContent, lines: range.getClientRects().length,"
+            "   fits: range.getBoundingClientRect().width <= th.clientWidth }; })"
+        )
+        assert [each["text"] for each in headings][:3] == ["Index", "Name", "Description"]
+        assert [each for each in headings if each["lines"] != 1 or not each["fits"]] == []
+        # The long cell wraps, at a width a line can be read at.
+        wide = await page.evaluate(
+            "(() => { const cell = [...document.querySelectorAll('#der-document-view td')]"
+            ".find((td) => td.textContent.startsWith('A description long enough'));"
+            " const range = document.createRange(); range.selectNodeContents(cell);"
+            " return { lines: range.getClientRects().length, width: cell.clientWidth }; })()"
+        )
+        assert wide["lines"] > 1 and wide["width"] < 700
+        assert page.errors == []
+
+    @pytest.mark.asyncio
     async def test_a_file_replaces_the_outstations_document_and_show_brings_it_back(self, console):
         page = console.page
         await _show(page)
