@@ -97,7 +97,8 @@ SCHEMAS: dict[str, Schema] = {
             "startup": {
                 "type": "boolean",
                 "description": "On connecting, and when the outstation reports that it "
-                "restarted: stop its unsolicited reporting, then read everything it holds.",
+                "restarted: read everything it holds. On connecting, a master that names "
+                "classes in `enable_unsolicited` first asks it to stop unsolicited reporting.",
             },
             "clear_restart": {
                 "type": "boolean",
@@ -113,7 +114,8 @@ SCHEMAS: dict[str, Schema] = {
                 "type": "array",
                 "items": {"type": "integer", "enum": [1, 2, 3]},
                 "description": "After startup, ask the outstation to report these event "
-                "classes without being polled.",
+                "classes without being polled. Empty means the master does not use "
+                "unsolicited reporting, and sends no request to enable or disable it.",
             },
             "events_when_indicated": {
                 "type": "boolean",

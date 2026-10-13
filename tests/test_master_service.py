@@ -579,7 +579,7 @@ class TestWhatIsDoneUnasked:
 
         (lab,) = (await _ask(service, "status"))["result"]["outstations"]
         assert lab["tasks"] == READING_TASKS and lab["tasks_due"] == []
-        assert lab["counts"] == {"complete": 2}
+        assert lab["counts"] == {"complete": 1}
         # Read, and left as it was found: restarted, and asking for the time.
         assert lab["points"]["ai"] == len(simulation.outstation.served(Kind.AI))
         assert {"DEVICE_RESTART", "NEED_TIME"} <= set(lab["indications"])
@@ -589,7 +589,10 @@ class TestWhatIsDoneUnasked:
             event = queue.get_nowait()
             if event["event"] == "exchange":
                 made.append((event["exchange"]["task"], event["exchange"]["function"]))
-        assert made == [("disable_unsolicited", "DISABLE_UNSOLICITED"), ("integrity", "READ")]
+        # One poll. A master not set to use unsolicited reporting sends no
+        # request to disable it, and one that does not clear the restart does
+        # not poll again for it.
+        assert made == [("integrity", "READ")]
 
     @pytest.mark.asyncio
     async def test_one_started_to_command_clears_the_restart_and_sets_the_clock(

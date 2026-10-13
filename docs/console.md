@@ -70,7 +70,8 @@ Outstations can also be added from the page, under **Add outstation**.
 
 Once an outstation is connected, the master runs its automatic tasks:
 
-- On connect, it disables unsolicited reporting and runs an integrity poll.
+- On connect, it runs an integrity poll. A master set to use unsolicited
+  reporting first asks the outstation to stop it.
 - It polls for events when a response says some are waiting, and polls again
   at once, up to three times, while a poll's own response still says so.
 - It reconnects when the connection is lost.

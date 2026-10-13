@@ -137,10 +137,10 @@ told not to. Each is a task:
 
 | Task | Does | When | Default |
 |---|---|---|---|
-| `startup` | Stops unsolicited reporting, then reads everything with an integrity poll | On connecting, and when the outstation reports that it restarted | On |
+| `startup` | Reads everything with an integrity poll. On connecting, a master that names classes in `enable_unsolicited` first asks the outstation to stop unsolicited reporting | On connecting, and when the outstation reports that it restarted | On |
 | `clear_restart` | Clears the restart indication | When a response carries it | On |
 | `write_time` | Sets the outstation's clock | When a response asks for the time | On |
-| `enable_unsolicited` | Asks the outstation to report the classes named without being polled | After startup | Off: no classes |
+| `enable_unsolicited` | Asks the outstation to report the classes named without being polled. With no classes the master does not use unsolicited reporting, and sends no request to enable or disable it (IEEE 1815-2012 5.1.1.2) | After startup | Off: no classes |
 | `events_when_indicated` | Polls for events | When a response says some are waiting | On |
 | `integrity_on_overflow` | Reads everything again | When a response says the event buffer overflowed | On |
 | `event_follow_ups` | Polls for events again, at once | When a poll's own response still says events are waiting, up to this many times in a row | 3 |
@@ -524,19 +524,20 @@ its octets and a reading of them one layer at a time.
 ```python
 for entry in lab.trace.since():
     print(entry.direction, entry.summary)
-# tx DISABLE_UNSOLICITED seq 0: class 1, class 2, class 3
-# rx RESPONSE seq 0 [CLASS_3_EVENTS, NEED_TIME, DEVICE_RESTART]
+# tx READ seq 0: class 1, class 2, class 3, class 0
+# rx RESPONSE seq 0 CON [NEED_TIME, DEVICE_RESTART]: g1v2 x49, g20v1 x4, g21v5 x4, g23v5 x4, g30v1 x283
+# tx CONFIRM seq 0
 # tx WRITE seq 1
-# rx RESPONSE seq 1 [CLASS_3_EVENTS, NEED_TIME]
+# rx RESPONSE seq 1 [NEED_TIME]
 # tx WRITE seq 2
-# rx RESPONSE seq 2 [CLASS_3_EVENTS]
+# rx RESPONSE seq 2
 # tx READ seq 3: class 1, class 2, class 3, class 0
-# rx RESPONSE seq 3 CON: g1v2 x49, g20v1 x4, g21v5 x4, g23v5 x4, g30v1 x283
-# tx CONFIRM seq 3
+# rx RESPONSE seq 3: g1v2 x49, g20v1 x4, g21v5 x4, g30v1 x283
 ```
 
 That is a connection being made to an outstation that has just started: the
-four requests of startup, each answered.
+poll that finds it restarted, the two writes that clear the restart and set
+its clock, and the poll made again once they have.
 
 ## Without an event loop
 

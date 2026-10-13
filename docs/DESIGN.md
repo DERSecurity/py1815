@@ -1518,6 +1518,30 @@ it bites a fragment of several segments, which a master seldom sends. Confirming
 second master address, and an endless series are not here yet; a request by broadcast or
 by an unknown function is an ordinary operation (`broadcast`, `request`), not a deviation.
 
+**D99 -- A master asks an outstation to stop unsolicited reporting only when it is set to
+use it, and only on connecting.** The startup sequence used to begin with
+`DISABLE_UNSOLICITED` for every master. The standard has a master send that request when
+it is configured to use unsolicited reporting with the outstation (IEEE 1815-2012 5.1.1.2,
+rule 1), and an outstation without the feature does not support the function, so a master
+that names no class in `enable_unsolicited` now sends none. A master that does name one
+sends it on connecting, before anything else, as before. Neither sends it when an
+outstation reports a restart: the sequence for that has no such request (5.1.1.1.2, rule
+2), since an outstation that restarted has disabled unsolicited reporting itself.
+
+The request to disable was also the first exchange of a connection, and so the one that
+showed a restart before the integrity poll was made. Without it the poll is first, and a
+restart it reports has not been cleared when it was made. The same rule has the poll come
+after the clearing, so the poll is made once more, after the restart is cleared and the
+time written. This is the one place the answer to a task's own request makes that task
+due again, against the rule of D81. It is bounded as the rest are: the restart is acted on
+when it appears and not again until it has cleared, so it costs one poll for each restart,
+and a master that does not clear the restart does not poll again for it.
+*Trade-off:* connecting to an outstation that has just restarted now takes two integrity
+polls where it took a request to disable and one poll. And classes left enabled by an
+earlier master, or by this one under other settings, are not disabled by a master no
+longer set to use unsolicited reporting; the `disable_unsolicited` operation does that
+when asked.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
