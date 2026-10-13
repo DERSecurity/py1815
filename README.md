@@ -180,7 +180,9 @@ against one and reports a verdict for each
 ([Evaluating an outstation](https://dersecurity.github.io/py1815/master-evaluate/)).
 To test what an outstation refuses, the master can break a named protocol rule on purpose,
 such as a bad checksum or a withheld confirmation
-([Misbehaving on purpose](https://dersecurity.github.io/py1815/master/#misbehaving-on-purpose)).
+([Misbehaving on purpose](https://dersecurity.github.io/py1815/master/#misbehaving-on-purpose)),
+and `py1815-master evaluate --allow-deviations` reports whether the outstation met each
+with what the standard requires.
 See [The console](https://dersecurity.github.io/py1815/console/),
 [The master's API](https://dersecurity.github.io/py1815/master-api/), whose routes are
 described in an [OpenAPI document](src/py1815/master/console/openapi.json), and

@@ -38,7 +38,8 @@ take `--config FILE`.
     "settle": 5.0,
     "curves": null,
     "checks": null,
-    "report": null
+    "report": null,
+    "allow_deviations": false
   },
   "defaults": {
     "port": 20000,
@@ -117,6 +118,7 @@ These go in `evaluate`, and are used by `py1815-master evaluate` only. See
 | `curves` | `null` | How many curves the outstation stores. `null` finds out by selecting each in turn |
 | `checks` | `null` | The checks to run, as a list of identifiers or sets. `null` runs all of them |
 | `report` | `null` | Path of a file to write the report to as JSON. `null` writes no file |
+| `allow_deviations` | `false` | Run the checks that have the master break a protocol rule on purpose. See [The deviation set](master-evaluate.md#the-deviation-set) |
 
 ## Outstation settings
 
@@ -211,10 +213,11 @@ own value.
 | `--log-max-mb MB` | `log_max_mb` |
 | `--log-keep FILES` | `log_keep` |
 | `--log-level LEVEL` | `log_level` |
-| `--settle SECONDS` | `evaluate.settle`. `evaluate` only, as are the next three |
+| `--settle SECONDS` | `evaluate.settle`. `evaluate` only, as are the next four |
 | `--curves N` | `evaluate.curves` |
 | `--check NAME` | Replaces `evaluate.checks` with the checks named. May be repeated |
 | `--report FILE` | `evaluate.report` |
+| `--allow-deviations` | `evaluate.allow_deviations` |
 | `--outstation NAME=HOST:PORT` | Adds an entry to `outstations`. May be repeated |
 | `--outstation-address N` | `defaults.outstation_address` |
 | `--master-address N` | `defaults.master_address` |

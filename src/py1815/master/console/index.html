@@ -7,6 +7,8 @@
 <link rel="icon" href="satori-mark.png">
 <link rel="stylesheet" href="console.css">
 <link rel="stylesheet" href="der.css">
+<link rel="stylesheet" href="requests.css">
+<link rel="stylesheet" href="evaluate.css">
 </head>
 <body>
 <header class="masthead">
@@ -51,6 +53,7 @@
       <div class="title-row">
         <h1 id="title"></h1>
         <span id="title-state" class="chip"></span>
+        <span id="deviation-state" class="chip bad" hidden>Deviations on</span>
         <div class="spacer"></div>
         <button id="connect-button"></button>
         <button id="remove-button" class="quiet">Remove</button>
@@ -62,7 +65,9 @@
         <button role="tab" data-tab="commands">Commands</button>
         <button role="tab" data-tab="events">Events <span id="events-count" class="count"></span></button>
         <button role="tab" data-tab="traffic">Traffic <span id="traffic-count" class="count"></span></button>
+        <button role="tab" data-tab="requests" title="Saved requests, sent once or repeated">Requests</button>
         <button role="tab" data-tab="der" hidden title="The outstation as an IEEE 1815.2 DER, named by its profile">DER</button>
+        <button role="tab" data-tab="evaluate" title="Checks to run, the report, and deviations to turn on">Evaluate</button>
         <button role="tab" data-tab="log">Log</button>
       </nav>
 
@@ -269,6 +274,10 @@
           </div>
           <label class="check"><input id="traffic-application" type="checkbox"> Application layer only</label>
           <label class="check"><input id="traffic-pause" type="checkbox"> Pause</label>
+          <span id="traffic-range" class="traffic-range" hidden>
+            <span id="traffic-range-text" role="status"></span>
+            <button id="traffic-range-clear" class="quiet">Show all frames</button>
+          </span>
           <div class="spacer"></div>
           <button id="traffic-save" class="quiet" title="Save the frames kept as a pcap file, for Wireshark">Save capture</button>
           <button id="traffic-clear" class="quiet">Clear</button>
@@ -286,6 +295,44 @@
         </div>
       </div>
 
+      <div class="panel" data-panel="requests" hidden>
+        <div class="toolbar">
+          <span class="hint">Requests saved in this browser. A repeated request is sent by this page, and stops when the page is closed or another outstation is selected.</span>
+        </div>
+        <div class="table-wrap">
+          <table id="requests-table">
+            <thead><tr>
+              <th>Name</th><th class="w-function">Function code</th><th>Object headers</th>
+              <th class="w-repeat">Repeat</th><th class="w-last">Last sent</th><th class="w-request-act"></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card spaced" id="request-card">
+          <h3 id="request-form-title">Add a request</h3>
+          <form id="request-form" class="inline" autocomplete="off">
+            <label>Name <input name="name" required maxlength="80"></label>
+            <label>Function code, by name <input name="function" required list="request-functions" class="mono" placeholder="READ"></label>
+            <datalist id="request-functions">
+              <option>READ</option>
+              <option>DELAY_MEASURE</option>
+              <option>ENABLE_UNSOLICITED</option>
+              <option>DISABLE_UNSOLICITED</option>
+              <option>IMMED_FREEZE</option>
+              <option>FREEZE_CLEAR</option>
+            </datalist>
+            <label>Object headers, in hexadecimal <input name="body" class="mono" placeholder="3C 02 06"></label>
+            <button type="submit" class="primary" id="request-save">Add</button>
+            <button type="button" class="quiet" id="request-cancel" hidden>Cancel</button>
+          </form>
+          <p id="request-error" class="error" role="alert"></p>
+        </div>
+        <div class="card" id="request-result-card" hidden>
+          <h3>Result <span id="request-result-of" class="hint"></span></h3>
+          <div id="request-result"></div>
+        </div>
+      </div>
+
       <div class="panel" data-panel="der" hidden>
         <div class="toolbar">
           <span class="hint">The outstation as an IEEE 1815.2 DER: points by name, in engineering units</span>
@@ -293,6 +340,13 @@
           <button id="der-reload" class="quiet">Read again</button>
         </div>
         <div id="der-content"></div>
+      </div>
+
+      <div class="panel" data-panel="evaluate" hidden>
+        <div class="toolbar">
+          <span class="hint">Checks run against the outstation, each with a verdict, and protocol rules the master can break on purpose</span>
+        </div>
+        <div id="evaluate-content"></div>
       </div>
 
       <div class="panel" data-panel="log" hidden>
@@ -308,6 +362,8 @@
 </div>
 
 <script src="der.js"></script>
+<script src="requests.js"></script>
+<script src="evaluate.js"></script>
 <script src="console.js"></script>
 </body>
 </html>

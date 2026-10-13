@@ -63,6 +63,29 @@ It also runs the master's automatic tasks against both: the startup sequence,
 clearing the restart indication, writing the time, enabling unsolicited
 reporting, and polling when events are indicated.
 
+Two things are checked against the Rust outstation only, because opendnp3 and
+its Python bindings do not offer them.
+
+- **Counter freezes.** Both outstations serve frozen counters, and the master
+  reads them back from both. The Rust outstation carries out each freeze, with
+  and without clearing and with and without a response, and prints it. The
+  frozen counters and the cleared counters are read back, and the printed
+  lines are checked. opendnp3 answers a freeze as a function it does not
+  support and gives its application no hook for one. Against it, started with
+  `--no-freeze`, the checks are that the master reports each refusal, that no
+  counter changed, and that the stack's own log names each freeze sent with no
+  response.
+- **TLS.** The job runs the same checks a second time over TLS, against a
+  second Rust outstation process. `interop/make_certificates.sh` makes an
+  authority and a certificate each for the outstation and the master when the
+  job runs. Nothing it writes is in the repository. The outstation accepts
+  only a master whose certificate the authority signed and that carries the
+  name it was told, and the master checks the outstation's certificate against
+  the name it is given. The run ends by connecting with no certificate, which
+  the outstation must refuse. That shows the checks before it passed because
+  the master's certificate was accepted. The Python bindings to opendnp3 list
+  a TLS server but cannot call it, so there is no TLS run against opendnp3.
+
 The first run found a real fault. The master read named points with the
 index-list qualifiers (0x17 and 0x28), which a Subset Level 2 outstation is not
 required to accept, and opendnp3 rejected them. The master now reads named
@@ -251,6 +274,12 @@ For a function the simulated DER implements, the procedure is carried out in ful
 including that its inputs are sent without the ONLINE flag while it is disabled. For
 one it does not, the procedure checks that the function says so, cannot be enabled, and
 serves none of its points.
+
+The checks that have the master break a protocol rule are tested the same two ways in
+`tests/test_master_evaluate_deviations.py`: each passes against the simulated DER, in
+process and over a socket, and each fails against an outstation made to answer a frame or
+a segment it has to discard, to stop answering after a damaged frame, or to clear events
+it was not sent the right confirmation for.
 
 The same procedures are what `py1815-master evaluate` runs against any outstation
 ([Evaluating an outstation](master-evaluate.md)). `tests/test_master_evaluate.py`

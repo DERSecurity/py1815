@@ -229,6 +229,8 @@ class EvaluateConfig:
     checks: tuple[str, ...] | None = None
     #: Path to write the report to as JSON, or None for no file.
     report: str | None = None
+    #: Run the checks that have the master break a protocol rule on purpose.
+    allow_deviations: bool = False
 
     @classmethod
     def from_mapping(cls, given: Any, where: str = "evaluate") -> EvaluateConfig:
@@ -243,6 +245,8 @@ class EvaluateConfig:
                 values[key] = None if value is None else settings.integer(value, at, 1, 65535)
             elif key == "report":
                 values[key] = None if value is None else settings.text(value, at)
+            elif key == "allow_deviations":
+                values[key] = settings.boolean(value, at)
             elif value is not None:
                 if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Sequence):
                     raise ConfigError(f"{at} must be a list of check names, or null for all")
@@ -258,6 +262,7 @@ class EvaluateConfig:
             "curves": self.curves,
             "checks": None if self.checks is None else list(self.checks),
             "report": self.report,
+            "allow_deviations": self.allow_deviations,
         }
 
 

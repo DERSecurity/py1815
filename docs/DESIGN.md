@@ -680,6 +680,15 @@ sequence number, which is what the protocol already asks of it.
 
 **D50 -- A broadcast is acted on, never answered, and reported in the next response.**
 Nothing is sent in reply to a broadcast at any layer, including a link acknowledgment. A
+master is to send a broadcast as user data that asks for no link confirmation. One sent
+as confirmed user data is acted on as well and still not acknowledged, since every device
+is to accept and process that function and none is to reply to a broadcast whichever
+function it carries (IEEE 1815-2012 9.2.4.1.3.6). It counts frames as confirmed data to
+the outstation's own address does: it is taken only after a link reset, and the same frame
+sent again, as a master that waits for an acknowledgment will send it, is not acted on a
+second time. A link reset or a link test sent to a broadcast address is still not acted
+on. A link reset sent to the outstation discards a broadcast left half received, as it
+does any other fragment, so segments from either side of the reset are never joined. A
 freeze and a time write are always carried out. A direct operate is carried out only when
 the session was built with `broadcast_controls=True`, because a control that reaches every
 outstation on a network at once is the caller's decision and not a default. The indication
@@ -1500,23 +1509,83 @@ produced, on their way to the channel, so the association's own code has no bran
 does the wrong thing: with every deviation off, the octets are sent as built, and no flag
 left on can bend the conformant path. A frame-level deviation is built and corrupted
 here rather than inside the link layer, so the layer that reads a frame is never taught to
-write a bad one. Ten are named: send nothing; repeat a request; corrupt a header or a
-data-block checksum; truncate a frame; overstate its length; break the transport sequence;
-orphan a segment; withhold a confirmation; confirm the wrong sequence. The socket master
+write a bad one. They are named: send nothing; repeat a request; speak from a second
+master address; corrupt a header or a data-block checksum; truncate a frame; overstate its
+length; break the transport sequence; orphan a segment; leave a series unfinished;
+withhold a confirmation; confirm late; confirm the wrong sequence; withhold the
+confirmation of an unsolicited response. The socket master
 and the loopback apply the same ones, and the service's `deviate` turns them on and off.
 A deviation that is on always changes what is sent: a frame whose length octet is already
 at its highest value cannot overstate it, so that frame loses its last data block instead.
 A confirmation deviation acts on the frame that carries the application confirmation and
-leaves a link-layer reply sent with it as built. The blocking master reads and changes the
+leaves a link-layer reply sent with it as built. The confirmation of a solicited response
+and of an unsolicited one are told apart by the UNS bit and have deviations of their own,
+so a check about the events a read returned leaves the confirmation of an unsolicited
+response that arrives meanwhile alone. The confirmations `late_confirmation` holds back
+are limited in number, the oldest dropped first (D89). The blocking master reads and changes the
 deviations on the loop's thread, as it does the store and the trace.
 The trace keeps each write as it was made, so a frame that no reader accepts is in the
 trace and in a capture with what is wrong with it. The trace reads what the master sent
 without the reader a receiver uses, which drops such a frame and holds a short one.
+A late confirmation is sent after the master's next request and not after a wait, so it
+needs no clock and is the same over a socket and in process: by then the outstation has
+taken the request as the failure of the confirmation (IEEE 1815-2012 Table 6-1). An endless
+series is a request whose last segment has its final bit clear, which leaves the outstation
+assembling; it is not segments sent without end.
 *Trade-off:* breaking the transport sequence of a request that fits one segment changes
 nothing an outstation rejects, since a lone segment is a complete fragment at any sequence;
-it bites a fragment of several segments, which a master seldom sends. Confirming late, a
-second master address, and an endless series are not here yet; a request by broadcast or
-by an unknown function is an ordinary operation (`broadcast`, `request`), not a deviation.
+it bites a fragment of several segments, which a master seldom sends. A request by
+broadcast or by an unknown function is an ordinary operation (`broadcast`, `request`), not
+a deviation.
+
+**D96 -- A check that has the master break a protocol rule needs its own permission, and
+requires only what a document requires.** `evaluate` gains a set of checks built from the
+deviations of D95. They write nothing to the outstation, so `--allow-control` is the wrong
+switch for them, and they send it malformed traffic, so they are not run by default
+either: a check marked as deviating is reported as not run unless the run was started with
+`--allow-deviations`, the way a check that writes is without `--allow-control` (D94). Each
+requires what a document states. A frame with a bad checksum or length draws no answer
+(IEEE 1815-2012 9.2.4.3; the invalid CRC procedure of section 6.6.2 of the IED
+Certification Procedure). A segment that is not a first segment is discarded while nothing
+is being assembled, and a first segment replaces a series under way (IEEE 1815-2012 8.2.4,
+Table 8-1, as TB2013-003 restates it). Events are kept when the confirmation is withheld,
+has the wrong sequence number, or arrives after the next request (IEEE 1815-2012 Table
+6-1; sections 8.5.2.2.4, 8.5.3.2.4 and 8.5.4.2.4 of the certification procedure). A check
+sends a well-formed read before it deviates and requires an answer, so the silence that
+follows is about the deviation. It begins with every deviation off and holds the master
+until it ends, so that a deviation left on does not damage its own well-formed reads and
+no automatic task or other caller sends a request while its deviation is on or between
+its steps; a socket master makes every other task wait for the turn the check holds. The
+master's deviations are put back as they were and the master is let go when the check
+ends, whether or not the connection is still there, and when a run is cancelled. Two
+events can be equal in every field, so events are compared as a count of each and not as
+a set. After a damaged frame up to
+three well-formed reads are sent before the outstation is said not to have recovered,
+because a receiver that waits for the octets a short frame promised takes them from the
+next frame. No check is made for a second master address: whether an outstation filters
+by source address is optional and stated in its Device Profile (section 6.6.1 of the
+certification procedure), so the deviation is a tool and not a verdict.
+*Trade-off:* a master cannot make an outstation raise an event, so the event checks work
+on the events the outstation happens to hold and are not applicable when it holds none;
+and they cannot tell an event with no time from a later one at the same point, so the
+last step, that a confirmed event is not reported again, is made only for timed events.
+
+**D97 -- The console runs an evaluation through the service, and keeps saved requests in
+the browser.** The Evaluate tab asks the service's `checks` and `evaluate` operations and
+holds none of the checks: `evaluate` answers with the report when the last check has
+ended and publishes each result as a `check` event, so the page shows a run that takes
+minutes without polling. One evaluation runs against an outstation at a time. A check
+that writes is run only by a service started to command and is written to the command
+log, as every operation that writes is (D80); a check that deviates is run only when the
+request allows it (D96). A saved request is a reader's own note, a function code and its
+object headers, and not the master's state or the outstation's, so the Requests tab keeps
+the list in the browser's storage, sends each through the `request` operation that
+already exists, and repeats one on the page's own timer. The service gains nothing to
+store and no second way to send a request.
+*Trade-off:* a repeated request stops when the page is closed, and a list saved in one
+browser is not in another. The master's own repeated scans, which outlive the page, are
+still the Commands tab's. An evaluation started from the console writes no capture file,
+so its results name their frames in the trace and not packets.
 
 ## Layering
 

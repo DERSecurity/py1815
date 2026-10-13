@@ -42,6 +42,10 @@
       "description": "Protocol rules the master breaks on purpose, so a test can see whether the outstation rejects what the standard says it must. Off until turned on."
     },
     {
+      "name": "Evaluation",
+      "description": "Checks of an outstation, each with a verdict. See the guide to evaluating an outstation for what each check requires."
+    },
+    {
       "name": "DER profile",
       "description": "An IEEE 1815.2 DER's points by name and in engineering units, its functions, its curves, and its Device Profile document."
     },
@@ -3553,6 +3557,9 @@
                       "repeat_request": {
                         "type": "boolean"
                       },
+                      "second_master_address": {
+                        "type": "boolean"
+                      },
                       "corrupt_header_crc": {
                         "type": "boolean"
                       },
@@ -3571,10 +3578,19 @@
                       "orphan_segment": {
                         "type": "boolean"
                       },
+                      "endless_series": {
+                        "type": "boolean"
+                      },
                       "withhold_confirmation": {
                         "type": "boolean"
                       },
+                      "late_confirmation": {
+                        "type": "boolean"
+                      },
                       "wrong_confirmation_sequence": {
+                        "type": "boolean"
+                      },
+                      "withhold_unsolicited_confirmation": {
                         "type": "boolean"
                       }
                     },
@@ -3681,7 +3697,289 @@
             }
           }
         },
-        "description": "A deviation makes the master break a protocol rule on purpose, so a test can see whether the outstation rejects what the standard says it must. Each is applied to the octets the association produced, on their way to the outstation, and is off until turned on. The names are `silence`, `repeat_request`, `corrupt_header_crc`, `corrupt_body_crc`, `truncate`, `overstate_length`, `break_transport_sequence`, `orphan_segment`, `withhold_confirmation`, `wrong_confirmation_sequence`. `set` turns them on or off; `clear` turns every one off first."
+        "description": "A deviation makes the master break a protocol rule on purpose, so a test can see whether the outstation rejects what the standard says it must. Each is applied to the octets the association produced, on their way to the outstation, and is off until turned on. The names are `silence`, `repeat_request`, `second_master_address`, `corrupt_header_crc`, `corrupt_body_crc`, `truncate`, `overstate_length`, `break_transport_sequence`, `orphan_segment`, `endless_series`, `withhold_confirmation`, `late_confirmation`, `wrong_confirmation_sequence`, `withhold_unsolicited_confirmation`. `set` turns them on or off; `clear` turns every one off first."
+      }
+    },
+    "/api/checks": {
+      "post": {
+        "operationId": "checks",
+        "summary": "The checks an evaluation can run",
+        "tags": [
+          "Evaluation"
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "checks": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Check"
+                              }
+                            }
+                          },
+                          "required": [
+                            "checks"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Each check with its set, whether it writes to the outstation and whether it has the master break a protocol rule, in the order `evaluate` runs them."
+      }
+    },
+    "/api/evaluate": {
+      "post": {
+        "operationId": "evaluate",
+        "summary": "Run checks against an outstation, and report a verdict for each",
+        "tags": [
+          "Evaluation"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "checks": {
+                    "description": "Check identifiers or sets, as `checks` lists them. All of them when null or left out.",
+                    "oneOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "allow_deviations": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run the checks that have the master break a protocol rule."
+                  },
+                  "settle": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Seconds to wait for the outstation to reach a state it was commanded to. 5 when left out."
+                  },
+                  "curves": {
+                    "description": "How many curves the outstation stores. Found by selecting each in turn when null or left out.",
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "checks": [
+                  "MON-001",
+                  "LINK-001"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "type": "object",
+                          "properties": {
+                            "tool": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "outstation": {
+                              "type": "string"
+                            },
+                            "started": {
+                              "type": "string",
+                              "description": "When the run began, in UTC."
+                            },
+                            "allow_control": {
+                              "type": "boolean"
+                            },
+                            "allow_deviations": {
+                              "type": "boolean"
+                            },
+                            "tables": {
+                              "type": "string",
+                              "description": "The edition of the profile tables the checks used."
+                            },
+                            "summary": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "integer"
+                              },
+                              "description": "How many checks ended with each verdict."
+                            },
+                            "results": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/CheckResult"
+                              }
+                            }
+                          },
+                          "required": [
+                            "tool",
+                            "version",
+                            "outstation",
+                            "started",
+                            "allow_control",
+                            "allow_deviations",
+                            "tables",
+                            "summary",
+                            "results"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Carries out the checks named, or all of them, and answers with the report when the last has ended. Each result is also sent as a `check` event as its check ends. A check that writes to the outstation is run only when the service was started to command, and a check that has the master break a protocol rule only when `allow_deviations` is true. A check that may not be run is reported as `not_run`. One evaluation runs against an outstation at a time. The outstation has to have been given a profile: `--profile`, or `profile` in its configuration."
       }
     },
     "/api/der.read": {
@@ -5180,6 +5478,8 @@
                       "capture",
                       "clear",
                       "deviate",
+                      "checks",
+                      "evaluate",
                       "der.read",
                       "der.write",
                       "der.enable",
@@ -6233,6 +6533,116 @@
           "application",
           "summary"
         ]
+      },
+      "Check": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The check's identifier, as in `MON-001`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "set": {
+            "type": "string",
+            "description": "The set the check belongs to."
+          },
+          "writes": {
+            "type": "boolean",
+            "description": "Whether the check writes to the outstation."
+          },
+          "deviates": {
+            "type": "boolean",
+            "description": "Whether the check has the master break a protocol rule."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "set",
+          "writes",
+          "deviates"
+        ],
+        "description": "One check `evaluate` can run."
+      },
+      "CheckResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "not_applicable",
+              "not_run"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "description": "Why the check failed, was not applicable or was not run. Empty when it passed."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the check saw that does not decide the verdict."
+          },
+          "requests": {
+            "type": "integer",
+            "description": "Requests the check sent."
+          },
+          "seconds": {
+            "type": "number"
+          },
+          "frames": {
+            "description": "The ids of the check's first and last frame in the trace.",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "packets": {
+            "description": "The check's first and last packet in a capture file. Null when the evaluation writes none.",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "verdict",
+          "detail",
+          "notes",
+          "requests",
+          "seconds",
+          "frames",
+          "packets"
+        ],
+        "description": "How one check ended."
       },
       "DerPoint": {
         "type": "object",

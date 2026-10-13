@@ -1,0 +1,44 @@
+/* The Evaluate tab of the Satori DNP3 master console, in the console's own look. */
+
+/* The frames of one check, when the Traffic tab is narrowed to them. */
+.traffic-range { display: inline-flex; align-items: center; gap: 10px; color: var(--coral); font: 12.5px var(--mono); }
+.traffic-range button { padding: 3px 10px; font-size: 12px; }
+
+.deviation-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+.deviation-head p { margin: 0; }
+.deviations-on { color: var(--coral); font-weight: 600; }
+.deviation { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; border-top: 1px solid var(--rule); padding: 8px 0; }
+.deviation-state { font: 500 11px var(--mono); letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); min-width: 28px; }
+.deviation-state.on { color: var(--coral); }
+.deviation-name { font: 500 12.5px var(--mono); color: var(--ink); min-width: 230px; }
+.deviation label.switch input[type="checkbox"]:checked { background: var(--coral); border-color: var(--coral); }
+
+.evaluate-controls { margin: 12px 0; }
+.report { display: flex; flex-wrap: wrap; gap: 14px 40px; align-items: start; margin-bottom: 14px; }
+
+/* The page scrolls the checks, and not a window inside it. */
+#evaluate-checks-wrap { max-height: none; }
+#evaluate-checks td { vertical-align: top; }
+#evaluate-checks td.name { min-width: 220px; }
+#evaluate-checks td.found { white-space: normal; min-width: 280px; }
+th.w-pick { width: 40px; }
+th.w-check { width: 130px; }
+th.w-verdict { width: 130px; }
+tr.check-set td { background: var(--paper); }
+.set-name { font: 500 11px var(--mono); letter-spacing: 0.7px; text-transform: uppercase; color: var(--ink); }
+.set-count { margin-left: 12px; }
+.flag.mark { margin: 0 0 0 10px; }
+.set-allow { margin-left: 22px; }
+.flag.mark.deviates { color: var(--coral); border-color: var(--coral); }
+
+/* A verdict in the words the report uses, which are not all capitals. */
+.check-verdict { font: 500 12px var(--mono); letter-spacing: 0.4px; white-space: nowrap; }
+.check-verdict.passed { color: var(--teal-ink); }
+.check-verdict.failed { color: var(--coral); font-weight: 700; }
+.check-verdict.not_applicable, .check-verdict.not_run { color: var(--muted); }
+.check-detail { color: var(--ink); }
+.check-detail.failed { color: var(--coral); }
+
+/* A button that reads as a link, for the way from a check to its frames. */
+button.link { border: none; padding: 0; background: none; font: inherit; color: var(--teal-ink); text-decoration: underline; cursor: pointer; }
+button.link:hover { background: none; color: var(--ink); }
