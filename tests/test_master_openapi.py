@@ -255,7 +255,8 @@ ORDER = [
     "trace",
     "capture",
     "clear",
-    "deviate",
+    "checks",
+    "evaluate",
     "der.functions",
     "der.read",
     "der.write",
@@ -264,6 +265,8 @@ ORDER = [
     "der.enable",
     "der.disable",
     "der.compare",
+    # After every example that needs an answer: this one leaves a deviation on.
+    "deviate",
     "disconnect",
     "connect",
     "remove",

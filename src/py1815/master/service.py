@@ -38,8 +38,11 @@ from py1815.decode import DecodedObject, PointType
 from py1815.master import requests
 from py1815.master.api import Master, Outstation
 from py1815.master.association import Exchange, Unsolicited
+from py1815.master.bench import DEFAULT_SETTLE, Check, NoAnswer, Result
 from py1815.master.capture import CaptureFile
+from py1815.master.checks import CATALOG, select
 from py1815.master.controls import Mode, Operated, Plan, commands
+from py1815.master.evaluate import evaluate
 from py1815.master.operations import DEFAULT_BROADCAST, broadcast_address
 from py1815.master.profile import (
     Curve,
@@ -424,6 +427,17 @@ def describe_declared(declared: Declared) -> dict[str, Any]:
     }
 
 
+def describe_check(check: Check) -> dict[str, Any]:
+    """Return a check of the catalog as a JSON-compatible dict."""
+    return {
+        "id": check.id,
+        "title": check.title,
+        "set": check.group,
+        "writes": check.commands,
+        "deviates": check.deviates,
+    }
+
+
 def describe_entry(entry: Entry) -> dict[str, Any]:
     return {
         "id": entry.id,
@@ -472,6 +486,8 @@ class Service:
         self._tls: dict[str, TlsSettings] = {}
         self._der_profiles: dict[str, DerProfile] = {}
         self._device_profiles: dict[str, str] = {}
+        #: The outstations an evaluation is running against.
+        self._evaluating: set[str] = set()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.stopped = asyncio.Event()
         self._operations: dict[str, Callable[[Mapping[str, Any]], Awaitable[Any]]] = {
@@ -503,6 +519,8 @@ class Service:
             "capture": self._capture,
             "clear": self._clear,
             "deviate": self._deviate,
+            "checks": self._checks,
+            "evaluate": self._evaluate,
             "der.read": self._der_read,
             "der.write": self._der_write,
             "der.enable": self._der_enable,
@@ -1299,6 +1317,74 @@ class Service:
             "deviations": outstation.deviations.describe(),
             "on": list(outstation.deviations.on()),
         }
+
+    # ------------------------------------------------------------ evaluation
+
+    async def _checks(self, _params: Mapping[str, Any]) -> dict[str, Any]:
+        """List the checks ``evaluate`` can run, in the order it runs them."""
+        return {"checks": [describe_check(check) for check in CATALOG]}
+
+    async def _evaluate(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Run checks against an outstation, and return the report.
+
+        Each result is also published as a ``check`` event as its check ends.
+        A check that writes is run only when the service was started to
+        command, and a check that has the master break a protocol rule only
+        when ``allow_deviations`` is true. The others are reported as not run.
+        """
+        outstation = self._outstation(params)
+        profile = self._der_profile(outstation.name)
+        wanted = params.get("checks")
+        if wanted is not None and (
+            not isinstance(wanted, list) or not all(isinstance(each, str) for each in wanted)
+        ):
+            raise BadRequest("checks is a list of check names, or null for all of them")
+        chosen = select(wanted)
+        deviating = params.get("allow_deviations", False)
+        if not isinstance(deviating, bool):
+            raise BadRequest("allow_deviations is true or false")
+        settle = params.get("settle", DEFAULT_SETTLE)
+        if (
+            isinstance(settle, bool)
+            or not isinstance(settle, (int, float))
+            or not math.isfinite(settle)
+            or not settle > 0
+        ):
+            raise BadRequest("settle is a number of seconds greater than 0")
+        curves = params.get("curves")
+        if curves is not None and (
+            isinstance(curves, bool) or not isinstance(curves, int) or curves < 1
+        ):
+            raise BadRequest("curves is a whole number of at least 1, or null to find out")
+        if outstation.name in self._evaluating:
+            raise BadRequest(f"an evaluation of {outstation.name} is already running")
+        if self.allow_control and any(check.commands for check in chosen):
+            # Recorded in the command log, as every operation that writes is.
+            self._commanding("an evaluation that writes")
+
+        def ended(result: Result) -> None:
+            self.publish(
+                {"event": "check", "outstation": outstation.name, "result": result.describe()}
+            )
+
+        self._evaluating.add(outstation.name)
+        try:
+            report = await evaluate(
+                outstation,
+                profile,
+                checks=chosen,
+                commanding=self.allow_control,
+                deviating=deviating,
+                settle=float(settle),
+                curves=curves,
+                device_profile=self._device_profiles.get(outstation.name),
+                on_result=ended,
+            )
+        except NoAnswer as error:
+            raise ConnectionError(f"{outstation.name}: {error}") from error
+        finally:
+            self._evaluating.discard(outstation.name)
+        return report.describe()
 
     # ---------------------------------------------------------- DER profile
 

@@ -44,7 +44,7 @@ are paired. See [Serving a DER](der.md#where-the-tables-come-from) for how to ge
 | `passed` | The outstation did everything the check requires |
 | `FAILED` | The outstation did something the check does not allow. The next line says what |
 | `not applicable` | The outstation does not serve what the check needs |
-| `not run` | The check writes and the run was read only, or the connection was lost earlier |
+| `not run` | The check writes and the run was read only, the check has the master break a protocol rule and the run was not allowed to, or the connection was lost earlier |
 
 A `note` line is something the check saw that does not decide the verdict: how many of a
 block's points are served, an alarm that was raised when read, a refusal with an unusual
@@ -55,8 +55,8 @@ be made: a setting that cannot be used, no tables, no connection, or no answer.
 
 ## The checks
 
-`py1815-master evaluate --list` prints them. `--check NAME` runs one check or one set, and
-may be repeated.
+`py1815-master evaluate --list` prints them, each with its set and whether it reads,
+writes or deviates. `--check NAME` runs one check or one set, and may be repeated.
 
 The `der` set carries out EPRI's *Test Procedure for Validating DNP Application Note
 AN2018-001 in Distributed Energy Resources* (report 3002016144). Each check is named for
@@ -95,10 +95,81 @@ serves with its DNP3 Device Profile document, given with `--device-profile FILE`
 declared and not served, served and not declared, or in class 0 when the document says
 otherwise fails it.
 
+### The deviation set
+
+The `deviation` set has the master break a protocol rule on purpose and requires what the
+standard requires of the outstation in return. These checks write nothing to the
+outstation. They are run only with `--allow-deviations`, and are reported as `not run`
+without it.
+
+```bash
+py1815-master evaluate --outstation lab=192.0.2.10:20000 --check deviation --allow-deviations
+```
+
+!!! warning "A run with `--allow-deviations` sends the outstation malformed traffic"
+    The checks send frames with bad checksums and wrong lengths, segments out of place,
+    and withhold confirmations the outstation asked for. An outstation that conforms
+    discards the frames and reports its events again. Use it on a device on a bench.
+
+| Check | What the master does | What it requires |
+|---|---|---|
+| `LINK-001` | Sends a read in a frame whose header checksum is wrong | No answer |
+| `LINK-002` | Sends a read in a frame whose data checksum is wrong | No answer |
+| `LINK-003` | Sends a read in a frame with its last octet missing | No answer |
+| `LINK-004` | Sends a read in a frame whose length octet claims more than the frame carries | No answer |
+| `TRANSPORT-001` | Sends a read as a segment that is not a first segment | No answer, and the next read is answered |
+| `TRANSPORT-002` | Sends a read whose final segment never comes | No answer, and the next read, which begins a new series, is answered |
+| `CONFIRM-001` | Reads the events and sends no confirmation | The same events are reported again |
+| `CONFIRM-002` | Reads the events and confirms the wrong sequence number | The same events are reported again |
+| `CONFIRM-003` | Reads the events and sends the confirmation after its next request | The same events are reported again |
+
+The sources:
+
+- **A frame with a bad checksum.** IEEE 1815-2012 9.2.4.3 has the checksums checked so
+  that only valid data pass up from the data link layer, and the invalid CRC procedure of
+  section 6.6.2 of the DNP Users Group's IED Certification Procedure requires that such a
+  frame draws no link confirmation and no response.
+- **A segment out of place.** IEEE 1815-2012 8.2.4, Table 8-1, as Technical Bulletin
+  TB2013-003 restates it: a segment that is not a first segment is discarded while no
+  fragment is being assembled, and a first segment replaces a series under way.
+- **Events and confirmations.** IEEE 1815-2012 Table 6-1: a confirmation that does not
+  match is discarded and no events are removed, and a request that arrives in place of a
+  confirmation means the confirmation failed. Sections 8.5.2.2.4, 8.5.3.2.4 and 8.5.4.2.4
+  of the certification procedure read class data without confirming it and require the
+  same events again.
+
+Each link and transport check first sends a well-formed read, which has to be answered,
+so that the silence that follows is about the damaged request. Afterwards it sends
+well-formed reads until one is answered. A frame that was cut short can take the start of
+the next frame with it, so after a link check up to three reads are sent, and the report
+notes when the first was not the one answered. After a transport check the first read
+has to be answered.
+
+A read that has to go unanswered is waited for as long as any other: the response
+timeout, times the read retries plus one. Each of these checks takes that long at least.
+
+The three event checks work on the events the outstation has to report. A master that
+polls for events has usually just taken them, so a check that finds none reads again every
+half second for up to the settling time, and is `not applicable` when none came. After the events are reported again, they are read
+once more with a confirmation and must not be reported after that. Events that carry no
+time cannot be told from later events at the same point, so for those the last step is
+skipped and noted. A master set to send no confirmations cannot run these checks.
+
+A check of this set begins with every deviation of the master off, so that one left on
+does not damage the well-formed reads the check compares against. It also holds the
+master until it ends: no automatic task, repeated scan or other caller sends that
+outstation a request while the check runs, so none is damaged by the check's deviation
+and none comes between its steps. Whatever deviations were on before the check are on
+again when it ends, and the same is so for a run that is cancelled part way.
+
+Two events can be equal in every field. An event that was reported twice has to be
+reported twice again.
+
 ### What counts as supported
 
 The run begins by reading which points the outstation serves: a class 0 read, a read of
-output status, and a read by range of every other point of the profile. A point is
+output status, and a read by range of every other point of the profile. These reads are
+made with every deviation of the master off. A point is
 supported when one of those reads returned it. A check reads only served points, and is
 not applicable when the points it is about are not served.
 
@@ -144,6 +215,7 @@ When something cannot be put back, the report says so in a note on that check.
   "outstation": "lab at 192.0.2.10:20000, outstation 1024",
   "started": "2026-10-09T16:39:39+00:00",
   "allow_control": true,
+  "allow_deviations": false,
   "tables": "IEEE Std 1815.2-2025",
   "summary": {"passed": 34, "failed": 0, "not_applicable": 1, "not_run": 0},
   "results": [
@@ -192,6 +264,7 @@ py1815-master evaluate lab --config master.json --allow-control \
 | `--curves N` | `evaluate.curves` | How many curves the outstation stores. Found by selecting each when not given |
 | `--report FILE` | `evaluate.report` | Also write the report as JSON |
 | `--allow-control` | `allow_control` | Run the checks that write |
+| `--allow-deviations` | `evaluate.allow_deviations` | Run the checks that have the master break a protocol rule |
 | `--device-profile FILE` | `defaults.device_profile` | The Device Profile document `PROFILE-001` compares with |
 | `--capture FILE` | `capture` | Write the traffic to a pcap file |
 
@@ -210,7 +283,7 @@ async def main() -> None:
     await outstation.connect()
     await outstation.idle()
     try:
-        report = await evaluate(outstation, load.load(), commanding=True)
+        report = await evaluate(outstation, load.load(), commanding=True, deviating=True)
     finally:
         await outstation.close()
     for line in report.lines():
@@ -253,3 +326,10 @@ report = await evaluate(outstation, point_map, checks=[*CATALOG, mine])
 
 The third argument says whether the check writes. One that does is run only when
 `commanding` is set.
+
+A check that has the master break a protocol rule is made with `deviates=True`, and is
+run only when `deviating` is set. `bench.deviate("corrupt_header_crc")` turns a deviation
+on until the check ends, `bench.conform()` turns it off sooner, `bench.unanswered(what)`
+sends a small read that has to draw no answer, and `bench.answers(after)` sends reads
+until one is answered. `not_answered` and `events_kept` in `py1815.master.checks` build
+the checks of the deviation set from these.

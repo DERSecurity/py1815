@@ -31,7 +31,14 @@ from py1815.master import bench as benches
 from py1815.master.association import Exchange, Outcome
 from py1815.master.bench import Bench, Check, Failed, NoAnswer, NotApplicable, Result, Verdict
 from py1815.master.capture import CaptureFile
-from py1815.master.checks import CATALOG, MODES, SAMPLE_CURVES, select, valid_values
+from py1815.master.checks import (
+    CATALOG,
+    DEVIATION_CHECKS,
+    MODES,
+    SAMPLE_CURVES,
+    select,
+    valid_values,
+)
 from py1815.master.evaluate import Report, catalog_lines, evaluate, evaluate_loopback
 from py1815.master.loopback import Loopback
 from py1815.master.profile import DerProfile, Plan
@@ -89,6 +96,10 @@ class TestAgainstTheSimulatedDer:
         report = _in_process(der.build(points), points)
         ended = {result.id: (result.verdict, result.detail) for result in report.results}
         assert ended.pop("PROFILE-001")[0] is NOT_APPLICABLE_, "no document was given"
+        # The checks that have the master deviate are run only when allowed
+        # to, and have tests of their own.
+        for check in DEVIATION_CHECKS:
+            assert ended.pop(check.id)[0] is NOT_RUN
         assert set(ended.values()) == {(PASSED, "")}, ended
         assert not report.failed
 
@@ -233,10 +244,13 @@ class TestReadOnly:
             if check.commands:
                 assert result.verdict is NOT_RUN and "writes to the outstation" in result.detail
                 assert result.requests == 0
+            if check.deviates:
+                assert result.verdict is NOT_RUN and "breaks a protocol rule" in result.detail
+                assert result.requests == 0
         reading = [
             result
             for check, result in zip(CATALOG, report.results, strict=True)
-            if not check.commands
+            if not check.commands and not check.deviates
         ]
         assert [result.id for result in reading] == [
             "PROFILE-001",
@@ -248,7 +262,8 @@ class TestReadOnly:
         assert report.count(NOT_RUN) == len(CATALOG) - 4
 
     def test_every_check_but_the_four_that_read_is_marked_as_writing(self):
-        assert {check.id for check in CATALOG if not check.commands} == {
+        assert not any(check.commands for check in DEVIATION_CHECKS)
+        assert {check.id for check in CATALOG if not check.commands and not check.deviates} == {
             "PROFILE-001",
             "MON-001",
             "ALARM-001",
@@ -918,7 +933,8 @@ class TestSelecting:
     def test_a_check_is_named_by_its_identifier_in_any_case_or_by_its_set(self):
         assert [check.id for check in select(["op-001", "MON-001"])] == ["MON-001", "OP-001"]
         assert [check.id for check in select(["device-profile"])] == ["PROFILE-001"]
-        assert len(select(["der"])) == len(CATALOG) - 1
+        assert len(select(["der"])) == len(CATALOG) - 1 - len(DEVIATION_CHECKS)
+        assert select(["deviation"]) == DEVIATION_CHECKS
 
     def test_an_unknown_name_is_refused(self):
         with pytest.raises(ValueError, match="'mon-1' is not a check"):
@@ -1103,7 +1119,10 @@ class TestTheCommand:
         printed = capsys.readouterr().out.splitlines()
         assert printed[0].startswith(f"lab at 127.0.0.1:{port}, outstation 1024, ")
         assert printed[0].endswith(", read only")
-        assert printed[-1] == f"{len(CATALOG)} checks: 3 passed, 1 not applicable, 31 not run"
+        waiting = len(CATALOG) - 4
+        assert printed[-1] == (
+            f"{len(CATALOG)} checks: 3 passed, 1 not applicable, {waiting} not run"
+        )
 
     def test_only_a_run_allowed_to_write_clears_the_restart_indication(self, capsys):
         def restart_indicated(port: int) -> bool:

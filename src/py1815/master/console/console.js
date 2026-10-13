@@ -52,6 +52,7 @@ const state = {
   events: [],
   frames: [],
   frame: null,       // the frame shown in detail
+  range: null,       // the frames of one check, when the Traffic tab is narrowed to them
   log: [],
   allowControl: false,  // whether the service behind this page commands outstations
 };
@@ -232,10 +233,13 @@ async function select(name) {
   state.events = [];
   state.frames = [];
   state.frame = null;
+  state.range = null;
+  requestsSelected(name);
   $("#point-unreported-label").hidden = true;
   $("#workspace").hidden = name === null;
   $("#empty").hidden = name !== null;
   renderOutstations();
+  evaluateSelected(name);
   if (name === null) return;
   renderHeader();
   const [values, events, trace, profile] = await Promise.all([
@@ -288,6 +292,7 @@ function renderControl() {
   pointRows = new Map();
   if (state.tab === "points") renderPoints();
   if (state.tab === "der") renderDer();
+  if (state.tab === "evaluate") renderEvaluate();
 }
 
 function showOperateFields() {
@@ -627,9 +632,12 @@ function frameShown(frame) {
 function renderTraffic() {
   $("#traffic-count").textContent = state.frames.length || "";
   if (state.tab !== "traffic") return;
+  const range = state.range;
+  $("#traffic-range").hidden = !range;
+  if (range) $("#traffic-range-text").textContent = `Frames ${range.first} to ${range.last}, of ${range.check}`;
   const body = $("#traffic-table tbody");
   body.replaceChildren();
-  const shown = state.frames.filter(frameShown).slice(-300).reverse();
+  const shown = (range ? range.frames : state.frames).filter(frameShown).slice(-300).reverse();
   if (!state.frame && shown.length) {
     // Something to read as soon as the tab is opened: the newest fragment.
     state.frame = shown.find((frame) => frame.application) || shown[0];
@@ -685,7 +693,11 @@ function renderFrame() {
   const detail = $("#frame-detail");
   const frame = state.frame;
   if (!frame) return;
-  const yes = (flag) => (flag ? "yes" : "no");
+  // A frame the master sent that is not a valid frame has its header fields
+  // as written, or null where the octets are too short to hold a header. A
+  // null field is left out.
+  const yes = (flag) => (flag === null || flag === undefined ? null : (flag ? "yes" : "no"));
+  const octets = (count) => (count === null || count === undefined ? null : `${count} octets`);
   const parts = [
     el("h3", { text: `${frame.direction === "tx" ? "Sent" : "Received"} at ${clockTime(frame.at)}` }),
     layer("link", "Data link", [
@@ -694,7 +706,8 @@ function renderFrame() {
       ["To", frame.link.destination],
       ["Sent by a master", yes(frame.link.from_master)],
       ["Primary", yes(frame.link.primary)],
-      ["User data", `${frame.link.user_data} octets`],
+      ["User data", octets(frame.link.user_data)],
+      ["Problem", frame.link.problem],
     ]),
   ];
   if (frame.transport) {
@@ -732,12 +745,12 @@ function renderFrame() {
 
 // ---------------------------------------------------------------- commands
 
-function renderResult(exchange) {
-  $("#result-card").hidden = false;
-  const result = $("#result");
+// What came of one request, as the Commands and Requests tabs both show it:
+// the facts of the exchange, and a table of the objects that came back.
+function exchangeNodes(exchange) {
   const rows = exchange.objects.filter((object) => object.type !== null).slice(0, 200);
   const named = rows.some((row) => row.name);
-  result.replaceChildren(
+  return [
     el("dl", { class: "facts" },
       el("dt", { text: "Request" }), el("dd", {}, exchange.function, " ", el("span", { class: "hint", text: `sequence ${exchange.sequence}` })),
       el("dt", { text: "Outcome" }), el("dd", {}, el("span", { class: `outcome ${exchange.outcome}`, text: exchange.outcome })),
@@ -757,7 +770,13 @@ function renderResult(exchange) {
           named && el("td", { class: "name" }, nameNodes(row.type, row.index, row.name)),
           el("td", { class: "num value", text: formatValue(row.value) }),
           el("td", {}, flagChips(row.flags)),
-          el("td", { class: "mono", text: `g${row.group}v${row.variation}${row.event ? " event" : ""}` })))))) : null);
+          el("td", { class: "mono", text: `g${row.group}v${row.variation}${row.event ? " event" : ""}` })))))) : null,
+  ].filter(Boolean);
+}
+
+function renderResult(exchange) {
+  $("#result-card").hidden = false;
+  $("#result").replaceChildren(...exchangeNodes(exchange));
 }
 
 // What came of an operate: whether the outstation accepted it, and what it
@@ -845,10 +864,12 @@ function renderAll() {
   if (state.tab === "points") renderPoints();
   if (state.tab === "log") renderLog();
   if (state.tab === "traffic") renderFrame();
+  if (state.tab === "requests") renderRequests();
   if (state.tab === "der") renderDer();
+  if (state.tab === "evaluate") renderEvaluate();
 }
 
-const TABS = ["overview", "points", "commands", "events", "traffic", "der", "log"];
+const TABS = ["overview", "points", "commands", "events", "traffic", "requests", "der", "evaluate", "log"];
 
 function showTab(name) {
   state.tab = name;
@@ -860,6 +881,9 @@ function showTab(name) {
     panel.hidden = panel.dataset.panel !== name;
   }
   renderAll();
+  // A deviation can be turned on by a script as well as from this page, so
+  // the tab asks the service again each time it is opened.
+  if (name === "evaluate") evaluateDeviations();
 }
 
 // ----------------------------------------------------------------- events
@@ -914,6 +938,12 @@ function onServiceEvent(event) {
       note(`${event.outstation}: ${event.connected ? "connected" : "connection ended"}`, !event.connected);
     }
     refreshStatus();
+    return;
+  }
+  if (event.event === "check") {
+    // Kept for whichever outstation it is about: an evaluation goes on while
+    // another outstation is looked at.
+    evaluateEnded(event.outstation, event.result);
     return;
   }
   if (event.outstation !== state.selected) return;
@@ -1100,7 +1130,13 @@ function wire() {
     try { await ask("traffic cleared", "clear", { what: "trace" }); } catch (error) { return; }
     state.frames = [];
     state.frame = null;
+    state.range = null;
     $("#frame-detail").replaceChildren(el("p", { class: "hint", text: "Select a frame to read it layer by layer." }));
+    renderTraffic();
+  });
+  $("#traffic-range-clear").addEventListener("click", () => {
+    state.range = null;
+    state.frame = null;
     renderTraffic();
   });
   $("#events-clear").addEventListener("click", async () => {
@@ -1110,6 +1146,7 @@ function wire() {
   });
   $("#log-clear").addEventListener("click", () => { state.log = []; renderLog(); });
   wireDer();
+  wireRequests();
 }
 
 document.body.append(tip);

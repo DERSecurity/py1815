@@ -175,7 +175,12 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
             document[key] = value
 
     evaluating = dict(document.get("evaluate") or {})
-    for key, flag in (("settle", "settle"), ("curves", "curves"), ("report", "report")):
+    for key, flag in (
+        ("settle", "settle"),
+        ("curves", "curves"),
+        ("report", "report"),
+        ("allow_deviations", "allow_deviations"),
+    ):
         value = getattr(args, flag, None)
         if value is not None:
             evaluating[key] = value
@@ -611,8 +616,9 @@ def _parser() -> argparse.ArgumentParser:
         help="run checks against an outstation and report a verdict for each",
         description="Run checks against one outstation. Checks that write to it run only "
         "with --allow-control: they change its settings, enable and disable its functions, "
-        "and stop and start it. Exit status: 0 when no check failed, 1 when one did, 2 when "
-        "the run could not be made.",
+        "and stop and start it. Checks that have the master break a protocol rule on purpose "
+        "run only with --allow-deviations. Exit status: 0 when no check failed, 1 when one "
+        "did, 2 when the run could not be made.",
     )
     evaluating.add_argument(
         "name",
@@ -651,6 +657,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help="also write the report to this file as JSON (default: no file)",
+    )
+    evaluating.add_argument(
+        "--allow-deviations",
+        action="store_true",
+        default=None,
+        help="run the checks that have the master break a protocol rule on purpose: frames "
+        "the outstation has to discard and confirmations withheld (default: not run)",
     )
     _add_outstation_options(evaluating)
 
