@@ -9,6 +9,257 @@ says so explicitly.
 
 Nothing yet.
 
+## [0.3.0] - 2026-10-13
+
+### Added
+
+- **A master for exercising outstations, in a first version that reads (#70).**
+  `py1815.master` is the other end of the conversation: `Master` and `Outstation` over a
+  socket, and `Loopback` wired straight to a `Session` in one process. It polls by class,
+  reads named points by type and index, confirms the fragments that ask, takes unsolicited
+  responses, and keeps the last value of every point in a store. Each request returns an
+  `Exchange` with every fragment received and every object decoded, and a timeout or an
+  error indication is a result and not an exception. `MasterAssociation` holds the protocol
+  and does no I/O, as the session does none. `py1815.decode` reads the objects a response
+  carries, from the standard's layouts and not from this library's encoders, and stops with
+  a reason at one it does not know. `application` gains `build_request`, `build_confirm`,
+  `parse_response` and the headers a read is made of. It does not command an output,
+  reconnect, or speak TLS yet; `docs/planning/MASTER.md` is the plan. D73 to D76 record the
+  decisions.
+
+- **The master as a service, and a web console on it (#71).** `py1815-master console` serves
+  a console for a DNP3 master in a browser: each outstation's points by type with their
+  flags named, scans and reads with their results, events as they arrive, and the traffic
+  with each frame read layer by layer beside its octets. `--demo` starts a simulated
+  IEEE 1815.2 DER beside it, and `--profile` names an outstation's points from the profile and
+  lets the console show the points of the profile it has not reported. An enumerated point is named without the values it lists, which
+  are shown beside it on request. The console holds no logic. It speaks to
+  `py1815.master.service`, whose operations are JSON: each is a route, `POST /api/<operation>`,
+  described in an OpenAPI document served at `/openapi.json` and built from one description
+  that a test holds the service to. `py1815-master serve` offers the same operations a line at
+  a time over a local socket for a test rig. The console is tested in a headless browser,
+  where one is installed. The Dockerfile gains a `master` target, an image of the master with
+  its API and console, and `compose.yaml` runs it beside the simulated DER: `docker compose up`
+  fetches the point tables, starts the outstation, and starts the master connected to it. The console listens on this machine unless
+  given a token, refuses a request from a page it did not serve, and loads nothing from the
+  network. `Outstation` gains `trace`, the record of every frame; `repeat_scan`, for a scan
+  on a schedule; `scan("outputs")`, which reads the output status an integrity poll leaves
+  out; and `enable_unsolicited` and `disable_unsolicited`. Neither the service nor
+  the console adds a dependency. D77 and D78 record the decisions.
+
+- **The master commands outputs (#76).** `operate` sends controls to binary and analog
+  outputs by direct operate, by select and then operate, or by direct operate with no
+  acknowledgment, and returns a status for each control with whether the outstation echoed
+  it unchanged. After a select the operate is sent only if every control was accepted, and
+  nothing is ever sent twice: a response that does not arrive is reported as not known.
+  `write_time`, `clear_restart`, `freeze` and `restart` are the other requests a master
+  makes. The JSON service has an operation and a route for each, described in the OpenAPI
+  document, and refuses all of them as `not_allowed` unless started with `--allow-control`,
+  along with a `request` by any function code that is not a read. `status` reports which.
+
+- **The console operates outputs (#77).** Started with `--allow-control`, the Commands tab
+  has a form that commands a binary or an analog output by select and operate, direct
+  operate, or direct operate with no acknowledgment, and buttons that write the time, clear
+  the restart indication and freeze the counters. The result says whether the outstation
+  accepted, refused, was never asked to operate, or did not say, with its status for the
+  control. Each row of the output tables has a button that opens the form filled in, and
+  the output's status is read back afterwards. The top of the page says whether it is read
+  only or commanding. Without the flag the controls are greyed out and the service refuses
+  them. The compose file starts the console able to command the simulated DER beside it.
+
+- **The master runs automatic tasks, and is configured from one JSON file (#78).**
+  On connect, and when an outstation reports a restart, the master disables unsolicited
+  reporting and runs an integrity poll. It also clears the restart indication, writes the
+  time when asked, polls for events when a response indicates some, runs an integrity poll
+  after an event buffer overflow, and can enable unsolicited reporting. Each task can be
+  disabled through `Tasks`, and `manual=True` disables them all along with confirmations.
+  No task operates an output, and no task is triggered by the response to its own request.
+  A lost connection is reopened every `reconnect` seconds. `idle()` waits for pending
+  tasks, and an exchange sent by a task names it in `task`. `Loopback` takes `tasks` and
+  has `start()`. The JSON service takes `tasks`, `manual` and `reconnect` in `add`, has an
+  `idle` operation, and reports each outstation's tasks. The console shows which tasks are
+  enabled and logs each run.
+
+  Every `py1815-master` setting can be kept in a JSON file: `--config FILE` loads it,
+  command-line flags override it, and `py1815-master config` prints the complete
+  configuration for editing. Unknown settings and wrong types are reported with their
+  location. New flags: `--config`, `--manual`, `--unsolicited` and `--reconnect`.
+
+- **The DER outstation is configured from one JSON file (#80).** Every `py1815-der`
+  setting can be kept in a JSON file: `--config FILE` loads it on `run`, `points` and
+  `profile`, command-line flags override it, and `py1815-der config` prints the complete
+  configuration for editing. Unknown settings and wrong types are reported with their
+  location. The file also sets things that had no flag before: the event policy, event
+  capacity, response size, select, confirm and idle timeouts, read-only and Level 2
+  operation. New flags: `--config`, `--read-only`, `--level2`, `--event-capacity`,
+  `--max-response`, `--select-timeout` and `--idle-timeout`. `der.build` passes extra
+  keyword arguments to `DerOutstation`.
+
+- **The master is tested against outstations this project did not write (#81).** Two new
+  interoperability jobs read and command an opendnp3 (C++) outstation and a `dnp3` crate
+  (Rust) outstation with the master on every pull request. They check decoded values,
+  quality flags, multi-fragment responses, events, unsolicited responses and the automatic
+  tasks, and they check each control and the time write against what the outstation logged
+  it received.
+
+- **The master saves its traffic as a pcap file, and the dissectors read what it sends (#83).**
+  A trace exports itself as a capture that Wireshark, tshark and Suricata read as it is: each
+  frame a TCP segment at the time it crossed, each connection a stream of its own between its
+  real addresses. The service's new `capture` operation returns that file, the console's Traffic
+  tab has a Save capture button, and `--capture FILE` on `py1815-master console` and `serve`
+  (`capture` in the configuration file) writes every frame to a file as it crosses the wire.
+  The writer is `py1815.master.capture`, moved from the interoperability scripts, which use it
+  too. The interoperability workflow's parsers job now also has the master read an outstation
+  and write a capture, which both dissectors read with the master's requests and confirmations
+  counted as well as the outstation's responses.
+
+- **The master speaks the IEEE 1815.2 DER profile, and the console has a DER tab (#84).**
+  `py1815.master.profile` gives an outstation with a profile its points by name and in
+  engineering units: `Der(outstation, point_map)` reads points or a named group (the
+  nameplate, monitoring, one function), writes outputs scaled through each point's
+  multiplier and refused before sending when out of range, enables and disables a
+  function and reads whether it is enabled, writes a curve selector, fields and points in
+  the order clause 6.1.3 requires and reads it back, lists the functions the outstation
+  supports and which are enabled, and compares what it serves with a DNP3 Device Profile
+  document. `verify=True` reads each mirroring input afterwards and checks it within one
+  step of the multiplier. Writes are controls: sent once, and refused by a service that
+  does not command. The service has a `der.*` operation for each, described in the
+  OpenAPI document, and `--device-profile FILE` (or `device_profile` in the configuration)
+  gives an outstation the document to compare with. The console's DER tab shows the
+  nameplate, monitoring, each supported function with its settings and an enable switch,
+  the curve as a plot and a table, and the comparison. `console --demo` gives the
+  simulated DER the Device Profile document it publishes.
+
+- **The master is ready to run for days (#85).** The capture file rotates by size
+  (`--capture-max-mb`, `--capture-keep`), and `--log-file` writes a rotating log file
+  (`--log-max-mb`, `--log-keep`, `--log-level`); every setting is also in the configuration
+  file. The log records what the master was started with, each connection made and lost,
+  and every command sent to an outstation with the points and values asked for and whether
+  it was accepted; a command refused for lack of `--allow-control` is logged as a warning. An
+  outstation that stays unreachable is logged once when the retries begin and then once an
+  hour, instead of at every attempt.
+
+- **The master retries reads, speaks TLS, broadcasts, sets the clock by either procedure,
+  waits for conditions, and has a blocking interface (#86).** A read that times out with
+  nothing received is sent again `read_retries` times under its own sequence number, none by
+  default; nothing else is ever sent again. `Outstation` connects over TLS when given an
+  `ssl.SSLContext`, and `py1815.master.tls.TlsSettings` makes one from a CA file, a
+  certificate and a key, whose password is read from `PY1815_MASTER_KEY_PASSWORD`.
+  `connect(wait=...)` and `Master.add(wait=...)` keep trying a first connection for as long as
+  asked. `broadcast()` sends any request to 0xFFFD, 0xFFFE or 0xFFFF. `synchronize_time()`
+  sets the clock by the LAN or the non-LAN procedure of IEEE 1815-2012 10.3.3, and the time
+  task can use either (`time_procedure`). An outstation's tasks can be changed after it is
+  added, and a poll whose response still says events are waiting is followed at once by up
+  to `event_follow_ups` more. `wait_for()` waits for a condition on the store, an event or
+  an indication. `py1815.master.sync.Master` is the same master for a script with no event
+  loop. The JSON service gains `set_tasks`, `wait_for`, `synchronize_time` and `broadcast`,
+  `connect` takes `wait`, and `add` takes `read_retries` and `tls`; the configuration file
+  and the command line gain `read_retries`, `tls` and the task settings, with
+  `--read-retries` and `--tls-ca`, `--tls-certificate`, `--tls-key` and `--tls-server-name`.
+  `py1815-master poll` runs one integrity poll and prints what came back.
+
+- **`py1815-master evaluate` checks an IEEE 1815.2 DER and reports a verdict for each check
+  (#87).** It carries out EPRI's test procedure for the DER profile against any outstation,
+  over a socket: the meter, alarm and operating state points, the connect switch, stop and
+  start with their permissions, the curve block, and each of the 21 functions, supported or
+  not. A further check compares what the outstation serves with its Device Profile document.
+  Without `--allow-control` only the checks that read are run. `--report` writes the report
+  as JSON, `--capture` writes the traffic, and each result names its frames in that capture.
+  The settings are in the configuration file under `evaluate`, with a flag for each.
+  `py1815.master.evaluate` runs the same checks from Python, and a check of your own is a
+  function that takes a `Bench`. See
+  [Evaluating an outstation](https://dersecurity.github.io/py1815/master-evaluate/).
+
+- **The master can break a protocol rule on purpose, to test how an outstation answers what the standard says it must refuse (#89).** A deviation is named and off by default, and is applied to the octets the master built on their way out, so with every one off the master stays conformant. The ten are `silence`, `repeat_request`, `corrupt_header_crc`, `corrupt_body_crc`, `truncate`, `overstate_length`, `break_transport_sequence`, `orphan_segment`, `withhold_confirmation` and `wrong_confirmation_sequence`. Set them in Python on `outstation.deviations`, or over the service and the console with the `deviate` operation. A frame the master damages is kept in the trace and in a capture as it was sent, with what is wrong with it. See [Misbehaving on purpose](https://dersecurity.github.io/py1815/master/#misbehaving-on-purpose).
+
+- **`py1815-master evaluate` checks how an outstation answers a master that breaks a protocol rule (#91).** A new set of checks, `deviation`, sends a read in a frame with a bad header checksum, a bad data checksum, a missing octet or an overstated length, as a segment with no first segment, and as a series whose final segment never comes, and requires that each draws no answer and that the outstation answers a well-formed read afterwards. Three more read the outstation's events while withholding the confirmation, confirming the wrong sequence number, or confirming after the next request, and require the same events again. These checks write nothing to the outstation. They are run only with `--allow-deviations`, or `evaluate.allow_deviations` in the configuration file, and are reported as not run without it. See [The deviation set](https://dersecurity.github.io/py1815/master-evaluate/#the-deviation-set).
+
+  **More deviations (#91).** `second_master_address` sends every frame from the next master address above the master's own, `late_confirmation` sends the confirmation of a solicited response after the master's next request, `endless_series` sends a request's last segment with its final bit clear, and `withhold_unsolicited_confirmation` sends no confirmation of an unsolicited response. `withhold_confirmation`, `late_confirmation` and `wrong_confirmation_sequence` act on the confirmation of a solicited response and leave the confirmation of an unsolicited one as built. They are set like the others, on `outstation.deviations` or with the `deviate` operation.
+
+  **The console has an Evaluate tab and a Requests tab (#91).** Evaluate lists the checks by set, runs the ones chosen and fills in each verdict as its check ends, offers the report as a JSON file, opens the Traffic tab on a check's frames, and has a switch for each deviation. Requests keeps a list of requests in the browser, each a function code and its object headers, to send once or to repeat while the page is open. The service gains the operations behind the first: `checks` lists the checks, and `evaluate` runs them and sends a `check` event as each ends. See [The console](https://dersecurity.github.io/py1815/console/).
+
+  **The Traffic tab says what is wrong with a frame the master damaged (#91).** The data link layer of such a frame shows a Problem line beside the header fields as they were written.
+
+- **A Device Profile document can be laid out as a page to read and to print (#92).** `py1815-der profile --html FILE` also writes the document it builds as one standalone HTML page, and `py1815-der profile --from vendor.xml --html vendor.html` lays out a Device Profile XML file that already exists, from any vendor and any edition of the schema, with no outstation and no point tables. The page has the header's facts, a table of settings for each part of the configuration with each setting's capabilities, current value and methods, the implementation table, and a table of points for each point type. Printed or saved as PDF from a browser, each table's headings are repeated on every page. The layout is this library's own and not the DNP Users Group's: a label is the element's own name made readable, and a value the document does not state is left empty. A document that is not XML or not a Device Profile, that declares a document type, or that is larger than 8 MiB is refused. See [Reading the document, and printing it](https://dersecurity.github.io/py1815/der/#reading-the-document-and-printing-it).
+
+  **The service lays a Device Profile document out, and the console shows and prints it (#92).** The `der.document` operation answers with a document as a title, header facts and sections of tables: the one sent as `document`, or the one the outstation was given with `--device-profile`. It sends nothing to the outstation, so it is allowed without `--allow-control`. The console's DER tab has a Device Profile document card that shows the outstation's document or a file from your machine, and prints it alone. The card that compares what an outstation serves with a document is now titled Device Profile comparison. From Python, `py1815.profile.device_profile_view.read` returns the same model and `page` writes it as HTML.
+
+### Changed
+
+- **DER behavior is stated as out of scope** (#72). The README, the DER page and the design notes
+  now say that the functions of IEEE 1815.2 clause 6, the following of a curve (6.1.3) and
+  schedules belong to the device or DER simulator bound behind the outstation. The library serves
+  their points and enforces what the profile says of the points, and the simulated DER answers to
+  a few functions only so the points can be seen working. No behavior changed.
+
+- **Connecting now runs a startup sequence (#78).** `Master.add` and `Outstation.connect`
+  used to send nothing. They are now followed by the startup tasks, and a lost connection
+  is reopened. Pass `manual=True` to send only what is asked for, `tasks=Tasks.none()` to
+  keep confirmations but no tasks, and `reconnect=None` to stay disconnected. A service
+  started without `--allow-control` does not run the two tasks that write (restart clear
+  and time write), so it changes nothing on an outstation it is only reading.
+
+- **`py1815-der poll` is the master's poll, and `--connect-wait` is the service's own (#86).**
+  `py1815-der poll` prints what it printed before, through the master instead of a probe of
+  its own, and gains `--read-retries` and the TLS flags; an object it cannot read is reported
+  in the output where the probe stopped with an error. `py1815.profile.probe` keeps only its
+  object parser. `--connect-wait` now asks the service's `connect` to keep trying, once a
+  second, rather than looping in the command line.
+
+- **The outstation acts on a broadcast sent as confirmed user data (#93).** It used to act
+  only on a broadcast sent as unconfirmed user data and drop the confirmed form. Every device
+  is to accept and process confirmed user data, and none is to reply to a broadcast whichever
+  function carries it (IEEE 1815-2012 9.2.4.1.3.6), so the request is now carried out and
+  IIN1.0 is set in the next response. Nothing is sent back, as before. A confirmed broadcast
+  is taken only after a link reset, and the same frame sent again is not acted on twice. A
+  link reset or a link test sent to a broadcast address is still not acted on.
+
+### Fixed
+
+- **The simulated DER limits generation on AO88, not AO87** (#73). The profile's tables name the two
+  setpoints of the active power limit the maximum and the minimum, and the simulation took the
+  first as the cap on generation. Clause 6.4.2.2 defines AO87 as a percentage of maximum charging
+  power and AO88 as a percentage of maximum generation power, which is also how DNP3 application
+  note AN2018-001 and EPRI's test procedure have them. A master that limited generation by
+  writing AO88 found the simulation unmoved. AO87 now limits what the storage draws when
+  charging. `der.AO_POWER_LIMIT_MAXIMUM` is replaced by `der.AO_POWER_LIMIT_GENERATION` and
+  `der.AO_POWER_LIMIT_CHARGING`.
+
+- **An event carries the time its reading gives (#75).** `Reading.timestamp_ms` is
+  documented as when the source measured the value, and `DerOutstation.poll()` ignored it:
+  every binary and analog event was stamped with the outstation's own clock, so a caller
+  that supplied a measurement time saw it go nowhere. An event raised by a `GOOD` reading
+  that gives a time now carries that time, moved onto the clock a master's time write sets.
+  A reading of any other quality is timed when the outstation records it, since a value
+  retained from a source that has gone away was not measured when the loss was seen. A
+  reading that gives no time, and a binding that returns a bare value, are timed by the
+  outstation as before, so nothing changes for a caller that never set the field. A master
+  may now see events whose times are not in order, when a source reports late.
+
+- **An element the console marked hidden could stay on the page (#77).** A label is laid
+  out as a grid, which outranked the hidden attribute, so the box offering the profile's
+  unreported points was shown for an outstation with no profile.
+
+- **A cancelled request no longer blocks later requests (#78).** If a request was
+  cancelled while waiting for its response, for example by the caller's timeout or by
+  rescheduling a repeated scan, the association stayed busy. Every later request was
+  rejected and the repeated scans stopped. The request is now ended as `abandoned` and
+  recorded, and a late response to it is dropped without being confirmed.
+
+- **The master reads named points in a form every outstation accepts (#81).** `read()`
+  sent point indices with the index-list qualifiers (0x17 and 0x28), which a DNP3 Subset
+  Level 2 outstation is not required to accept. opendnp3 rejected them, so a read of named
+  points returned nothing. Indices are now sent as start-stop ranges (qualifiers 0x00 and
+  0x01), one for each run of consecutive indices, in ascending order.
+
+- **A console that fell behind no longer stops updating without saying so (#85).** A
+  subscriber that fell 10,000 updates behind was dropped while its event stream stayed open,
+  so the console still showed "Service running" and received nothing more until it was
+  reloaded. The subscriber now stays subscribed, its waiting updates are replaced by one
+  `lost` update that says how many were dropped, and the console reloads what it shows. An
+  event stream that has not accepted a write for 60 seconds is closed, so the browser opens
+  a new one, and the console reloads after any reconnection.
+
 ## [0.2.0] - 2026-10-06
 
 The IEEE 1815.2 DER outstation. A builder assembles one from the profile's point tables

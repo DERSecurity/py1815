@@ -211,7 +211,7 @@ When something cannot be put back, the report says so in a note on that check.
 ```json
 {
   "tool": "py1815-master evaluate",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "outstation": "lab at 192.0.2.10:20000, outstation 1024",
   "started": "2026-10-09T16:39:39+00:00",
   "allow_control": true,
