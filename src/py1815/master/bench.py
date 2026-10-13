@@ -54,8 +54,17 @@ DEFAULT_SETTLE = 5.0
 #: Seconds between reads while a check waits.
 POLL_SECONDS = 0.5
 
+#: Well-formed reads a check sends after a damaged frame before it gives up on
+#: an answer. A frame that was cut short can take the start of the next frame
+#: with it, so the first read after one may go unanswered too.
+RECOVERY_READS = 3
+
 #: The flag bits of a binary point. The top bit is its state.
 _BINARY_FLAGS = 0x7F
+
+#: The kinds of point a check reads to see whether the outstation answers,
+#: most preferred first. An input is preferred to an output's status.
+_PROBE_ORDER = (Kind.AI, Kind.BI, Kind.CTR, Kind.AO, Kind.BO)
 
 
 class Verdict(Enum):
@@ -109,6 +118,8 @@ class Check:
     procedure: Callable[[Bench], Plan[None]]
     #: The set the check belongs to.
     group: str = "der"
+    #: Whether the check has the master break a protocol rule on purpose.
+    deviates: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,6 +217,10 @@ class Bench:
         self.requests = 0
         self._notes: list[str] = []
         self._afterwards: list[tuple[str, Callable[[], Plan[Any]]]] = []
+        #: The master's deviations as the check found them, once it has changed any.
+        self._deviations: dict[str, bool] | None = None
+        #: Whether the check began with every deviation turned off.
+        self._isolated = False
 
     # ------------------------------------------------------------ a check's own
 
@@ -215,6 +230,8 @@ class Bench:
         self.requests = 0
         self._notes = []
         self._afterwards = []
+        self._deviations = None
+        self._isolated = False
 
     def note(self, text: str) -> None:
         """Record something the report should say about this check."""
@@ -406,6 +423,123 @@ class Bench:
         self._made(comparison.exchanges, "the reads of the points its Device Profile declares")
         return comparison
 
+    # -------------------------------------------------------------- deviating
+
+    def deviate(self, *names: str) -> Plan[None]:
+        """Have the master break the named protocol rules until the check ends.
+
+        The master's deviations are put back as the check found them when the
+        check ends, or sooner by :meth:`conform`.
+        """
+
+        def turn_on(target: Any) -> bool:
+            deviations = getattr(target, "deviations", None)
+            if deviations is None:
+                return False
+            if self._deviations is None:
+                self._deviations = deviations.describe()
+            for each in names:
+                deviations.set(each, True)
+            return True
+
+        if not (yield turn_on):
+            raise NotApplicable("the master in use cannot break a protocol rule")
+
+    def conform(self) -> Plan[None]:
+        """Turn off every deviation the check turned on."""
+        yield self._conform
+
+    def _conform(self, target: Any) -> None:
+        deviations = getattr(target, "deviations", None)
+        if deviations is None or self._deviations is None:
+            return
+        deviations.clear()
+        if not self._isolated:
+            for each, state in self._deviations.items():
+                deviations.set(each, state)
+
+    def isolate(self, target: Any) -> Any:
+        """Begin a check that deviates: hold the master, with every deviation off.
+
+        A deviation someone left on would damage the well-formed requests the
+        check compares against, so each is turned off until the check ends.
+        A master that sends on its own is held as well, so that no automatic
+        task, repeated scan or other caller sends a request while one of the
+        check's deviations is on, or between two of its steps. Returns what
+        the master's own hold returns, to be awaited where it is awaitable.
+        """
+
+        def conform() -> None:
+            deviations = getattr(target, "deviations", None)
+            if deviations is not None and self._deviations is None:
+                self._deviations = deviations.describe()
+                self._isolated = True
+                deviations.clear()
+
+        reserve = getattr(target, "_reserve", None)
+        if reserve is None:
+            conform()
+            return None
+
+        async def held() -> None:
+            # The deviations are turned off once the master is held, so that a
+            # request another task has under way is finished as it was begun.
+            await reserve()
+            conform()
+
+        return held()
+
+    def restore(self, target: Any) -> None:
+        """Put a master back as the check found it. Sends nothing.
+
+        The deviations are set as they were before the check, and a master
+        the check held is let go.
+        """
+        release = getattr(target, "_release", None)
+        if release is not None:
+            release()
+        if self._deviations is None:
+            return
+        before, self._deviations, self._isolated = self._deviations, None, False
+        target.deviations.clear()
+        for each, state in before.items():
+            target.deviations.set(each, state)
+
+    def probe(self) -> Plan[bool]:
+        """Send one small read, and return whether the outstation answered it."""
+        if not self.served:
+            raise NotApplicable("the outstation serves no point to read")
+        kind, index = min(self.served, key=lambda each: (_PROBE_ORDER.index(each[0]), each[1]))
+        readings: Readings = yield from read_plan([self.map.point(kind, index)])
+        self.requests += len(readings.exchanges)
+        return any(exchange.fragments for exchange in readings.exchanges)
+
+    def unanswered(self, what: str) -> Plan[None]:
+        """Send one small read, and fail the check if the outstation answers it."""
+        answered = yield from self.probe()
+        self.require(not answered, f"the outstation answered {what}")
+
+    def answers(self, after: str, *, reads: int = RECOVERY_READS) -> Plan[None]:
+        """Send small reads until one is answered, and fail the check if none of ``reads`` is."""
+        for sent in range(1, reads + 1):
+            if (yield from self.probe()):
+                if sent > 1:
+                    self.note(f"read {sent} after {after} was the first to be answered")
+                return
+        said = "a well-formed read" if reads == 1 else f"any of {reads} well-formed reads"
+        raise Failed(f"the outstation did not answer {said} sent after {after}")
+
+    def events(self) -> Plan[Exchange]:
+        """Read the events of every class, and return the exchange."""
+        exchange: Exchange = yield lambda target: target.scan("events")
+        self._made([exchange], "a read of its events")
+        return exchange
+
+    def confirming(self) -> Plan[bool]:
+        """Return whether the master sends a confirmation when a response asks for one."""
+        confirming: bool = yield lambda target: bool(target.association.confirming)
+        return confirming
+
     # ---------------------------------------------------------------- waiting
 
     def pause(self, seconds: float) -> Plan[None]:
@@ -499,21 +633,37 @@ class _Run:
 
 
 def run_plan(
-    bench: Bench, checks: Sequence[Check], *, commanding: bool
+    bench: Bench,
+    checks: Sequence[Check],
+    *,
+    commanding: bool,
+    deviating: bool = False,
+    on_result: Callable[[Result], None] | None = None,
 ) -> Plan[tuple[Result, ...]]:
     """Carry out checks in order, and return how each ended.
 
-    The run begins by reading which points the outstation serves. A check
-    that writes is not run unless ``commanding`` is set. When the connection
-    is lost the check under way fails and the rest are not run.
+    The run begins by reading which points the outstation serves, with every
+    deviation of the master off. A check
+    that writes is not run unless ``commanding`` is set, and a check that has
+    the master break a protocol rule is not run unless ``deviating`` is set.
+    When the connection is lost the check under way fails and the rest are
+    not run. ``on_result`` is called with each result as its check ends.
 
     Raises :class:`NoAnswer` when the outstation does not answer the first read.
     """
     wanted = [(POINT_TYPES[point.kind], point.index) for point in bench.map.points.values()]
+    # What the outstation serves is read with every deviation off: a
+    # deviation someone left on would make a served point look absent.
+    yield bench.isolate
+    lost: OSError | None = None
+    survey = None
     try:
         survey = yield from survey_plan(wanted)
     except _LOST as error:
-        raise NoAnswer(f"the connection was lost: {error}") from error
+        lost = error
+    yield bench.restore
+    if survey is None:
+        raise NoAnswer(f"the connection was lost: {lost}") from lost
     if not survey.exchanges[0].fragments:
         raise NoAnswer("the outstation did not answer a class 0 read")
     if any(not exchange.fragments for exchange in survey.exchanges):
@@ -528,23 +678,36 @@ def run_plan(
     run = _Run()
     for check in checks:
         if run.lost is not None:
-            run.results.append(Result(check.id, check.title, Verdict.NOT_RUN, run.lost))
+            result = Result(check.id, check.title, Verdict.NOT_RUN, run.lost)
         elif check.commands and not commanding:
-            run.results.append(
-                Result(
-                    check.id,
-                    check.title,
-                    Verdict.NOT_RUN,
-                    "it writes to the outstation, and the run was not allowed to",
-                )
+            result = Result(
+                check.id,
+                check.title,
+                Verdict.NOT_RUN,
+                "it writes to the outstation, and the run was not allowed to",
+            )
+        elif check.deviates and not deviating:
+            result = Result(
+                check.id,
+                check.title,
+                Verdict.NOT_RUN,
+                "it breaks a protocol rule on purpose, and the run was not allowed to",
             )
         else:
-            run.results.append((yield from _one(bench, check, run)))
+            result = yield from _one(bench, check, run)
+        run.results.append(result)
+        if on_result is not None:
+            on_result(result)
     return tuple(run.results)
 
 
 def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
     bench.begin()
+    if check.deviates:
+        # Before the check's frames are counted from here: a request another
+        # task had under way is finished while this one waits for the hold,
+        # and its frames are not the check's.
+        yield bench.isolate
     first: int | None = yield _last_frame
     first_packet: tuple[int, int] | None = _last_packet(bench)
     started = time.monotonic()
@@ -558,6 +721,10 @@ def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
     except _LOST as error:
         verdict, detail = Verdict.FAILED, f"the connection was lost: {error}"
         run.lost = "the connection was lost during an earlier check"
+    # A deviation left on would bend every request that follows, the ones that
+    # put things back included. Turning one off and letting the master go send
+    # nothing, so both are done whether or not the connection is still there.
+    yield bench.restore
     if run.lost is None:
         try:
             yield from bench.put_back()
@@ -631,6 +798,7 @@ async def drive_async(target: Any, plan: Plan[T], pause: Callable[[float], Await
 
 __all__ = [
     "DEFAULT_SETTLE",
+    "RECOVERY_READS",
     "Bench",
     "Check",
     "Failed",

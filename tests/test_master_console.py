@@ -17,7 +17,8 @@ import pytest_asyncio
 from browser import Page, open_page
 from profile_fixtures import for_reference_der
 
-from py1815.master.service import HttpServer, Service
+from py1815.master.service import HttpServer, Service, describe_entry
+from py1815.master.trace import Trace
 from py1815.profile import der, load
 from py1815.profile.model import Composition, Kind
 from py1815.server import OutstationServer
@@ -829,7 +830,9 @@ class TestWithAToken:
             await page.evaluate("getComputedStyle(document.querySelector('.masthead')).display")
             == "flex"
         )
-        assert await page.evaluate("(state.points.ai || new Map()).size") > 0
+        # The points come from the response to the first poll, which can arrive
+        # after the title and the service state are shown.
+        await page.wait_for("(state.points.ai || new Map()).size > 0")
         assert page.errors == []
 
     @pytest.mark.asyncio
@@ -879,3 +882,97 @@ class TestWhatItWillNotDo:
         await page.wait_for("document.querySelector('#add-error').textContent")
         await page.wait_for("document.querySelectorAll('#outstations li').length === 2")
         assert await page.count("#outstations .lamp.off") == 1
+
+
+#: The row of the Traffic tab that holds a frame the master sent that is not valid.
+NOT_VALID = (
+    "[...document.querySelectorAll('#traffic-table tbody tr')]"
+    ".find((row) => row.cells[2].textContent.startsWith('not a valid frame'))"
+)
+
+#: The facts the frame detail gives for the data link layer, as pairs.
+LINK_FACTS = (
+    "[...document.querySelectorAll(\"#frame-detail [data-layer='link'] dt\")]"
+    ".map((term) => [term.textContent, term.nextElementSibling.textContent])"
+)
+
+
+class TestAFrameThatIsNotValid:
+    """A frame the master sent on purpose that no outstation accepts, read in the Traffic tab."""
+
+    @pytest.mark.asyncio
+    async def test_the_data_link_layer_says_what_is_wrong_with_it(self, console):
+        page = console.page
+
+        async def ask(op: str, **params):
+            answer = await console.service.handle({"op": op, "outstation": "lab", "params": params})
+            assert answer["ok"], answer
+            return answer["result"]
+
+        # Only the scan below is sent while the deviation is on.
+        await ask("repeat", kind="events", interval=None)
+        await ask("idle")
+        assert (await ask("deviate", set={"corrupt_header_crc": True}))["on"] == [
+            "corrupt_header_crc"
+        ]
+        try:
+            scan = await ask("scan", kind="class0")
+        finally:
+            await ask("deviate", clear=True)
+        assert scan["outcome"] == "timeout", "the outstation did not answer the bad frame"
+
+        await console.tab("traffic")
+        await page.wait_for(f"{NOT_VALID} !== undefined")
+        await page.evaluate(f"{NOT_VALID}.click()")
+        await page.wait_for(
+            "document.querySelector(\"#frame-detail [data-layer='link']\")"
+            ".textContent.includes('Problem')"
+        )
+
+        # The header is read as written: a class 0 read is six octets of user data.
+        assert await page.evaluate(LINK_FACTS) == [
+            ["Function", "UNCONFIRMED_USER_DATA"],
+            ["From", "1"],
+            ["To", "1024"],
+            ["Sent by a master", "yes"],
+            ["Primary", "yes"],
+            ["User data", "6 octets"],
+            ["Problem", "header CRC does not match"],
+        ]
+        layers = await page.evaluate(
+            "[...document.querySelectorAll('#frame-detail .layer h4')]"
+            ".map((heading) => heading.textContent.trim().split(' ')[0])"
+        )
+        assert layers == ["Data", "Octets"], "no transport or application layer is read from it"
+        assert await page.text("#frame-detail .octet") == "05"
+        assert page.errors == []
+
+    @pytest.mark.asyncio
+    async def test_octets_too_short_to_hold_a_header_show_only_the_problem(self, console):
+        """The header fields are null then, and a null field is left out and not printed.
+
+        No deviation writes fewer octets than a header, so the frame is made
+        by the trace from two octets and sent to the page as the service
+        sends any frame.
+        """
+        page = console.page
+        (entry,) = Trace().record_write(bytes.fromhex("05 64"))
+        frame = {**describe_entry(entry), "id": 999999998}
+        assert frame["link"]["user_data"] is None and frame["link"]["from_master"] is None
+        await console.tab("traffic")
+
+        console.service.publish({"event": "frame", "outstation": "lab", "frame": frame})
+
+        await page.wait_for(f"{NOT_VALID} !== undefined")
+        await page.evaluate(f"{NOT_VALID}.click()")
+        await page.wait_for("state.frame.id === 999999998")
+        await page.wait_for(
+            "document.querySelector(\"#frame-detail [data-layer='link']\")"
+            ".textContent.includes('Problem')"
+        )
+        assert await page.evaluate(LINK_FACTS) == [
+            ["Problem", "frame is 2 octets, shorter than a header"]
+        ]
+        assert "null" not in await page.text("#frame-detail")
+        assert await page.count("#frame-detail .octet") == 2
+        assert page.errors == []

@@ -602,9 +602,21 @@ done means.
    named points, output status) and write a capture, which Wireshark's and
    Suricata's dissectors read with the master's requests and confirmations
    counted as well as the outstation's responses (`interop/master_capture.py`).
-   *Left:* freezes, which neither outstation's fixture serves; and TLS, which
-   the master now speaks and is tested over against this library's own
-   listener only.
+   Both outstations serve frozen counters, which the master reads back. The
+   `dnp3` crate outstation carries out each freeze, with and without clearing
+   and with and without a response, and logs it: the frozen counters and the
+   cleared counters are read back and the log is checked. opendnp3 answers a
+   freeze as a function it does not support and gives no hook for one, so
+   against it the checks are that the master reports the refusal, that no
+   counter changed, and that the stack's own log names each freeze sent with
+   no response. The same checks also run over TLS against the `dnp3` crate
+   outstation, with certificates made in the job: the outstation checks the
+   master's certificate against an authority and a name, the master checks
+   the outstation's against the name it is given, and a master that offers no
+   certificate is refused. *Left:* a freeze carried out by a second
+   independent stack, and TLS against one. opendnp3 carries out no freeze, and
+   its Python bindings cannot open a TLS server, so neither can be closed with
+   the peers in use.
 9. **Deviations.** The catalog. *Done when* each has its test and three of the
    certification procedures have been reproduced through it over a socket. *Built,* in
    `master.deviations` (D95), applied by the socket master and the loopback and turned on
@@ -613,8 +625,11 @@ done means.
    orphan segment, a withheld confirmation, and a wrong confirmation sequence. Each has a
    test of the octets it changes, and a bad header checksum, a bad data checksum and an
    orphan segment are each met with silence through the socket master (IEEE 1815-2012
-   6.6.2.5 and clause 7). *Left:* confirming late, a second master address, an endless
-   series, and moving the existing harnesses onto the master.
+   9.2.4.3 and 8.2.4; the invalid CRC procedure of section 6.6.2 of the IED Certification
+   Procedure). Also built: a second master address, a confirmation sent after the next
+   request, a series whose final segment never comes, and a confirmation of an
+   unsolicited response withheld, apart from the confirmations of solicited ones. *Left:* moving the existing
+   harnesses onto the master.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
     each function can be configured, enabled and read back by name against the
     simulated DER. *Built,* in `master.profile`, with every operation of the
@@ -637,8 +652,11 @@ done means.
     the freezes, when started to command; the image; and tests that load it in
     a browser; and the DER tab, with the nameplate, monitoring, each supported
     function with its settings and an enable switch, the curve as a plot and a
-    table, and the comparison with a Device Profile document. *Left:* the
-    Evaluate tab, and the saved requests.
+    table, and the comparison with a Device Profile document; the Evaluate
+    tab, with the checks to run, each verdict as its check ends, the report
+    to save and a switch for each deviation; and the Requests tab, with saved
+    requests sent once or repeated by the page (D97). *Left:* nothing of the
+    layout above.
 12. **Checks and the report.** `evaluate`, with the DER profile procedure as
     the first set. *Done when* it runs against the simulated DER over a socket
     and its report says what the in-process procedures say. *Built:*
@@ -646,8 +664,13 @@ done means.
     profile procedure as a check for each procedure, and the comparison with a Device Profile
     document as one more (D94). `tests/test_master_evaluate.py` holds the
     report over a socket to the in-process run, and has the simulated DER
-    misbehave to see each check fail. *Left:* checks built from the
-    deviations of item 9 (now built in `master.deviations`).
+    misbehave to see each check fail. Also built: a set of checks made from
+    the deviations of item 9, run with `--allow-deviations` (D96), each shown to
+    fail against an outstation that answers what it has to discard or clears
+    events it was not confirmed (`tests/test_master_evaluate_deviations.py`).
+    *Left:* checks that need a deviation not yet made: the select rules, a
+    request while an unsolicited response is unconfirmed, and a control or a
+    freeze repeated.
 
 ## Sequencing
 

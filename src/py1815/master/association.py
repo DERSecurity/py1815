@@ -309,6 +309,11 @@ class MasterAssociation:
             )
         return self._send(fragment, destination=broadcast)
 
+    @property
+    def confirming(self) -> bool:
+        """Whether a response that asks for a confirmation is sent one."""
+        return self._confirm
+
     def confirm(self, response: Response) -> bytes:
         """The octets that confirm a response fragment, for an owner that
         turned automatic confirmation off."""

@@ -16,8 +16,9 @@ console at `http://127.0.0.1:8815/`.
     Started as above, the console polls, reads named points, takes
     unsolicited responses and shows the traffic, and can change nothing. Add
     `--allow-control` and it can operate outputs, write the time, clear the
-    restart indication, freeze counters, and write a DER's settings and curves
-    and enable its functions. The top of the page says which:
+    restart indication, freeze counters, write a DER's settings and curves
+    and enable its functions, and run the checks that write. The top of the
+    page says which:
     **Read only** or **Commanding on**. See [Commanding](#commanding).
 
 ## Starting it
@@ -122,7 +123,8 @@ for a minute to connect to an outstation that starts after the master does.
 ## What it shows
 
 Outstations are listed on the left, each with a lamp for its connection. The
-one selected has six tabs, and a seventh, **DER**, when it was given a profile.
+one selected has a row of tabs. **DER** is among them when the outstation was
+given a profile.
 
 | Tab | Shows |
 |---|---|
@@ -131,7 +133,9 @@ one selected has six tabs, and a seventh, **DER**, when it was given a profile.
 | **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
 | **Traffic** | Every frame, and the one selected read layer by layer; saved as a capture |
+| **Requests** | Requests you saved, each sent once or repeated |
 | **DER** | The outstation as an IEEE 1815.2 DER: its nameplate, what it is measuring, each function with its settings and an enable switch, the curve the curve block shows, and what it serves against its Device Profile document. Offered for an outstation with a profile |
+| **Evaluate** | The checks an evaluation runs and the report of the last run, and the deviations: protocol rules the master breaks on purpose |
 | **Log** | What the console asked for, and what came of it |
 
 ### Points
@@ -314,10 +318,102 @@ to, and nothing that was cleared. To keep everything from the start of a run
 instead, start the console with `--capture FILE`; see
 [Captures](master.md#captures).
 
+A frame the master sent that is not a valid frame, which only a
+[deviation](#evaluate) produces, is listed as `not a valid frame` with what is
+wrong with it. Its data link layer gives the header fields as they were
+written and a **Problem** line. A field the octets are too short to hold is
+left out.
+
+### Requests
+
+A list of requests you saved, each with a name, a function code by name, and
+the object headers after it in hexadecimal. A browser that has saved none
+starts with a few reads: an integrity poll, an event poll, class 0 and every
+binary input.
+
+| Control | Does |
+|---|---|
+| **Send** | Sends the request once, and shows its result as the Commands tab shows one |
+| **Repeat** | Sends it now and then again every so many seconds, 0.2 at the least, until **Stop** |
+| **Edit** | Puts the request in the form under the list, to change and **Save** |
+| **Remove** | Deletes it from the list |
+| **Add** | Saves the request typed into the form |
+
+The page checks nothing you type. The service reads the function code and the
+octets and says what is wrong with them, and the result shows what it said. A
+function code that changes the outstation is refused without
+`--allow-control`, as it is on the Commands tab: `READ`,
+`ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE` are always
+sent.
+
+The list is kept in the browser, under the address the console was opened at.
+It is there the next time the page is opened, and another browser or another
+console has its own. The page keeps up to 100 requests.
+
+A repeated request is sent by the page on its own timer, and not by the
+master. It stops when the page is closed or another outstation is selected,
+and when a send is refused, fails or is not answered, which the list says
+beside the request. To have the master repeat a scan with no page open, use
+**Repeat** on the Commands tab.
+
+### Evaluate
+
+The checks of [Evaluating an outstation](master-evaluate.md), run from the
+page, and the deviations of
+[Misbehaving on purpose](master.md#misbehaving-on-purpose) as switches.
+
+**Checks** lists every check by set, in the order they run. A check marked
+`writes` writes to the outstation, and one marked `deviates` has the master
+break a protocol rule on purpose. Tick the checks to run. The box beside a
+set's name chooses the whole set, and **All** and **None** choose every check
+that may be chosen, or none. Every check that may be chosen is chosen to begin
+with. A check that is chosen is one that will be run, with one exception named
+below.
+
+**Run** runs the chosen checks against the selected outstation. Each row is
+filled in as its check ends, with its verdict, the reason for it and what the
+check noted. A function check is listed by the output that enables its
+function, and once it has run its row names the function and says whether the
+outstation supports it. When the last has ended, the report counts the verdicts:
+`passed`, `FAILED`, `not applicable` and `not run`, as
+[Verdicts](master-evaluate.md#verdicts) defines them. A check that sent
+anything gives its requests, how long it took and its frames. Choosing the
+frames opens the **Traffic** tab narrowed to them, and **Show all frames**
+there widens it again. The master keeps a limited number of frames, and when it
+no longer keeps all of a check's the row says so and offers no link. **Save report** saves the report as a JSON file, the
+one `py1815-master evaluate --report` writes.
+
+Two things decide which checks are run:
+
+- A check that writes is run only when the console was started with
+  `--allow-control`, and is otherwise reported as `not run`. The tab says
+  which above the list. With it, the checks change the outstation's settings,
+  curves and switches: see
+  [What a run leaves behind](master-evaluate.md#what-a-run-leaves-behind).
+- A check that deviates cannot be chosen until **Allow these checks** on the
+  `deviation` set's own row is switched on. Switching it on chooses them, and
+  switching it off clears them. With it on, the master sends the outstation
+  frames it has to discard and withholds confirmations it asked for, so use it
+  on a device on a bench.
+
+One evaluation runs against an outstation at a time, and a second is refused
+while it does. A run takes as long as its checks do, and goes on when another
+tab or another outstation is selected. The checks need the outstation's
+profile: for an outstation given none, the tab says so and offers no **Run**.
+
+**Deviations** has a switch for each deviation, with what it makes the master
+do. A deviation that is on changes what the master sends that outstation,
+the scans it repeats included, until it is turned off. So the tab
+names the ones that are on, **Deviations on** stays beside the outstation's
+name on every tab, and **Turn all off** clears them. The switches show what
+the service reports, so a deviation a script turned on is shown as well. A
+check that deviates turns its own deviation on and off, and the switches
+cannot be changed while an evaluation runs.
+
 ## Who can reach it
 
-The console can read an outstation and, in time, will command one, so who can
-reach it matters.
+The console can read an outstation and, started with `--allow-control`, command
+one, so who can reach it matters.
 
 - It listens on this machine only. To reach it from another, give it a token:
 

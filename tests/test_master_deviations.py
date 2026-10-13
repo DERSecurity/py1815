@@ -5,15 +5,17 @@ an outstation rejects what the standard says it must. Each is tested two ways:
 the octets it changes, against a frame written out here, and that the master
 sends what the association built when the deviation is off.
 
-Three certification procedures are reproduced through the socket master with a
-deviation on: a frame with a corrupt header checksum, a frame with a corrupt
-data checksum, and a segment with no first segment are each met with silence,
-as IEEE 1815-2012 6.6.2.5 and clause 7 require, so an integrity poll times out;
-with the deviation off the same poll completes.
+Three faults are sent through the socket master with a deviation on: a frame
+with a corrupt header checksum, a frame with a corrupt data checksum, and a
+segment with no first segment are each met with silence, as IEEE 1815-2012
+9.2.4.3 and 8.2.4 require, so an integrity poll times out; with the deviation
+off the same poll completes. The first two are the invalid CRC procedure of
+section 6.6.2 of the DNP Users Group's IED Certification Procedure.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 
 import pytest
@@ -47,6 +49,9 @@ _LINK_ACK = bytes.fromhex("05 64 05 80 00 04 01 00 6D C7")
 _CONFIRMATION = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 C3 00 98 26")
 # The same confirmation with application control 0xC4, sequence 4.
 _CONFIRMATION_OF_4 = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 C4 00 F9 A1")
+# The confirmation of an unsolicited response of sequence 3: application
+# control 0xD3, which is 0xC3 with the UNS bit set. The CRC is B0 F9.
+_UNSOLICITED_CONFIRMATION = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 D3 00 B0 F9")
 
 
 def _valid(frame: bytes) -> link.LinkFrame:
@@ -82,6 +87,13 @@ class TestTheTransforms:
             ),
             # The transport header, C0, becomes 80: FIR clear. The CRC is 29 4E.
             (dev.orphan_segment, "05 64 0B C4 00 04 01 00 CA 8A 80 C0 01 3C 02 06 29 4E"),
+            # The transport header, C0, becomes 40: FIN clear. The CRC is D7 F1.
+            (dev.endless_series, "05 64 0B C4 00 04 01 00 CA 8A 40 C0 01 3C 02 06 D7 F1"),
+            # The source address, 1, becomes 2. The header CRC is 61 3A.
+            (
+                dev.second_master_address,
+                "05 64 0B C4 00 04 02 00 61 3A C0 C0 01 3C 02 06 54 E0",
+            ),
             # The application control, C0, becomes C1: sequence 1. The CRC is 52 C3.
             (
                 dev.wrong_application_sequence,
@@ -133,6 +145,24 @@ class TestTheTransforms:
         with pytest.raises(link.LinkFrameError, match="length octet describes"):
             _valid(out)
 
+    def test_the_second_master_address_is_not_the_outstations_own(self):
+        # From master 1 to outstation 2, the next address up is the
+        # outstation's, so the one after it is used: 3.
+        to_outstation_2 = bytes.fromhex("05 64 0B C4 02 00 01 00 83 24") + _FRAME[10:]
+        assert _valid(to_outstation_2).destination == 2
+        assert dev.second_master_address(to_outstation_2) == (
+            bytes.fromhex("05 64 0B C4 02 00 03 00 66 3F") + _FRAME[10:]
+        )
+
+    def test_the_second_master_address_is_a_station_address(self):
+        # 65519 is the highest address a station may have, so the address
+        # below it is used: 65518.
+        from_the_highest = bytes.fromhex("05 64 0B C4 01 00 EF FF 61 3C") + _FRAME[10:]
+        assert _valid(from_the_highest).source == 65519
+        assert dev.second_master_address(from_the_highest) == (
+            bytes.fromhex("05 64 0B C4 01 00 EE FF 2F 97") + _FRAME[10:]
+        )
+
     def test_break_transport_sequence_changes_the_sequence_and_keeps_the_frame_valid(self):
         out = dev.break_transport_sequence(_FRAME)
         parsed = _valid(out)  # a valid frame: only the transport header is wrong
@@ -173,7 +203,8 @@ class TestTheDeviations:
         described = d.describe()
         assert set(described) == set(d.names())
         assert all(value is False for value in described.values())
-        assert len(d.names()) == 10
+        switches = {each.name for each in dataclasses.fields(d) if each.type == "bool"}
+        assert set(d.names()) == switches
 
     def test_set_turns_one_on_and_off_and_rejects_an_unknown_name(self):
         d = Deviations()
@@ -299,6 +330,96 @@ class TestTheDeviations:
         (out,) = d.outbound(_FRAME, kind=dev.REQUEST)
         assert out == bytes.fromhex("05 64 0B C4 00 04 01 00 CA 8A 80 C0 01 3C 02 06 29 B1")
 
+    def test_endless_series_changes_the_last_frame_of_a_request(self):
+        d = Deviations(endless_series=True)
+        first, last = d.outbound(_FRAME + _FRAME, kind=dev.REQUEST)
+        assert first == _FRAME and last == dev.endless_series(_FRAME)
+
+    def test_second_master_address_changes_every_frame_of_a_request_and_of_a_reply(self):
+        d = Deviations(second_master_address=True)
+        other = dev.second_master_address(_FRAME)
+        assert d.outbound(_FRAME + _FRAME, kind=dev.REQUEST) == [other, other]
+        assert d.outbound(_LINK_ACK + _CONFIRMATION, kind=dev.CONFIRM) == [
+            bytes.fromhex("05 64 05 80 00 04 02 00 C6 77"),
+            bytes.fromhex("05 64 08 C4 00 04 02 00 31 A9 C0 C3 00 98 26"),
+        ]
+
+    @pytest.mark.parametrize(
+        "name", ["withhold_confirmation", "late_confirmation", "wrong_confirmation_sequence"]
+    )
+    def test_the_confirmation_of_an_unsolicited_response_is_left_as_built(self, name):
+        # These three are about a response the master asked for.
+        d = Deviations()
+        d.set(name, True)
+        assert d.outbound(_UNSOLICITED_CONFIRMATION, kind=dev.CONFIRM) == [
+            _UNSOLICITED_CONFIRMATION
+        ]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME], "and none was held back"
+
+    def test_withhold_unsolicited_confirmation_withholds_that_one_and_no_other(self):
+        d = Deviations(withhold_unsolicited_confirmation=True)
+        assert d.outbound(_UNSOLICITED_CONFIRMATION, kind=dev.CONFIRM) == []
+        assert d.outbound(_LINK_ACK + _UNSOLICITED_CONFIRMATION, kind=dev.CONFIRM) == [_LINK_ACK]
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == [_CONFIRMATION]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
+
+    def test_the_confirmation_the_association_makes_of_an_unsolicited_response_is_told_apart(
+        self,
+    ):
+        association = MasterAssociation()
+        control = link.control_byte(
+            from_master=False, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+        )
+        # Transport FIR and FIN, then an unsolicited response with FIR, FIN,
+        # CON and UNS, sequence 0, and no objects.
+        unsolicited = link.build(control, 1, 1024, bytes.fromhex("C0 F0 82 00 00"))
+        reply = association.receive(unsolicited)
+        assert link.parse(reply).payload[1:] == bytes.fromhex("D0 00"), "a confirmation with UNS"
+        assert Deviations(withhold_confirmation=True).outbound(reply, kind=dev.CONFIRM) == [reply]
+        assert (
+            Deviations(withhold_unsolicited_confirmation=True).outbound(reply, kind=dev.CONFIRM)
+            == []
+        )
+
+    def test_no_more_than_a_few_confirmations_are_held_back(self):
+        # Sequences 0 to 15, each confirmed and none followed by a request.
+        d = Deviations(late_confirmation=True)
+        confirmations = [
+            link.build(0xC4, 1024, 1, bytes([0xC0, 0xC0 | sequence, 0x00]))
+            for sequence in range(16)
+        ]
+        for confirmation in confirmations:
+            assert d.outbound(confirmation, kind=dev.CONFIRM) == []
+        kept = confirmations[-dev.HELD_CONFIRMATIONS :]
+        assert len(kept) < len(confirmations)
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME, *kept], "the oldest were dropped"
+
+    def test_a_late_confirmation_follows_the_next_request(self):
+        d = Deviations(late_confirmation=True)
+        assert d.outbound(_LINK_ACK + _CONFIRMATION, kind=dev.CONFIRM) == [_LINK_ACK]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME, _CONFIRMATION]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME], "it is sent once"
+
+    def test_a_late_confirmation_can_carry_the_wrong_sequence_as_well(self):
+        d = Deviations(late_confirmation=True, wrong_confirmation_sequence=True)
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == []
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME, _CONFIRMATION_OF_4]
+
+    def test_a_confirmation_held_back_is_not_sent_once_the_deviation_is_off(self):
+        d = Deviations(late_confirmation=True)
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == []
+        d.late_confirmation = False
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
+        d.late_confirmation = True
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME], "nor when it is on again"
+
+    def test_clear_forgets_a_confirmation_held_back(self):
+        d = Deviations(late_confirmation=True)
+        d.outbound(_CONFIRMATION, kind=dev.CONFIRM)
+        d.clear()
+        d.late_confirmation = True
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
+
     def test_repeat_request_repeats_every_write_of_a_changed_request(self):
         d = Deviations(repeat_request=True, corrupt_header_crc=True)
         bad = dev.corrupt_header_crc(_FRAME)
@@ -325,6 +446,8 @@ _SILENCING = (
     "truncate",
     "overstate_length",
     "orphan_segment",
+    "endless_series",
+    "second_master_address",
 )
 
 
@@ -426,10 +549,11 @@ async def served(simulation):
 
 @pytest.mark.asyncio
 class TestOverASocket:
-    """Three certification procedures reproduced through the socket master."""
+    """Faults an outstation has to meet with silence, sent through the socket master."""
 
     async def test_a_corrupt_header_checksum_is_met_with_silence(self, served):
-        # IEEE 1815-2012 6.6.2.5: a frame whose header CRC fails draws no answer.
+        # A frame whose header CRC fails draws no answer: IEEE 1815-2012 9.2.4.3, and
+        # the invalid CRC procedure of section 6.6.2 of the IED Certification Procedure.
         served.deviations.set("corrupt_header_crc", True)
         poll = await served.integrity_poll()
         assert poll.outcome is Outcome.TIMEOUT and not poll.fragments
@@ -437,7 +561,7 @@ class TestOverASocket:
         assert (await served.integrity_poll()).complete
 
     async def test_a_corrupt_data_checksum_is_met_with_silence(self, served):
-        # IEEE 1815-2012 6.6.2.5: a frame whose data-block CRC fails draws no answer.
+        # A frame whose data-block CRC fails draws no answer, by the same two sources.
         served.deviations.set("corrupt_body_crc", True)
         poll = await served.integrity_poll()
         assert poll.outcome is Outcome.TIMEOUT and not poll.fragments
@@ -445,12 +569,23 @@ class TestOverASocket:
         assert (await served.integrity_poll()).complete
 
     async def test_a_segment_with_no_first_segment_is_met_with_silence(self, served):
-        # IEEE 1815-2012 clause 7: reassembly refuses a continuation that begins
+        # IEEE 1815-2012 8.2.4, Table 8-1: reassembly discards a continuation that begins
         # no fragment, so the request is never delivered and nothing answers.
         served.deviations.set("orphan_segment", True)
         poll = await served.integrity_poll()
         assert poll.outcome is Outcome.TIMEOUT and not poll.fragments
         served.deviations.set("orphan_segment", False)
+        assert (await served.integrity_poll()).complete
+
+    async def test_a_request_from_a_second_master_is_in_the_trace_under_that_address(self, served):
+        # The simulated DER answers the one master it was told of, so the
+        # request draws nothing. Another outstation may answer it.
+        served.deviations.set("second_master_address", True)
+        poll = await served.integrity_poll()
+        assert poll.outcome is Outcome.TIMEOUT
+        sent = [entry for entry in served.trace.since() if entry.direction == "tx"]
+        assert sent[-1].link["source"] == 2 and "problem" not in sent[-1].link
+        served.deviations.set("second_master_address", False)
         assert (await served.integrity_poll()).complete
 
     async def test_the_deviate_operation_turns_them_on_through_the_service(self, served):

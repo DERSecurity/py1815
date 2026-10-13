@@ -1,0 +1,16 @@
+/* The Requests tab of the Satori DNP3 master console, in the console's own look. */
+
+#requests-table td.name { min-width: 160px; }
+#requests-table td.request-body { white-space: normal; word-break: break-word; min-width: 300px; }
+#requests-table td.request-last { white-space: normal; min-width: 200px; }
+th.w-function { width: 190px; }
+th.w-repeat { width: 250px; }
+th.w-request-act { width: 250px; }
+td.request-repeat .inline { flex-wrap: nowrap; gap: 8px; }
+td.request-repeat button { padding: 2px 10px; font-size: 12px; }
+td.request-act button + button { margin-left: 6px; }
+.request-repeating { font: 500 11px var(--mono); letter-spacing: 0.6px; text-transform: uppercase; color: var(--teal-ink); }
+.outcome.failed { color: var(--coral); }
+
+#request-form input { width: 190px; }
+#request-form input[name="body"] { width: 320px; }

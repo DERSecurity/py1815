@@ -3,8 +3,10 @@
 What ``py1815-master evaluate`` does: connect to an outstation, carry out the
 checks of :mod:`py1815.master.checks`, and print a report with a verdict for
 each. A check that writes to the outstation is run only when the run is
-allowed to command. The report can also be written as JSON, and the traffic
-as a pcap file in which each check's frames can be found by number.
+allowed to command, and a check that has the master break a protocol rule
+only when the run is allowed to deviate. The report can also be written as
+JSON, and the traffic as a pcap file in which each check's frames can be
+found by number.
 
 From Python:
 
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import datetime
 import importlib.metadata
 import json
@@ -68,6 +71,8 @@ class Report:
     #: The edition of the profile tables the checks were read from.
     edition: str
     results: tuple[Result, ...]
+    #: Whether the run was allowed to have the master break protocol rules.
+    deviating: bool = False
 
     def count(self, verdict: Verdict) -> int:
         """Return how many checks ended with a verdict."""
@@ -91,6 +96,7 @@ class Report:
             "outstation": self.outstation,
             "started": began.isoformat(timespec="seconds"),
             "allow_control": self.commanding,
+            "allow_deviations": self.deviating,
             "tables": self.edition,
             "summary": {verdict.value: self.count(verdict) for verdict in Verdict},
             "results": [result.describe() for result in self.results],
@@ -104,6 +110,8 @@ class Report:
         """Return the report as lines of text: a line for each check, then the totals."""
         began = datetime.datetime.fromtimestamp(self.started, datetime.UTC)
         writes = "allowed to write" if self.commanding else "read only"
+        if self.deviating:
+            writes += ", allowed to deviate"
         lines = [
             f"{self.outstation}, {began.isoformat(timespec='seconds')}, {writes}",
             f"profile tables: {self.edition or 'edition not stated'}",
@@ -149,11 +157,13 @@ async def evaluate(
     *,
     checks: Sequence[Check] | None = None,
     commanding: bool = False,
+    deviating: bool = False,
     settle: float = DEFAULT_SETTLE,
     curves: int | None = None,
     device_profile: str | None = None,
     capture: Any = None,
     pause: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    on_result: Callable[[Result], None] | None = None,
 ) -> Report:
     """Run checks against a connected outstation, and return the report.
 
@@ -164,6 +174,9 @@ async def evaluate(
         commanding: Run the checks that write to the outstation. They change
             its settings, enable and disable its functions, and stop and
             start it.
+        deviating: Run the checks that have the master break a protocol rule
+            on purpose. They send the outstation frames it has to discard and
+            withhold confirmations it asked for.
         settle: Seconds to wait for the outstation to reach a state it was
             commanded to.
         curves: How many curves the outstation stores. Found by selecting
@@ -173,16 +186,29 @@ async def evaluate(
             frames are being written to. Each result then gives the numbers of
             its packets in it.
         pause: Awaited with the seconds of each wait.
+        on_result: Called with each result as its check ends.
 
     Raises :class:`~py1815.master.bench.NoAnswer` when the outstation does
     not answer the first read.
     """
     bench = _bench(point_map, settle, curves, device_profile, capture)
     started = time.time()
-    plan = benches.run_plan(bench, CATALOG if checks is None else checks, commanding=commanding)
-    results = await benches.drive_async(outstation, plan, pause)
+    plan = benches.run_plan(
+        bench,
+        CATALOG if checks is None else checks,
+        commanding=commanding,
+        deviating=deviating,
+        on_result=on_result,
+    )
+    try:
+        results = await benches.drive_async(outstation, plan, pause)
+    finally:
+        # A run that is cancelled or fails part way through a check never
+        # reaches the end of that check. Its deviations are turned off and
+        # the master is let go here, which sends nothing.
+        bench.restore(outstation)
     name = getattr(outstation, "name", "outstation")
-    return Report(str(name), started, commanding, bench.map.edition, results)
+    return Report(str(name), started, commanding, bench.map.edition, results, deviating)
 
 
 def evaluate_loopback(
@@ -191,6 +217,7 @@ def evaluate_loopback(
     *,
     checks: Sequence[Check] | None = None,
     commanding: bool = False,
+    deviating: bool = False,
     settle: float = DEFAULT_SETTLE,
     curves: int | None = None,
     device_profile: str | None = None,
@@ -203,9 +230,14 @@ def evaluate_loopback(
     """
     bench = _bench(point_map, settle, curves, device_profile)
     started = time.time()
-    plan = benches.run_plan(bench, CATALOG if checks is None else checks, commanding=commanding)
-    results = benches.drive(loopback, plan, advance or (lambda seconds: None))
-    return Report("loopback", started, commanding, bench.map.edition, results)
+    plan = benches.run_plan(
+        bench, CATALOG if checks is None else checks, commanding=commanding, deviating=deviating
+    )
+    try:
+        results = benches.drive(loopback, plan, advance or (lambda seconds: None))
+    finally:
+        bench.restore(loopback)
+    return Report("loopback", started, commanding, bench.map.edition, results, deviating)
 
 
 # ------------------------------------------------------------ the command line
@@ -216,8 +248,8 @@ def catalog_lines() -> list[str]:
     width = max(len(check.id) for check in CATALOG)
     lines = []
     for check in CATALOG:
-        kind = "writes" if check.commands else "reads"
-        lines.append(f"{check.id:<{width}}  {check.group:<14}  {kind:<6}  {check.title}")
+        kind = "writes" if check.commands else "deviates" if check.deviates else "reads"
+        lines.append(f"{check.id:<{width}}  {check.group:<14}  {kind:<8}  {check.title}")
     return lines
 
 
@@ -295,6 +327,7 @@ async def _run(
             point_map,
             checks=checks,
             commanding=config.allow_control,
+            deviating=config.evaluate.allow_deviations,
             settle=config.evaluate.settle,
             curves=config.evaluate.curves,
             device_profile=device_profile,
@@ -309,7 +342,7 @@ async def _run(
             except OSError as error:
                 print(f"the capture could not be closed: {error}", file=sys.stderr)
     where = f"{chosen.name} at {chosen.host}:{chosen.port}, outstation {chosen.outstation_address}"
-    return Report(where, report.started, report.commanding, report.edition, report.results)
+    return dataclasses.replace(report, outstation=where)
 
 
 def run(args: argparse.Namespace, config: MasterConfig) -> int:
