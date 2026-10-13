@@ -4,3 +4,8 @@
 # What a run writes: the report, each procedure's log and capture, the
 # device's log and the outcomes.
 /results/
+
+# What the CI job writes beside device.ini to turn packet capture on.
+/capture.ini
+/probe.ini
+/capture-probe/
