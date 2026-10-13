@@ -24,9 +24,10 @@ const DEVIATIONS = {
   break_transport_sequence: "Sends the first segment of each request with a transport sequence number that is out of order.",
   orphan_segment: "Sends the first segment of each request as a continuation, so the request has no first segment.",
   endless_series: "Sends the last segment of each request with its final bit clear, so the series never ends.",
-  withhold_confirmation: "Withholds every application confirmation the master would send.",
-  late_confirmation: "Sends each application confirmation after the master's next request, and not when the response arrives.",
-  wrong_confirmation_sequence: "Confirms a sequence number the outstation did not send.",
+  withhold_confirmation: "Withholds the confirmation of every solicited response.",
+  late_confirmation: "Sends the confirmation of each solicited response after the master's next request, and not when the response arrives.",
+  wrong_confirmation_sequence: "Confirms a solicited response with a sequence number the outstation did not send.",
+  withhold_unsolicited_confirmation: "Withholds the confirmation of every unsolicited response.",
 };
 
 // The verdicts, in the order a summary counts them, and the word for each.

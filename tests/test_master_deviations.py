@@ -49,6 +49,9 @@ _LINK_ACK = bytes.fromhex("05 64 05 80 00 04 01 00 6D C7")
 _CONFIRMATION = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 C3 00 98 26")
 # The same confirmation with application control 0xC4, sequence 4.
 _CONFIRMATION_OF_4 = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 C4 00 F9 A1")
+# The confirmation of an unsolicited response of sequence 3: application
+# control 0xD3, which is 0xC3 with the UNS bit set. The CRC is B0 F9.
+_UNSOLICITED_CONFIRMATION = bytes.fromhex("05 64 08 C4 00 04 01 00 9A 19 C0 D3 00 B0 F9")
 
 
 def _valid(frame: bytes) -> link.LinkFrame:
@@ -340,6 +343,56 @@ class TestTheDeviations:
             bytes.fromhex("05 64 05 80 00 04 02 00 C6 77"),
             bytes.fromhex("05 64 08 C4 00 04 02 00 31 A9 C0 C3 00 98 26"),
         ]
+
+    @pytest.mark.parametrize(
+        "name", ["withhold_confirmation", "late_confirmation", "wrong_confirmation_sequence"]
+    )
+    def test_the_confirmation_of_an_unsolicited_response_is_left_as_built(self, name):
+        # These three are about a response the master asked for.
+        d = Deviations()
+        d.set(name, True)
+        assert d.outbound(_UNSOLICITED_CONFIRMATION, kind=dev.CONFIRM) == [
+            _UNSOLICITED_CONFIRMATION
+        ]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME], "and none was held back"
+
+    def test_withhold_unsolicited_confirmation_withholds_that_one_and_no_other(self):
+        d = Deviations(withhold_unsolicited_confirmation=True)
+        assert d.outbound(_UNSOLICITED_CONFIRMATION, kind=dev.CONFIRM) == []
+        assert d.outbound(_LINK_ACK + _UNSOLICITED_CONFIRMATION, kind=dev.CONFIRM) == [_LINK_ACK]
+        assert d.outbound(_CONFIRMATION, kind=dev.CONFIRM) == [_CONFIRMATION]
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME]
+
+    def test_the_confirmation_the_association_makes_of_an_unsolicited_response_is_told_apart(
+        self,
+    ):
+        association = MasterAssociation()
+        control = link.control_byte(
+            from_master=False, primary=True, function=link.PrimaryFunction.UNCONFIRMED_USER_DATA
+        )
+        # Transport FIR and FIN, then an unsolicited response with FIR, FIN,
+        # CON and UNS, sequence 0, and no objects.
+        unsolicited = link.build(control, 1, 1024, bytes.fromhex("C0 F0 82 00 00"))
+        reply = association.receive(unsolicited)
+        assert link.parse(reply).payload[1:] == bytes.fromhex("D0 00"), "a confirmation with UNS"
+        assert Deviations(withhold_confirmation=True).outbound(reply, kind=dev.CONFIRM) == [reply]
+        assert (
+            Deviations(withhold_unsolicited_confirmation=True).outbound(reply, kind=dev.CONFIRM)
+            == []
+        )
+
+    def test_no_more_than_a_few_confirmations_are_held_back(self):
+        # Sequences 0 to 15, each confirmed and none followed by a request.
+        d = Deviations(late_confirmation=True)
+        confirmations = [
+            link.build(0xC4, 1024, 1, bytes([0xC0, 0xC0 | sequence, 0x00]))
+            for sequence in range(16)
+        ]
+        for confirmation in confirmations:
+            assert d.outbound(confirmation, kind=dev.CONFIRM) == []
+        kept = confirmations[-dev.HELD_CONFIRMATIONS :]
+        assert len(kept) < len(confirmations)
+        assert d.outbound(_FRAME, kind=dev.REQUEST) == [_FRAME, *kept], "the oldest were dropped"
 
     def test_a_late_confirmation_follows_the_next_request(self):
         d = Deviations(late_confirmation=True)

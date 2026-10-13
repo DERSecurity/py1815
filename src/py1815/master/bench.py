@@ -468,13 +468,26 @@ class Bench:
         check's deviations is on, or between two of its steps. Returns what
         the master's own hold returns, to be awaited where it is awaitable.
         """
-        deviations = getattr(target, "deviations", None)
-        if deviations is not None and self._deviations is None:
-            self._deviations = deviations.describe()
-            self._isolated = True
-            deviations.clear()
+
+        def conform() -> None:
+            deviations = getattr(target, "deviations", None)
+            if deviations is not None and self._deviations is None:
+                self._deviations = deviations.describe()
+                self._isolated = True
+                deviations.clear()
+
         reserve = getattr(target, "_reserve", None)
-        return None if reserve is None else reserve()
+        if reserve is None:
+            conform()
+            return None
+
+        async def held() -> None:
+            # The deviations are turned off once the master is held, so that a
+            # request another task has under way is finished as it was begun.
+            await reserve()
+            conform()
+
+        return held()
 
     def restore(self, target: Any) -> None:
         """Put a master back as the check found it. Sends nothing.

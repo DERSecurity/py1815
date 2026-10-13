@@ -3589,6 +3589,9 @@
                       },
                       "wrong_confirmation_sequence": {
                         "type": "boolean"
+                      },
+                      "withhold_unsolicited_confirmation": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false,
@@ -3694,7 +3697,7 @@
             }
           }
         },
-        "description": "A deviation makes the master break a protocol rule on purpose, so a test can see whether the outstation rejects what the standard says it must. Each is applied to the octets the association produced, on their way to the outstation, and is off until turned on. The names are `silence`, `repeat_request`, `second_master_address`, `corrupt_header_crc`, `corrupt_body_crc`, `truncate`, `overstate_length`, `break_transport_sequence`, `orphan_segment`, `endless_series`, `withhold_confirmation`, `late_confirmation`, `wrong_confirmation_sequence`. `set` turns them on or off; `clear` turns every one off first."
+        "description": "A deviation makes the master break a protocol rule on purpose, so a test can see whether the outstation rejects what the standard says it must. Each is applied to the octets the association produced, on their way to the outstation, and is off until turned on. The names are `silence`, `repeat_request`, `second_master_address`, `corrupt_header_crc`, `corrupt_body_crc`, `truncate`, `overstate_length`, `break_transport_sequence`, `orphan_segment`, `endless_series`, `withhold_confirmation`, `late_confirmation`, `wrong_confirmation_sequence`, `withhold_unsolicited_confirmation`. `set` turns them on or off; `clear` turns every one off first."
       }
     },
     "/api/checks": {

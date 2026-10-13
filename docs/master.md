@@ -485,16 +485,20 @@ lab.deviations.corrupt_header_crc = False
 | `break_transport_sequence` | Sends a request's first segment with a sequence number out of order |
 | `orphan_segment` | Sends a request's first segment as a continuation, with no first segment |
 | `endless_series` | Sends a request's last segment with its final bit clear, so the series never ends |
-| `withhold_confirmation` | Sends no application confirmation |
-| `late_confirmation` | Sends each application confirmation after its next request, and not when the response arrives |
-| `wrong_confirmation_sequence` | Confirms a sequence number the outstation did not send |
+| `withhold_confirmation` | Sends no confirmation of a solicited response |
+| `late_confirmation` | Sends the confirmation of each solicited response after its next request, and not when the response arrives |
+| `wrong_confirmation_sequence` | Confirms a solicited response with a sequence number the outstation did not send |
+| `withhold_unsolicited_confirmation` | Sends no confirmation of an unsolicited response |
 
 They are applied to the frame the master built on its way out, so with every one off the
 master is conformant.
 
-The three confirmation deviations act on the application confirmation. A link-layer
-acknowledgment the master sends with it is sent as built. A confirmation held back by
-`late_confirmation` is dropped when the deviation is turned off.
+A confirmation deviation acts on the application confirmation of the kind of response it
+names. The first three leave the confirmation of an unsolicited response as built, and
+the last leaves the confirmation of a solicited one. A link-layer acknowledgment the
+master sends with a confirmation is sent as built. A confirmation held back by
+`late_confirmation` is dropped when the deviation is turned off, and no more than a few
+are held: the oldest is dropped first.
 
 A frame that is already full cannot claim a greater length, so `overstate_length` drops
 that frame's last data block instead. When several are on, each is applied in turn.

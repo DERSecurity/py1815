@@ -1494,12 +1494,17 @@ here rather than inside the link layer, so the layer that reads a frame is never
 write a bad one. They are named: send nothing; repeat a request; speak from a second
 master address; corrupt a header or a data-block checksum; truncate a frame; overstate its
 length; break the transport sequence; orphan a segment; leave a series unfinished;
-withhold a confirmation; confirm late; confirm the wrong sequence. The socket master
+withhold a confirmation; confirm late; confirm the wrong sequence; withhold the
+confirmation of an unsolicited response. The socket master
 and the loopback apply the same ones, and the service's `deviate` turns them on and off.
 A deviation that is on always changes what is sent: a frame whose length octet is already
 at its highest value cannot overstate it, so that frame loses its last data block instead.
 A confirmation deviation acts on the frame that carries the application confirmation and
-leaves a link-layer reply sent with it as built. The blocking master reads and changes the
+leaves a link-layer reply sent with it as built. The confirmation of a solicited response
+and of an unsolicited one are told apart by the UNS bit and have deviations of their own,
+so a check about the events a read returned leaves the confirmation of an unsolicited
+response that arrives meanwhile alone. The confirmations `late_confirmation` holds back
+are limited in number, the oldest dropped first (D89). The blocking master reads and changes the
 deviations on the loop's thread, as it does the store and the trace.
 The trace keeps each write as it was made, so a frame that no reader accepts is in the
 trace and in a capture with what is wrong with it. The trace reads what the master sent

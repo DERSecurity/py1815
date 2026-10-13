@@ -517,6 +517,21 @@ class TestOverASocket:
         outstation._release()  # Letting go of an outstation that is not held does nothing.
         assert (await outstation.scan("class0")).complete
 
+    async def test_a_deviation_left_on_is_turned_off_only_once_the_outstation_is_held(self, served):
+        # Another task holds the outstation, as a request under way does. A
+        # check that begins meanwhile changes nothing until it has the turn.
+        points, outstation = served
+        outstation.deviations.repeat_request = True
+        await outstation._reserve()
+        report = asyncio.create_task(
+            evaluate(outstation, points, checks=select(["LINK-001"]), deviating=True)
+        )
+        await asyncio.sleep(0.3)
+        assert outstation.deviations.on() == ("repeat_request",), "changed before it was held"
+        outstation.deviations.repeat_request = False
+        outstation._release()
+        assert (await asyncio.wait_for(report, 30)).results[0].verdict is PASSED
+
     async def test_a_check_that_deviates_holds_the_outstation_until_it_ends(self, served):
         points, outstation = served
         elsewhere: list[asyncio.Task[Any]] = []

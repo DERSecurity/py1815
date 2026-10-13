@@ -627,7 +627,8 @@ done means.
    orphan segment are each met with silence through the socket master (IEEE 1815-2012
    9.2.4.3 and 8.2.4; the invalid CRC procedure of section 6.6.2 of the IED Certification
    Procedure). Also built: a second master address, a confirmation sent after the next
-   request, and a series whose final segment never comes. *Left:* moving the existing
+   request, a series whose final segment never comes, and a confirmation of an
+   unsolicited response withheld, apart from the confirmations of solicited ones. *Left:* moving the existing
    harnesses onto the master.
 10. **The DER profile.** Names, units, functions, curves, `verify`. *Done when*
     each function can be configured, enabled and read back by name against the

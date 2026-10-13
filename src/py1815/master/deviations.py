@@ -23,11 +23,12 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from py1815 import crc, link, transport
-from py1815.application import FunctionCode
+from py1815.application import UNS_MASK, FunctionCode
 
 #: What an outbound write is: a request the master initiated, or a confirmation
 #: it is sending in reply to something the outstation sent. A deviation names
@@ -39,6 +40,14 @@ KINDS = (REQUEST, CONFIRM)
 
 #: The highest value a frame's length octet can hold.
 _MAX_LENGTH = 0xFF
+
+#: Confirmations ``late_confirmation`` holds back before the oldest is dropped.
+#: A response is confirmed once and the next request sends what is held, so
+#: more than a few are held only when something is wrong.
+HELD_CONFIRMATIONS = 8
+
+#: What a frame confirms, when it carries an application confirmation.
+_SOLICITED, _UNSOLICITED = "solicited", "unsolicited"
 
 
 def _split(octets: bytes) -> list[bytes]:
@@ -178,19 +187,22 @@ def wrong_application_sequence(frame: bytes) -> bytes:
     return _rebuild(frame, parsed.payload[:1] + bytes([changed]) + parsed.payload[2:])
 
 
-def _is_confirmation(frame: bytes) -> bool:
-    """Return whether a link frame carries an application confirmation.
+def _confirms(frame: bytes) -> str | None:
+    """Return which kind of response a link frame confirms, or None when it confirms none.
 
     The association can answer one frame with a link-layer reply and an
     application confirmation together. A frame with no user data, or with
     another function code after its transport and application control octets,
-    is not a confirmation.
+    is not a confirmation. The UNS bit of the application control octet says
+    that the response confirmed was unsolicited.
     """
     try:
         payload = link.parse(frame).payload
     except link.LinkFrameError:
-        return False
-    return len(payload) >= 3 and payload[2] == FunctionCode.CONFIRM
+        return None
+    if len(payload) < 3 or payload[2] != FunctionCode.CONFIRM:
+        return None
+    return _UNSOLICITED if payload[1] & UNS_MASK else _SOLICITED
 
 
 #: Which frames of a request a deviation changes.
@@ -246,16 +258,24 @@ class Deviations:
     #: Send the last segment of each request with its final bit clear, so
     #: the series never ends.
     endless_series: bool = False
-    #: Withhold every application confirmation the master would send.
+    #: Withhold the confirmation of every solicited response.
     withhold_confirmation: bool = False
-    #: Send each application confirmation after the master's next request,
-    #: and not when the response arrives.
+    #: Send the confirmation of each solicited response after the master's
+    #: next request, and not when the response arrives.
     late_confirmation: bool = False
-    #: Confirm a sequence number the outstation did not send.
+    #: Confirm a solicited response with a sequence number the outstation did
+    #: not send.
     wrong_confirmation_sequence: bool = False
+    #: Withhold the confirmation of every unsolicited response.
+    withhold_unsolicited_confirmation: bool = False
 
     #: Confirmations held back by ``late_confirmation`` until the next request.
-    _held: list[bytes] = field(default_factory=list, init=False, repr=False, compare=False)
+    _held: deque[bytes] = field(
+        default_factory=lambda: deque(maxlen=HELD_CONFIRMATIONS),
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     #: Deviations that act on a request the master initiated.
     _ON_REQUEST = (
@@ -268,7 +288,12 @@ class Deviations:
         "endless_series",
     )
     #: Deviations that act on a confirmation the master sends in reply.
-    _ON_CONFIRM = ("withhold_confirmation", "late_confirmation", "wrong_confirmation_sequence")
+    _ON_CONFIRM = (
+        "withhold_confirmation",
+        "late_confirmation",
+        "wrong_confirmation_sequence",
+        "withhold_unsolicited_confirmation",
+    )
 
     @classmethod
     def names(cls) -> tuple[str, ...]:
@@ -316,7 +341,8 @@ class Deviations:
         except ``endless_series``, which changes the last, and
         ``second_master_address``, which changes every frame. A confirmation
         deviation acts on each frame that carries an application confirmation
-        and leaves a link-layer reply as built. A repeated request holds its
+        of the kind it names, solicited or unsolicited, and leaves the other
+        kind and a link-layer reply as built. A repeated request holds its
         writes twice. A confirmation held back by ``late_confirmation``
         follows the next request.
         """
@@ -338,7 +364,8 @@ class Deviations:
         if self.repeat_request:
             writes = writes * 2
         if self._held:
-            writes, self._held = writes + self._held, []
+            writes = writes + list(self._held)
+            self._held.clear()
         return writes
 
     def _confirmation(self, octets: bytes) -> list[bytes]:
@@ -347,6 +374,7 @@ class Deviations:
             self.withhold_confirmation
             or self.late_confirmation
             or self.wrong_confirmation_sequence
+            or self.withhold_unsolicited_confirmation
             or self.second_master_address
         )
         if not deviating:
@@ -355,10 +383,17 @@ class Deviations:
         for frame in _split(octets):
             if self.second_master_address:
                 frame = second_master_address(frame)
-            if not _is_confirmation(frame):
+            confirmed = _confirms(frame)
+            if confirmed is None:
                 # A link-layer reply sent with the confirmation is not a
                 # confirmation, and is sent as built.
                 writes.append(frame)
+                continue
+            if confirmed == _UNSOLICITED:
+                # The other confirmation deviations are about a response the
+                # master asked for, and leave this confirmation as built.
+                if not self.withhold_unsolicited_confirmation:
+                    writes.append(frame)
                 continue
             if self.withhold_confirmation:
                 continue
@@ -391,6 +426,7 @@ class Deviations:
 
 __all__ = [
     "CONFIRM",
+    "HELD_CONFIRMATIONS",
     "KINDS",
     "REQUEST",
     "Deviations",
