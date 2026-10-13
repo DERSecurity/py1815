@@ -148,8 +148,9 @@ has to be answered.
 A read that has to go unanswered is waited for as long as any other: the response
 timeout, times the read retries plus one. Each of these checks takes that long at least.
 
-The three event checks work on the events the outstation has when the check begins, and
-are `not applicable` when it has none. After the events are reported again, they are read
+The three event checks work on the events the outstation has to report. A master that
+polls for events has usually just taken them, so a check that finds none reads again every
+half second for up to the settling time, and is `not applicable` when none came. After the events are reported again, they are read
 once more with a confirmation and must not be reported after that. Events that carry no
 time cannot be told from later events at the same point, so for those the last step is
 skipped and noted. A master set to send no confirmations cannot run these checks.
