@@ -12,6 +12,13 @@
     <name>py1815 conformance plugin for dnp3c</name>
     <description>Drives the py1815 Subset Level 2 outstation through Step Function I/O's dnp3c conformance harness. Used only in this repository's tests; never published.</description>
 
+    <licenses>
+        <license>
+            <name>GPL-3.0-only</name>
+            <url>https://www.gnu.org/licenses/gpl-3.0.txt</url>
+        </license>
+    </licenses>
+
     <!--
       NOTE ON THE DEPENDENCY BELOW, WHICH IS UNDER THE GPL.
 
@@ -22,7 +29,10 @@
         https://github.com/stepfunc/dnp3c/blob/main/LICENSE
 
       This project is a separate program that links the dnp3c library and runs it
-      against the py1815 outstation in this repository's tests. Nothing in this
+      against the py1815 outstation in this repository's tests. Because it links
+      that library, everything in this directory is licensed under the GNU General
+      Public License, version 3 only, unlike the rest of the repository: see
+      LICENSE beside this file. Nothing in this
       directory is part of the py1815 library, its wheel or its source
       distribution, and the library does not depend on it. README.md says more,
       and deleting this directory and its workflow job removes dnp3c entirely.

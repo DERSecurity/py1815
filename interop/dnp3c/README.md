@@ -28,8 +28,12 @@ Function I/O's. So is the `dnp3` crate that two other jobs in this repository us
 
 ## The license, and how this directory is scoped
 
-dnp3c is licensed under the GNU General Public License v3.0 only. Read the license
-instead of a summary of it:
+Everything in this directory is licensed under the GNU General Public License,
+version 3 only. [LICENSE](LICENSE) here is its text. The rest of this repository is
+licensed under the Apache License, Version 2.0, and this directory is the one exception.
+
+The reason is the harness. dnp3c is licensed under the GNU General Public License v3.0
+only. Read the license instead of a summary of it:
 
 <https://github.com/stepfunc/dnp3c/blob/main/LICENSE>
 

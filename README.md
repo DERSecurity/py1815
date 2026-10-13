@@ -375,3 +375,9 @@ What this library can say about interoperating rests on implementations other pe
 ## License
 
 Apache-2.0. See [LICENSE](https://github.com/DERSecurity/py1815/blob/main/LICENSE) and [NOTICE](https://github.com/DERSecurity/py1815/blob/main/NOTICE).
+
+One directory is the exception. `interop/dnp3c/` holds a test program that links a
+conformance harness licensed under the GNU General Public License, version 3 only, and
+everything in that directory is licensed the same way: see
+[its LICENSE](https://github.com/DERSecurity/py1815/blob/main/interop/dnp3c/LICENSE).
+It is not part of the library, the wheel or the source distribution.

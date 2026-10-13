@@ -29,7 +29,8 @@ holds to the record. It needs no run.
 new is written with an empty reason, which the comparison refuses until
 someone has found out why and said so.
 
-Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
+Copyright 2026 DER Security Corp. Licensed under the GNU General Public License,
+version 3 only: see LICENSE in this directory.
 """
 
 from __future__ import annotations
