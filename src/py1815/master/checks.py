@@ -1064,6 +1064,16 @@ def not_answered(
     about the deviation. With the deviation on, a read has to go unanswered.
     With it off again, one of the next ``reads`` reads has to be answered, so
     the silence was about that one request and not a receiver that stopped.
+
+    What makes silence the required answer depends on the deviation:
+
+    - A frame that fails a checksum, is cut short, or claims a length it does
+      not carry is discarded by the data link layer and nothing is sent for it
+      (IEEE 1815-2012 9.2.4.3). The invalid CRC procedure of section 6.6.2 of
+      the IED Certification Procedure tests the two checksum cases.
+    - A segment that is not a first segment and follows no series in progress
+      is discarded, and a new first segment abandons a series that did not
+      end (IEEE 1815-2012 8.2.4, Table 8-1, as TB2013-003 restates it).
     """
 
     def procedure(bench: Bench) -> Plan[None]:
@@ -1183,6 +1193,9 @@ def _deviating(identifier: str, title: str, procedure: Callable[[Bench], Plan[No
 
 
 DEVIATION_CHECKS: tuple[Check, ...] = (
+    # A frame the data link layer cannot accept draws nothing
+    # (IEEE 1815-2012 9.2.4.3). The IED Certification Procedure tests the two
+    # checksum cases in the invalid CRC procedure of its section 6.6.2.
     _deviating(
         "LINK-001",
         "A frame with a bad header checksum is not answered",
@@ -1203,6 +1216,8 @@ DEVIATION_CHECKS: tuple[Check, ...] = (
         "A frame that claims more than it carries is not answered",
         not_answered("overstate_length", "a frame whose length claims more than it carries"),
     ),
+    # A segment out of place is discarded, and a new first segment starts
+    # again (IEEE 1815-2012 8.2.4, Table 8-1, as TB2013-003 restates it).
     _deviating(
         "TRANSPORT-001",
         "A segment with no first segment is discarded",
@@ -1213,6 +1228,8 @@ DEVIATION_CHECKS: tuple[Check, ...] = (
         "A series that never ends gives way to a new first segment",
         not_answered("endless_series", "a request whose final segment never came", reads=1),
     ),
+    # Events stay buffered until the confirmation the outstation asked for
+    # arrives (IEEE 1815-2012 Table 6-1, and 4.6.6 rule 9).
     _deviating(
         "CONFIRM-001",
         "Events are kept when no confirmation arrives",
