@@ -143,7 +143,8 @@ object Main {
       val path =
         try Paths.get(file)
         catch {
-          case ex: java.nio.file.InvalidPathException => throw new CannotStart(s"-config is not a path: ${ex.getMessage}")
+          case ex: java.nio.file.InvalidPathException =>
+            throw new CannotStart(s"-config is not a path: ${ex.getMessage}")
         }
       arguments(rest, path, id)
     case "-run" :: what :: rest => arguments(rest, config, what)

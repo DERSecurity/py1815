@@ -100,7 +100,8 @@ final class Fixture(command: FixtureCommand) extends AutoCloseable {
     val prefix = "control channel listening on 127.0.0.1:"
     if (line == null || !line.startsWith(prefix)) {
       throw new FixtureException(
-        s"The device did not start (it printed ${if (line == null) "nothing" else s"'$line'"}); its log is ${command.log}")
+        s"The device did not start (it printed ${if (line == null) "nothing" else s"'$line'"}); " +
+          s"its log is ${command.log}")
     }
     line.substring(prefix.length).trim.toInt
   }

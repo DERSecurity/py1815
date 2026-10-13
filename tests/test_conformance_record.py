@@ -83,13 +83,13 @@ def problems(
     tmp_path: pathlib.Path,
     procedures: dict[str, dict[str, str]],
     *,
-    record: dict[str, Any] = RECORD,
+    record: dict[str, Any] | None = None,
     version: str = "1.2.3",
     off: tuple[str, ...] = ("supports.widgets",),
 ) -> list[str]:
     """Compare a made-up run with a record, and return what differs."""
     run = check.read_run(write_run(tmp_path / "results", procedures))
-    found: list[str] = check.compare(record, run, version=version, off=list(off))
+    found: list[str] = check.compare(record or RECORD, run, version=version, off=list(off))
     return found
 
 
@@ -237,8 +237,8 @@ class TestPuttingARunOnRecord:
         assert written["procedures"]["8.2.2"] == RECORD["procedures"]["8.2.2"]
 
 
-@pytest.fixture(scope="module")
-def record() -> dict[str, Any]:
+@pytest.fixture(scope="module", name="record")
+def record_in_the_repository() -> dict[str, Any]:
     """The record in the repository."""
     loaded: dict[str, Any] = json.loads((_HERE / "expected.json").read_text(encoding="utf-8"))
     return loaded

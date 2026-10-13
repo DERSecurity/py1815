@@ -80,7 +80,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       try {
         refreshOperations(f)
         if (unchecked.nonEmpty) {
-          reporter.log(s"Outputs the device operated that no step asked about: ${unchecked.mkString(", ")}")
+          reporter.log(s"Outputs the device operated that no step asked about: ${listed(unchecked)}")
         }
       } catch { case _: FixtureException => }
       f.close()
@@ -176,7 +176,10 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   // the inputs of a kind that report events in a class, by the device's own account
   private def inClass(state: ujson.Obj, kind: String, eventClass: Int): List[Int] =
-    state("event_classes")(kind).obj.collect { case (index, c) if c.num.toInt == eventClass => index.toInt }.toList.sorted
+    state("event_classes")(kind).obj
+      .collect { case (index, c) if c.num.toInt == eventClass => index.toInt }
+      .toList
+      .sorted
 
   private def classOf(eventClass: EventClass): Int = eventClass match {
     case EventClass.Class1 => 1
@@ -244,7 +247,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
         case ujson.Bool(b) => if (b) 1.0 else 0.0
         case other => other.num
       }
-      Generated(kind, index, value, change("time_ms").num.toLong, before("event_classes")(kind)(index.toString).num.toInt)
+      val eventClass = before("event_classes")(kind)(index.toString).num.toInt
+      Generated(kind, index, value, change("time_ms").num.toLong, eventClass)
     }
     if (done.size <= 12) done.foreach(change => reporter.log(s"Changed ${ujson.write(change)}"))
     else reporter.log(s"Made ${done.size} changes, from ${ujson.write(done.head)} to ${ujson.write(done.last)}")
@@ -421,7 +425,10 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   override def generateTimeEvent(reporter: PluginReporter): Unit = {
     val s = state()
     val before = System.currentTimeMillis()
-    val event = generate(reporter, exactClassChanges(s, List(1, 2, 3).find(inClass(s, "BI", _).nonEmpty).getOrElse(1), 1))
+    // a binary input event, since those carry their time
+    val eventClass = List(1, 2, 3).find(inClass(s, "BI", _).nonEmpty)
+      .getOrElse(throw new Exception("The device has no binary input that reports events"))
+    val event = generate(reporter, exactClassChanges(s, eventClass, 1))
     val after = System.currentTimeMillis()
     timeEvent = Some(TimeEvent(event.head, before, after))
     reporter.log(s"Generated ${event.head} between $before and $after by this machine's clock")
@@ -569,14 +576,17 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     val same = p.point match {
       case point if point.pointType != PointType.Event => false
       case b: BinaryPoint => expected.kind == "BI" && expected.index == p.idx && bit(b.value) == expected.value
-      case a: AnalogPoint => !a.isFrozen && expected.kind == "AI" && expected.index == p.idx && a.value == expected.value
+      case a: AnalogPoint =>
+        !a.isFrozen && expected.kind == "AI" && expected.index == p.idx && a.value == expected.value
       case _ => false
     }
     if (!same) Some(s"expected $expected, and the response has ${describe(p)}")
     else
       p.point.timestamp match {
         case Some(t) if t.value != expected.timeMs =>
-          Some(s"${describe(p)} carries a time ${t.value - expected.timeMs} ms from the ${expected.timeMs} the device recorded")
+          Some(
+            s"${describe(p)} carries a time ${t.value - expected.timeMs} ms from the ${expected.timeMs} the device " +
+              "recorded")
         case _ => None
       }
   }
@@ -595,11 +605,15 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       want.zip(got).foreach { case (w, g) => difference(w, g).foreach(reason => throw new Exception(reason)) }
     }
     val stray = points.filterNot(p => p.point.isInstanceOf[BinaryPoint] || p.point.isInstanceOf[AnalogPoint])
-    if (stray.nonEmpty) throw new Exception(s"The response holds events of a kind that was not generated: $stray")
+    if (stray.nonEmpty) {
+      throw new Exception(
+        s"The response holds events of a kind that was not generated: ${stray.map(describe).mkString("; ")}")
+    }
     inOrder("binary input", expected.filter(_.kind == "BI"), points.filter(isBinary).toList)
     val analog = points.filterNot(isBinary).toList
     (expected.filter(_.kind == "AI").map(_.index) ++ analog.map(_.idx)).distinct.foreach { index =>
-      inOrder(s"analog input $index", expected.filter(e => e.kind == "AI" && e.index == index), analog.filter(_.idx == index))
+      val generated = expected.filter(e => e.kind == "AI" && e.index == index)
+      inOrder(s"analog input $index", generated, analog.filter(_.idx == index))
     }
   }
 
@@ -793,7 +807,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   // figure is one a request answered at once could have.
   override def verifyDelayMeasurementAccuracy(reporter: CheckReporter, delayMs: Long): Option[DeferredCheck] = {
     if (delayMs < 0 || delayMs > settings.timeToleranceMs) {
-      throw new Exception(s"The device reports a delay of $delayMs ms; up to ${settings.timeToleranceMs} ms is accepted")
+      throw new Exception(
+        s"The device reports a delay of $delayMs ms; up to ${settings.timeToleranceMs} ms is accepted")
     }
     reporter.log(s"The device reports a delay of $delayMs ms, within ${settings.timeToleranceMs} ms")
     None
