@@ -288,6 +288,30 @@ class TestAFileFromDisk:
         assert await page.count("#der-document-print") == 0
         assert page.errors == []
 
+    @pytest.mark.asyncio
+    async def test_a_file_larger_than_a_message_holds_is_not_read(self, console):
+        page = console.page
+        await _show(page)
+        await page.evaluate(
+            "FileReader.prototype.readAsText = function () { window.readStarted = true; };"
+        )
+        # One octet more than 4 MiB.
+        await page.evaluate(
+            "(() => { const input = document.querySelector('#der-document-file');"
+            " const chosen = new DataTransfer();"
+            " chosen.items.add(new File([new Uint8Array(4 * 1024 * 1024 + 1)], 'large.xml'));"
+            " input.files = chosen.files;"
+            " input.dispatchEvent(new Event('change', { bubbles: true })); })()"
+        )
+
+        await page.wait_for("document.querySelector('#der-document-error') !== null")
+        assert await page.text("#der-document-error") == (
+            "large.xml is larger than 4 MiB, the most a message to the service holds."
+        )
+        assert await page.evaluate("window.readStarted === undefined"), "the file was read"
+        assert await page.count("#der-document-view") == 0
+        assert page.errors == []
+
 
 class TestWithNoDocument:
     @pytest.mark.asyncio

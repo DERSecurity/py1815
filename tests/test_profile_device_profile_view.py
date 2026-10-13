@@ -462,6 +462,33 @@ class TestAnotherNamespace:
     def test_a_document_in_no_namespace_reads_the_same(self):
         assert view.read(self.BODY.replace(f' xmlns="{NAMESPACE}"', "")) == SMALL_MODEL
 
+    def test_text_a_part_of_the_document_carries_beside_its_elements_is_kept(self):
+        document = view.read(
+            profile(
+                "<vendorExtension>Read this first"
+                "<settings><a><currentValue><value>1</value></currentValue></a></settings>"
+                "</vendorExtension>"
+            )
+        )
+        assert Fact("Vendor extension", "Read this first") in document.facts
+        assert [section.title for section in document.sections] == ["Vendor extension: Settings"]
+
+    def test_the_title_is_the_headers_name_and_not_a_fact_with_the_same_label(self):
+        # An attribute a vendor put on the root has the label the header's
+        # name has. It is shown, and it is not the title.
+        text = (
+            '<DNP3DeviceProfileDocument documentName="An extension value">'
+            "<documentHeader><documentName>The real name</documentName></documentHeader>"
+            "</DNP3DeviceProfileDocument>"
+        )
+        document = view.read(text)
+        assert document.title == "The real name"
+        assert Fact("Document name", "An extension value") in document.facts
+
+    def test_a_document_with_no_name_of_its_own_takes_a_fact_with_that_label(self):
+        text = '<DNP3DeviceProfileDocument documentName="The only name given"/>'
+        assert view.read(text).title == "The only name given"
+
     def test_two_attributes_with_one_local_name_are_both_kept(self):
         # Attributes of two namespaces can share a local name. Neither is lost.
         document = view.read(

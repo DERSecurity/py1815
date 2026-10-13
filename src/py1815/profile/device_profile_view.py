@@ -545,6 +545,18 @@ def _fact(node: _Node) -> Fact:
     )
 
 
+def _own(part: _Node) -> list[Fact]:
+    """Return what a part of the document states itself, beside its child elements.
+
+    Its attributes and its own text are facts, so that neither is lost when
+    the part's children are laid out as sections.
+    """
+    own = [Fact(_label(part.name, name), value) for name, value in part.attributes]
+    if part.text:
+        own.append(Fact(_label(part.name), part.text))
+    return own
+
+
 def _sections(part: _Node, budget: _Budget) -> list[Section]:
     """Return a section for each child of one of the document's parts.
 
@@ -580,12 +592,13 @@ def _layout(root: _Node) -> Document:
         elif part.name == "documentHeader":
             # What the header states in a word or a sentence is a fact. The
             # rest of it, the revision history above all, is tables.
+            facts += _own(part)
             facts += [_fact(child) for child in part.children if not child.children]
             tables = _tables(part, [], budget, leaves=False)
             if tables:
                 sections.append(Section(_label(part.name), tuple(tables)))
         else:
-            facts += [Fact(_label(part.name, name), value) for name, value in part.attributes]
+            facts += _own(part)
             sections += _sections(part, budget)
     # The device's identification is repeated beside the header's facts, where
     # a reader looks for it. Its rows stay in the table they come from.
@@ -594,8 +607,20 @@ def _layout(root: _Node) -> Document:
         current = None if identity is None else _find(identity, name, _CURRENT)
         if current is not None:
             facts.append(Fact(_label(name), _cell([current])))
-    named = {fact.label: fact.value for fact in reversed(facts)}
-    title = named.get(_label("documentName")) or named.get(_label("deviceName")) or DEFAULT_TITLE
+    # The title is the name the header gives the document, or the device's
+    # name, read from where every edition this was written against keeps
+    # them. A fact that merely has the same label, a vendor's attribute on
+    # the root for one, is a title only for a document that has neither.
+    named = _find(root, "documentHeader", "documentName")
+    device = None if identity is None else _find(identity, "deviceName", _CURRENT)
+    labeled = {fact.label: fact.value for fact in reversed(facts)}
+    title = (
+        (named.text if named is not None else "")
+        or (_cell([device]) if device is not None else "")
+        or labeled.get(_label("documentName"))
+        or labeled.get(_label("deviceName"))
+        or DEFAULT_TITLE
+    )
     return Document(title, tuple(facts), tuple(sections))
 
 

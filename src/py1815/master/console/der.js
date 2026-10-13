@@ -355,8 +355,19 @@ function derReadFile(file) {
   });
 }
 
+// The most a file may hold to be read here: what one message to the service
+// may hold. A larger file is not read at all, so the page is never asked to
+// hold it.
+const DER_DOCUMENT_BYTES = 4 * 1024 * 1024;
+
 async function derShowDocumentFile(file) {
   let text;
+  if (file.size > DER_DOCUMENT_BYTES) {
+    der.document = { error: `${file.name} is larger than 4 MiB, the most a message to the service holds.` };
+    der.documentNode = null;
+    renderDer();
+    return;
+  }
   try {
     text = await derReadFile(file);
   } catch (error) {
