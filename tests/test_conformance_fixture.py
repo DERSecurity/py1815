@@ -26,6 +26,8 @@ import pytest
 from ied_harness import (
     COLD_RESTART,
     DIRECT_OPERATE,
+    DIRECT_OPERATE_NR,
+    IIN1_BROADCAST,
     IIN1_CLASS_1,
     IIN1_NEED_TIME,
     IIN1_RESTART,
@@ -99,10 +101,16 @@ class Master:
         reader, writer = await asyncio.wait_for(asyncio.open_connection(HOST, port), 5.0)
         return cls(reader, writer, source)
 
-    def _send(self, fragment: bytes) -> None:
+    def _send(self, fragment: bytes, destination: int = OUTSTATION) -> None:
         # 0xC4: from the master, primary, unconfirmed user data.
         for part in segment(fragment):
-            self.writer.write(link.build(0xC4, OUTSTATION, self.source, part))
+            self.writer.write(link.build(0xC4, destination, self.source, part))
+
+    async def send(self, function: int, body: bytes = b"", *, destination: int) -> None:
+        """Send one request to another address, and wait for nothing."""
+        self._send(bytes([0xC0 | self.sequence, function]) + body, destination)
+        self.sequence = (self.sequence + 1) % 16
+        await self.writer.drain()
 
     async def request(self, function: int, body: bytes = b"") -> Fragment:
         """Send one request and return the fragment that answers it."""
@@ -358,6 +366,63 @@ class TestOutputs:
 
 
 @pytest.mark.asyncio
+class TestWhatTheDeviceDecidesForItself:
+    async def test_a_control_sent_to_a_broadcast_address_is_operated_and_not_answered(self):
+        async with Bench() as bench:
+            master = await bench.master()
+            await master.send(DIRECT_OPERATE_NR, LATCH_ON_2, destination=0xFFFF)
+            with pytest.raises(TimeoutError):
+                await master.fragment(timeout=0.3)
+            state = await bench.ask("state")
+            assert [(o["kind"], o["index"], o["value"]) for o in state["operated"]] == [
+                ("BO", 2, True)
+            ]
+            assert (await master.request(READ, CLASS_1)).iin1 & IIN1_BROADCAST
+            await master.close()
+
+    async def test_with_broadcast_controls_off_a_broadcast_control_operates_nothing(self):
+        async with Bench(broadcast_controls=False) as bench:
+            master = await bench.master()
+            await master.send(DIRECT_OPERATE_NR, LATCH_ON_2, destination=0xFFFF)
+            # The broadcast is still heard, and the next response says so.
+            assert (await master.request(READ, CLASS_1)).iin1 & IIN1_BROADCAST
+            assert (await bench.ask("state"))["operated"] == []
+            await master.close()
+
+    async def test_the_time_is_asked_for_again_an_interval_after_it_is_written(self):
+        async with Bench(time_sync_interval=0.05) as bench:
+            master = await bench.master()
+            body = bytes.fromhex("32 01 07 01") + (1_800_000_000_000).to_bytes(6, "little")
+            written = await master.request(WRITE, body)
+            assert written.is_null and not written.iin1 & IIN1_NEED_TIME
+            for _ in range(250):
+                if (await bench.ask("state"))["need_time"]:
+                    break
+                await asyncio.sleep(0.02)
+            assert (await master.request(READ, CLASS_1)).iin1 & IIN1_NEED_TIME
+            await master.close()
+
+    async def test_with_no_interval_the_time_is_not_asked_for_again(self):
+        async with Bench(time_sync_interval=None) as bench:
+            master = await bench.master()
+            body = bytes.fromhex("32 01 07 01") + (1_800_000_000_000).to_bytes(6, "little")
+            await master.request(WRITE, body)
+            await asyncio.sleep(0.2)
+            assert not (await master.request(READ, CLASS_1)).iin1 & IIN1_NEED_TIME
+            await master.close()
+
+    async def test_it_says_that_an_analog_input_keeps_one_event(self):
+        async with Bench(need_time=False) as bench:
+            assert (await bench.ask("state"))["analog_events_latest_only"] is True
+            await bench.ask("set", changes=[["AI", 0, 100], ["AI", 0, 200]])
+            master = await bench.master()
+            assert [(e.index, e.value) for e in (await master.request(READ, CLASS_3)).of(32)] == [
+                (0, 200)
+            ]
+            await master.close()
+
+
+@pytest.mark.asyncio
 class TestPowerCycle:
     async def test_it_drops_the_connection_and_listens_again_on_the_same_port(self):
         async with Bench() as bench:
@@ -465,6 +530,7 @@ class TestPowerCycle:
             ({"unsolicited": "yes"}, "settings.unsolicited is 'yes'"),
             ({"max_response": 1100.5}, "settings.max_response is 1100.5"),
             ({"unsolicited_retries": True}, "settings.unsolicited_retries is True"),
+            ({"time_sync_interval": 0}, "settings.time_sync_interval is 0"),
         ],
     )
     async def test_a_wrong_setting_is_refused_and_power_is_not_cycled(self, settings, message):

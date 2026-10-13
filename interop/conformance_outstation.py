@@ -18,9 +18,21 @@ when ``ok`` is false. The operations are the methods of :class:`ControlChannel`
 named ``op_...``.
 
 Nothing here knows which harness is on the other end or which procedure is
-running. The outstation is built from the library's defaults, and what the
-control channel reports comes from the device side: the values behind the
-inputs, and the writes that reached the outputs.
+running. What the control channel reports comes from the device side: the
+values behind the inputs, and the writes that reached the outputs.
+
+The outstation is built from the library's defaults, with three things a
+device built on the library decides for itself, and this one decides as the
+certification procedures expect of a device:
+
+- It carries out a cold restart request, by cycling its own power.
+- It carries out a control sent to a broadcast address. IEEE 1815-2012 4.7
+  has an outstation support by broadcast the functions of Table 4-16 that it
+  supports at its own address, and allows that to be configurable. The
+  library leaves it off unless asked.
+- It asks for the time again some seconds after a master has written it, as
+  a device whose clock drifts does. The library keeps the indication and
+  leaves when to raise it to the device.
 
 The point map is invented here. It has enough analog inputs that a class 0
 response is longer than one link frame, so a read of it is segmented by the
@@ -129,6 +141,11 @@ class Settings:
     max_response: int = 2048
     #: Whether the outstation asks the master for the time after it starts.
     need_time: bool = True
+    #: Seconds after a master writes the time before the outstation asks for
+    #: it again. None never asks again. Not used when ``need_time`` is off.
+    time_sync_interval: float | None = 10.0
+    #: Whether a direct operate sent to a broadcast address is carried out.
+    broadcast_controls: bool = True
 
     def changed(self, changes: Mapping[str, Any]) -> Settings:
         """Return these settings with *changes* applied. A wrong name or type is refused."""
@@ -139,6 +156,10 @@ class Settings:
             wanted = type(getattr(self, name))
             if name == "unsolicited_retries":
                 valid = value is None or (isinstance(value, int) and not isinstance(value, bool))
+            elif name == "time_sync_interval":
+                valid = value is None or (
+                    isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+                )
             elif wanted is float:
                 valid = isinstance(value, int | float) and not isinstance(value, bool)
             elif wanted is int:
@@ -148,6 +169,19 @@ class Settings:
             if not valid:
                 raise ValueError(f"settings.{name} is {value!r}; it must be {known[name]}")
         return replace(self, **changes)
+
+
+class _Outstation(DerOutstation):
+    """The outstation, telling the device when a master has written the time."""
+
+    def __init__(self, *args: Any, time_written: Callable[[], None], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._time_written = time_written
+
+    def set_time(self, timestamp_ms: int) -> None:
+        """Adopt the time a master wrote, and say that it was written."""
+        super().set_time(timestamp_ms)
+        self._time_written()
 
 
 class Device:
@@ -184,6 +218,7 @@ class Device:
         self._cycling = asyncio.Lock()
         self._restart_timer: asyncio.TimerHandle | None = None
         self._restart_task: asyncio.Task[None] | None = None
+        self._time_timer: asyncio.TimerHandle | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -245,6 +280,9 @@ class Device:
             pass
 
     async def _power_off(self) -> None:
+        if self._time_timer is not None:
+            self._time_timer.cancel()
+            self._time_timer = None
         server, self._server = self._server, None
         if server is not None:
             self._requested_port = server.port
@@ -254,8 +292,13 @@ class Device:
 
     async def _power_on(self) -> None:
         settings = self.settings
-        outstation = DerOutstation(
-            point_map(), self._binding(settings), strict=False, level2=True, clock_ms=self._clock_ms
+        outstation = _Outstation(
+            point_map(),
+            self._binding(settings),
+            strict=False,
+            level2=True,
+            clock_ms=self._clock_ms,
+            time_written=self._time_written,
         )
         session = outstation.session(
             outstation_address=self._outstation_address,
@@ -263,6 +306,7 @@ class Device:
             max_response=settings.max_response,
             need_time=settings.need_time,
             restart_handler=self._cold_restart,
+            broadcast_controls=settings.broadcast_controls,
             unsolicited=settings.unsolicited,
             unsolicited_confirm_timeout=settings.unsolicited_confirm_timeout,
             unsolicited_retries=settings.unsolicited_retries,
@@ -320,6 +364,21 @@ class Device:
             logger.info("operated %s%d to %r", kind.value, index, value)
 
         return write
+
+    def _time_written(self) -> None:
+        """Start the wait after which the outstation asks for the time again."""
+        if self._time_timer is not None:
+            self._time_timer.cancel()
+            self._time_timer = None
+        interval = self.settings.time_sync_interval
+        if self.settings.need_time and interval is not None:
+            loop = asyncio.get_running_loop()
+            self._time_timer = loop.call_later(interval, self._ask_for_time)
+
+    def _ask_for_time(self) -> None:
+        self._time_timer = None
+        if self._session is not None:
+            self._session.need_time = True
 
     def _cold_restart(self) -> int:
         """Begin a power cycle a master asked for, and return the milliseconds it takes."""
@@ -416,6 +475,7 @@ class Device:
                 for event_class in EventClass
             },
             "deadband": DEADBAND,
+            "analog_events_latest_only": session.facts.analog_latest_only,
             "operations": self._operations,
             "operated": list(self.operated),
             "time_ms": outstation.now_ms(),

@@ -201,11 +201,19 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     which.toList.map(index => ("AI", index, ujson.Num(state("analog")(index.toString).num + by)))
   }
 
+  // Analog inputs with those that have not changed since the device powered on first. The outstation keeps one
+  // event for each analog input, so a second change to the same input replaces the event of the first. Changing
+  // another input instead leaves the earlier event in the buffer, where a later step can ask whether it was kept.
+  private def unusedFirst(analog: List[Int]): List[Int] = {
+    val used = batches.flatten.collect { case e if e.kind == "AI" => e.index }.toSet
+    analog.filterNot(used.contains) ++ analog.filter(used.contains)
+  }
+
   // Changes that generate events in one class: binary inputs toggled, or analog inputs moved, whichever the class
   // holds. Each of the first `points` inputs of the class changes once.
   private def classChanges(state: ujson.Obj, eventClass: Int, points: Int): List[(String, Int, ujson.Value)] = {
     val binary = inClass(state, "BI", eventClass)
-    val analog = inClass(state, "AI", eventClass)
+    val analog = unusedFirst(inClass(state, "AI", eventClass))
     if (binary.isEmpty && analog.isEmpty) throw new Exception(s"The device has no input in class $eventClass")
     toggles(state, binary.take(points)) ++ steps(state, analog.take(points))
   }
@@ -216,7 +224,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     inClass(state, "BI", eventClass).headOption match {
       case Some(index) => toggles(state, List.fill(count)(index))
       case None =>
-        val analog = inClass(state, "AI", eventClass)
+        val analog = unusedFirst(inClass(state, "AI", eventClass))
         if (analog.size < count) {
           throw new Exception(s"Class $eventClass has ${analog.size} analog inputs, too few for $count events")
         }
@@ -262,7 +270,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       generate(reporter, toggles(s, some ++ some.take(1)))
     case InputKind.AnalogInput =>
       val s = state()
-      generate(reporter, steps(s, indices(s, "analog").take(4)))
+      generate(reporter, steps(s, unusedFirst(indices(s, "analog")).take(4)))
     case InputKind.Counter =>
       // every counter counts up; the outstation reports no counter events, so this is no batch
       val s = state()
@@ -284,7 +292,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       case InputKind.AnalogInput =>
         // an analog input reports only its latest value, so each event needs an input of its own
         val s = state()
-        val analog = indices(s, "analog")
+        val analog = unusedFirst(indices(s, "analog"))
         if (analog.size < numEvents) {
           throw new Exception(s"The device has ${analog.size} analog inputs, too few for $numEvents events")
         }
@@ -598,11 +606,23 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   private def latest: List[Generated] =
     batches.lastOption.getOrElse(throw new Exception("No events were generated before this check"))
 
+  // The generated events the device still holds, of those given. Where the device says it keeps one event for
+  // each analog input, an analog event is gone once the same input has changed again.
+  private def kept(events: List[Generated]): List[Generated] = {
+    if (!state()("analog_events_latest_only").bool) events
+    else {
+      val all = batches.toList.flatten
+      events.filter { e =>
+        e.kind != "AI" || !all.drop(all.indexWhere(_ eq e) + 1).exists(l => l.kind == "AI" && l.index == e.index)
+      }
+    }
+  }
+
   private def expected(expectation: EventExpectation, wanted: Generated => Boolean): List[Generated] =
     expectation match {
-      case EventExpectation.LatestBatch => latest.filter(wanted)
-      case EventExpectation.RemainingLatestBatch => latest.filter(wanted).filterNot(_.checked)
-      case EventExpectation.AllGeneratedBatches => batches.toList.flatten.filter(wanted)
+      case EventExpectation.LatestBatch => kept(latest.filter(wanted))
+      case EventExpectation.RemainingLatestBatch => kept(latest.filter(wanted).filterNot(_.checked))
+      case EventExpectation.AllGeneratedBatches => kept(batches.toList.flatten.filter(wanted))
       case other => throw new Exception(s"The plugin does not check $other here")
     }
 
