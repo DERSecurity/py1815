@@ -1524,7 +1524,9 @@ use it, and only on connecting.** The startup sequence used to begin with
 it is configured to use unsolicited reporting with the outstation (IEEE 1815-2012 5.1.1.2,
 rule 1), and an outstation without the feature does not support the function, so a master
 that names no class in `enable_unsolicited` now sends none. A master that does name one
-sends it on connecting, before anything else, as before. Neither sends it when an
+sends it on connecting, before anything else, as before, when its `startup` task is on;
+with `startup` off it sends the request to enable alone, as it always has. Neither sends
+the request to disable when an
 outstation reports a restart: the sequence for that has no such request (5.1.1.1.2, rule
 2), since an outstation that restarted has disabled unsolicited reporting itself.
 
