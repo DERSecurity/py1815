@@ -18,8 +18,9 @@ answers wrongly, and a bug in a self-initiated one sends frames nobody asked
 for, on a timer, to a master that may not be listening. The first multi-fragment
 response path is enough novelty for one change.
 
-The interoperability warnings the roadmap complains about are still addressed
-here -- see **D21**. They do not require sending an unsolicited response.
+The interoperability warnings the roadmap complains about were addressed here by
+agreeing to a disable request. **D21** has since gone the other way, and a session
+without unsolicited responses refuses it.
 
 ## What already exists
 
@@ -111,16 +112,17 @@ Class bits from the buffers per **D22**, overflow per **D23**.
 neighbor; the bits clear when the events are confirmed away; overflow survives
 until the response reporting it is confirmed.
 
-### 5. `DISABLE_UNSOLICITED` -- landed
+### 5. `DISABLE_UNSOLICITED` -- landed, then reversed
 
-Per **D21**. Small, and worth doing here rather than with unsolicited, because
-it is the half that needs no sending.
+This section records what landed with events. It is no longer what a session
+does: one built without unsolicited responses, the default, now refuses this
+request with `FUNC_NOT_SUPPORTED`, as it refuses `ENABLE_UNSOLICITED`, because the
+certification procedure expects both refused by a device with the mode off
+(**D21**). One built with them takes the request by class (D69).
 
-Nothing is recorded when it is accepted. There is no state to enter that is not
-already the state, and a flag tracking it would be one no sending path exists to
-read. Unsolicited responses have since landed, and a session built with them
-takes this request by class instead (D69); one built without them, the default,
-answers as described here.
+As it landed: nothing was recorded when the request was accepted. There was no
+state to enter that was not already the state, and a flag tracking it would have
+been one no sending path existed to read.
 
 The classes the request names are accepted without being examined, since the
 answer is the same for any of them. They are emphatically not a selection to
@@ -128,8 +130,8 @@ answer: the function reaches its own branch rather than falling through to the
 read path, which would hand a master events it never polled for and then wait to
 have them confirmed.
 
-**Acceptance:** `DISABLE_UNSOLICITED` is answered with a null response that
-does *not* carry `FUNC_NOT_SUPPORTED`; `ENABLE_UNSOLICITED` still does.
+**Acceptance, as it landed:** `DISABLE_UNSOLICITED` is answered with a null response
+that does *not* carry `FUNC_NOT_SUPPORTED`; `ENABLE_UNSOLICITED` still does.
 
 Success is the absence of that bit rather than an empty indication field, which
 an earlier draft of this said and which nothing could satisfy. `DEVICE_RESTART`

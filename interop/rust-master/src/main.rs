@@ -242,11 +242,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // No unsolicited handling, and no startup class scan beyond class 0. This
-    // outstation sends no unsolicited responses: it agrees to DISABLE, having
-    // nothing to stop, and refuses ENABLE, which asks for something it does not
-    // do. A startup sequence that argued with it about either would be testing
-    // that exchange rather than the read, and both answers are covered by the
-    // function code sweep.
+    // outstation sends no unsolicited responses and refuses both DISABLE and
+    // ENABLE, as a device without the feature does. A startup sequence that
+    // argued with it about either would be testing that exchange rather than
+    // the read, and both answers are covered by the function code sweep.
     //
     // The event classes are read further down, explicitly and one at a time.
     // Leaving them out of the startup scan is what makes that possible: the

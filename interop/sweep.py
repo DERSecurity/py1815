@@ -259,7 +259,7 @@ CASES: list[Case] = [
         expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=0xFF, objects=True),
         note="events and static data in one response, the events in front",
     ),
-    # -- the one unsolicited request an outstation sending none agrees to ------
+    # -- a request to stop what an outstation built without it never sends -----
     Case(
         name="unsolicited: disable",
         # Naming classes 1, 2 and 3, which is the shape a real master sends
@@ -268,8 +268,8 @@ CASES: list[Case] = [
             FunctionCode.DISABLE_UNSOLICITED,
             bytes([60, 2, 0x06, 60, 3, 0x06, 60, 4, 0x06]),
         ),
-        expect=Expect(function=FunctionCode.RESPONSE, iin2_clear=IIN2Bit.FUNC_NOT_SUPPORTED),
-        note="an outstation that sends none is already in the state this asks for (D21)",
+        expect=Expect(function=FunctionCode.RESPONSE, iin2=IIN2Bit.FUNC_NOT_SUPPORTED),
+        note="refused like the enable request, as a device without the feature does (D21)",
     ),
     # -- everything else the outstation does not implement --------------------
     _refused(FunctionCode.IMMED_FREEZE, "freeze: immediate"),

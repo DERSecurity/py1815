@@ -188,10 +188,16 @@ _SUPPORTED_FUNCTIONS = frozenset(
         FunctionCode.CONFIRM,
         FunctionCode.READ,
         FunctionCode.WRITE,
-        FunctionCode.DISABLE_UNSOLICITED,
         FunctionCode.DELAY_MEASURE,
     }
     | _CONTROL_FUNCTIONS
+)
+
+#: Enabling and disabling unsolicited responses. Supported only by a session
+#: built with them (D69). One built without them refuses both, as a device
+#: that does not have the feature does (D21).
+_UNSOLICITED_FUNCTIONS = frozenset(
+    {FunctionCode.ENABLE_UNSOLICITED, FunctionCode.DISABLE_UNSOLICITED}
 )
 
 #: The freezes, answered and not. Supported only by an outstation that was
@@ -1945,7 +1951,7 @@ class Session:
             and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
             and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
             and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
-            and not (known is FunctionCode.ENABLE_UNSOLICITED and self._unsolicited)
+            and not (known in _UNSOLICITED_FUNCTIONS and self._unsolicited)
         ):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
@@ -1970,9 +1976,7 @@ class Session:
             return self._set_unsolicited(request, enable=True)
 
         if known is FunctionCode.DISABLE_UNSOLICITED:
-            if self._unsolicited:
-                return self._set_unsolicited(request, enable=False)
-            return self._disable_unsolicited(request)
+            return self._set_unsolicited(request, enable=False)
 
         if known in _FREEZE_FUNCTIONS:
             return self._acting(fragment, known, self._handle_freeze(request, known))
@@ -2020,34 +2024,6 @@ class Session:
         logger.info("dnp3: cold restart requested; restarting in %d ms", delay_ms)
         self.restart()
         return response
-
-    def _disable_unsolicited(self, request: Request) -> bytes:
-        """Agree, having nothing to stop (D21).
-
-        The asymmetry with ``ENABLE_UNSOLICITED`` is the point. This outstation
-        sends no unsolicited responses, so it is already in the state this
-        request asks for, and refusing it answers a question the master did not
-        ask. ``ENABLE`` asks for something this outstation does not do, and
-        saying so is the honest answer rather than the matching one.
-
-        Nothing is recorded. There is no state to enter that is not already the
-        state. This is the answer of a session built without unsolicited
-        responses, and only of one: with them on, the request goes to
-        ``_set_unsolicited``, which examines what it names (D69).
-
-        The classes named in the request are accepted without being examined,
-        because the answer is the same for any of them: none is being sent for.
-
-        Success is the absence of ``FUNC_NOT_SUPPORTED`` rather than an empty
-        indication field. ``DEVICE_RESTART`` stands until a master clears it,
-        and D22 and D23 put the class and overflow bits there on their own
-        terms -- a response reporting those is still a successful one.
-        """
-        logger.info(
-            "dnp3: DISABLE_UNSOLICITED accepted; none are sent (%d header(s))",
-            len(request.headers),
-        )
-        return null_response(sequence=request.control.sequence, iin=self._indications())
 
     def _set_unsolicited(self, request: Request, *, enable: bool) -> bytes:
         """Turn unsolicited reporting on or off for the classes a master names (D69).

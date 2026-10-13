@@ -357,10 +357,11 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 )
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, delay measurement, and the
-    # two that depend on how the session was built. Disable unsolicited is
-    # among them only for a session that sends none, which agrees to it
-    # whatever it names; one that sends them takes it by class, above.
-    codes = [0, 23] if facts.unsolicited else [0, 21, 23]
+    # two that depend on how the session was built. Enable and disable
+    # unsolicited are not among them: a session that sends unsolicited
+    # responses takes them by class, above, and one that sends none refuses
+    # both (D21).
+    codes = [0, 23]
     if facts.cold_restart:
         codes.append(13)
     if facts.time_write:
