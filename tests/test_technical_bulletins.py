@@ -110,17 +110,30 @@ class TestSpecialUseAddresses:
         assert dut.master.raw(_raw_frame(0xC9, 0xFFFC, MASTER)).silent
         assert dut.master.read(classes(0), destination=0xFFFC).silent
 
-    @pytest.mark.parametrize("control", [0xC0, 0xC9, 0xF2, 0xF3])
-    def test_tb2013_002_a_broadcast_is_unconfirmed_user_data_and_nothing_else(self, control):
-        """Reset, link status, test and confirmed data sent to everyone are not acted on."""
+    @pytest.mark.parametrize("control", [0xC0, 0xC9, 0xF2])
+    def test_tb2013_002_a_link_function_sent_to_everyone_is_not_answered_or_acted_on(self, control):
+        """A reset, a link status request and a link test sent to everyone draw nothing."""
+        dut = Dut()
+        dut.master.link(0xC0)
+        assert dut.master.raw(_raw_frame(control, 0xFFFF, MASTER)).silent
+        after = dut.master.read(classes(0)).fragment
+        assert not after.iin1 & IIN1_BROADCAST
+
+    def test_tb2013_002_a_broadcast_sent_as_confirmed_user_data_is_not_acknowledged(self):
+        """A master is to send a broadcast unconfirmed. One sent confirmed draws no reply.
+
+        The bulletin has a master use only UNCONFIRMED_USER_DATA for a
+        broadcast, and an outstation accept a message to a broadcast address.
+        The frame is acted on, as IEEE 1815-2012 9.2.4.1.3.6 has every device
+        process confirmed user data and none reply to a broadcast.
+        """
         dut = Dut()
         dut.master.link(0xC0)
         freeze = bytes([0xC0, 0xC0, FREEZE]) + header(20, 0)
-        payload = freeze if control == 0xF3 else b""
-        assert dut.master.raw(_raw_frame(control, 0xFFFF, MASTER, payload)).silent
+        assert dut.master.raw(_raw_frame(0xF3, 0xFFFF, MASTER, freeze)).silent
         after = dut.master.read(classes(0)).fragment
-        assert not after.iin1 & IIN1_BROADCAST
-        assert not after.of(21), "the freeze sent as confirmed data was not carried out"
+        assert after.iin1 & IIN1_BROADCAST
+        assert after.of(21), "the freeze was carried out"
 
     def test_tb2013_002_a_confirmation_sent_to_everyone_confirms_nothing(self):
         dut = Dut()
