@@ -25,10 +25,11 @@ library. It is what their tool reported when this project ran it.
 | Steps a master cannot perform | Done by a plugin through the device's control channel: cycling power, changing inputs, and checking each response against what the device holds |
 | Where | The `dnp3c-conformance` job of the `interop` workflow, on every pull request |
 
-dnp3c does not say which edition of the procedure it implements. Its section numbers
-from 8.13 on are not those of version 3.1 revision 1, which the unit suite follows: for
-one, its 8.23 is device attributes, where 3.1 has specific point ranges there. Several
-of the differences below come from that. The numbers on this page are dnp3c's.
+dnp3c does not say which edition of the procedure it implements. It is not version 3.1
+revision 1, which the unit suite follows: its 8.6.5.3 sends a control by broadcast, a
+procedure 3.1 does not have, and its 8.23 is device attributes, where 3.1 has specific
+point ranges. Several of the differences below come from that. The numbers on this page
+are dnp3c's, and from 8.13 on a procedure's number is often one less than in 3.1.
 
 The device is built from the library's defaults. Three things a device built on the
 library decides for itself are decided as the procedures expect: it carries out a cold
