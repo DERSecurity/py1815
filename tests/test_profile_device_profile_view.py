@@ -462,6 +462,19 @@ class TestAnotherNamespace:
     def test_a_document_in_no_namespace_reads_the_same(self):
         assert view.read(self.BODY.replace(f' xmlns="{NAMESPACE}"', "")) == SMALL_MODEL
 
+    def test_two_attributes_with_one_local_name_are_both_kept(self):
+        # Attributes of two namespaces can share a local name. Neither is lost.
+        document = view.read(
+            profile(
+                '<referenceDevice><vendorExtension xmlns:a="urn:a" xmlns:b="urn:b" '
+                'a:edition="one" b:edition="two">Read this first'
+                "<widget><count><exact>3</exact></count></widget>"
+                "</vendorExtension></referenceDevice>"
+            )
+        )
+        rows = document.sections[0].tables[0].rows
+        assert rows[:2] == (("Edition", "one"), ("Edition", "two"))
+
     def test_a_document_whose_elements_carry_a_prefix_reads_the_same(self):
         prefixed = re.sub(r"<(/?)([A-Za-z])", r"<\1p:\2", self.BODY).replace(
             f'xmlns="{NAMESPACE}"', f'xmlns:p="{NAMESPACE}"'
@@ -707,6 +720,39 @@ class TestWhatIsRefused:
         assert view.read(within).title == view.DEFAULT_TITLE
         with pytest.raises(DeviceProfileError, match="more than 50 elements"):
             view.read(profile("<referenceDevice>" + "<a/>" * 49 + "</referenceDevice>"))
+
+    @staticmethod
+    def _records(properties: list[list[str]]) -> str:
+        """Return a document with one list of records, each carrying the properties named."""
+        rows = "".join(
+            "<row>" + "".join(f"<{name}>1</{name}>" for name in names) + "</row>"
+            for names in properties
+        )
+        return profile(f"<referenceDevice><things>{rows}</things></referenceDevice>")
+
+    def test_records_that_each_carry_a_property_of_their_own_are_refused(self):
+        # A column for each property: a thousand records with a thousand
+        # different properties would be a table of a million cells, from a
+        # document of a few tens of kilobytes.
+        text = self._records([[f"p{number}"] for number in range(1000)])
+        assert len(text) < 64 * 1024
+        with pytest.raises(DeviceProfileError, match="more than 200 columns"):
+            view.read(text)
+
+    def test_a_table_as_wide_as_the_limit_is_laid_out(self, monkeypatch):
+        monkeypatch.setattr(view, "MAX_COLUMNS", 5)
+        document = view.read(self._records([[f"p{number}"] for number in range(5)]))
+        assert len(document.sections[0].tables[0].columns) == 5
+        with pytest.raises(DeviceProfileError, match="more than 5 columns"):
+            view.read(self._records([[f"p{number}"] for number in range(6)]))
+
+    def test_tables_with_more_cells_between_them_than_the_limit_are_refused(self, monkeypatch):
+        monkeypatch.setattr(view, "MAX_CELLS", 20)
+        four_columns = ["a", "b", "c", "d"]
+        document = view.read(self._records([four_columns] * 5))
+        assert len(document.sections[0].tables[0].rows) == 5, "twenty cells are laid out"
+        with pytest.raises(DeviceProfileError, match="more than 20 cells"):
+            view.read(self._records([four_columns] * 6))
 
     def test_elements_nested_deeper_than_the_limit(self):
         def nested(depth: int) -> str:

@@ -50,6 +50,13 @@ MAX_SIZE = 8 * 1024 * 1024
 MAX_ELEMENTS = 500_000
 MAX_DEPTH = 64
 
+#: The most columns one table is laid out with, and the most cells the tables
+#: of one document hold between them. A table has a column for each property
+#: any of its records carries, so records that each carry a property of their
+#: own would make a table as wide as it is long.
+MAX_COLUMNS = 200
+MAX_CELLS = 1_000_000
+
 #: The root element of a Device Profile in every edition of the schema.
 ROOT = "DNP3DeviceProfileDocument"
 
@@ -168,7 +175,10 @@ class _Node:
     """One element: its local name, attributes, own text and child elements."""
 
     name: str
-    attributes: dict[str, str]
+    #: Each attribute's local name and value, in the order written. Two
+    #: attributes of different namespaces can share a local name, and both
+    #: are kept.
+    attributes: list[tuple[str, str]]
     children: list[_Node] = field(default_factory=list)
     text: str = ""
     parts: list[str] = field(default_factory=list)
@@ -234,9 +244,11 @@ def _parse(source: str | bytes) -> _Node:
             raise DeviceProfileError(
                 f"the Device Profile document nests elements more than {MAX_DEPTH} deep"
             )
-        stated = {
-            _local(key): value for key, value in attributes.items() if not _declares_namespace(key)
-        }
+        stated = [
+            (_local(key), value)
+            for key, value in attributes.items()
+            if not _declares_namespace(key)
+        ]
         node = _Node(_local(name), stated)
         (stack[-1].children if stack else roots).append(node)
         stack.append(node)
@@ -298,7 +310,7 @@ def _label(*names: str) -> str:
 
 
 def _attributes(node: _Node) -> list[str]:
-    return [f"{_label(name)}: {value}" for name, value in node.attributes.items()]
+    return [f"{_label(name)}: {value}" for name, value in node.attributes]
 
 
 def _say(node: _Node) -> str:
@@ -346,6 +358,22 @@ def _cell(nodes: Iterable[_Node]) -> str:
 
 
 # -------------------------------------------------------------------- layout
+
+
+@dataclass
+class _Budget:
+    """The cells the tables of one document may still be given."""
+
+    cells: int
+
+    def spend(self, cells: int) -> None:
+        """Take cells from what is left, or refuse the document when there are too few."""
+        self.cells -= cells
+        if self.cells < 0:
+            raise DeviceProfileError(
+                f"the tables of the Device Profile document have more than {MAX_CELLS} "
+                "cells, the most that are laid out"
+            )
 
 
 def _is_setting(node: _Node) -> bool:
@@ -402,16 +430,14 @@ def _fields(record: _Node) -> list[tuple[str, str]]:
     column for each of them that has text, named for both ("Request function
     code"), and one column of its own for the rest.
     """
-    found: list[tuple[str, str]] = [
-        (_label(name), value) for name, value in record.attributes.items()
-    ]
+    found: list[tuple[str, str]] = [(_label(name), value) for name, value in record.attributes]
     if record.text:
         found.append((_label(record.name), record.text))
     for child in record.children:
         column = _label(child.name)
         if not child.children or child.text:
             found.append((column, child.text))
-        found += [(_label(child.name, name), value) for name, value in child.attributes.items()]
+        found += [(_label(child.name, name), value) for name, value in child.attributes]
         for inner in child.children:
             if inner.text and not inner.children and not inner.attributes:
                 found.append((_label(child.name, inner.name), inner.text))
@@ -420,7 +446,7 @@ def _fields(record: _Node) -> list[tuple[str, str]]:
     return found
 
 
-def _records(title: str, records: Sequence[_Node]) -> Table:
+def _records(title: str, records: Sequence[_Node], budget: _Budget) -> Table:
     """Return a table with a row for each record and a column for each property."""
     columns: list[str] = []
     rows: list[dict[str, str]] = []
@@ -429,6 +455,11 @@ def _records(title: str, records: Sequence[_Node]) -> Table:
         before: str | None = None
         for column, value in _fields(record):
             if column not in columns:
+                if len(columns) >= MAX_COLUMNS:
+                    raise DeviceProfileError(
+                        f"a table of the Device Profile document has more than {MAX_COLUMNS} "
+                        "columns, the most that are laid out"
+                    )
                 # Beside the column this record gives before it, so that a
                 # property only some records carry lands where they have it.
                 columns.insert(
@@ -438,6 +469,8 @@ def _records(title: str, records: Sequence[_Node]) -> Table:
             row[column] = ", ".join(part for part in (row.get(column, ""), value) if part)
             before = column
         rows.append(row)
+    # Checked before the cells are made: every row is filled out to every column.
+    budget.spend(len(columns) * len(rows))
     return Table(
         title,
         tuple(columns),
@@ -449,7 +482,9 @@ def _title(path: Sequence[str]) -> str:
     return ": ".join(path)
 
 
-def _tables(node: _Node, path: Sequence[str], *, leaves: bool = True) -> list[Table]:
+def _tables(
+    node: _Node, path: Sequence[str], budget: _Budget, *, leaves: bool = True
+) -> list[Table]:
     """Return the tables that lay out an element's children.
 
     The children that are settings share one table. Children that are a list
@@ -459,15 +494,14 @@ def _tables(node: _Node, path: Sequence[str], *, leaves: bool = True) -> list[Ta
     Args:
         node: The element whose children are laid out.
         path: The labels that title its tables.
+        budget: The cells the document's tables may still be given.
         leaves: Whether a child with no children of its own is a row. The
             document header's are not: they are shown as facts instead.
     """
     groups: dict[str, list[_Node]] = {}
     for child in node.children:
         groups.setdefault(child.name, []).append(child)
-    rows: list[tuple[str, _Node | str]] = [
-        (_label(name), value) for name, value in node.attributes.items()
-    ]
+    rows: list[tuple[str, _Node | str]] = [(_label(name), value) for name, value in node.attributes]
     if node.text:
         rows.append((_label(node.name), node.text))
     listed = node.name in _LISTS
@@ -482,7 +516,7 @@ def _tables(node: _Node, path: Sequence[str], *, leaves: bool = True) -> list[Ta
             # A list names its table by where it is. Its own label is added
             # only when the list holds records of more than one kind.
             kind = [] if listed and len(groups) == 1 else [_label(name)]
-            after.append(_records(_title([*path, *kind]) or _label(name), same))
+            after.append(_records(_title([*path, *kind]) or _label(name), same, budget))
             continue
         for child in same:
             if _is_row(child):
@@ -490,7 +524,7 @@ def _tables(node: _Node, path: Sequence[str], *, leaves: bool = True) -> list[Ta
                     rows.append((_label(name), child))
             else:
                 inner = path if name in _LISTS else [*path, _label(name)]
-                after += _tables(child, inner)
+                after += _tables(child, inner, budget)
     return ([_settings(_title(path), rows)] if rows else []) + after
 
 
@@ -511,7 +545,7 @@ def _fact(node: _Node) -> Fact:
     )
 
 
-def _sections(part: _Node) -> list[Section]:
+def _sections(part: _Node, budget: _Budget) -> list[Section]:
     """Return a section for each child of one of the document's parts.
 
     The device the document describes is the part every edition has, and its
@@ -524,7 +558,7 @@ def _sections(part: _Node) -> list[Section]:
         if _is_row(child):
             tables = [_settings("", [(_label(child.name), child)])]
         else:
-            tables = _tables(child, [])
+            tables = _tables(child, [], budget)
         sections.append(Section(_title([*prefix, _label(child.name)]), tuple(tables)))
     return sections
 
@@ -535,7 +569,8 @@ def _layout(root: _Node) -> Document:
         raise DeviceProfileError(
             f"the document is not a Device Profile: its root element is {root.name}, not {ROOT}"
         )
-    facts = [Fact(_label(name), value) for name, value in root.attributes.items()]
+    budget = _Budget(MAX_CELLS)
+    facts = [Fact(_label(name), value) for name, value in root.attributes]
     if root.text:
         facts.append(Fact(_label(root.name), root.text))
     sections: list[Section] = []
@@ -546,14 +581,12 @@ def _layout(root: _Node) -> Document:
             # What the header states in a word or a sentence is a fact. The
             # rest of it, the revision history above all, is tables.
             facts += [_fact(child) for child in part.children if not child.children]
-            tables = _tables(part, [], leaves=False)
+            tables = _tables(part, [], budget, leaves=False)
             if tables:
                 sections.append(Section(_label(part.name), tuple(tables)))
         else:
-            facts += [
-                Fact(_label(part.name, name), value) for name, value in part.attributes.items()
-            ]
-            sections += _sections(part)
+            facts += [Fact(_label(part.name, name), value) for name, value in part.attributes]
+            sections += _sections(part, budget)
     # The device's identification is repeated beside the header's facts, where
     # a reader looks for it. Its rows stay in the table they come from.
     identity = _find(root, "referenceDevice", "configuration", "deviceConfig")
@@ -576,7 +609,9 @@ def read(source: str | bytes) -> Document:
     refused, so no entity can be defined to expand or to fetch anything, and
     nothing the document refers to is followed. One of more than
     :data:`MAX_SIZE` characters or octets, more than :data:`MAX_ELEMENTS`
-    elements, or elements nested more than :data:`MAX_DEPTH` deep is refused.
+    elements, or elements nested more than :data:`MAX_DEPTH` deep is refused,
+    and so is one whose tables would have more than :data:`MAX_COLUMNS`
+    columns in one table or :data:`MAX_CELLS` cells between them.
 
     Raises:
         DeviceProfileError: The text is not XML, is not a Device Profile, or
@@ -705,6 +740,8 @@ def page(document: Document) -> str:
 
 __all__ = [
     "DEFAULT_TITLE",
+    "MAX_CELLS",
+    "MAX_COLUMNS",
     "MAX_DEPTH",
     "MAX_ELEMENTS",
     "MAX_SIZE",

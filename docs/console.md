@@ -328,8 +328,9 @@ describes.
 Laying a document out sends nothing to the outstation. `py1815-der profile
 --from FILE --html FILE` writes the same document as a page, with no console.
 
-Without `--allow-control` the switches, the settings form and **Show** are
-greyed out, and the service refuses the operations whoever asks.
+Without `--allow-control` the switches, the settings form and the curve block's
+**Show** are greyed out, and the service refuses those operations whoever asks.
+The Device Profile document card is not: laying a document out commands nothing.
 
 ### Traffic
 

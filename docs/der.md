@@ -498,7 +498,9 @@ Group's own layout, use their stylesheet as above.
 
 A document that is not XML, or is not a Device Profile, is refused with a
 message that says which, and so is one that declares a document type or is
-larger than 8 MiB.
+larger than 8 MiB. A table has a column for each property any of its records
+carries, so a document whose tables would be wider or larger than any real
+profile's is refused as well.
 
 The console lays a document out the same way, on the **DER** tab: see
 [The console](console.md#der). From Python:

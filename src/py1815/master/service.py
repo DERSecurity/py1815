@@ -1691,7 +1691,12 @@ class LineServer:
         return int(self._server.sockets[0].getsockname()[1])
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(self._handle, self._host, self._port)
+        # A line may be as long as a message over HTTP may be, which is what a
+        # Device Profile document sent in one needs. The stream's own default
+        # is far shorter.
+        self._server = await asyncio.start_server(
+            self._handle, self._host, self._port, limit=_MAX_REQUEST_BODY
+        )
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -1715,7 +1720,24 @@ class LineServer:
 
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await reader.readline()
+                except ValueError:
+                    # The line is longer than the limit, and the rest of it is
+                    # still to come, so the connection cannot be read on.
+                    megabytes = _MAX_REQUEST_BODY >> 20
+                    await send(
+                        {
+                            "id": None,
+                            "ok": False,
+                            "error": {
+                                "kind": "request",
+                                "message": f"a line is at most {megabytes} MiB; "
+                                "the connection is closed",
+                            },
+                        }
+                    )
+                    return
                 if not line:
                     return
                 if not line.strip():

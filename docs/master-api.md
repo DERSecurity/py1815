@@ -359,8 +359,11 @@ Nothing is asked of the outstation, so the operation is answered by a service
 that was not started to command, for an outstation that is not connected, and
 with no outstation at all when `document` is sent. A document that is not XML,
 is not a Device Profile, declares a document type, or is larger than 8 MiB is
-refused with a `request` error that says which. Over HTTP a message of more
-than 4 MiB is refused before that, with status 413.
+refused with a `request` error that says which, and so is one whose tables
+would be wider or larger than the reader lays out. Over HTTP a message of more
+than 4 MiB is refused before that, with status 413, and over the line socket a
+line of more than 4 MiB is answered with a `request` error and the connection
+is closed.
 
 ## Values
 
