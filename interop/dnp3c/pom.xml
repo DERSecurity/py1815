@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.dersecurity</groupId>
+    <artifactId>py1815-dnp3c-conformance</artifactId>
+    <version>0.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>py1815 conformance plugin for dnp3c</name>
+    <description>Drives the py1815 Subset Level 2 outstation through Step Function I/O's dnp3c conformance harness. Used only in this repository's tests; never published.</description>
+
+    <!--
+      NOTE ON THE DEPENDENCY BELOW, WHICH IS UNDER THE GPL.
+
+      dnp3c (https://github.com/stepfunc/dnp3c) is published by Step Function I/O
+      under the GNU General Public License v3.0 only. The license is the authority
+      on what it permits, so it is linked here and not summarized:
+
+        https://github.com/stepfunc/dnp3c/blob/main/LICENSE
+
+      This project is a separate program that links the dnp3c library and runs it
+      against the py1815 outstation in this repository's tests. Nothing in this
+      directory is part of the py1815 library, its wheel or its source
+      distribution, and the library does not depend on it. README.md says more,
+      and deleting this directory and its workflow job removes dnp3c entirely.
+
+      Every version below is pinned, so a run is reproducible.
+    -->
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>17</maven.compiler.release>
+        <dnp3c.version>0.1.0</dnp3c.version>
+        <scala.version>3.9.0</scala.version>
+        <ujson.version>4.4.3</ujson.version>
+        <scala-maven-plugin.version>4.10.0</scala-maven-plugin.version>
+        <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
+        <maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.stepfunc</groupId>
+            <artifactId>dnp3c</artifactId>
+            <version>${dnp3c.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala3-library_3</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
+        <!-- Reads the control channel's JSON answers. -->
+        <dependency>
+            <groupId>com.lihaoyi</groupId>
+            <artifactId>ujson_3</artifactId>
+            <version>${ujson.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <sourceDirectory>src/main/scala</sourceDirectory>
+        <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>${scala-maven-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <scalaVersion>${scala.version}</scalaVersion>
+                    <args>
+                        <arg>-feature</arg>
+                        <arg>-deprecation</arg>
+                        <arg>-Werror</arg>
+                    </args>
+                    <launchers>
+                        <launcher>
+                            <id>conformance</id>
+                            <mainClass>py1815conformance.Main</mainClass>
+                            <args>
+                                <arg>-config</arg>
+                                <arg>device.ini</arg>
+                                <arg>-run</arg>
+                                <arg>all</arg>
+                            </args>
+                        </launcher>
+                    </launchers>
+                </configuration>
+            </plugin>
+        </plugins>
+        <!-- The two plugins the compile phase runs besides the Scala one, pinned like the rest. -->
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>${maven-resources-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${maven-compiler-plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

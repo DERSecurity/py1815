@@ -1,0 +1,6 @@
+# Build output.
+/target/
+
+# What a run writes: the report, each procedure's log and capture, the
+# device's log and the outcomes.
+/results/
