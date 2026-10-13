@@ -370,6 +370,19 @@ class TestChangingTasks:
         # The startup sequence the restart began finishes; nothing else is done.
         assert housekeeper.due == ("integrity",)
 
+    def test_a_disable_request_that_is_due_is_dropped_when_no_class_is_left_to_enable(self):
+        housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
+        housekeeper.connected()
+        assert housekeeper.due == ("disable_unsolicited", "integrity", "enable_unsolicited")
+        housekeeper.tasks = Tasks()
+        assert housekeeper.due == ("integrity",)
+
+    def test_a_disable_request_that_is_due_is_kept_while_a_class_is_still_named(self):
+        housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
+        housekeeper.connected()
+        housekeeper.tasks = Tasks(enable_unsolicited=(2,))
+        assert housekeeper.due == ("disable_unsolicited", "integrity", "enable_unsolicited")
+
     def test_a_due_task_left_on_is_still_done(self):
         housekeeper = Housekeeper()
         housekeeper.saw(NEED_TIME, answering=A_READ)

@@ -227,12 +227,15 @@ class Housekeeper:
 
         A startup sequence under way finishes, and an integrity poll already
         due is still made, whatever the new settings say: either may have been
-        queued for more than one reason.
+        queued for more than one reason. A request to disable unsolicited
+        reporting is part of startup only for a master set to use it, so one
+        that is due is dropped when the classes to enable are taken away.
         """
         self._tasks = tasks
         off = {
             "clear_restart": not tasks.clear_restart,
             "write_time": not tasks.write_time,
+            "disable_unsolicited": not tasks.enable_unsolicited,
             "enable_unsolicited": not tasks.enable_unsolicited,
             "events": not tasks.events_when_indicated,
         }
