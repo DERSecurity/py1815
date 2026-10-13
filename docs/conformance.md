@@ -58,7 +58,7 @@ running fails the job until the record and this page are brought up to date.
 | 8.3 | Analog output status | 8.3.2 |  |  |  |
 | 8.4 | Analog output controls | 8.4.1.2.1 to 8.4.1.2.12, 8.4.2.2.1 to 8.4.2.2.3, 8.4.3.2.1 to 8.4.3.2.3, 8.4.4.2 |  |  |  |
 | 8.5 | Class data | 8.5.1.2, 8.5.2.2.1 to 8.5.2.2.4, 8.5.3.2.1 to 8.5.3.2.4, 8.5.4.2.1 to 8.5.4.2.4, 8.5.5.2.1, 8.5.5.2.2, 8.5.6.2 |  |  |  |
-| 8.6 | Internal indications | 8.6.1.2, 8.6.2.2, 8.6.3.2, 8.6.5.3, 8.6.6.2.1 | 8.6.4.2, 8.6.4.3, 8.6.6.2.2 to 8.6.6.2.4 | 8.6.5.2, 8.6.5.4 |  |
+| 8.6 | Internal indications | 8.6.1.2, 8.6.2.2, 8.6.3.2, 8.6.5.2 to 8.6.5.4, 8.6.6.2.1 | 8.6.4.2, 8.6.4.3, 8.6.6.2.2 to 8.6.6.2.4 |  |  |
 | 8.7 | Time | 8.7.1.2, 8.7.2.2 |  |  |  |
 | 8.8 | Cold restart | 8.8.2 |  |  |  |
 | 8.9 | Fragmentation | 8.9.1.2, 8.9.2.2 |  |  |  |
@@ -86,7 +86,6 @@ option is turned off to avoid one.
 <!-- record: failed -->
 | Procedure | What happens, and which document it turns on |
 |---|---|
-| 8.6.5.2, 8.6.5.4 | The procedure broadcasts a write as confirmed user data and expects it carried out. The outstation carries out a broadcast sent as unconfirmed user data, which is the function IEEE 1815-2012 9.2.4.1.3.6 and TB2013-002 have a master use for one, and drops a broadcast that asks for a link confirmation (D50). The same write sent as unconfirmed user data is carried out. Version 3.1 revision 1 of the certification procedure repeats the broadcast without the link confirmation for a device that does this; dnp3c does not. |
 | 8.11.2.1 | Step 24 reads class 0 while the initial null unsolicited response is unconfirmed, and waits the response timeout for the answer. The outstation holds a read until that response is confirmed or its confirmation times out, then answers it and sends the null response again, as rule 16 of TB2015-002a and Table 6-1 of IEEE 1815-2012 have it (D71). The answer comes at the unsolicited confirmation timeout, which is later than dnp3c waits. dnp3c lists this step among its known limitations. |
 | 8.11.2.6 | With unsolicited responses configured off, the procedure expects a request to disable them to be refused as an unsupported function. The outstation agrees to it, since a device that sends none is already in the state the request asks for. This is a deliberate departure from the procedure (D21). |
 | 8.14.2.9 to 8.14.2.11 | The procedure reads binary input events with absolute time before any time has been written, and expects them in that variation. The outstation sends an event stamped by a clock nobody has set with relative time, behind a common time of occurrence that says the clock was not synchronized (TB2017-003, D60). Version 3.1 revision 1 of the certification procedure, section 8.14.1, gives that answer for this case. |
