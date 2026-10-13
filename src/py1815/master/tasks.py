@@ -260,7 +260,7 @@ class Housekeeper:
         A master set to use unsolicited reporting with the outstation first
         asks it to stop, when the master is the one starting (IEEE 1815-2012
         5.1.1.2, rule 1). A master not set to use it sends no such request: an
-        outstation without the feature does not support the function. An
+        outstation without the feature need not support the function. An
         outstation that reports a restart has disabled unsolicited reporting
         itself, and the sequence for that has no request to disable it
         (5.1.1.1.2, rule 2).
