@@ -1,12 +1,9 @@
 """Answering the two questions a master asks about unsolicited responses.
 
-Section 5 of the event plan, and D21. This outstation sends none, which makes
-the two requests different questions rather than a pair: `DISABLE` asks for a
-state it is already in, and `ENABLE` asks for something it does not do.
-
-The interoperability job is what this is for. Both peer masters send `DISABLE`
-and then `ENABLE` on startup, and both refusals went into an operator's log on
-every connection.
+D21. A session built without unsolicited responses sends none and supports
+neither `ENABLE_UNSOLICITED` nor `DISABLE_UNSOLICITED`, so it refuses both with
+IIN2.0, as the certification procedure expects of a device with the mode off
+(IEEE 1815-2012 4.4.13 and 4.5.9).
 """
 
 from __future__ import annotations
@@ -37,39 +34,40 @@ def _request(function: int, body: bytes = b"", sequence: int = 0) -> bytes:
     return bytes([0xC0 | sequence, function]) + body
 
 
-class TestDisableUnsolicited:
+class TestBothRequestsAreRefused:
+    """A session built without unsolicited responses supports neither function (D21)."""
+
+    @pytest.mark.parametrize(
+        "function",
+        [FunctionCode.ENABLE_UNSOLICITED, FunctionCode.DISABLE_UNSOLICITED],
+        ids=["enable", "disable"],
+    )
     @pytest.mark.parametrize("body", [b"", CLASSES], ids=["bare", "naming the classes"])
-    def test_it_is_not_refused(self, body):
-        response = _session()._handle_fragment(_request(FunctionCode.DISABLE_UNSOLICITED, body))
-
-        assert not response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
-
-    def test_nor_is_it_answered_with_a_parameter_error(self):
-        """The classes it names are accepted without being examined, because
-        the answer is the same for any of them: none is being sent for."""
-        response = _session()._handle_fragment(_request(FunctionCode.DISABLE_UNSOLICITED, CLASSES))
-
-        assert not response[3] & IIN2Bit.OBJECT_UNKNOWN
-        assert not response[3] & IIN2Bit.PARAM_ERROR
-
-    def test_the_answer_is_a_null_response(self):
-        response = _session()._handle_fragment(_request(FunctionCode.DISABLE_UNSOLICITED, CLASSES))
+    def test_the_request_is_answered_with_a_null_response_and_iin2_0(self, function, body):
+        response = _session()._handle_fragment(_request(function, body))
 
         assert response[1] == FunctionCode.RESPONSE
-        assert response[4:] == b"", "nothing to report, having nothing to stop"
+        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[4:] == b""
 
-    def test_it_is_answered_under_the_sequence_it_arrived_on(self):
+    def test_a_disable_request_naming_the_classes_is_these_octets(self):
+        # Application control C3, DISABLE_UNSOLICITED (0x15), then group 60
+        # variations 2, 3 and 4 with qualifier 0x06, as a master sends it.
+        request = bytes.fromhex("C3 15 3C 02 06 3C 03 06 3C 04 06")
+        # The answer: application control C3, RESPONSE (0x81), IIN1 with
+        # DEVICE_RESTART (0x80), IIN2 with NO_FUNC_CODE_SUPPORT (0x01).
+        assert _session()._handle_fragment(request) == bytes.fromhex("C3 81 80 01")
+
+    def test_the_refusal_is_answered_under_the_sequence_the_request_arrived_on(self):
         response = _session()._handle_fragment(
             _request(FunctionCode.DISABLE_UNSOLICITED, CLASSES, sequence=7)
         )
 
         assert response[0] & 0x0F == 7
 
-    def test_success_is_the_absence_of_one_bit_and_not_an_empty_field(self):
+    def test_a_refused_disable_request_reports_the_other_indications_as_they_stand(self):
         """`DEVICE_RESTART` stands until a master clears it, and the class bits
-        are derived from the buffers on every response (D22). A response
-        reporting those is still a successful one, which an earlier draft of
-        this section got wrong by asking for an empty indication field."""
+        are derived from the buffers on every response (D22)."""
         buffers = EventBuffers()
         buffers.record_analog(0, AnalogPoint(1.0), event_class=EventClass.CLASS_1, timestamp_ms=1)
         session = _session(events=buffers)
@@ -78,13 +76,12 @@ class TestDisableUnsolicited:
 
         assert response[2] & IINBit.DEVICE_RESTART
         assert response[2] & IINBit.CLASS_1_EVENTS
-        assert not response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
 
-    def test_the_classes_it_names_are_not_a_selection_to_answer(self):
-        """It is not a read. The classes name what to stop sending, and the
-        headers of a request are not a request for their contents -- answering
-        them from the buffers would hand a master events it never polled for,
-        and then wait to have them confirmed."""
+    def test_the_classes_a_disable_request_names_are_not_read(self):
+        """The headers of the request are not a request for their contents:
+        answering them from the buffers would hand a master events it never
+        polled for, and then wait to have them confirmed."""
         buffers = EventBuffers()
         for index in range(3):
             buffers.record_analog(
@@ -98,29 +95,17 @@ class TestDisableUnsolicited:
         assert not response[0] & 0x20, "and nothing to confirm"
         assert buffers.count(EventClass.CLASS_1) == 3
 
-    def test_a_monitor_outstation_accepts_it_too(self):
-        """It commands nothing, so it is not a control function and does not
-        need a control provider to answer."""
-        response = _session()._handle_fragment(_request(FunctionCode.DISABLE_UNSOLICITED))
+    def test_a_session_built_with_unsolicited_responses_agrees_to_a_disable_request(self):
+        session = _session(unsolicited=True)
 
-        assert not response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
+        response = session._handle_fragment(_request(FunctionCode.DISABLE_UNSOLICITED, CLASSES))
 
-
-class TestEnableUnsolicitedIsStillRefused:
-    """The asymmetry is the point rather than an oversight. `ENABLE` asks for
-    something this outstation does not do, and the honest answer is to say so."""
-
-    @pytest.mark.parametrize("body", [b"", CLASSES], ids=["bare", "naming the classes"])
-    def test_it_earns_the_unsupported_bit(self, body):
-        response = _session()._handle_fragment(_request(FunctionCode.ENABLE_UNSOLICITED, body))
-
-        assert response[3] & IIN2Bit.FUNC_NOT_SUPPORTED
-        assert response[4:] == b""
+        assert response[1] == FunctionCode.RESPONSE
+        assert not response[3], "no error indication"
 
 
 class TestItIsARequestLikeAnyOther:
-    """Being answered rather than refused puts it inside the rules the other
-    requests obey, and both of those are easy to lose on a new branch."""
+    """A refused request is still a request, and obeys the rules the others do."""
 
     def test_it_clears_an_armed_select(self):
         commands = _Commands()

@@ -93,8 +93,8 @@ was followed and the disagreement is recorded:
   and checks it is answered. TB2015-002a has that read held until the confirmation or
   the timeout. It is held, and answered within the step's wait.
 - Section 8.11.2.6, steps 14 and 15, expect a disable request refused when unsolicited
-  responses are configured off. It is agreed to, as D21 decided; the test catalog lists
-  this as a departure.
+  responses are configured off. It is refused (D21). It was agreed to when this was
+  built, and the test catalog listed that as a departure.
 
 ## What is not done
 
