@@ -58,7 +58,7 @@ JSON file and loaded with `--config`. See
 | `--output-interval SECONDS` | Repeats a read of output status. As often as the integrity poll unless given; 0 for never |
 | `--profile` | The outstations named are IEEE 1815.2 DER: name their points from the profile, and let the console show the profile's points they have not reported |
 | `--tables FILE` | The profile tables, for `--demo` and `--profile` |
-| `--device-profile FILE` | A DNP3 Device Profile document for the outstations named, which the **DER** tab compares what they serve with |
+| `--device-profile FILE` | A DNP3 Device Profile document for the outstations named, which the **DER** tab compares what they serve with, and lays out to read and to print |
 | `--bind HOST:PORT` | Where the console listens. `127.0.0.1:8815` unless given |
 | `--token TOKEN` | Required of every request to the service. Needed to listen on anything but this machine. Read from `PY1815_MASTER_TOKEN` when not given |
 | `--new-token` | With no token given, makes one for this run and prints the address that carries it |
@@ -134,7 +134,7 @@ given a profile.
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
 | **Traffic** | Every frame, and the one selected read layer by layer; saved as a capture |
 | **Requests** | Requests you saved, each sent once or repeated |
-| **DER** | The outstation as an IEEE 1815.2 DER: its nameplate, what it is measuring, each function with its settings and an enable switch, the curve the curve block shows, and what it serves against its Device Profile document. Offered for an outstation with a profile |
+| **DER** | The outstation as an IEEE 1815.2 DER: its nameplate, what it is measuring, each function with its settings and an enable switch, the curve the curve block shows, what it serves against its Device Profile document, and that document laid out for reading and printing. Offered for an outstation with a profile |
 | **Evaluate** | The checks an evaluation runs and the report of the last run, and the deviations: protocol rules the master breaks on purpose |
 | **Log** | What the console asked for, and what came of it |
 
@@ -264,7 +264,8 @@ ask.
 | **Monitoring** | What the DER is measuring and reporting: available power, state of charge, the system meter |
 | **Functions** | Each function the outstation says it supports, with a switch that enables or disables it and says whether it is, and **Settings** to read its settings and write one. The functions it does not support are named underneath |
 | **Curve** | The curve the curve block shows, as a plot and a table of its points, with its type, its units and whether a function follows it |
-| **Device Profile document** | What the outstation serves against what a Device Profile document declares |
+| **Device Profile comparison** | What the outstation serves against what a Device Profile document declares |
+| **Device Profile document** | A Device Profile document laid out for reading and printing: the outstation's own, or a file from your machine |
 
 A value marked `OFFLINE` was sent without the `ONLINE` flag. IEEE 1815.2 has a
 disabled function's inputs sent that way: the value is there and not in effect.
@@ -292,8 +293,45 @@ event class and deadband cannot be asked of an outstation, so they are listed
 as the document declares them. `console --demo` gives the simulated DER the
 document it publishes.
 
-Without `--allow-control` the switches, the settings form and **Show** are
-greyed out, and the service refuses the operations whoever asks.
+A Device Profile is XML, which is not something to read. The **Device Profile
+document** card lays one out as a document:
+
+- **Show** lays out the document the outstation was given with
+  `--device-profile`. For an outstation given none, the card says so.
+- **or lay out another Device Profile XML file** takes a file from your
+  machine: any vendor's, written for any edition of the schema. The file is
+  read as UTF-8. One that is not XML, or is not a Device Profile, is refused
+  and the card says why.
+- **Print** prints the document alone, without the rest of the console. Choose
+  **Save as PDF** in the browser's print dialog to keep it as a file. A
+  table's headings are repeated on each page, and a row is not split between
+  two pages.
+
+The document opens with its name, what its header states and the device's
+vendor, name and versions. Its parts follow in the document's own order:
+
+| Part | Is laid out as |
+|---|---|
+| The configuration | A table for each group of settings, with a row for each setting: what it is, its capabilities, its current value, and the methods by which it is configured where the document gives them |
+| The database | The same, for each point type |
+| The implementation table | A row for each object group and variation, with the function codes and qualifier codes of the requests it accepts and the responses it sends |
+| The point lists | A table for each point type, with a row for each point and a column for each property the points carry |
+
+The layout is this library's own, and is not the one the DNP Users Group's
+stylesheet produces. A heading or a label is the element's own name made
+readable, as in "Max received fragment size", and is not the wording of the
+Users Group's template. Nothing is added: a value the document does not state
+is an empty cell, and anything the layout does not recognize is still shown,
+by its label and its text. To see a document in the Users Group's layout, open
+it with their stylesheet, as [Serving a DER](der.md#the-device-profile-document)
+describes.
+
+Laying a document out sends nothing to the outstation. `py1815-der profile
+--from FILE --html FILE` writes the same document as a page, with no console.
+
+Without `--allow-control` the switches, the settings form and the curve block's
+**Show** are greyed out, and the service refuses those operations whoever asks.
+The Device Profile document card is not: laying a document out commands nothing.
 
 ### Traffic
 

@@ -62,6 +62,70 @@ label.switch input[type="checkbox"]:disabled { cursor: default; opacity: 0.55; }
 .der-summary dd.bad { color: var(--coral); font-weight: 600; }
 .der-declared summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 12px; }
 
+/* A Device Profile document laid out for reading. Its headings are a
+   document's and not the console's small capital labels, and its cells wrap,
+   since a cell may state several things, one to a line. */
+.document { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--rule); }
+.document h2, .document h3, .document h4 {
+  font-family: var(--serif);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+.document h2::before, .document h3::before { content: none; }
+.document h2 { font-size: 22px; line-height: 1.2; margin: 0 0 4px; }
+.document h3 { font-size: 16px; margin: 26px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--ink); }
+.document h4 { font-size: 13.5px; margin: 16px 0 6px; }
+.document-notice { margin: 0 0 14px; }
+.document-facts dd { white-space: pre-line; overflow-wrap: anywhere; }
+.document-table { max-height: 420px; }
+/* A table is as wide as its columns need, and scrolls sideways in its frame
+   when that is wider than the frame. A heading stays on one line. A cell
+   wraps at its words, and a long one within a width a line can be read at.
+   Wrapping anywhere is not allowed: it lets a column shrink to one letter
+   when another column has a long cell. */
+.document-table table { width: max-content; min-width: 100%; }
+.document-table th { white-space: nowrap; vertical-align: bottom; }
+.document-table td { white-space: pre-line; vertical-align: top; overflow-wrap: break-word; max-width: 46ch; }
+
 @media (max-width: 900px) {
   .der-curve { grid-template-columns: 1fr; }
+}
+
+/* Printing the Device Profile document. While the page carries the class the
+   Print button gives it, everything is hidden but the document and the
+   elements it sits inside, and those lose their frames, so that what reaches
+   the paper, or a PDF, is the document alone. */
+@page { margin: 14mm 12mm; }
+@media print {
+  html:has(body.print-document), body.print-document { height: auto; display: block; background: #fff; }
+  body.print-document *:not(:has(#der-document-view)):not(#der-document-view):not(#der-document-view *) {
+    display: none !important;
+  }
+  body.print-document *:has(#der-document-view) {
+    display: block !important;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    overflow: visible;
+    height: auto;
+    max-height: none;
+  }
+  body.print-document .document { margin: 0; padding: 0; border: none; color: #000; font-size: 9.5pt; }
+  body.print-document .document-table { max-height: none; overflow: visible; border: none; background: none; }
+  /* On paper there is no scrolling sideways, so a table is the page's width
+     and its headings may wrap. */
+  body.print-document .document table { font-size: 8.5pt; width: 100%; min-width: 0; }
+  body.print-document .document-table th { white-space: normal; }
+  body.print-document .document-table td { max-width: none; }
+  body.print-document .document th, body.print-document .document td { border: 1px solid #bbb; padding: 3px 6px; }
+  /* A table's headings are repeated on each page it runs to, and a row stays on one page. */
+  body.print-document .document thead { display: table-header-group; }
+  body.print-document .document thead th { position: static; background: #eee; color: #000; }
+  body.print-document .document tr { break-inside: avoid; page-break-inside: avoid; }
+  body.print-document .document h2, body.print-document .document h3, body.print-document .document h4 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
 }

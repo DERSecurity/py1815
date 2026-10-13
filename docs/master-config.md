@@ -140,7 +140,7 @@ These go in `defaults`, in an outstation's entry, or both.
 | `confirm` | `true` | Confirm response fragments that ask for confirmation |
 | `manual` | `false` | Send only what is asked for. Disables every task and confirmation, whatever `tasks` and `confirm` say |
 | `profile` | `false` | The outstation is an IEEE 1815.2 DER: name its points from the profile tables, and offer the [DER profile's operations](master-api.md#the-der-profile) |
-| `device_profile` | `null` | Path of the outstation's DNP3 Device Profile document, which [`der.compare`](master-api.md#the-der-profile) compares what it serves with. Read when the master starts |
+| `device_profile` | `null` | Path of the outstation's DNP3 Device Profile document, which [`der.compare`](master-api.md#the-der-profile) compares what it serves with and [`der.document`](master-api.md#a-device-profile-document-laid-out) lays out for reading. Read when the master starts |
 | `tasks` | see below | The [automatic tasks](master.md#what-it-does-without-being-asked) |
 | `repeat` | see below | Scans repeated on a schedule |
 

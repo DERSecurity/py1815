@@ -425,6 +425,7 @@ same map, so a script and the console can speak in the profile's terms.
 | `der.write_curve` | A curve: the selector, its fields, its points, in the order the profile requires, then read back |
 | `der.functions` | Which functions the outstation says it supports, and which are enabled |
 | `der.compare` | What the outstation serves against a Device Profile document: declared and absent, served and undeclared, class and deadband as declared |
+| `der.document` | A Device Profile document laid out for reading: header facts, and sections of tables. Sends nothing to the outstation (D98) |
 
 A write takes `verify=True`, which reads the mirroring input afterwards and
 reports whether it matches within one step of the point's multiplier. The
@@ -485,7 +486,7 @@ indication by its name and its bit.
 | **Events** | Events in the order received, solicited and unsolicited told apart, with class and time |
 | **Traffic** | Every frame, interpreted and raw, with filters, Clear, Save, and export as a capture |
 | **Requests** | Saved requests: send once, or repeat at an interval |
-| **DER** | With a profile loaded: nameplate, monitoring, each function with its settings and an enable switch, a curve as a plot and a table, and the comparison with a Device Profile document |
+| **DER** | With a profile loaded: nameplate, monitoring, each function with its settings and an enable switch, a curve as a plot and a table, the comparison with a Device Profile document, and a Device Profile document laid out to read and to print |
 | **Evaluate** | Deviations to switch on, checks to run, the report |
 | **Log** | What the master itself did and why |
 
@@ -652,7 +653,8 @@ done means.
     the freezes, when started to command; the image; and tests that load it in
     a browser; and the DER tab, with the nameplate, monitoring, each supported
     function with its settings and an enable switch, the curve as a plot and a
-    table, and the comparison with a Device Profile document; the Evaluate
+    table, the comparison with a Device Profile document, and a Device
+    Profile document laid out to read and to print (D98); the Evaluate
     tab, with the checks to run, each verdict as its check ends, the report
     to save and a switch for each deviation; and the Requests tab, with saved
     requests sent once or repeated by the page (D97). *Left:* nothing of the
