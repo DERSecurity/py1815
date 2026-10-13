@@ -361,7 +361,11 @@ The master is tested the way the outstation is, and from the same argument.
   simulated DER, the service and a headless browser, and checks the page: that
   it shows what the service reports, that its controls do what they say, that
   its tables hold still while values change, that a name is shown as text and
-  never run, and that it asks the outside world for nothing. A machine with no
+  never run, and that it asks the outside world for nothing. The files beside
+  it do the same for one tab or one card each, and
+  `tests/test_master_console_document.py` also checks, under the browser's
+  print rules, that printing a Device Profile document prints the document
+  alone. A machine with no
   Chrome, Chromium or Edge skips these, and says so. CI has one, and there a
   skip is a failure. Point `PY1815_BROWSER` at a browser to name one.
 
