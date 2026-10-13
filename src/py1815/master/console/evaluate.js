@@ -50,8 +50,8 @@ const evaluation = {
   deviations: null,       // a deviate result for the outstation, or an error message
   question: 0,            // counts each time the deviations are read or changed
   unavailable: null,      // why the outstation cannot be evaluated, as the service says it
-  selected: null,         // the ids of the checks to run: every check, until one is cleared
-  allowDeviations: false,
+  selected: null,         // the ids of the checks to run: every check that may be chosen, until one is cleared
+  allowDeviations: false, // whether the checks that break a protocol rule may be chosen and run
   runs: new Map(),        // outstation name -> the evaluation under way, or the last one
 };
 
@@ -103,7 +103,9 @@ async function evaluateSelected(name) {
   ]);
   if (state.selected !== name) return;
   evaluation.checks = checks;
-  if (!checks.error && !evaluation.selected) evaluation.selected = new Set(checks.checks.map((check) => check.id));
+  if (!checks.error && !evaluation.selected) {
+    evaluation.selected = new Set(checks.checks.filter(checkMayBeChosen).map((check) => check.id));
+  }
   Object.assign(evaluation, { deviations, unavailable, loading: false });
   renderDeviationState();
   renderEvaluate();
@@ -195,6 +197,24 @@ function renderDeviations() {
 
 // ------------------------------------------------------------------ checks
 
+// A check that breaks a protocol rule is run only when the reader has allowed
+// it, so until then it cannot be chosen: a check that is chosen is one that
+// will be run.
+function checkMayBeChosen(check) {
+  return !check.deviates || evaluation.allowDeviations;
+}
+
+// Allow the checks that break a protocol rule, or stop allowing them. Allowing
+// them chooses them, and not allowing them clears them.
+function evaluateAllowDeviations(allowed) {
+  evaluation.allowDeviations = allowed;
+  for (const check of evaluation.checks.checks.filter((each) => each.deviates)) {
+    if (allowed) evaluation.selected.add(check.id);
+    else evaluation.selected.delete(check.id);
+  }
+  renderEvaluate();
+}
+
 // The checks in the order the service lists them, grouped by set.
 function checkSets() {
   const sets = [];
@@ -234,6 +254,7 @@ function checkRow(check, run) {
       type: "checkbox",
       "data-check": check.id,
       checked: evaluation.selected.has(check.id),
+      disabled: !checkMayBeChosen(check),
       "aria-label": `Run ${check.id}, ${check.title}`,
       onchange: (event) => evaluatePick([check.id], event.target.checked),
     })),
@@ -247,16 +268,25 @@ function checkRow(check, run) {
     el("td", { class: "found" }, result ? foundNodes(result, run) : null));
 }
 
-function setRow(set) {
+function setRow(set, run) {
+  // The set of checks that break a protocol rule carries the switch that
+  // allows them, where the reader is looking when the checks cannot be chosen.
+  const deviates = set.checks.some((check) => check.deviates);
   return el("tr", { class: "check-set", "data-set": set.name },
     el("td", { class: "pick" }, el("input", {
       type: "checkbox",
       "data-set": set.name,
+      disabled: !set.checks.some(checkMayBeChosen),
       "aria-label": `Run every check of the set ${set.name}`,
       onchange: (event) => evaluatePick(set.checks.map((check) => check.id), event.target.checked),
     })),
     el("td", { colspan: "4" }, el("span", { class: "set-name", text: set.name }),
-      el("span", { class: "hint set-count" })));
+      el("span", { class: "hint set-count" }),
+      deviates ? el("label", { class: "check switch set-allow" },
+        el("input", { type: "checkbox", role: "switch", id: "evaluate-allow-deviations", checked: evaluation.allowDeviations,
+          disabled: run.running,
+          onchange: (event) => evaluateAllowDeviations(event.target.checked) }),
+        "Allow these checks: the master sends frames the outstation has to discard and withholds confirmations") : null));
 }
 
 // The parts of the tab that follow from which checks are picked: each set's
@@ -270,7 +300,9 @@ function renderPicked() {
     if (!box) continue;
     box.checked = picked === set.checks.length;
     box.indeterminate = picked > 0 && picked < set.checks.length;
-    box.closest("tr").querySelector(".set-count").textContent = `${picked} of ${set.checks.length} chosen`;
+    box.closest("tr").querySelector(".set-count").textContent = set.checks.some(checkMayBeChosen)
+      ? `${picked} of ${set.checks.length} chosen`
+      : "not allowed";
   }
   for (const box of document.querySelectorAll("#evaluate-checks input[data-check]")) {
     box.checked = evaluation.selected.has(box.dataset.check);
@@ -283,9 +315,10 @@ function renderPicked() {
 }
 
 function evaluatePick(ids, picked) {
+  const allowed = new Set(evaluation.checks.checks.filter(checkMayBeChosen).map((check) => check.id));
   for (const id of ids) {
-    if (picked) evaluation.selected.add(id);
-    else evaluation.selected.delete(id);
+    if (picked && allowed.has(id)) evaluation.selected.add(id);
+    else if (!picked) evaluation.selected.delete(id);
   }
   renderPicked();
 }
@@ -325,17 +358,13 @@ function checkNodes(name) {
     state.allowControl
       ? el("p", { class: "hint", id: "evaluate-commanding", text: "Commanding is on: the checks that write change the outstation's settings, curves and switches. Use them on a device on a bench, not on one in service." })
       : el("p", { class: "hint", id: "evaluate-read-only", text: "Commanding is off: the checks that write will be reported as not run. Start the console with --allow-control to run them." }),
-    el("p", { class: "hint", text: "A check that breaks a protocol rule is run only when the switch below allows it, and is otherwise reported as not run." }),
+    el("p", { class: "hint", text: "A check that breaks a protocol rule can be chosen once the switch on its set allows it." }),
     el("div", { class: "inline evaluate-controls" },
       el("div", { class: "buttons" },
         el("button", { id: "evaluate-all", class: "quiet", text: "All", "aria-label": "Choose every check",
           onclick: () => evaluatePick(evaluation.checks.checks.map((check) => check.id), true) }),
         el("button", { id: "evaluate-none", class: "quiet", text: "None", "aria-label": "Choose no check",
           onclick: () => evaluatePick(evaluation.checks.checks.map((check) => check.id), false) })),
-      el("label", { class: "check switch" },
-        el("input", { type: "checkbox", role: "switch", id: "evaluate-allow-deviations", checked: evaluation.allowDeviations,
-          onchange: (event) => { evaluation.allowDeviations = event.target.checked; } }),
-        "Allow the checks that break a protocol rule"),
       el("button", { id: "evaluate-run", class: "primary", text: "Run", onclick: evaluateRun }),
       el("span", { class: "hint", id: "evaluate-progress", role: "status", text: progressText(run) })),
     run.error ? el("p", { class: "error", id: "evaluate-error", role: "alert", text: run.error }) : null,
@@ -345,7 +374,7 @@ function checkNodes(name) {
         el("thead", {}, el("tr", {},
           el("th", { class: "w-pick", "aria-label": "Run" }), el("th", { class: "w-check", text: "Check" }), el("th", { text: "Title" }),
           el("th", { class: "w-verdict", text: "Verdict" }), el("th", { text: "Found" }))),
-        checkSets().map((set) => el("tbody", { "data-set": set.name }, setRow(set), set.checks.map((check) => checkRow(check, run)))))),
+        checkSets().map((set) => el("tbody", { "data-set": set.name }, setRow(set, run), set.checks.map((check) => checkRow(check, run)))))),
   ];
 }
 

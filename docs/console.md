@@ -403,7 +403,9 @@ page, and the deviations of
 `writes` writes to the outstation, and one marked `deviates` has the master
 break a protocol rule on purpose. Tick the checks to run. The box beside a
 set's name chooses the whole set, and **All** and **None** choose every check
-or none. Every check is chosen to begin with.
+that may be chosen, or none. Every check that may be chosen is chosen to begin
+with. A check that is chosen is one that will be run, with one exception named
+below.
 
 **Run** runs the chosen checks against the selected outstation. Each row is
 filled in as its check ends, with its verdict, the reason for it and what the
@@ -425,8 +427,11 @@ Two things decide which checks are run:
   which above the list. With it, the checks change the outstation's settings,
   curves and switches: see
   [What a run leaves behind](master-evaluate.md#what-a-run-leaves-behind).
-- A check that deviates is run only with **Allow the checks that break a
-  protocol rule** switched on, and is otherwise reported as `not run`.
+- A check that deviates cannot be chosen until **Allow these checks** on the
+  `deviation` set's own row is switched on. Switching it on chooses them, and
+  switching it off clears them. With it on, the master sends the outstation
+  frames it has to discard and withholds confirmations it asked for, so use it
+  on a device on a bench.
 
 One evaluation runs against an outstation at a time, and a second is refused
 while it does. A run takes as long as its checks do, and goes on when another
