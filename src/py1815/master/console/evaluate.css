@@ -28,6 +28,7 @@ tr.check-set td { background: var(--paper); }
 .set-name { font: 500 11px var(--mono); letter-spacing: 0.7px; text-transform: uppercase; color: var(--ink); }
 .set-count { margin-left: 12px; }
 .flag.mark { margin: 0 0 0 10px; }
+.set-allow { margin-left: 22px; }
 .flag.mark.deviates { color: var(--coral); border-color: var(--coral); }
 
 /* A verdict in the words the report uses, which are not all capitals. */

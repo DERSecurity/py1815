@@ -161,20 +161,58 @@ class TestTheChecks:
         listed = (await console.ask("checks"))["checks"]
         every = [check["id"] for check in listed]
         deviation = [check["id"] for check in listed if check["set"] == "deviation"]
-        assert await page.evaluate("[...evaluation.selected]") == every
+        conformant = [check["id"] for check in listed if not check["deviates"]]
+        # A check that deviates cannot be chosen until its set is allowed.
+        assert await page.evaluate("[...evaluation.selected]") == conformant
 
         await page.click("#evaluate-none")
         assert await page.evaluate("[...evaluation.selected]") == []
         assert await page.evaluate("document.querySelector('#evaluate-run').disabled")
         assert await page.count("#evaluate-checks input[data-check]:checked") == 0
 
-        await page.click("#evaluate-checks input[data-set='deviation']")
-        assert await page.evaluate("[...evaluation.selected]") == deviation
-        assert await page.count("#evaluate-checks input[data-check]:checked") == len(deviation)
+        await page.click("#evaluate-checks input[data-set='der']")
+        der = [check["id"] for check in listed if check["set"] == "der"]
+        assert await page.evaluate("[...evaluation.selected]") == der
+        assert await page.count("#evaluate-checks input[data-check]:checked") == len(der)
         assert not await page.evaluate("document.querySelector('#evaluate-run').disabled")
 
         await page.click("#evaluate-all")
-        assert await page.count("#evaluate-checks input[data-check]:checked") == len(every)
+        assert await page.count("#evaluate-checks input[data-check]:checked") == len(conformant)
+
+        await page.click("#evaluate-allow-deviations")
+        await page.wait_for(
+            f"document.querySelectorAll('#evaluate-checks input[data-check]:checked').length"
+            f" === {len(every)}"
+        )
+        await page.click("#evaluate-none")
+        await page.click("#evaluate-checks input[data-set='deviation']")
+        assert await page.evaluate("[...evaluation.selected]") == deviation
+
+    @pytest.mark.asyncio
+    async def test_a_check_that_deviates_cannot_be_chosen_until_its_set_is_allowed(self, console):
+        page = console.page
+        box = "document.querySelector(\"#evaluate-checks input[data-check='LINK-001']\")"
+        whole = "document.querySelector(\"#evaluate-checks input[data-set='deviation']\")"
+        count = (
+            "document.querySelector(\"#evaluate-checks tr[data-set='deviation'] .set-count\")"
+            ".textContent"
+        )
+        assert await page.evaluate(f"{box}.disabled && !{box}.checked")
+        assert await page.evaluate(f"{whole}.disabled")
+        assert await page.evaluate(count) == "not allowed"
+        # All chooses what may be chosen, and that is not this check.
+        await page.click("#evaluate-all")
+        assert not await page.evaluate("evaluation.selected.has('LINK-001')")
+
+        await page.click("#evaluate-allow-deviations")
+        await page.wait_for(f"!{box}.disabled && {box}.checked")
+        listed = (await console.ask("checks"))["checks"]
+        deviating = sum(1 for check in listed if check["deviates"])
+        assert await page.evaluate(count) == f"{deviating} of {deviating} chosen"
+
+        await page.click("#evaluate-allow-deviations")
+        await page.wait_for(f"{box}.disabled && !{box}.checked")
+        assert not await page.evaluate("evaluation.selected.has('LINK-001')")
 
 
 class TestRunning:
@@ -220,17 +258,18 @@ class TestRunning:
         assert await page.count("#evaluate-summary") == 0
 
     @pytest.mark.asyncio
-    async def test_a_check_that_deviates_is_not_run_until_the_switch_allows_it(self, console):
+    async def test_a_check_that_deviates_is_run_once_its_set_is_allowed(self, console):
         page = console.page
-        await _run(page, "LINK-001")
-        await page.wait_for(
-            f"{_row('LINK-001')}.querySelector('.check-verdict')?.textContent === 'not run'"
-        )
-        found = await page.evaluate(f"{_row('LINK-001')}.cells[4].textContent")
-        assert "it breaks a protocol rule on purpose, and the run was not allowed to" in found
-        assert (await _summary(page))["not_run"] == 1
+        # Not allowed, the check is not among those a run asks for.
+        await _run(page, "MON-001")
+        assert await page.evaluate("evaluation.runs.get('lab').asked") == ["MON-001"]
 
         await page.click("#evaluate-allow-deviations")
+        await page.wait_for(
+            "document.querySelector(\"#evaluate-checks input[data-check='LINK-001']\").checked"
+        )
+        await page.click("#evaluate-none")
+        await page.click("#evaluate-checks input[data-check='LINK-001']")
         await page.click("#evaluate-run")
 
         await page.wait_for(
