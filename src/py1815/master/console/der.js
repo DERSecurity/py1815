@@ -2,10 +2,11 @@
 //
 // An IEEE 1815.2 DER as its profile names it: the nameplate, what it is
 // measuring, each function with its settings and an enable switch, the curve
-// the curve block shows, and what it serves against its Device Profile
-// document. Like the rest of the console it holds no logic: it asks the
-// service's der.* operations and shows what comes back. Scaling, the order a
-// curve is written in, and whether a readback matches are the service's.
+// the curve block shows, what it serves against its Device Profile document,
+// and that document laid out for reading. Like the rest of the console it
+// holds no logic: it asks the service's der.* operations and shows what comes
+// back. Scaling, the order a curve is written in, whether a readback matches,
+// and every label and cell of a Device Profile document are the service's.
 //
 // It is loaded before console.js and declares only: what it uses of that
 // script, it uses once the page is running.
@@ -23,11 +24,14 @@ const der = {
   written: {},        // function key -> what came of the last write
   curve: null,        // a der.curve result, or an error message
   comparison: null,   // a der.compare result, or an error message
+  document: null,     // a der.document result, or an error message
+  documentNode: null, // that result as it is shown, built once
 };
 
 function derReset(name) {
   der.outstation = name;
   der.nameplate = der.monitoring = der.functions = der.curve = der.comparison = null;
+  der.document = der.documentNode = null;
   der.settings = {};
   der.open = new Set();
   der.written = {};
@@ -327,6 +331,87 @@ function derComparison() {
   ];
 }
 
+// ---------------------------------------------------------------- document
+
+// A Device Profile document laid out for reading. The service reads the XML
+// and answers with a title, facts, and sections of tables, every label and
+// cell already text. This shows that model and decides nothing about it.
+async function derShowDocument(text) {
+  const name = state.selected;
+  const params = text === undefined ? {} : { document: text };
+  const answer = await derAsk("lay out the Device Profile document", "der.document", params);
+  if (state.selected !== name) return;
+  der.document = answer;
+  der.documentNode = der.document.error ? null : derDocumentView(der.document);
+  renderDer();
+}
+
+function derReadFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+async function derShowDocumentFile(file) {
+  let text;
+  try {
+    text = await derReadFile(file);
+  } catch (error) {
+    der.document = { error: `${file.name} could not be read: ${error.message}` };
+    der.documentNode = null;
+    renderDer();
+    return;
+  }
+  await derShowDocument(text);
+}
+
+function derDocumentTable(table) {
+  return [
+    table.title ? el("h4", { text: table.title }) : null,
+    el("div", { class: "table-wrap document-table" },
+      el("table", {},
+        el("thead", {}, el("tr", {}, table.columns.map((column) => el("th", { text: column })))),
+        el("tbody", {}, table.rows.map((row) => el("tr", {}, row.map((cell) => el("td", { text: cell }))))))),
+  ];
+}
+
+function derDocumentView(model) {
+  return el("div", { id: "der-document-view", class: "document" },
+    el("h2", { class: "document-title", text: model.title }),
+    el("p", { class: "hint document-notice", text: model.notice }),
+    model.facts.length ? el("dl", { class: "facts document-facts" },
+      model.facts.map((fact) => [el("dt", { text: fact.label }), el("dd", { text: fact.value })])) : null,
+    model.sections.map((section) => el("section", { class: "document-section" },
+      el("h3", { text: section.title }),
+      section.tables.map(derDocumentTable))));
+}
+
+// Only the document is printed: the rule that hides the rest of the console
+// applies while the page carries this class, which is taken off afterwards.
+function derPrintDocument() {
+  document.body.classList.add("print-document");
+  window.print();
+}
+
+function derDocument() {
+  const file = el("input", { type: "file", accept: ".xml,application/xml,text/xml", id: "der-document-file",
+    onchange: (event) => {
+      const chosen = event.target.files[0];
+      if (chosen) derShowDocumentFile(chosen);
+    } });
+  const result = der.document;
+  const controls = el("div", { class: "inline" },
+    el("button", { id: "der-document-show", text: "Show", title: "Lay out the Device Profile document this outstation was given", onclick: () => derShowDocument() }),
+    el("label", {}, "or lay out another Device Profile XML file", file),
+    der.documentNode ? el("button", { id: "der-document-print", text: "Print", title: "Print the document, or save it as PDF", onclick: derPrintDocument }) : null);
+  if (!result) return controls;
+  if (result.error) return [controls, el("p", { class: "error", id: "der-document-error", role: "alert", text: result.error })];
+  return [controls, der.documentNode];
+}
+
 // ------------------------------------------------------------------ render
 
 function renderDer() {
@@ -343,9 +428,11 @@ function renderDer() {
       el("div", { class: "card", id: "der-monitoring" }, el("h3", { text: "Monitoring" }), derReadings(der.monitoring, "The profile names no monitoring points."))),
     el("div", { class: "card spaced", id: "der-functions" }, el("h3", {}, "Functions ", el("span", { class: "hint", text: "as the outstation reports them" })), derFunctions()),
     el("div", { class: "card spaced", id: "der-curve" }, el("h3", {}, "Curve ", el("span", { class: "hint", text: "the one the curve block shows" })), derCurve()),
-    el("div", { class: "card spaced", id: "der-comparison" }, el("h3", { text: "Device Profile document" }), derComparison()));
+    el("div", { class: "card spaced", id: "der-comparison" }, el("h3", { text: "Device Profile comparison" }), derComparison()),
+    el("div", { class: "card spaced", id: "der-document" }, el("h3", {}, "Device Profile document ", el("span", { class: "hint", text: "laid out for reading and printing" })), derDocument()));
 }
 
 function wireDer() {
   $("#der-reload").addEventListener("click", () => { if (state.selected) derLoad(); });
+  window.addEventListener("afterprint", () => document.body.classList.remove("print-document"));
 }
