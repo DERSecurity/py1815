@@ -1508,6 +1508,9 @@ class Session:
             return self._link_reply(link.SecondaryFunction.LINK_STATUS)
         if function == link.PrimaryFunction.RESET_LINK_STATES:
             self._reassembler.reset()
+            # A broadcast begun before the reset is from before it too, and a
+            # segment sent after it must not complete it.
+            self._broadcast_reassembler.reset()
             self._link_reset = True
             self._expected_fcb = True
             return self._link_reply(link.SecondaryFunction.ACK)
