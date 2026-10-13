@@ -63,7 +63,7 @@ running fails the job until the record and this page are brought up to date.
 | 8.8 | Cold restart | 8.8.2 |  |  |  |
 | 8.9 | Fragmentation | 8.9.1.2, 8.9.2.2 |  |  |  |
 | 8.10 | Multi-drop |  |  |  | 8.10.2 |
-| 8.11 | Unsolicited responses | 8.11.2.2 to 8.11.2.5 |  | 8.11.2.1, 8.11.2.6 |  |
+| 8.11 | Unsolicited responses | 8.11.2.2 to 8.11.2.6 |  | 8.11.2.1 |  |
 | 8.12 | Collision avoidance |  |  |  | 8.12.2 |
 | 8.13 | Binary inputs | 8.13.2.2, 8.13.2.3 | 8.13.2.1 |  |  |
 | 8.14 | Binary input events | 8.14.2.2 to 8.14.2.8, 8.14.2.12 to 8.14.2.15 | 8.14.2.1 | 8.14.2.9 to 8.14.2.11 |  |
@@ -87,16 +87,18 @@ option is turned off to avoid one.
 | Procedure | What happens, and which document it turns on |
 |---|---|
 | 8.11.2.1 | Step 24 reads class 0 while the initial null unsolicited response is unconfirmed, and waits the response timeout for the answer. The outstation holds a read until that response is confirmed or its confirmation times out, then answers it and sends the null response again, as rule 16 of TB2015-002a and Table 6-1 of IEEE 1815-2012 have it (D71). The answer comes at the unsolicited confirmation timeout, which is later than dnp3c waits. dnp3c lists this step among its known limitations. |
-| 8.11.2.6 | With unsolicited responses configured off, the procedure expects a request to disable them to be refused as an unsupported function. The outstation agrees to it, since a device that sends none is already in the state the request asks for. This is a deliberate departure from the procedure (D21). |
 | 8.14.2.9 to 8.14.2.11 | The procedure reads binary input events with absolute time before any time has been written, and expects them in that variation. The outstation sends an event stamped by a clock nobody has set with relative time, behind a common time of occurrence that says the clock was not synchronized (TB2017-003, D60). Version 3.1 revision 1 of the certification procedure, section 8.14.1, gives that answer for this case. |
 | 8.22.2.1 | The procedure reads double-bit input events from a device that has none and expects a null response with no error indication. The outstation answers with a null response and IIN2.1, object unknown. Version 3.1 revision 1 of the certification procedure, section 8.22.1, allows IIN2.1 or IIN2.2 there. |
 <!-- end -->
 
-Of these, the departure in 8.11.2.6 is this library's own choice, recorded as D21 in
-[Design decisions](DESIGN.md). In 8.11.2.1 the outstation does what a technical
-bulletin requires and dnp3c says so in its own list of limitations. In the others the
-outstation's answer is one that version 3.1 revision 1 of the procedure accepts, and
-dnp3c expects another.
+None of these is a departure this library chose. In 8.11.2.1 the outstation does what a
+technical bulletin requires and dnp3c says so in its own list of limitations. In the
+others the outstation's answer is one that version 3.1 revision 1 of the procedure
+accepts, and dnp3c expects another.
+
+Two differences this run found were the outstation's, and were corrected: it now acts on
+a broadcast sent as confirmed user data (D50), and with unsolicited responses off it
+refuses a request to disable them (D21).
 
 ## Procedures that are skipped
 

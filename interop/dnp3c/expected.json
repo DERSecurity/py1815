@@ -341,8 +341,7 @@
       "outcome": "passed"
     },
     "8.11.2.6": {
-      "outcome": "failed",
-      "reason": "With unsolicited responses configured off, the procedure expects a request to disable them to be refused as an unsupported function. The outstation agrees to it, since a device that sends none is already in the state the request asks for. This is a deliberate departure from the procedure (D21)."
+      "outcome": "passed"
     },
     "8.12.2": {
       "outcome": "not implemented"
