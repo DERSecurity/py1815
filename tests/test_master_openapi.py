@@ -265,6 +265,7 @@ ORDER = [
     "der.enable",
     "der.disable",
     "der.compare",
+    "der.document",
     # After every example that needs an answer: this one leaves a deviation on.
     "deviate",
     "disconnect",

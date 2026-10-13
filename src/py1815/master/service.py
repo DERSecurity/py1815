@@ -67,6 +67,7 @@ from py1815.master.timesync import LAN, PROCEDURES, Synchronized
 from py1815.master.tls import TlsSettings
 from py1815.master.trace import Entry, Recorder, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
+from py1815.profile import device_profile_view
 from py1815.profile.model import Kind, Point, PointMap
 
 logger = logging.getLogger(__name__)
@@ -529,6 +530,7 @@ class Service:
             "der.curve": self._der_curve,
             "der.write_curve": self._der_write_curve,
             "der.compare": self._der_compare,
+            "der.document": self._der_document,
             "stop": self._stop,
         }
 
@@ -1573,10 +1575,11 @@ class Service:
             "curve": self._describe_curve(outstation, written.readback),
         }
 
-    async def _der_compare(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        outstation = self._outstation(params)
+    def _device_profile(self, params: Mapping[str, Any]) -> str:
+        """Return the Device Profile XML a request sent, or the outstation's own."""
         document = params.get("document")
         if document is None:
+            outstation = self._outstation(params)
             document = self._device_profiles.get(outstation.name)
             if document is None:
                 raise BadRequest(
@@ -1585,7 +1588,19 @@ class Service:
                 )
         if not isinstance(document, str):
             raise BadRequest("document is the Device Profile document's XML, as text")
-        plan = compare_plan(document)
+        return document
+
+    async def _der_document(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Lay a Device Profile document out as facts, sections and tables.
+
+        Nothing is asked of the outstation and nothing is sent to it, so this
+        needs no connection and is answered by a service that only reads.
+        """
+        return device_profile_view.read(self._device_profile(params)).describe()
+
+    async def _der_compare(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        plan = compare_plan(self._device_profile(params))
         # Compared by type and index, so it needs no profile: the names are the document's.
         compared = await Der(outstation, PointMap({})).run(plan)
 
