@@ -85,7 +85,7 @@ class TestBroadcast:
         assert self._frozen(dut) == [5, 5, 5], "and the freeze was carried out"
 
     @pytest.mark.parametrize("address", [0xFFFF, 0xFFFE, 0xFFFD])
-    def test_a_broadcast_that_asks_for_a_link_confirmation_is_acted_on_and_not_answered(
+    def test_8_6_5_2_a_broadcast_that_asks_for_a_link_confirmation_is_acted_on_and_not_answered(
         self, address
     ):
         # A master is to send a broadcast as unconfirmed user data. One sent
@@ -99,7 +99,7 @@ class TestBroadcast:
         assert first.iin1 & IIN1_BROADCAST, "the broadcast was received"
         assert self._frozen(dut) == [5, 5, 5], "and the freeze was carried out"
 
-    def test_a_confirmed_broadcast_is_these_octets_and_clears_the_restart_indication(self):
+    def test_8_6_5_2_a_confirmed_broadcast_is_these_octets_and_clears_the_restart_indication(self):
         dut = Dut()
         dut.master.link(0xC0)
         before = dut.master.read(classes(1)).fragment
@@ -113,7 +113,7 @@ class TestBroadcast:
         assert not after.iin1 & 0x80, "the write was carried out"
         assert after.iin1 & IIN1_BROADCAST
 
-    def test_a_confirmed_broadcast_sent_again_is_not_acted_on_again(self):
+    def test_8_6_5_2_a_confirmed_broadcast_sent_again_is_not_acted_on_again(self):
         # No acknowledgment can be sent, so a master that waits for one sends
         # the frame again with the same frame count bit. It is the frame
         # already taken.
@@ -139,7 +139,7 @@ class TestBroadcast:
         assert dut.master.raw(following).silent
         assert dut.master.read(classes(1)).fragment.iin1 & IIN1_BROADCAST
 
-    def test_a_confirmed_broadcast_before_a_link_reset_is_not_acted_on(self):
+    def test_8_6_5_2_a_confirmed_broadcast_before_a_link_reset_is_not_acted_on(self):
         dut = Dut()
         assert dut.master.request(FREEZE, FREEZE_ALL, destination=0xFFFF, control=0xF3).silent
         assert not dut.master.read(classes(1)).fragment.iin1 & IIN1_BROADCAST
