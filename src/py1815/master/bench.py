@@ -703,13 +703,16 @@ def run_plan(
 
 def _one(bench: Bench, check: Check, run: _Run) -> Plan[Result]:
     bench.begin()
+    if check.deviates:
+        # Before the check's frames are counted from here: a request another
+        # task had under way is finished while this one waits for the hold,
+        # and its frames are not the check's.
+        yield bench.isolate
     first: int | None = yield _last_frame
     first_packet: tuple[int, int] | None = _last_packet(bench)
     started = time.monotonic()
     verdict, detail = Verdict.PASSED, ""
     try:
-        if check.deviates:
-            yield bench.isolate
         yield from check.procedure(bench)
     except NotApplicable as reason:
         verdict, detail = Verdict.NOT_APPLICABLE, str(reason)

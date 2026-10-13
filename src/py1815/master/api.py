@@ -532,8 +532,17 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         self._reserved_by = asyncio.current_task()
 
     def _release(self) -> None:
-        """Let other tasks send again. Does nothing when the outstation is not held."""
-        if self._reserved_by is not None:
+        """Let other tasks send again. Does nothing unless the calling task holds the outstation.
+
+        Only the holder lets go: a task that was cancelled while it waited for
+        the hold cleans up as well, and must not end another task's hold.
+        """
+        try:
+            caller = asyncio.current_task()
+        except RuntimeError:
+            # Called with no event loop running, so not by the task that holds it.
+            return
+        if self._reserved_by is not None and self._reserved_by is caller:
             self._reserved_by = None
             self._turn.release()
 

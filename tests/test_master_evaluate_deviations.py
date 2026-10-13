@@ -532,6 +532,54 @@ class TestOverASocket:
         outstation._release()
         assert (await asyncio.wait_for(report, 30)).results[0].verdict is PASSED
 
+    async def test_frames_sent_while_a_check_waits_for_the_outstation_are_not_the_checks(
+        self, served
+    ):
+        points, outstation = served
+        last_of_the_other: list[int] = []
+        others: list[asyncio.Task[None]] = []
+
+        async def busy(target: Outstation) -> None:
+            """Hold the outstation for two requests, as another caller's plan would."""
+            await target._reserve()
+            await target.scan("class0")
+            await asyncio.sleep(0.2)
+            await target.scan("class0")
+            last_of_the_other.append(target.trace.last_id)
+            target._release()
+
+        def begin_the_other(bench: Bench) -> Plan[None]:
+            yield lambda target: others.append(asyncio.create_task(busy(target)))
+            # Long enough for the other task to take the hold, and no longer.
+            yield from bench.pause(0.05)
+
+        other = Check("X-000", "Start another task's requests", False, begin_the_other)
+        report = await evaluate(
+            outstation, points, checks=[other, *select(["LINK-001"])], deviating=True
+        )
+        await others[0]
+        result = report.results[1]
+        assert result.verdict is PASSED and result.frames is not None
+        assert result.frames[0] == last_of_the_other[0] + 1
+
+    async def test_a_run_cancelled_while_it_waits_does_not_end_another_tasks_hold(self, served):
+        points, outstation = served
+        await outstation._reserve()
+        waiting = asyncio.create_task(
+            evaluate(outstation, points, checks=select(["LINK-001"]), deviating=True)
+        )
+        await asyncio.sleep(0.2)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+        # The outstation is still held by this task: a request from another waits.
+        elsewhere = asyncio.create_task(outstation.scan("class0"))
+        await asyncio.sleep(0.2)
+        assert not elsewhere.done(), "the cancelled run ended a hold that was not its own"
+        outstation._release()
+        assert (await asyncio.wait_for(elsewhere, 5)).complete
+
     async def test_a_check_that_deviates_holds_the_outstation_until_it_ends(self, served):
         points, outstation = served
         elsewhere: list[asyncio.Task[Any]] = []
