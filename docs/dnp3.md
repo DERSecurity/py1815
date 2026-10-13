@@ -55,6 +55,28 @@ starts a link transaction) or secondary (it answers one), and a link function:
 reset the link, request its status, or carry user data with or without
 confirmation.
 
+| Code | Primary, which starts a transaction | Secondary, which answers one |
+|---|---|---|
+| 0 | `RESET_LINK_STATES` | `ACK` |
+| 1 | | `NACK` |
+| 2 | `TEST_LINK_STATES` | |
+| 3 | `CONFIRMED_USER_DATA` | |
+| 4 | `UNCONFIRMED_USER_DATA` | |
+| 9 | `REQUEST_LINK_STATUS` | |
+| 11 | | `LINK_STATUS` |
+| 15 | | `NOT_SUPPORTED` |
+
+The same four bits mean different things in the two directions, so a decoder
+reads the primary bit before it reads the function. Over TCP a master usually
+sends `UNCONFIRMED_USER_DATA` and leaves delivery to TCP; the confirmed
+variant, and the link transaction built around it, belong to serial and radio.
+
+Addresses are 16-bit and little endian. Anything at or above `0xFFF0` is
+reserved, leaving `0` through `0xFFEF` for stations, and three of the reserved
+values are broadcasts: `0xFFFD` wants no confirmation, `0xFFFE` requires one,
+and `0xFFFF` leaves it optional. A frame that arrives on one of those is what
+sets the broadcast indication below.
+
 !!! note "The link address is not authorization"
     Source and destination are 16-bit integers chosen by whoever is sending.
     They identify a conversation; they do not establish who is on the other end.
@@ -81,6 +103,42 @@ A fragment begins with a control octet carrying FIR, FIN, CON (a confirmation is
 requested) and UNS (this is unsolicited), plus a four-bit sequence. Then a
 function code. Then, on a response, the two **internal indication** octets. Then
 object headers and their data.
+
+### A frame, octet by octet
+
+An integrity poll, master 1 to outstation 10. Twenty-seven octets, one data
+block:
+
+```text
+05 64 14 C4 0A 00 01 00 8F ED   header, and its checksum
+C1                              transport: FIR, FIN, sequence 1
+C1 01                           application: FIR, FIN, sequence 1; READ
+3C 01 06                        group 60 variation 1, all objects: class 0
+3C 02 06                        class 1
+3C 03 06                        class 2
+3C 04 06                        class 3
+74 59                           checksum over the fifteen octets above
+```
+
+The header is the fixed part:
+
+| Octets | Field | |
+|---|---|---|
+| `05 64` | Start | what to search a capture for |
+| `14` | Length | 20: the control octet, four address octets, fifteen of user data |
+| `C4` | Control | from the master, primary, `UNCONFIRMED_USER_DATA` |
+| `0A 00` | Destination | 10 |
+| `01 00` | Source | 1 |
+| `8F ED` | Checksum | over the eight octets above, low octet first |
+
+The length counts neither the start octets, nor itself, nor any checksum,
+which is how a 27-octet frame comes to declare 20. `frame_size()` in
+[Protocol layers](reference/protocol.md) does the same arithmetic the other
+way round.
+
+Four object headers, three octets each, ask for the four classes. That is an
+integrity poll, and the rest of this page is mostly an explanation of those
+twelve octets.
 
 ## Internal indications
 
@@ -149,6 +207,21 @@ that matter:
   whichever points happened to change, so they are not a range, the same index
   can appear twice, and the points between two events need not have moved.
 
+| Qualifier | What follows it | Where it is used |
+|---|---|---|
+| `0x00` | an 8-bit start and stop index | contiguous static data |
+| `0x01` | a 16-bit start and stop index | the same, past index 255 |
+| `0x06` | nothing at all | every object in the group; what a class read sends |
+| `0x07` | an 8-bit count | a count of objects with no indices |
+| `0x17` | an 8-bit count, then an 8-bit index on each object | events, and controls |
+| `0x28` | a 16-bit count, then a 16-bit index on each object | the same, past index 255 |
+
+The octet is two fields: the low nibble says what the range looks like, and
+bits 4 to 6 say what prefixes each object, an index or a size, and how wide
+that prefix is. `0x06` is the one
+to memorize. It is what makes a class read three octets long, and therefore
+cheap enough to send every second.
+
 ## Static data and events
 
 This is the central idea, and the one most worth getting right.
@@ -183,6 +256,23 @@ Quality travels *with* each value, in a flags octet: online, restart, comm-lost,
 remote or local forced, over-range, reference error. A consumer has to be able
 to tell a fresh reading from a retained one, and arrival time cannot tell it.
 
+| Bit | Binary input | Analog input |
+|---|---|---|
+| `0x01` | online | online |
+| `0x02` | restart | restart |
+| `0x04` | comm-lost | comm-lost |
+| `0x08` | remote forced | remote forced |
+| `0x10` | local forced | local forced |
+| `0x20` | chatter filter | over-range |
+| `0x40` | | reference error |
+| `0x80` | the state itself | |
+
+The low five bits mean the same thing in both, which is what lets a consumer
+decide whether a value can be trusted without knowing what kind of point it
+came from. Above them the two diverge, and on a binary input the top bit is
+the value itself, so a binary input whose flags octet is zero reads as an
+offline false rather than as a missing reading.
+
 ## Function codes
 
 | Code | Name | |
@@ -206,8 +296,65 @@ Controls have a safety interlock. `SELECT` arms a point, and the outstation
 match. A master that meant to open one breaker and misaddressed the request
 finds out before anything moves.
 
+| Direction | Message |
+|---|---|
+| master -> outstation | `SELECT`, group 12 variation 1, index 3, latch on |
+| outstation -> master | the same block, echoed back as understood |
+| master -> outstation | `OPERATE`, the identical block |
+| outstation -> master | the block again, with the status field filled in |
+
 `DIRECT_OPERATE` skips the interlock for cases where the round trip costs more
 than the mistake would.
+
+### The control block
+
+A control is group 12 variation 1, eleven octets:
+
+| Octets | Field | |
+|---|---|---|
+| 1 | Control code | what to do |
+| 1 | Count | how many times to do it |
+| 4 | On-time | milliseconds, for a pulse |
+| 4 | Off-time | milliseconds, for a pulse |
+| 1 | Status | zero in a request, the outcome in the reply |
+
+The control code is the octet to read carefully. Its low nibble is the
+operation: `1` pulse on, `2` pulse off, `3` latch on, `4` latch off. Its top
+two bits are the trip-close code, `1` close and `2` trip, which is how a
+single point operates equipment with a pair of coils. Between them sit a clear
+bit and a queue bit, which IEEE 1815-2012 made obsolete and requires to be
+zero.
+
+A direct operate of latch-on against point 3. Thirty-three octets, and this
+one needs two data blocks:
+
+```text
+05 64 18 C4 0A 00 01 00 3D 3A   header, and its checksum
+C2                              transport: FIR, FIN, sequence 2
+C2 05                           application: sequence 2; DIRECT_OPERATE
+0C 01 17                        group 12 variation 1, count and 8-bit indices
+01                              one control follows
+03                              index 3
+03                              control code: latch on, no trip-close
+01                              count: once
+00 00 00 00                     on-time, which a latch ignores
+00 00                           off-time, first half
+CE 33                           checksum: sixteen octets of user data end here
+00 00                           off-time, continued
+00                              status
+FF FF                           checksum over the three octets above
+```
+
+!!! warning "A data block ends where it ends"
+    The checksum lands in the middle of the off-time field, because a block is
+    sixteen octets wherever that falls and knows nothing about the structure
+    above it. A parser that reads fields as it strips checksums, rather than
+    reassembling the user data first and parsing it afterwards, works on every
+    short frame and then fails on this one.
+
+The last checksum is `FF FF` because the three octets it covers are all zero
+and CRC-16/DNP complements its result. It is correct, and it looks exactly
+like a placeholder.
 
 ### The functions that expect no reply
 
@@ -219,6 +366,29 @@ The obligation is on the function code rather than on whether the outstation
 implements what was asked. An outstation that refuses one of these out loud is
 sending a fragment to a master that is not listening for it, and that is true
 even when the refusal is correct and even when the request did not parse.
+
+## What a session looks like
+
+An outstation has restarted and a master reconnects:
+
+| Direction | Message |
+|---|---|
+| master -> outstation | read classes 1, 2, 3 and 0 |
+| outstation -> master | the data, with the restart indication set |
+| master -> outstation | write zero to that indication bit |
+| master -> outstation | write the time |
+| master -> outstation | enable unsolicited reporting |
+
+Every step answers something the outstation said rather than something the
+master assumed. The restart bit is why the write happens, the clock bit is why
+the time follows, and an outstation that never asks for either is one the
+master leaves alone.
+
+After that the traffic settles: a class read every second or few, an integrity
+poll every several minutes to repair anything the event path lost, and
+unsolicited responses in between. The shape is repetitive by design, and a
+session that does not settle into it is usually a session where confirmations
+are not arriving.
 
 ## Security
 
