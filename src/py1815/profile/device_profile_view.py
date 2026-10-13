@@ -284,6 +284,10 @@ def _label(*names: str) -> str:
                 abbreviated = False
                 continue
             abbreviated = (len(token) > 1 and token.isupper()) or token.lower() in _ABBREVIATIONS
+            if token.lower() == "station" and words and words[-1].lower() == "out":
+                # The schema writes "outStation", and the standard's word is "outstation".
+                words[-1] += "station"
+                continue
             words.append(token.upper() if abbreviated else token.lower())
     if not words:
         return " ".join(names)

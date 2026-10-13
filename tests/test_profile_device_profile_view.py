@@ -306,6 +306,9 @@ class TestLabels:
         [
             ("maxReceivedFragmentSize", "Max received fragment size"),
             ("maxObjectsInCROBControlRequest", "Max objects in CROB control request"),
+            ("outStation", "Outstation"),
+            ("outStationConfig", "Outstation config"),
+            ("timeoutStation", "Timeout station"),
             ("supportsDNP3ClockManagement", "Supports DNP3 clock management"),
             ("outstationSetsIIN14", "Outstation sets IIN14"),
             ("class0ResponseMode", "Class 0 response mode"),
