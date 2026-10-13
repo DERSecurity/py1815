@@ -287,6 +287,20 @@ class TestInputs:
             assert (await bench.ask("state"))["counters"]["2"] == 41
             await master.close()
 
+    async def test_a_change_asks_for_its_events_to_be_reported_at_once(self):
+        """Without this an enabled class waits for the listener's next look, half a second away."""
+        async with Bench() as bench:
+            asked = []
+            notify = bench.device.notify
+
+            def counted() -> None:
+                asked.append(True)
+                notify()
+
+            bench.device.notify = counted
+            await bench.ask("set", changes=[["BI", 3, True], ["BI", 3, False]])
+            assert asked == [True], "once for the request, after its last change"
+
     async def test_the_time_reported_follows_a_time_the_master_wrote(self):
         async with Bench() as bench:
             master = await bench.master()
