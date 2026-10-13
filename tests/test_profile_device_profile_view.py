@@ -840,8 +840,9 @@ def no_tables(tmp_path, monkeypatch):
     monkeypatch.setenv(load.TABLES_VARIABLE, str(tmp_path / "absent.json"))
 
 
+@pytest.mark.usefixtures("tables")
 class TestTheCommandWritesThePage:
-    def test_html_writes_the_page_for_the_document_it_builds(self, tables, tmp_path, capsys):
+    def test_html_writes_the_page_for_the_document_it_builds(self, tmp_path, capsys):
         page = tmp_path / "made" / "profile.html"
 
         assert cli.main(["profile", "--vendor", "Example Co", "--html", str(page)]) == 0
@@ -856,14 +857,14 @@ class TestTheCommandWritesThePage:
         assert "<td>0</td><td>Synthetic BI0</td>" in written
         assert html.escape(view.NOTICE) in written
 
-    def test_the_page_is_written_as_utf_8_with_unix_line_endings(self, tables, tmp_path):
+    def test_the_page_is_written_as_utf_8_with_unix_line_endings(self, tmp_path):
         page = tmp_path / "profile.html"
         assert cli.main(["profile", "--vendor", "Caf\u00e9 Works", "--html", str(page)]) == 0
         octets = page.read_bytes()
         assert b"\r" not in octets and octets.endswith(b"</html>\n")
         assert "<dd>Caf\u00e9 Works</dd>".encode() in octets
 
-    def test_out_and_html_write_the_document_and_its_page(self, tables, tmp_path, capsys):
+    def test_out_and_html_write_the_document_and_its_page(self, tmp_path, capsys):
         document, page = tmp_path / "profile.xml", tmp_path / "profile.html"
         assert cli.main(["profile", "--out", str(document), "--html", str(page)]) == 0
         assert capsys.readouterr().out == ""
@@ -872,10 +873,9 @@ class TestTheCommandWritesThePage:
         )
 
 
+@pytest.mark.usefixtures("no_tables")
 class TestTheCommandLaysOutAnotherDocument:
-    def test_from_lays_out_a_file_with_no_tables_and_no_configuration(
-        self, no_tables, tmp_path, capsys
-    ):
+    def test_from_lays_out_a_file_with_no_tables_and_no_configuration(self, tmp_path, capsys):
         vendor, page = tmp_path / "vendor.xml", tmp_path / "out" / "vendor.html"
         vendor.write_text(SMALL, encoding="utf-8", newline="\n")
         missing = str(tmp_path / "no-such-configuration.json")
@@ -892,7 +892,7 @@ class TestTheCommandLaysOutAnotherDocument:
         assert b"\r" not in octets
         assert octets.decode("utf-8") == view.page(SMALL_MODEL)
 
-    def test_a_file_is_decoded_as_it_declares(self, no_tables, tmp_path):
+    def test_a_file_is_decoded_as_it_declares(self, tmp_path):
         vendor, page = tmp_path / "vendor.xml", tmp_path / "vendor.html"
         vendor.write_bytes(
             (
@@ -913,7 +913,7 @@ class TestTheCommandLaysOutAnotherDocument:
         ],
     )
     def test_a_file_that_is_not_a_device_profile_is_reported_and_no_page_is_written(
-        self, no_tables, tmp_path, capsys, text, says
+        self, tmp_path, capsys, text, says
     ):
         vendor, page = tmp_path / "vendor.xml", tmp_path / "vendor.html"
         vendor.write_text(text, encoding="utf-8")
@@ -921,7 +921,7 @@ class TestTheCommandLaysOutAnotherDocument:
         assert capsys.readouterr().err.startswith(says)
         assert not page.exists()
 
-    def test_a_file_over_the_size_limit_is_reported(self, no_tables, tmp_path, capsys, monkeypatch):
+    def test_a_file_over_the_size_limit_is_reported(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(view, "MAX_SIZE", 2 * 1024 * 1024)
         vendor, page = tmp_path / "vendor.xml", tmp_path / "vendor.html"
         vendor.write_text(SMALL + " " * (2 * 1024 * 1024), encoding="utf-8")
@@ -931,13 +931,13 @@ class TestTheCommandLaysOutAnotherDocument:
         )
         assert not page.exists()
 
-    def test_a_file_that_is_not_there_is_reported(self, no_tables, tmp_path, capsys):
+    def test_a_file_that_is_not_there_is_reported(self, tmp_path, capsys):
         absent, page = tmp_path / "absent.xml", tmp_path / "vendor.html"
         assert cli.main(["profile", "--from", str(absent), "--html", str(page)]) == 2
         assert capsys.readouterr().err.startswith(f"cannot read {absent}: ")
         assert not page.exists()
 
-    def test_from_needs_somewhere_to_write_the_page(self, no_tables, tmp_path, capsys):
+    def test_from_needs_somewhere_to_write_the_page(self, tmp_path, capsys):
         vendor = tmp_path / "vendor.xml"
         vendor.write_text(SMALL, encoding="utf-8")
         assert cli.main(["profile", "--from", str(vendor)]) == 2
@@ -946,9 +946,7 @@ class TestTheCommandLaysOutAnotherDocument:
         assert captured.out == ""
 
     @pytest.mark.parametrize("flag", ["--out", "--validate"])
-    def test_from_refuses_the_flags_that_are_for_a_document_it_builds(
-        self, no_tables, tmp_path, capsys, flag
-    ):
+    def test_from_refuses_the_flags_that_are_for_a_document_it_builds(self, tmp_path, capsys, flag):
         vendor, page = tmp_path / "vendor.xml", tmp_path / "vendor.html"
         vendor.write_text(SMALL, encoding="utf-8")
         other = tmp_path / "other"
@@ -959,7 +957,8 @@ class TestTheCommandLaysOutAnotherDocument:
         )
         assert not page.exists() and not other.exists()
 
-    def test_without_from_the_command_still_needs_its_tables(self, no_tables, tmp_path, capsys):
+    def test_without_from_the_command_still_needs_its_tables(self, tmp_path, capsys):
         page = tmp_path / "profile.html"
         assert cli.main(["profile", "--html", str(page)]) == 1
         assert not page.exists()
+        assert capsys.readouterr().out == ""
