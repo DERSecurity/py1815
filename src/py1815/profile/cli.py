@@ -408,11 +408,10 @@ def _profile(args: argparse.Namespace) -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(document, encoding="utf-8")
         print(f"wrote {args.out}", file=sys.stderr)
-    if args.html is not None:
-        status = _write_page(document, args.html)
-        if status:
-            return status
-    return _validate(document, args.validate) if args.validate is not None else 0
+    status = 0 if args.html is None else _write_page(document, args.html)
+    if status == 0 and args.validate is not None:
+        status = _validate(document, args.validate)
+    return status
 
 
 def _count(text: str) -> int:
