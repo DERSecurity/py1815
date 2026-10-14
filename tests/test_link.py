@@ -15,6 +15,7 @@ from py1815.link import (
     HEADER_SIZE,
     MAX_FRAME,
     MAX_USER_DATA,
+    MIN_LENGTH,
     START,
     Broadcast,
     FrameReader,
@@ -28,6 +29,7 @@ from py1815.link import (
     is_valid_address,
     parse,
 )
+from py1815.master import requests as master_requests
 
 MASTER_REQUEST = control_byte(
     from_master=True, primary=True, function=PrimaryFunction.UNCONFIRMED_USER_DATA
@@ -105,6 +107,64 @@ class TestWireVectors:
         """The vector would pass with destination and source swapped only if
         they happened to be equal, so they are not."""
         assert build(0xC0, destination=1, source=10) != self.RESET_LINK
+
+
+class TestTheFramesTheGuideShows:
+    """The two frames printed in docs/dnp3.md, pinned so the page cannot drift.
+
+    The guide prints these octet by octet for a reader to match a capture
+    against, so a wrong octet on the page is a wrong octet in someone's notes.
+    An earlier draft asked for class 0 first, which is not what an integrity
+    poll is, and nothing held the page to the library.
+    """
+
+    #: An integrity poll, master 1 to outstation 10, as the page prints it.
+    INTEGRITY_POLL = bytes.fromhex("056414c40a0001008fedc1c1013c02063c03063c04063c01066201")
+
+    #: What the page labels: transport octet, application control, READ, then
+    #: one class header each for classes 1, 2, 3 and 0.
+    INTEGRITY_POLL_PAYLOAD = bytes.fromhex("c1c1013c02063c03063c04063c0106")
+
+    #: A direct operate of latch-on against point 3, as the page prints it.
+    #: Nineteen octets of user data, so it carries two data blocks and the
+    #: second checksum falls inside the off-time field.
+    DIRECT_OPERATE = bytes.fromhex(
+        "056418c40a0001003d3ac2c2050c011701030301000000000000ce33000000ffff"
+    )
+
+    DIRECT_OPERATE_PAYLOAD = bytes.fromhex("c2c2050c011701030301000000000000000000")
+
+    def test_the_integrity_poll_parses_to_what_the_page_labels(self):
+        frame = parse(self.INTEGRITY_POLL)
+
+        assert (frame.destination, frame.source) == (10, 1)
+        assert frame.function == PrimaryFunction.UNCONFIRMED_USER_DATA
+        assert frame.from_master and frame.is_primary
+        assert frame.payload == self.INTEGRITY_POLL_PAYLOAD
+
+    def test_the_poll_on_the_page_asks_for_the_classes_the_master_asks_for(self):
+        """The event classes first and class 0 last, so a buffered change is
+        never applied over a newer static value. The page states that order in
+        prose and prints a frame; this holds the two together.
+        """
+        assert self.INTEGRITY_POLL_PAYLOAD.endswith(master_requests.scan("integrity"))
+
+    def test_the_direct_operate_parses_to_what_the_page_labels(self):
+        frame = parse(self.DIRECT_OPERATE)
+
+        assert (frame.destination, frame.source) == (10, 1)
+        assert frame.payload == self.DIRECT_OPERATE_PAYLOAD
+
+    def test_the_direct_operate_needs_a_second_data_block(self):
+        """Nineteen octets of user data do not fit one 16-octet block, which is
+        why the page can show a checksum landing in the middle of a field."""
+        assert len(self.DIRECT_OPERATE_PAYLOAD) == 19
+        assert block_count(len(self.DIRECT_OPERATE_PAYLOAD)) == 2
+        assert frame_size(len(self.DIRECT_OPERATE_PAYLOAD)) == len(self.DIRECT_OPERATE)
+
+    def test_both_frames_declare_the_length_they_carry(self):
+        for frame in (self.INTEGRITY_POLL, self.DIRECT_OPERATE):
+            assert frame[2] == MIN_LENGTH + len(parse(frame).payload)
 
 
 class TestBuildAndParse:

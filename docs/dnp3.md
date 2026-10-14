@@ -67,9 +67,9 @@ confirmation.
 | 15 | | `NOT_SUPPORTED` |
 
 The same four bits mean different things in the two directions, so a decoder
-reads the primary bit before it reads the function. Over TCP a master usually
-sends `UNCONFIRMED_USER_DATA` and leaves delivery to TCP; the confirmed
-variant, and the link transaction built around it, belong to serial and radio.
+reads the primary bit before it reads the function. This library's master sends
+`UNCONFIRMED_USER_DATA` and leaves delivery to TCP, and its outstation accepts
+user data sent either way.
 
 Addresses are 16-bit and little endian. Anything at or above `0xFFF0` is
 reserved, leaving `0` through `0xFFEF` for stations, and three of the reserved
@@ -113,11 +113,11 @@ block:
 05 64 14 C4 0A 00 01 00 8F ED   header, and its checksum
 C1                              transport: FIR, FIN, sequence 1
 C1 01                           application: FIR, FIN, sequence 1; READ
-3C 01 06                        group 60 variation 1, all objects: class 0
-3C 02 06                        class 1
+3C 02 06                        group 60 variation 2, all objects: class 1
 3C 03 06                        class 2
 3C 04 06                        class 3
-74 59                           checksum over the fifteen octets above
+3C 01 06                        class 0
+62 01                           checksum over the fifteen octets above
 ```
 
 The header is the fixed part:
@@ -136,9 +136,10 @@ which is how a 27-octet frame comes to declare 20. `frame_size()` in
 [Protocol layers](reference/protocol.md) does the same arithmetic the other
 way round.
 
-Four object headers, three octets each, ask for the four classes. That is an
-integrity poll, and the rest of this page is mostly an explanation of those
-twelve octets.
+Four object headers, three octets each, ask for the four classes. The event
+classes come first and class 0 last, so that a change held in a buffer is never
+applied over a newer static value. That is an integrity poll, and the rest of
+this page is mostly an explanation of those twelve octets.
 
 ## Internal indications
 
@@ -213,6 +214,7 @@ that matter:
 | `0x01` | a 16-bit start and stop index | the same, past index 255 |
 | `0x06` | nothing at all | every object in the group; what a class read sends |
 | `0x07` | an 8-bit count | a count of objects with no indices |
+| `0x08` | a 16-bit count | the same, where the count runs past 255 |
 | `0x17` | an 8-bit count, then an 8-bit index on each object | events, and controls |
 | `0x28` | a 16-bit count, then a 16-bit index on each object | the same, past index 255 |
 
@@ -299,9 +301,12 @@ finds out before anything moves.
 | Direction | Message |
 |---|---|
 | master -> outstation | `SELECT`, group 12 variation 1, index 3, latch on |
-| outstation -> master | the same block, echoed back as understood |
+| outstation -> master | the block echoed back, carrying a status |
 | master -> outstation | `OPERATE`, the identical block |
-| outstation -> master | the block again, with the status field filled in |
+| outstation -> master | the block again, carrying the status of the operation |
+
+Both replies carry a status. The one on the select is what tells the master
+whether to go on to the operate.
 
 `DIRECT_OPERATE` skips the interlock for cases where the round trip costs more
 than the mistake would.
@@ -321,9 +326,10 @@ A control is group 12 variation 1, eleven octets:
 The control code is the octet to read carefully. Its low nibble is the
 operation: `1` pulse on, `2` pulse off, `3` latch on, `4` latch off. Its top
 two bits are the trip-close code, `1` close and `2` trip, which is how a
-single point operates equipment with a pair of coils. Between them sit a clear
-bit and a queue bit, which IEEE 1815-2012 made obsolete and requires to be
-zero.
+single point operates equipment with a pair of coils. Between them sit two
+more bits. The queue bit is obsolete in IEEE 1815-2012 and required to be zero,
+and a master that sets it is asking for behavior the standard withdrew. The
+clear bit is not obsolete: this library builds it and reads it back.
 
 A direct operate of latch-on against point 3. Thirty-three octets, and this
 one needs two data blocks:
@@ -376,19 +382,29 @@ An outstation has restarted and a master reconnects:
 | master -> outstation | read classes 1, 2, 3 and 0 |
 | outstation -> master | the data, with the restart indication set |
 | master -> outstation | write zero to that indication bit |
-| master -> outstation | write the time |
-| master -> outstation | enable unsolicited reporting |
+| master -> outstation | write the time, if the outstation asked for it |
+| master -> outstation | read classes 1, 2, 3 and 0 again |
+
+IEEE 1815-2012 5.1.1.1.2, rule 2, gives the order: clear the restart
+indication, then the optional steps with time synchronization among them, then
+the integrity poll. A master learns of the restart only from a response, so a
+poll comes first in practice and comes again once the indication is cleared.
 
 Every step answers something the outstation said rather than something the
 master assumed. The restart bit is why the write happens, the clock bit is why
 the time follows, and an outstation that never asks for either is one the
 master leaves alone.
 
-After that the traffic settles: a class read every second or few, an integrity
-poll every several minutes to repair anything the event path lost, and
-unsolicited responses in between. The shape is repetitive by design, and a
-session that does not settle into it is usually a session where confirmations
-are not arriving.
+A master configured to use unsolicited reporting also asks the outstation to
+enable it (5.1.1.2, and the same rule). That is not a step every master takes,
+and an outstation built without unsolicited responses, which is this library's
+default, refuses the request.
+
+After that the traffic settles into a repetition: event reads at whatever
+interval the deployment asks for, an integrity poll less often to repair
+anything the event path lost, and unsolicited responses in between where they
+are enabled. This library's master sends nothing on a schedule unless it is
+told to.
 
 ## Security
 
