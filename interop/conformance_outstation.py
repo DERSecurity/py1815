@@ -99,8 +99,8 @@ _REQUEST_LIMIT = 1 << 20
 _KINDS = {"BI": Kind.BI, "AI": Kind.AI, "CTR": Kind.CTR}
 
 
-def point_map() -> PointMap:
-    """Build the point map this device serves."""
+def point_map(*, frozen_counters: bool = True) -> PointMap:
+    """Build the point map this device serves, with or without frozen counters."""
     points: list[Point] = []
     points += [
         Point(Kind.BI, index, f"Binary input {index}", event_class=event_class)
@@ -111,7 +111,8 @@ def point_map() -> PointMap:
         for index in ANALOG_INPUTS
     ]
     points += [
-        Point(Kind.CTR, index, f"Counter {index}", event_class=0, frozen=True) for index in COUNTERS
+        Point(Kind.CTR, index, f"Counter {index}", event_class=0, frozen=frozen_counters)
+        for index in COUNTERS
     ]
     points += [Point(Kind.BO, index, f"Binary output {index}") for index in BINARY_OUTPUTS]
     points += [Point(Kind.AO, index, f"Analog output {index}") for index in ANALOG_OUTPUTS]
@@ -128,6 +129,8 @@ class Settings:
     binary_inputs: bool = True
     analog_inputs: bool = True
     counters: bool = True
+    #: Whether the counters can be frozen. Off, the device has no frozen counters.
+    frozen_counters: bool = True
     binary_outputs: bool = True
     analog_outputs: bool = True
     #: Whether the outstation reports without being asked.
@@ -293,7 +296,7 @@ class Device:
     async def _power_on(self) -> None:
         settings = self.settings
         outstation = _Outstation(
-            point_map(),
+            point_map(frozen_counters=settings.frozen_counters),
             self._binding(settings),
             strict=False,
             level2=True,

@@ -6,8 +6,8 @@ package py1815conformance
 import io.stepfunc.dnp3c.dnp3.app._
 import io.stepfunc.dnp3c.dnp3.app.objects.AttributeValue
 import io.stepfunc.dnp3c.dnp3.{
-  ActionResult, ActionTiming, CheckReporter, DeferredCheck, EventExpectation, InputKind, IntegrationPlugin,
-  PluginReporter
+  ActionResult, ActionTiming, CheckReporter, DeferredCheck, EventExpectation, InputKind, IntegrationPlugin, OutputKind,
+  PluginReporter, PointKind
 }
 
 import scala.collection.mutable
@@ -122,17 +122,16 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   // --------------------------------------------------------------- controls
 
-  override def checkBinaryOutputOperate(reporter: CheckReporter, index: Int): Option[DeferredCheck] =
-    operated(reporter, "BO", index)
+  override def checkOperate(reporter: CheckReporter, kind: OutputKind, index: Int): Option[DeferredCheck] =
+    operated(reporter, outputName(kind), index)
 
-  override def checkBinaryOutputNotOperate(reporter: CheckReporter): Option[DeferredCheck] =
-    notOperated(reporter, "BO")
+  override def checkNotOperate(reporter: CheckReporter, kind: OutputKind): Option[DeferredCheck] =
+    notOperated(reporter, outputName(kind))
 
-  override def checkAnalogOutputOperate(reporter: CheckReporter, index: Int): Option[DeferredCheck] =
-    operated(reporter, "AO", index)
-
-  override def checkAnalogOutputNotOperate(reporter: CheckReporter): Option[DeferredCheck] =
-    notOperated(reporter, "AO")
+  private def outputName(kind: OutputKind): String = kind match {
+    case PointKind.BinaryOutputStatus => "BO"
+    case PointKind.AnalogOutputStatus => "AO"
+  }
 
   private def refreshOperations(from: Fixture): Unit = {
     val state = from.ask("state")
@@ -287,15 +286,15 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   }
 
   override def generateInputChanges(reporter: PluginReporter, kind: InputKind[?]): Unit = kind match {
-    case InputKind.BinaryInput =>
+    case PointKind.BinaryInput =>
       // three inputs of the first class that has binary inputs, the first of them changing twice
       val s = state()
       val some = List(1, 2, 3).map(inClass(s, "BI", _)).find(_.nonEmpty).getOrElse(Nil).take(3)
       generate(reporter, toggles(s, some ++ some.take(1)))
-    case InputKind.AnalogInput =>
+    case PointKind.AnalogInput =>
       val s = state()
       generate(reporter, steps(s, unusedFirst(indices(s, "analog")).take(4)))
-    case InputKind.Counter =>
+    case PointKind.Counter =>
       // every counter counts up; the outstation reports no counter events, so this is no batch
       val s = state()
       val changes = indices(s, "counters").map { index =>
@@ -303,17 +302,17 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       }
       val generated = apply(reporter, changes)
       if (generated.nonEmpty) throw new Exception(s"The device buffered counter events: ${generated.mkString(", ")}")
-    case InputKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+    case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
   }
 
   override def generateExactInputEvents(reporter: PluginReporter, kind: InputKind[?], numEvents: Int): Unit =
     kind match {
-      case InputKind.BinaryInput =>
+      case PointKind.BinaryInput =>
         val s = state()
         val index = List(1, 2, 3).flatMap(inClass(s, "BI", _)).headOption
           .getOrElse(throw new Exception("The device has no binary input that reports events"))
         generate(reporter, toggles(s, List.fill(numEvents)(index)))
-      case InputKind.AnalogInput =>
+      case PointKind.AnalogInput =>
         // an analog input reports only its latest value, so each event needs an input of its own
         val s = state()
         val analog = unusedFirst(indices(s, "analog"))
@@ -321,8 +320,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
           throw new Exception(s"The device has ${analog.size} analog inputs, too few for $numEvents events")
         }
         generate(reporter, steps(s, analog.take(numEvents)))
-      case InputKind.Counter => throw new NotSupported("counter change events")
-      case InputKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+      case PointKind.Counter => throw new NotSupported("counter change events")
+      case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
     }
 
   override def generateClassEvents(reporter: PluginReporter, eventClass: EventClass): Unit = {
@@ -338,8 +337,15 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   override def generateExactClassEvents(reporter: PluginReporter, eventClass: EventClass, numEvents: Int): Unit =
     generate(reporter, exactClassChanges(state(), classOf(eventClass), numEvents))
 
+  override def generatePattern(reporter: PluginReporter, kind: InputKind[?]): Unit = kind match {
+    case PointKind.BinaryInput => binaryPattern(reporter)
+    case PointKind.AnalogInput => analogPattern(reporter)
+    case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+    case PointKind.Counter => throw new Exception("No procedure sets counters to a pattern")
+  }
+
   // Every binary input set to a pattern that alternates by index, and inverts each time it is asked for.
-  override def generateBinaryInputPattern(reporter: PluginReporter): Unit = {
+  private def binaryPattern(reporter: PluginReporter): Unit = {
     patterns += 1
     val s = state()
     val changes = indices(s, "binary").flatMap { index =>
@@ -349,11 +355,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     batches += apply(reporter, changes)
   }
 
-  override def generateDoubleBitBinaryInputPattern(reporter: PluginReporter): Unit =
-    throw new NotSupported("double-bit binary inputs")
-
   // Every analog input set to a value of its own, further from its last one than the deadband.
-  override def generateAnalogInputPattern(reporter: PluginReporter): Unit = {
+  private def analogPattern(reporter: PluginReporter): Unit = {
     patterns += 1
     val s = state()
     val changes = indices(s, "analog").map(index => ("AI", index, ujson.Num(1000 * patterns + 37 * index)))
@@ -362,21 +365,19 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   // -------------------------------------------------- uninstalling points
 
-  override def uninstallBinaryInputs(reporter: PluginReporter): Unit =
-    powerCycle(reporter, "Uninstalled every binary input", "binary_inputs" -> false)
-
-  override def uninstallDoubleBitBinaryInputs(reporter: PluginReporter): Unit =
-    throw new NotSupported("double-bit binary inputs")
-
-  // the frozen counters go with the counters they freeze
-  override def uninstallCounters(reporter: PluginReporter): Unit =
-    powerCycle(reporter, "Uninstalled every counter", "counters" -> false)
-
-  override def uninstallBinaryOutputs(reporter: PluginReporter): Unit =
-    powerCycle(reporter, "Uninstalled every binary output", "binary_outputs" -> false)
-
-  override def uninstallAnalogOutputs(reporter: PluginReporter): Unit =
-    powerCycle(reporter, "Uninstalled every analog output", "analog_outputs" -> false)
+  override def uninstall(reporter: PluginReporter, kind: PointKind): Unit = kind match {
+    case PointKind.BinaryInput => powerCycle(reporter, "Uninstalled every binary input", "binary_inputs" -> false)
+    case PointKind.AnalogInput => powerCycle(reporter, "Uninstalled every analog input", "analog_inputs" -> false)
+    // the frozen counters go with the counters they freeze
+    case PointKind.Counter => powerCycle(reporter, "Uninstalled every counter", "counters" -> false)
+    case PointKind.FrozenCounter =>
+      powerCycle(reporter, "Uninstalled every frozen counter", "frozen_counters" -> false)
+    case PointKind.BinaryOutputStatus =>
+      powerCycle(reporter, "Uninstalled every binary output", "binary_outputs" -> false)
+    case PointKind.AnalogOutputStatus =>
+      powerCycle(reporter, "Uninstalled every analog output", "analog_outputs" -> false)
+    case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+  }
 
   override def reinstallPoints(reporter: PluginReporter): Unit =
     powerCycle(
@@ -385,6 +386,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       "binary_inputs" -> true,
       "analog_inputs" -> true,
       "counters" -> true,
+      "frozen_counters" -> true,
       "binary_outputs" -> true,
       "analog_outputs" -> true)
 
@@ -496,10 +498,10 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       kind: InputKind[P],
       points: Seq[GenIndexedPoint[P]]): Option[DeferredCheck] = {
     val wanted = kind match {
-      case InputKind.BinaryInput => "BI"
-      case InputKind.AnalogInput => "AI"
-      case InputKind.Counter => "CTR"
-      case InputKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+      case PointKind.BinaryInput => "BI"
+      case PointKind.AnalogInput => "AI"
+      case PointKind.Counter => "CTR"
+      case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
     }
     val s = state()
     points.foreach { p =>
@@ -721,10 +723,10 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   }
 
   private def kindName(kind: InputKind[?]): String = kind match {
-    case InputKind.BinaryInput => "BI"
-    case InputKind.AnalogInput => "AI"
-    case InputKind.Counter => throw new NotSupported("counter change events")
-    case InputKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+    case PointKind.BinaryInput => "BI"
+    case PointKind.AnalogInput => "AI"
+    case PointKind.Counter => throw new NotSupported("counter change events")
+    case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
   }
 
   private def inClasses(eventClass: EventClass): Generated => Boolean = eventClass match {

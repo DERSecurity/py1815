@@ -6,7 +6,7 @@ package py1815conformance
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{ Files, Path, Paths }
 
-import io.stepfunc.dnp3c.conformance.Harness
+import io.stepfunc.dnp3c.conformance.{ Harness, Revisions }
 import io.stepfunc.dnp3c.conformance.api.options.{ ChannelOptions, LinkOptions, TestOptions }
 import io.stepfunc.dnp3c.conformance.api.{
   ConfigurationException, HarnessExecutionException, Options, ProcedureOutcome, ProcedureResult
@@ -18,12 +18,13 @@ import scala.util.control.NonFatal
 /**
  * Runs the conformance procedures against the py1815 outstation with nobody present.
  *
+ *   -rev <id>        the revision of the certification procedure to run, e.g. 3.1r1 or 2.7 (required)
  *   -config <file>   the dnp3c configuration; device.ini when not given
  *   -run <id>        a procedure, a section, or all; all when not given
  *
  * The harness stops a run at the first procedure that fails. This program then runs each procedure the harness did
  * not reach, one at a time, so one failure does not hide the outcome of the rest. It writes the harness's report,
- * and outcomes.json beside it with every procedure's outcome and the harness's own words for it. It exits with 0
+ * in the revision's folder for the subset level, and outcomes.json beside it with every procedure's outcome and the harness's own words for it. It exits with 0
  * only if no procedure failed.
  *
  * Two settings come from the environment, because they differ from one machine to the next:
@@ -53,7 +54,9 @@ object Main {
   private def setting(name: String): Option[String] = sys.env.get(name).map(_.trim).filter(_.nonEmpty)
 
   private def run(args: List[String]): Int = {
-    val (config, id) = arguments(args, Paths.get("device.ini"), "all")
+    val (rev, config, id) = arguments(args, None, Paths.get("device.ini"), "all")
+    val revision = Revisions.find(rev.getOrElse(throw new CannotStart(s"Name the revision with -rev: $revisionIds")))
+      .getOrElse(throw new CannotStart(s"Unknown revision ${rev.get}: $revisionIds"))
     val python = setting(pythonVariable).getOrElse(
       throw new CannotStart(s"Set $pythonVariable to the Python interpreter that has py1815 installed."))
     val script = Paths.get(setting(fixtureVariable).getOrElse("../conformance_outstation.py"))
@@ -69,7 +72,9 @@ object Main {
       throw new CannotStart(
         s"tcp.device.address is ${channel.host}; the device this program starts listens on 127.0.0.1")
     }
-    val output = Paths.get(options.get(TestOptions.outputDirectory))
+    val output =
+      try revision.runDirectory(options)
+      catch { case ex: ConfigurationException => throw new CannotStart(ex.getMessage) }
     val command = FixtureCommand(
       python = python,
       script = script,
@@ -78,7 +83,7 @@ object Main {
       master = options.get(LinkOptions.source),
       log = output.resolve("outstation.log")
     )
-    val harness = new Harness(options, new Py1815Plugin(PluginSettings(command)))
+    val harness = new Harness(options, new Py1815Plugin(PluginSettings(command)), revision)
 
     // each procedure's outcome and the harness's words for it, in the order the procedures ran
     val outcomes = mutable.LinkedHashMap[String, (String, String)]()
@@ -100,6 +105,7 @@ object Main {
         summary.unreached
       } catch {
         case ex: IllegalArgumentException => throw new CannotStart(ex.getMessage)
+        case ex: ConfigurationException => throw new CannotStart(ex.getMessage)
         case ex: HarnessExecutionException =>
           // the harness or the plugin failed around the procedure, which then has no result of its own
           broken = true
@@ -138,8 +144,15 @@ object Main {
     if (broken || failed) 1 else 0
   }
 
-  private def arguments(args: List[String], config: Path, id: String): (Path, String) = args match {
-    case Nil => (config, id)
+  private def revisionIds: String = Revisions.list.map(_.id).mkString("one of ", ", ", "")
+
+  private def arguments(
+      args: List[String],
+      rev: Option[String],
+      config: Path,
+      id: String): (Option[String], Path, String) = args match {
+    case Nil => (rev, config, id)
+    case "-rev" :: which :: rest => arguments(rest, Some(which), config, id)
     case "-config" :: file :: rest =>
       val path =
         try Paths.get(file)
@@ -147,11 +160,11 @@ object Main {
           case ex: java.nio.file.InvalidPathException =>
             throw new CannotStart(s"-config is not a path: ${ex.getMessage}")
         }
-      arguments(rest, path, id)
-    case "-run" :: what :: rest => arguments(rest, config, what)
+      arguments(rest, rev, path, id)
+    case "-run" :: what :: rest => arguments(rest, rev, config, what)
     case other :: _ =>
       throw new CannotStart(
-        s"Unexpected argument: $other\nusage: [-config <file>] [-run <procedure, section or all>]")
+        s"Unexpected argument: $other\nusage: -rev <revision> [-config <file>] [-run <procedure, section or all>]")
   }
 
   private def write(file: Path, outcomes: mutable.LinkedHashMap[String, (String, String)]): Unit = {
