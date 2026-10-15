@@ -347,6 +347,28 @@ class TestColdRestart:
         assert fragment.iin2 & IIN2_BAD_FUNCTION
         assert not fragment.body
 
+    def test_8_8_2_cold_restart_turned_off_and_on_without_a_restart(self):
+        restarts: list[bool] = []
+
+        def restart() -> int:
+            restarts.append(True)
+            return 1500
+
+        dut = Dut(restart_handler=restart)
+        dut.clear_restart()
+        dut.session.restart_handler = None
+        refused = dut.master.request(COLD_RESTART).fragment
+        assert refused.iin2 & IIN2_BAD_FUNCTION
+        assert not refused.body
+        assert not refused.iin1 & IIN1_RESTART, "turning it off is not a restart"
+        assert restarts == []
+
+        dut.session.restart_handler = restart
+        assert dut.session.restart_handler is restart
+        (delay,) = dut.master.request(COLD_RESTART).fragment.objects
+        assert delay.value == 1500
+        assert restarts == [True]
+
 
 class TestFragmentation:
     #: Enough analog inputs that class 0 takes several fragments.

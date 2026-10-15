@@ -149,6 +149,13 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 )
             )
 
+    def widened(group: int, variations: dict[int, str]) -> None:
+        # Read and answered in a 32-bit variation with flags, so the row lists
+        # the request and no response of its own.
+        select = tuple(_RANGE + _ALL + _INDEXED)
+        for variation, description in variations.items():
+            rows.append(Row(group, variation, description, request=(READ, select)))
+
     def events(group: int, name: str, variations: dict[int, str]) -> None:
         if not facts.events:
             return
@@ -199,6 +206,14 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
             controls(12, {1: "Binary Output Command - control relay output block"})
     if served[Kind.CTR]:
         static(20, "Counter", {1: "Counter - 32-bit with flag"})
+        widened(
+            20,
+            {
+                2: "Counter - 16-bit with flag",
+                5: "Counter - 32-bit without flag",
+                6: "Counter - 16-bit without flag",
+            },
+        )
         if facts.freezes:
             for function in (FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR):
                 rows.append(
@@ -211,6 +226,13 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 1: "Frozen Counter - 32-bit with flag",
                 5: "Frozen Counter - 32-bit with flag and time",
                 9: "Frozen Counter - 32-bit without flag",
+            },
+        )
+        widened(
+            21,
+            {
+                2: "Frozen Counter - 16-bit with flag",
+                10: "Frozen Counter - 16-bit without flag",
             },
         )
         if facts.events:
