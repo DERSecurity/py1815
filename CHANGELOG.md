@@ -11,6 +11,8 @@ says so explicitly.
 
 - `Session.restart_handler` is a property: setting it turns cold restart on, and setting it
   to `None` turns it off, with no restart (D55).
+- `DerOutstation.frozen(index)` returns the value a counter held at its last freeze, or
+  `None` if it was never frozen.
 
 ### Changed
 

@@ -523,6 +523,11 @@ class DerOutstation:
         """The last value an output accepted, or None if it has none yet."""
         return self._state.get((kind, index))
 
+    def frozen(self, index: int) -> int | None:
+        """Return what counter *index* held at its last freeze, or None if never frozen."""
+        held = self._frozen.get(index)
+        return None if held is None else held[0].value
+
     def coverage(self) -> Coverage:
         """Every point of the map against what this outstation serves.
 
