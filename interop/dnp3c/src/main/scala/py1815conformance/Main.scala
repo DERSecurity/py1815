@@ -68,9 +68,12 @@ object Main {
         case ex: java.io.IOException => throw new CannotStart(s"Could not read $config: $ex")
       }
     val channel = ChannelOptions(options)
-    if (channel.host != "127.0.0.1") {
+    val loopback =
+      try java.net.InetAddress.getByName(channel.host).isLoopbackAddress
+      catch { case _: java.net.UnknownHostException => false }
+    if (!loopback) {
       throw new CannotStart(
-        s"tcp.device.address is ${channel.host}; the device this program starts listens on 127.0.0.1")
+        s"tcp.device.address is ${channel.host}; the device this program starts listens on a loopback address")
     }
     val output =
       try revision.runDirectory(options)
@@ -78,6 +81,7 @@ object Main {
     val command = FixtureCommand(
       python = python,
       script = script,
+      host = channel.host,
       port = channel.port,
       outstation = options.get(LinkOptions.destination),
       master = options.get(LinkOptions.source),

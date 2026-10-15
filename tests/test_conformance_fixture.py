@@ -31,6 +31,7 @@ from ied_harness import (
     IIN1_CLASS_1,
     IIN1_NEED_TIME,
     IIN1_RESTART,
+    IIN2_BAD_FUNCTION,
     IIN2_OBJECT_UNKNOWN,
     READ,
     SELECT,
@@ -53,7 +54,12 @@ CLASS_1 = bytes.fromhex("3C 02 06")
 CLASS_2 = bytes.fromhex("3C 03 06")
 CLASS_3 = bytes.fromhex("3C 04 06")
 BINARY_INPUTS = bytes.fromhex("01 00 06")
+BINARY_OUTPUTS = bytes.fromhex("0A 00 06")
 COUNTERS = bytes.fromhex("14 00 06")
+FROZEN_COUNTERS = bytes.fromhex("15 00 06")
+
+#: Group 50 variation 1, one object: a time to write.
+TIME_WRITE = bytes.fromhex("32 01 07 01") + (1_800_000_000_000).to_bytes(6, "little")
 
 #: Group 12 variation 1, one object behind an 8-bit index: index 2, latch on,
 #: count 1, on for 100 ms, off for 100 ms, status 0.
@@ -571,6 +577,76 @@ class TestPowerCycle:
             state = await bench.ask("state")
             assert state["power_cycles"] == 1
             assert state["restart_indication"] is True
+
+
+@pytest.mark.asyncio
+class TestTheTestBench:
+    async def test_quality_sets_the_flags_an_input_reports(self):
+        async with Bench() as bench:
+            await bench.ask("quality", kind="BI", index=0, quality="comm-lost")
+            master = await bench.master()
+            inputs = (await master.request(READ, BINARY_INPUTS)).of(1)
+            assert inputs[0].flags & 0x7F == 0x04
+            assert all(o.flags & 0x7F == 0x01 for o in inputs[1:])
+            await bench.ask("quality", kind="BI", index=0, quality="good")
+            assert (await master.request(READ, BINARY_INPUTS)).of(1)[0].flags & 0x7F == 0x01
+            await master.close()
+
+    async def test_quality_sets_the_flags_an_output_status_reports(self):
+        async with Bench() as bench:
+            await bench.ask("quality", kind="BO", index=1, quality="comm-lost")
+            master = await bench.master()
+            outputs = (await master.request(READ, BINARY_OUTPUTS)).of(10)
+            assert outputs[1].flags & 0x7F == 0x04
+            assert outputs[0].flags & 0x7F == 0x01
+            await master.close()
+
+    async def test_cold_restart_turned_off_is_refused_without_a_power_cycle(self):
+        async with Bench() as bench:
+            master = await bench.master()
+            await bench.ask("cold_restart", enabled=False)
+            refused = await master.request(COLD_RESTART)
+            assert refused.iin2 & IIN2_BAD_FUNCTION and not refused.objects
+            await bench.ask("cold_restart", enabled=True)
+            (delay,) = (await master.request(COLD_RESTART)).objects
+            assert delay.value == fixture.RESTART_DELAY_MS
+            await master.close()
+
+    async def test_freeze_gives_every_counter_a_frozen_value(self):
+        async with Bench() as bench:
+            await bench.ask("set", changes=[["CTR", 0, 7], ["CTR", 1, 9]])
+            assert (await bench.ask("state"))["frozen"] == {}
+            assert (await bench.ask("freeze"))["frozen"] == len(fixture.COUNTERS)
+            state = await bench.ask("state")
+            assert state["frozen"] == state["counters"]
+            master = await bench.master()
+            frozen = (await master.request(READ, FROZEN_COUNTERS)).of(21)
+            assert [(o.index, o.value) for o in frozen][:2] == [(0, 7), (1, 9)]
+            await master.close()
+
+    async def test_the_clock_is_unsynchronized_some_time_after_the_time_is_written(self):
+        async with Bench(time_sync_interval=None, time_valid_for=0.05) as bench:
+            master = await bench.master()
+            await master.request(WRITE, TIME_WRITE)
+            await bench.ask("set", changes=[["BI", 0, True]])
+            assert [o.variation for o in (await master.request(READ, CLASS_1)).of(51)] == []
+            await asyncio.sleep(0.2)
+            await bench.ask("set", changes=[["BI", 0, False]])
+            ctos = (await master.request(READ, CLASS_1)).of(51)
+            assert [o.variation for o in ctos] == [2], "an unsynchronized common time"
+            await master.close()
+
+    async def test_network_moves_the_outstation_to_another_port_and_back(self):
+        async with Bench() as bench:
+            first = bench.device.port
+            moved = await bench.ask("network", port=0, udp_broadcast=False)
+            assert moved["port"] != first
+            assert moved["settings"]["udp_broadcast"] is False
+            master = await Master.connect(moved["port"])
+            assert (await master.request(READ, CLASS_1)).iin1 & IIN1_RESTART
+            await master.close()
+            restored = await bench.ask("network")
+            assert restored["settings"]["udp_broadcast"] is True
 
 
 @pytest.mark.asyncio

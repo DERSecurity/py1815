@@ -14,12 +14,20 @@ import java.util.concurrent.{ CompletableFuture, TimeUnit, TimeoutException }
  *
  * @param python the Python interpreter that has py1815 installed
  * @param script interop/conformance_outstation.py
+ * @param host the loopback address the outstation listens on
  * @param port the port the outstation listens on
  * @param outstation the outstation's link address
  * @param master the link address of the master the outstation serves
  * @param log the file the device's own log is appended to
  */
-final case class FixtureCommand(python: String, script: Path, port: Int, outstation: Int, master: Int, log: Path)
+final case class FixtureCommand(
+    python: String,
+    script: Path,
+    host: String,
+    port: Int,
+    outstation: Int,
+    master: Int,
+    log: Path)
 
 /** A request the control channel refused, or a device that could not be started or reached. */
 final class FixtureException(message: String, cause: Throwable = null) extends Exception(message, cause)
@@ -44,6 +52,8 @@ final class Fixture(command: FixtureCommand) extends AutoCloseable {
       command.python,
       "-u",
       command.script.toString,
+      "--host",
+      command.host,
       "--port",
       command.port.toString,
       "--outstation-address",

@@ -6,7 +6,7 @@ package py1815conformance
 import io.stepfunc.dnp3c.dnp3.app._
 import io.stepfunc.dnp3c.dnp3.app.objects.AttributeValue
 import io.stepfunc.dnp3c.dnp3.{
-  AbnormalFlag, ActionResult, ActionTiming, CheckReporter, DeferredCheck, EventExpectation, InputKind, IntegrationPlugin, OutputKind,
+  AbnormalFlag, ActionResult, ActionTiming, AllowedMasters, CheckReporter, NetworkMode, NetworkSetup, DeferredCheck, EventExpectation, InputKind, IntegrationPlugin, OutputKind,
   PluginReporter, PointKind
 }
 
@@ -76,6 +76,9 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     patterns = 0
     fixture = Some(new Fixture(settings.command))
     reporter.log(s"Started the outstation on port ${settings.command.port}")
+    // Bring-up, before the procedure's first step: a frozen counter holds a value only after a freeze, so the
+    // counters are frozen once, as an operator would before testing.
+    freeze(reporter)
   }
 
   override def endProcedure(reporter: PluginReporter): Unit = {
@@ -420,19 +423,39 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     reporter.log(s"Set the quality of $kind$index to $quality: ${ujson.write(done)}")
   }
 
-  // Every point of the kind back to good quality, which reports ONLINE and no other flag. Frozen counters have no
-  // quality of their own here, so their flags are always normal.
-  override def setFlagsNormal(reporter: PluginReporter, kind: PointKind): Unit = qualityKind(kind) match {
-    case Some(name) =>
+  // Every point of the kind back to good quality, which reports ONLINE and no other flag. A frozen counter holds the
+  // flags its counter had at the freeze, so the counters are made good and frozen again.
+  override def setFlagsNormal(reporter: PluginReporter, kind: PointKind): Unit = kind match {
+    case PointKind.FrozenCounter =>
+      setFlagsNormal(reporter, PointKind.Counter)
+      freeze(reporter)
+    case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+    case _ =>
+      val name = qualityKind(kind).getOrElse(throw new Exception(s"The plugin has no flags to set for ${kind.name}s"))
       val abnormal = state()("quality")(name).obj.keys.map(_.toInt).toList.sorted
       abnormal.foreach(setQuality(reporter, name, _, "good"))
       if (abnormal.isEmpty) reporter.log(s"Every $name already reports ONLINE and no other flag")
-    case None if kind == PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
-    case None => reporter.log(s"The device's ${kind.name}s always report ONLINE and no other flag")
+  }
+
+  // Freeze every counter at the device, as an operator would.
+  private def freeze(reporter: PluginReporter): Unit = {
+    val frozen = device.ask("freeze")("frozen").num.toInt
+    reporter.log(s"Froze the device's counters: $frozen frozen")
   }
 
   // The source of the first point named loses communication: the device reports COMM_LOST with ONLINE clear.
   override def setFlagAbnormal(reporter: PluginReporter, kind: PointKind, indices: Seq[Int]): AbnormalFlag =
+    kind match {
+      case PointKind.FrozenCounter =>
+        // the counter's source is lost, and the freeze that follows records that in the frozen counter
+        val index = indices.headOption.getOrElse(throw new Exception("No frozen counter was named"))
+        setQuality(reporter, "CTR", index, "comm-lost")
+        freeze(reporter)
+        AbnormalFlag(index, Some(0x04))
+      case _ => sourceLost(reporter, kind, indices)
+    }
+
+  private def sourceLost(reporter: PluginReporter, kind: PointKind, indices: Seq[Int]): AbnormalFlag =
     qualityKind(kind) match {
       case Some(name) =>
         val index = indices.headOption.getOrElse(throw new Exception(s"No $name was named"))
@@ -441,6 +464,42 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       case None =>
         throw new Exception(s"The device's ${kind.name}s have no source whose loss the test bench can simulate")
     }
+
+  // -------------------------------------------------------------- network
+
+  // The device takes TCP connections from any master on the port it is given, and broadcasts sent to that port as
+  // UDP datagrams. It has no list of masters it accepts, no UDP request handling and no multicast group.
+  override def configureNetwork(reporter: PluginReporter, setup: NetworkSetup): Unit = {
+    if (setup.mode != NetworkMode.Tcp) throw new Exception(s"The device answers over TCP only: ${setup.describe}")
+    if (setup.allowedMasters != AllowedMasters.Any) {
+      throw new Exception(s"The device accepts connections from any master and no narrower set: ${setup.describe}")
+    }
+    if (setup.unsolicited.nonEmpty || setup.multicastGroup.nonEmpty) {
+      throw new Exception(s"The device sends nothing over UDP and joins no multicast group: ${setup.describe}")
+    }
+    listen(reporter, Some(setup.port), setup.describe)
+  }
+
+  override def restoreNetwork(reporter: PluginReporter): Unit =
+    listen(reporter, None, "its usual network setup")
+
+  private def listen(reporter: PluginReporter, port: Option[Int], what: String): Unit = {
+    val fields = List("udp_broadcast" -> ujson.Bool(true)) ++ port.map(p => "port" -> ujson.Num(p))
+    val answer = device.ask("network", fields*)
+    batches.clear()
+    reporter.log(s"Set up the device to $what. It listens on port ${answer("port").num.toInt}")
+  }
+
+  // The device sees the master's close as the end of its connection within operateWaitMs.
+  override def verifyDisconnectNoticed(reporter: CheckReporter): Option[DeferredCheck] = {
+    val deadline = System.nanoTime() + settings.operateWaitMs * 1000000L
+    while (state()("connected").bool && System.nanoTime() < deadline) Thread.sleep(10)
+    if (state()("connected").bool) {
+      throw new Exception(s"The device still holds the connection ${settings.operateWaitMs} ms after it was closed")
+    }
+    reporter.log("The device has no connection: it noticed the close")
+    None
+  }
 
   // -------------------------------------------------- uninstalling points
 
@@ -585,10 +644,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     val s = state()
     points.foreach { p =>
       p.point match {
-        // A counter frozen with nothing counted since holds what the counter holds now. The procedures ask for
-        // this check of frozen counters only straight after a freeze.
         case frozen: CounterPoint if frozen.isFrozen && wanted == "CTR" =>
-          expectValue(s"frozen counter ${p.idx}", s("counters")(p.idx.toString).num, frozen.value.toDouble)
+          checkStatic(s, GenIndexedPoint[MeasurementPoint](p.idx, frozen))
         case other =>
           if (!staticKind(other).contains(wanted)) throw new Exception(s"Index ${p.idx} is not a ${kind.name}: $other")
           checkStatic(s, GenIndexedPoint[MeasurementPoint](p.idx, other))
@@ -639,12 +696,13 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
         expectValue(s"analog input ${p.idx}", held("analog", "analog input").num, point.value)
       case point: CounterPoint if !point.isFrozen =>
         expectValue(s"counter ${p.idx}", held("counters", "counter").num, point.value.toDouble)
+      case point: CounterPoint =>
+        expectValue(s"frozen counter ${p.idx}", held("frozen", "frozen counter").num, point.value.toDouble)
       case point: BinaryOutputStatusPoint =>
         expectValue(s"binary output ${p.idx}", bit(held("binary_outputs", "binary output").bool), bit(point.value))
       case point: AnalogOutputStatusPoint =>
         expectValue(s"analog output ${p.idx}", held("analog_outputs", "analog output").num, point.value)
       case other =>
-        // the device's record of a frozen value is not on the control channel, so one here cannot be checked
         throw new Exception(s"The plugin has no record to check index ${p.idx} against: $other")
     }
   }

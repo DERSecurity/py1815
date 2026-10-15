@@ -5,10 +5,12 @@ has steps a master cannot perform over DNP3: cycle power to the device, change
 an input, check that an output operated. A person does those at a test bench.
 Here a second connection does them, so the procedures run with nobody present.
 
-The process serves two listeners, both on the loopback interface only:
+The process serves two listeners:
 
-- the outstation, a Level 2 configuration of this library, over TCP;
-- a control channel, which stands for the test bench: it changes the inputs,
+- the outstation, a Level 2 configuration of this library, over TCP, with
+  broadcasts also taken as UDP datagrams on the same port. It listens on
+  127.0.0.1 unless ``--host`` names another address;
+- a control channel, on 127.0.0.1 only, which stands for the test bench: it changes the inputs,
   cycles power, changes the settings a power cycle applies, and reports what
   the device holds and which outputs it operated.
 
@@ -31,8 +33,9 @@ certification procedures expect of a device:
   supports at its own address, and allows that to be configurable. The
   library leaves it off unless asked.
 - It asks for the time again some seconds after a master has written it, as
-  a device whose clock drifts does. The library keeps the indication and
-  leaves when to raise it to the device.
+  a device whose clock drifts does, and some seconds later still it stops
+  trusting its clock. The library keeps the indication and the clock's state,
+  and leaves when to change either to the device.
 
 The point map is invented here. It has enough analog inputs that a class 0
 response is longer than one link frame, so a read of it is segmented by the
@@ -148,11 +151,20 @@ class Settings:
     #: Seconds after a master writes the time before the outstation asks for
     #: it again. None never asks again. Not used when ``need_time`` is off.
     time_sync_interval: float | None = 10.0
+    #: Seconds after a master writes the time before the device stops
+    #: trusting its clock, as a clock that drifts does. Events recorded after
+    #: that carry an unsynchronized time until the time is written again.
+    #: None trusts a written time until the next power cycle.
+    time_valid_for: float | None = 20.0
     #: Whether a direct operate sent to a broadcast address is carried out.
     broadcast_controls: bool = True
     #: Whether a cold restart request is carried out. Off, it is refused as a
     #: function the device does not implement.
     cold_restart: bool = True
+    #: Whether broadcasts sent as UDP datagrams to the outstation's port are
+    #: acted on, beside the TCP connection. IEEE 1815-2012 13.2.3.2 asks it of
+    #: a device that accepts broadcasts, as this one does.
+    udp_broadcast: bool = True
 
     def changed(self, changes: Mapping[str, Any]) -> Settings:
         """Return these settings with *changes* applied. A wrong name or type is refused."""
@@ -163,7 +175,7 @@ class Settings:
             wanted = type(getattr(self, name))
             if name == "unsolicited_retries":
                 valid = value is None or (isinstance(value, int) and not isinstance(value, bool))
-            elif name == "time_sync_interval":
+            elif name in ("time_sync_interval", "time_valid_for"):
                 valid = value is None or (
                     isinstance(value, int | float) and not isinstance(value, bool) and value > 0
                 )
@@ -197,12 +209,16 @@ class Device:
     def __init__(
         self,
         *,
+        host: str = LOOPBACK,
         port: int = 20000,
         outstation_address: int = 1024,
         settings: Settings | None = None,
         wall_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
     ) -> None:
+        self._host = host
         self._requested_port = port
+        #: The port the outstation listens on when its network is set up as usual.
+        self.usual_port = port
         self._outstation_address = outstation_address
         self._wall_ms = wall_ms
         #: The wall clock as the outstation last read it.
@@ -231,6 +247,7 @@ class Device:
         self._restart_timer: asyncio.TimerHandle | None = None
         self._restart_task: asyncio.Task[None] | None = None
         self._time_timer: asyncio.TimerHandle | None = None
+        self._clock_timer: asyncio.TimerHandle | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -286,6 +303,20 @@ class Device:
             self.power_cycles += 1
             await self._power_on()
 
+    async def listen(self, port: int, *, udp_broadcast: bool) -> None:
+        """Set up the outstation's network: the TCP port, and whether UDP broadcasts are taken.
+
+        Applied by a power cycle, as a device applies a change to its network
+        configuration by restarting.
+        """
+        settings = self.settings.changed({"udp_broadcast": udp_broadcast})
+        async with self._cycling:
+            await self._power_off()
+            self._requested_port = port
+            self.settings = settings
+            self.power_cycles += 1
+            await self._power_on()
+
     async def settled(self) -> None:
         """Wait until no power cycle is in progress."""
         async with self._cycling:
@@ -295,6 +326,9 @@ class Device:
         if self._time_timer is not None:
             self._time_timer.cancel()
             self._time_timer = None
+        if self._clock_timer is not None:
+            self._clock_timer.cancel()
+            self._clock_timer = None
         server, self._server = self._server, None
         if server is not None:
             self._requested_port = server.port
@@ -325,7 +359,11 @@ class Device:
         )
         # The first poll records where every input stands and buffers nothing.
         outstation.poll()
-        server = OutstationServer(session, bind=f"{LOOPBACK}:{self._requested_port}")
+        server = OutstationServer(
+            session,
+            bind=f"{self._host}:{self._requested_port}",
+            broadcast_datagrams=settings.udp_broadcast,
+        )
         await _start_listening(server)
         self._outstation, self._session, self._server = outstation, session, server
 
@@ -411,14 +449,27 @@ class Device:
         return write
 
     def _time_written(self) -> None:
-        """Start the wait after which the outstation asks for the time again."""
+        """Start the waits after which the outstation asks for the time and stops trusting it."""
+        loop = asyncio.get_running_loop()
         if self._time_timer is not None:
             self._time_timer.cancel()
             self._time_timer = None
         interval = self.settings.time_sync_interval
         if self.settings.need_time and interval is not None:
-            loop = asyncio.get_running_loop()
             self._time_timer = loop.call_later(interval, self._ask_for_time)
+        if self._clock_timer is not None:
+            self._clock_timer.cancel()
+            self._clock_timer = None
+        valid_for = self.settings.time_valid_for
+        if valid_for is not None:
+            self._clock_timer = loop.call_later(valid_for, self._clock_unsynchronized)
+
+    def _clock_unsynchronized(self) -> None:
+        """Mark events recorded from now on as stamped by an unsynchronized clock."""
+        self._clock_timer = None
+        if self._outstation is not None:
+            self._outstation.events.synchronized = False
+            logger.info("the clock is no longer synchronized")
 
     def _ask_for_time(self) -> None:
         self._time_timer = None
@@ -517,11 +568,10 @@ class Device:
 
         The harness keeps its connection across this change and sends the
         next request on it, so the change cannot wait for a power cycle. The
-        session has no public setter for its restart handler; the test bench
-        sets it directly. The setting also holds for later power cycles.
+        setting also holds for later power cycles.
         """
         self.settings = replace(self.settings, cold_restart=enabled)
-        self.session._restart_handler = self._cold_restart if enabled else None
+        self.session.restart_handler = self._cold_restart if enabled else None
 
     def notify(self) -> None:
         """Have buffered events reported now, if a master enabled their class."""
@@ -544,6 +594,12 @@ class Device:
             "binary": _keyed(self.binary),
             "analog": _keyed(self.analog),
             "counters": _keyed(self.counters),
+            # What each counter held at its last freeze, for those that have one.
+            "frozen": {
+                str(index): value
+                for index in installed["CTR"]
+                if (value := outstation.frozen(index)) is not None
+            },
             "binary_outputs": {
                 str(index): outstation.value(Kind.BO, index) for index in installed["BO"]
             },
@@ -744,6 +800,23 @@ class ControlChannel:
         self._device.set_cold_restart(enabled)
         return {"settings": asdict(self._device.settings)}
 
+    async def op_network(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Set up the network: ``port``, or the usual one if absent, and ``udp_broadcast``."""
+        port = request.get("port", self._device.usual_port)
+        udp = request.get("udp_broadcast", True)
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port < 65536:
+            raise ValueError(f"port is {port!r}; it is a TCP port number, or 0 for any free one")
+        if not isinstance(udp, bool):
+            raise ValueError(f"udp_broadcast is {udp!r}; it is true or false")
+        await self._device.listen(port, udp_broadcast=udp)
+        return {"port": self._device.port, "settings": asdict(self._device.settings)}
+
+    async def op_freeze(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Freeze every counter now, as an operator at the device would."""
+        del request
+        await self._device.settled()
+        return {"frozen": self._device.outstation.freeze_all()}
+
     async def op_stop(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """End the process."""
         del request
@@ -754,6 +827,7 @@ class ControlChannel:
 async def main() -> None:
     """Serve the outstation and its control channel until told to stop."""
     parser = argparse.ArgumentParser(description=__doc__.partition("\n")[0])
+    parser.add_argument("--host", default=LOOPBACK, help="the address the outstation listens on")
     parser.add_argument(
         "--port", type=int, default=20000, help="the port the outstation listens on"
     )
@@ -770,6 +844,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s outstation: %(message)s")
 
     device = Device(
+        host=args.host,
         port=args.port,
         outstation_address=args.outstation_address,
         settings=Settings(master_address=args.master_address),
