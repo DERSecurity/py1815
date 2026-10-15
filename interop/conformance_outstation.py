@@ -55,7 +55,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
 from py1815.events import EventClass
-from py1815.profile.binding import Binding, Reading
+from py1815.profile.binding import Binding, Quality, Reading
 from py1815.profile.model import Kind, Point, PointMap
 from py1815.profile.outstation import DerOutstation
 from py1815.server import OutstationServer
@@ -97,6 +97,7 @@ _OPERATED_KEPT = 4096
 _REQUEST_LIMIT = 1 << 20
 
 _KINDS = {"BI": Kind.BI, "AI": Kind.AI, "CTR": Kind.CTR}
+_OUTPUT_KINDS = {"BO": Kind.BO, "AO": Kind.AO}
 
 
 def point_map(*, frozen_counters: bool = True) -> PointMap:
@@ -149,6 +150,9 @@ class Settings:
     time_sync_interval: float | None = 10.0
     #: Whether a direct operate sent to a broadcast address is carried out.
     broadcast_controls: bool = True
+    #: Whether a cold restart request is carried out. Off, it is refused as a
+    #: function the device does not implement.
+    cold_restart: bool = True
 
     def changed(self, changes: Mapping[str, Any]) -> Settings:
         """Return these settings with *changes* applied. A wrong name or type is refused."""
@@ -211,6 +215,11 @@ class Device:
         self.counters: dict[int, int] = dict.fromkeys(COUNTERS, 0)
         #: When each input last changed, by the wall clock.
         self._changed_at: dict[tuple[Kind, int], int] = {}
+        #: The quality of each input whose source is not good. Like the values,
+        #: it belongs to the plant and survives a power cycle.
+        self.quality: dict[tuple[Kind, int], Quality] = {}
+        #: What each output was last set to since the device powered on.
+        self.outputs: dict[tuple[Kind, int], bool | float] = {}
         #: Every write that reached an output, oldest first, each numbered.
         self.operated: deque[dict[str, Any]] = deque(maxlen=_OPERATED_KEPT)
         self._operations = 0
@@ -308,7 +317,7 @@ class Device:
             master_address=settings.master_address,
             max_response=settings.max_response,
             need_time=settings.need_time,
-            restart_handler=self._cold_restart,
+            restart_handler=self._cold_restart if settings.cold_restart else None,
             broadcast_controls=settings.broadcast_controls,
             unsolicited=settings.unsolicited,
             unsolicited_confirm_timeout=settings.unsolicited_confirm_timeout,
@@ -338,22 +347,55 @@ class Device:
         if settings.counters:
             for index in self.counters:
                 binding.read(Kind.CTR, index, self._reader(Kind.CTR, self.counters, index))
+        # A power cycle loses what the outputs were set to.
+        self.outputs = {
+            **{(Kind.BO, index): False for index in BINARY_OUTPUTS},
+            **{(Kind.AO, index): 0.0 for index in ANALOG_OUTPUTS},
+        }
         if settings.binary_outputs:
             for index in BINARY_OUTPUTS:
-                binding.output(Kind.BO, index, self._writer(Kind.BO, index), initial=False)
+                binding.output(
+                    Kind.BO,
+                    index,
+                    self._writer(Kind.BO, index),
+                    initial=False,
+                    status=self._status(Kind.BO, index),
+                )
         if settings.analog_outputs:
             for index in ANALOG_OUTPUTS:
-                binding.output(Kind.AO, index, self._writer(Kind.AO, index), initial=0.0)
+                binding.output(
+                    Kind.AO,
+                    index,
+                    self._writer(Kind.AO, index),
+                    initial=0.0,
+                    status=self._status(Kind.AO, index),
+                )
         return binding
+
+    def _status(self, kind: Kind, index: int) -> Callable[[], Reading]:
+        """Report an output at the value last written to it, with its source's quality."""
+
+        def read() -> Reading:
+            return Reading(
+                self.outputs[(kind, index)],
+                quality=self.quality.get((kind, index), Quality.GOOD),
+            )
+
+        return read
 
     def _reader(self, kind: Kind, values: Mapping[int, Any], index: int) -> Callable[[], Reading]:
         def read() -> Reading:
-            return Reading(values[index], timestamp_ms=self._changed_at.get((kind, index)))
+            return Reading(
+                values[index],
+                quality=self.quality.get((kind, index), Quality.GOOD),
+                timestamp_ms=self._changed_at.get((kind, index)),
+            )
 
         return read
 
     def _writer(self, kind: Kind, index: int) -> Callable[[float], None]:
         def write(value: float) -> None:
+            self.outputs[(kind, index)] = bool(value) if kind is Kind.BO else value
             self._operations += 1
             self.operated.append(
                 {
@@ -439,6 +481,48 @@ class Device:
             "events": buffered,
         }
 
+    def set_quality(self, kind: str, index: int, quality: str) -> dict[str, Any]:
+        """Set what one input's source knows about its value, and let the outstation notice.
+
+        Returns the input, its quality, and how many events the outstation
+        buffered for the change.
+        """
+        which = _KINDS.get(kind) or _OUTPUT_KINDS.get(kind)
+        if which is None:
+            names = ", ".join([*_KINDS, *_OUTPUT_KINDS])
+            raise ValueError(f"kind is {kind!r}; a point with a source is one of {names}")
+        indices = {
+            Kind.BI: self.binary,
+            Kind.AI: self.analog,
+            Kind.CTR: self.counters,
+            Kind.BO: BINARY_OUTPUTS,
+            Kind.AO: ANALOG_OUTPUTS,
+        }[which]
+        if index not in indices:
+            raise ValueError(f"the device has no {kind}{index}")
+        try:
+            wanted = Quality(quality)
+        except ValueError:
+            names = ", ".join(q.value for q in Quality)
+            raise ValueError(f"quality is {quality!r}; it is one of {names}") from None
+        if wanted is Quality.GOOD:
+            self.quality.pop((which, index), None)
+        else:
+            self.quality[(which, index)] = wanted
+        buffered = self.outstation.poll()
+        return {"kind": kind, "index": index, "quality": wanted.value, "events": buffered}
+
+    def set_cold_restart(self, enabled: bool) -> None:
+        """Turn cold restart support on or off without a power cycle.
+
+        The harness keeps its connection across this change and sends the
+        next request on it, so the change cannot wait for a power cycle. The
+        session has no public setter for its restart handler; the test bench
+        sets it directly. The setting also holds for later power cycles.
+        """
+        self.settings = replace(self.settings, cold_restart=enabled)
+        self.session._restart_handler = self._cold_restart if enabled else None
+
     def notify(self) -> None:
         """Have buffered events reported now, if a master enabled their class."""
         if self._server is not None:
@@ -476,6 +560,14 @@ class Device:
             "events_held": {
                 str(int(event_class)): outstation.events.count(event_class)
                 for event_class in EventClass
+            },
+            "quality": {
+                kind.value: {
+                    str(index): quality.value
+                    for (which, index), quality in self.quality.items()
+                    if which is kind
+                }
+                for kind in [*_KINDS.values(), *_OUTPUT_KINDS.values()]
             },
             "deadband": DEADBAND,
             "analog_events_latest_only": session.facts.analog_latest_only,
@@ -627,6 +719,30 @@ class ControlChannel:
             done.append(self._device.change(kind, index, value))
         self._device.notify()
         return {"changes": done}
+
+    async def op_quality(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Set the quality of one input: ``kind``, ``index`` and ``quality``.
+
+        ``quality`` is ``good``, ``comm-lost``, ``never-read`` or ``offline``.
+        """
+        await self._device.settled()
+        kind, index, quality = request.get("kind"), request.get("index"), request.get("quality")
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError(f"index is {index!r}; an index is a whole number")
+        if not isinstance(kind, str) or not isinstance(quality, str):
+            raise ValueError("'kind' and 'quality' are strings")
+        done = self._device.set_quality(kind, index, quality)
+        self._device.notify()
+        return done
+
+    async def op_cold_restart(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Turn cold restart support on or off now: ``enabled``."""
+        await self._device.settled()
+        enabled = request.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError(f"enabled is {enabled!r}; it is true or false")
+        self._device.set_cold_restart(enabled)
+        return {"settings": asdict(self._device.settings)}
 
     async def op_stop(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """End the process."""

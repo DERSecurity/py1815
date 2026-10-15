@@ -6,7 +6,7 @@ package py1815conformance
 import io.stepfunc.dnp3c.dnp3.app._
 import io.stepfunc.dnp3c.dnp3.app.objects.AttributeValue
 import io.stepfunc.dnp3c.dnp3.{
-  ActionResult, ActionTiming, CheckReporter, DeferredCheck, EventExpectation, InputKind, IntegrationPlugin, OutputKind,
+  AbnormalFlag, ActionResult, ActionTiming, CheckReporter, DeferredCheck, EventExpectation, InputKind, IntegrationPlugin, OutputKind,
   PluginReporter, PointKind
 }
 
@@ -113,6 +113,12 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   override def setLinkLayerConfirm(reporter: PluginReporter, value: Boolean): Unit = {
     if (value) throw new NotSupported("data link confirmation of its own transmissions")
     reporter.log("The outstation never requests data link confirmation, so there is nothing to turn off")
+  }
+
+  // Changed without a power cycle: the harness sends its next request on the connection it has.
+  override def setColdRestartSupport(reporter: PluginReporter, enabled: Boolean): Unit = {
+    val answer = device.ask("cold_restart", "enabled" -> enabled)
+    reporter.log(s"Set cold restart support to $enabled; the settings are ${ujson.write(answer("settings"))}")
   }
 
   override def setSelfAddressSupport(reporter: PluginReporter, value: Boolean): Unit = {
@@ -324,6 +330,19 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
     }
 
+  // Analog input events whose values fit 16 bits, each from an input of its own.
+  override def generateExactSmallAnalogInputEvents(reporter: PluginReporter, numEvents: Int): Unit = {
+    val s = state()
+    val changes = steps(s, unusedFirst(indices(s, "analog")).take(numEvents))
+    if (changes.size < numEvents) {
+      throw new Exception(s"The device has ${changes.size} analog inputs, too few for $numEvents events")
+    }
+    changes.foreach { case (_, index, value) =>
+      if (math.abs(value.num) >= 32768) throw new Exception(s"AI$index would move to ${value.num}, outside 16 bits")
+    }
+    generate(reporter, changes)
+  }
+
   override def generateClassEvents(reporter: PluginReporter, eventClass: EventClass): Unit = {
     val s = state()
     eventClass match {
@@ -362,6 +381,66 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     val changes = indices(s, "analog").map(index => ("AI", index, ujson.Num(1000 * patterns + 37 * index)))
     batches += apply(reporter, changes)
   }
+
+  // Apply a value to one analog input. The change is a batch of its own if the device buffered an event for it.
+  override def setAnalogInput(reporter: PluginReporter, index: Int, value: Double): Unit = {
+    val generated = apply(reporter, List(("AI", index, ujson.Num(value))))
+    if (generated.nonEmpty) batches += generated
+    reporter.log(s"Applied $value to AI$index; the device buffered ${generated.size} event(s)")
+  }
+
+  // Change one input. The change is a batch of its own, empty if the input's class reports no events.
+  override def generateEventOn(reporter: PluginReporter, kind: PointKind, index: Int): Unit = {
+    val s = state()
+    val changes = kind match {
+      case PointKind.BinaryInput => toggles(s, List(index))
+      case PointKind.AnalogInput => steps(s, List(index))
+      case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+      case other => throw new Exception(s"The plugin generates events on binary and analog inputs, not ${other.name}s")
+    }
+    val generated = apply(reporter, changes)
+    batches += generated
+    reporter.log(s"The device buffered ${generated.size} event(s)")
+  }
+
+  // ---------------------------------------------------------------- flags
+
+  // The point kinds whose flags follow what the device's source knows about the value.
+  private def qualityKind(kind: PointKind): Option[String] = kind match {
+    case PointKind.BinaryInput => Some("BI")
+    case PointKind.AnalogInput => Some("AI")
+    case PointKind.Counter => Some("CTR")
+    case PointKind.BinaryOutputStatus => Some("BO")
+    case PointKind.AnalogOutputStatus => Some("AO")
+    case _ => None
+  }
+
+  private def setQuality(reporter: PluginReporter, kind: String, index: Int, quality: String): Unit = {
+    val done = device.ask("quality", "kind" -> kind, "index" -> index, "quality" -> quality)
+    reporter.log(s"Set the quality of $kind$index to $quality: ${ujson.write(done)}")
+  }
+
+  // Every point of the kind back to good quality, which reports ONLINE and no other flag. Frozen counters have no
+  // quality of their own here, so their flags are always normal.
+  override def setFlagsNormal(reporter: PluginReporter, kind: PointKind): Unit = qualityKind(kind) match {
+    case Some(name) =>
+      val abnormal = state()("quality")(name).obj.keys.map(_.toInt).toList.sorted
+      abnormal.foreach(setQuality(reporter, name, _, "good"))
+      if (abnormal.isEmpty) reporter.log(s"Every $name already reports ONLINE and no other flag")
+    case None if kind == PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+    case None => reporter.log(s"The device's ${kind.name}s always report ONLINE and no other flag")
+  }
+
+  // The source of the first point named loses communication: the device reports COMM_LOST with ONLINE clear.
+  override def setFlagAbnormal(reporter: PluginReporter, kind: PointKind, indices: Seq[Int]): AbnormalFlag =
+    qualityKind(kind) match {
+      case Some(name) =>
+        val index = indices.headOption.getOrElse(throw new Exception(s"No $name was named"))
+        setQuality(reporter, name, index, "comm-lost")
+        AbnormalFlag(index, Some(0x04))
+      case None =>
+        throw new Exception(s"The device's ${kind.name}s have no source whose loss the test bench can simulate")
+    }
 
   // -------------------------------------------------- uninstalling points
 
