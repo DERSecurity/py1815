@@ -1627,7 +1627,7 @@ no schema cannot say a document is invalid, and lays out a wrong document as fai
 as a right one. A file chosen in the console is read by the browser as UTF-8, where the
 command decodes a file as it declares.
 
-**D99 -- A counter read in a narrow or flagless variation is answered at 32 bits with
+**D100 -- A counter read in a narrow or flagless variation is answered at 32 bits with
 flags, and frozen counters are the counters that freeze.** Counters and frozen counters
 are kept in 32 bits (the reason is on `FrozenCounterVariation`), and the outstation used
 to refuse a read of any other counter variation with `OBJECT_UNKNOWN`. IEEE 1815-2012

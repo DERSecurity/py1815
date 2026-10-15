@@ -18,9 +18,9 @@ says so explicitly.
 
 - A read of counters in group 20 variation 2, 5 or 6, or of frozen counters in group 21
   variation 2 or 10, is answered at 32 bits with flags. It was refused with
-  `OBJECT_UNKNOWN`. The Device Profile lists these reads (D99).
+  `OBJECT_UNKNOWN`. The Device Profile lists these reads (D100).
 - An outstation whose counters do not freeze answers a read of group 21 with
-  `OBJECT_UNKNOWN`. It answered with no objects and no error indication (D99).
+  `OBJECT_UNKNOWN`. It answered with no objects and no error indication (D100).
 
 ## [0.2.0] - 2026-10-06
 
