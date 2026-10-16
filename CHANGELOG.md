@@ -9,7 +9,7 @@ says so explicitly.
 
 Nothing yet.
 
-## [0.3.0] - 2026-10-13
+## [0.3.0] - 2026-10-16
 
 ### Added
 
@@ -184,6 +184,37 @@ Nothing yet.
 
   **The service lays a Device Profile document out, and the console shows and prints it (#92).** The `der.document` operation answers with a document as a title, header facts and sections of tables: the one sent as `document`, or the one the outstation was given with `--device-profile`. It sends nothing to the outstation, so it is allowed without `--allow-control`. The console's DER tab has a Device Profile document card that shows the outstation's document or a file from your machine, and prints it alone. The card that compares what an outstation serves with a document is now titled Device Profile comparison. From Python, `py1815.profile.device_profile_view.read` returns the same model and `page` writes it as HTML.
 
+- **A conformance harness the project did not write runs the certification procedures, and
+  every procedure that runs passes (#94).** Continuous integration runs
+  [dnp3c](https://github.com/stepfunc/dnp3c) 0.2.0, Step Function I/O's conformance test
+  harness, against a Subset Level 2 configuration of the outstation under revision 3.1 rev 1
+  of the DNP3 IED Certification Procedure, and
+  [Conformance run with dnp3c](https://dersecurity.github.io/py1815/conformance/) says how
+  every procedure ends and why. None fails, none is excluded and none passes with a warning.
+  The tool's report is kept in `compliance/`. The job compares each run with a record, so a
+  procedure that starts to fail or starts to pass is noticed. `interop/dnp3c/`, the test
+  program that links the harness, and `compliance/` are licensed under the GNU General Public
+  License, version 3 only; nothing in them is part of the library, the wheel or the source
+  distribution.
+
+- **Cold restart can be turned on and off without a restart, and an outstation reports its
+  frozen values (#100).** `Session.restart_handler` is a property: setting a handler turns
+  cold restart on, and setting `None` turns it off, from the next request, with the master
+  still connected (D55). `DerOutstation.frozen(index)` returns the value a counter held at
+  its last freeze, or `None` if it was never frozen.
+
+- **Connections and protocol anomalies are reported as records to an observer the host application gives (#101).**
+  `OutstationServer` and the master's `Outstation` take a `connection_observer`, called with a
+  `ConnectionEvent` for each connection accepted, refused, displaced or ended at the outstation,
+  and each connection made, failed, lost or closed at the master: the endpoints, TCP or TLS, the
+  identity a TLS peer proved, and the reason. `Session` takes an `anomaly_observer`, called with
+  a `ProtocolAnomaly` for each frame or request it drops and each unsolicited response it gives up
+  on, with a stable code, a severity and the link addresses. A host application can keep a record
+  of every connection attempt and pass anomalies to its own monitoring without subclassing the
+  listener. Both are optional and settable as attributes, the log lines are unchanged, an
+  observer that raises does not affect the connection, and `on_connection` works as before.
+  `docs/observers.md` lists the records and what produces each.
+
 ### Changed
 
 - **DER behavior is stated as out of scope** (#72). The README, the DER page and the design notes
@@ -213,6 +244,35 @@ Nothing yet.
   IIN1.0 is set in the next response. Nothing is sent back, as before. A confirmed broadcast
   is taken only after a link reset, and the same frame sent again is not acted on twice. A
   link reset or a link test sent to a broadcast address is still not acted on.
+
+- **An outstation without unsolicited responses refuses a disable request (#97).** Built
+  without them, which is the default, an outstation used to agree to `DISABLE_UNSOLICITED`
+  while refusing `ENABLE_UNSOLICITED`. It now refuses both with IIN2.0, as the certification
+  procedure expects of a device with the mode off (IED Certification Procedure 3.1 rev 1,
+  8.11.2), and its Device Profile no longer lists function code 21. A master that sends a
+  disable request at startup will see the refusal; build the outstation with `--unsolicited`,
+  or `Session(unsolicited=True)`, for one that takes the request. An outstation built with
+  unsolicited responses is not affected.
+
+- **A master sends a disable request at startup only when it is set to use unsolicited
+  reporting (#98).** The startup sequence used to begin with `DISABLE_UNSOLICITED` for every
+  outstation. A master that names no class in `enable_unsolicited`, which is the default, now
+  sends none, and no master sends one when an outstation reports a restart (IEEE 1815-2012
+  5.1.1.2 and 5.1.1.1.2). The integrity poll is therefore the first request of a connection.
+  When it reports a restart, a master that clears the restart makes the poll once more after
+  clearing it, and after writing the time if the outstation asked for it, so connecting to an
+  outstation that has just started takes two integrity polls. Use the `disable_unsolicited`
+  operation to stop reporting that an earlier master left enabled.
+
+- **Counter reads in a 16-bit or flagless variation are answered at 32 bits, and frozen
+  counters are only the counters that freeze (#100).** A read of group 20 variation 2, 5 or 6
+  is answered in variation 1, and a read of group 21 variation 2 or 10 in variation 1 or 9.
+  These reads used to be refused with `OBJECT_UNKNOWN`. DNP3 IED Certification Procedure 3.1
+  rev 1, 8.24.2, lets a Level 2 device refuse only its first read of a type, and accepts a
+  32-bit answer from a device that keeps 32-bit values (D100). The Device Profile lists these
+  reads. An outstation whose counters do not freeze now refuses a read of group 21 with
+  `OBJECT_UNKNOWN`, where it answered with no objects and no error indication, refuses a
+  freeze as a function it does not implement, and lists neither in its Device Profile.
 
 ### Fixed
 
@@ -259,6 +319,15 @@ Nothing yet.
   `lost` update that says how many were dropped, and the console reloads what it shows. An
   event stream that has not accepted a write for 60 seconds is closed, so the browser opens
   a new one, and the console reloads after any reconnection.
+
+- **The IEEE 1815.2 outstation refuses a control with the clear bit set (#102).** A control
+  relay output block with the clear bit set and an operation used to be carried out as if
+  the bit were not there, while one with the clear bit alone was refused. The outstation does
+  not support the clear bit, and IEEE 1815-2012 Annex A has a device answer `NOT_SUPPORTED`
+  to a combination with the bit set that it does not support, so every such block is now
+  refused, on select, operate and direct operate, and operates nothing (D101). A master that
+  sets the bit out of habit should stop setting it. `ControlRelayOutputBlock` still decodes
+  the bit, so a provider of its own can support it.
 
 ## [0.2.0] - 2026-10-06
 
