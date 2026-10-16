@@ -1691,6 +1691,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
   from that outstation and its session. `profile.device_profile_view` reads the XML of any
   Device Profile into facts, sections and tables, and writes them as a page. It knows a
   few element names and no schema, and nothing of points, sessions or the wire.
+- `observers` defines the records the listener, the session and the master report to the
+  host application, and knows nothing of sockets or frames.
 
 ## Testing
 

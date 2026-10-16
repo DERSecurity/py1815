@@ -70,6 +70,7 @@ nav:
   - Serving an outstation: outstation.md
   - Serving a DER: der.md
   - Configuring the outstation: der-config.md
+  - Connection and anomaly reports: observers.md
   - The master: master.md
   - The console: console.md
   - The master's API: master-api.md
@@ -86,3 +87,4 @@ nav:
       - DER profile: reference/profile.md
       - Master: reference/master.md
       - Protocol layers: reference/protocol.md
+      - Observers: reference/observers.md
