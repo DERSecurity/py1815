@@ -520,6 +520,22 @@ class TestOutstationConnections:
         assert refused.reason.startswith("not authorized: peer offers names ['stranger.test']")
         assert not listening.server.connected
 
+    async def test_a_broadcast_datagram_anomaly_names_its_sender(self):
+        seen: list[ProtocolAnomaly] = []
+        session = _session(anomaly_observer=seen.append)
+        async with _Listener(session=session, broadcast_datagrams=True) as listening:
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                asyncio.DatagramProtocol, remote_addr=("127.0.0.1", listening.server.port)
+            )
+            sender = Endpoint.of(transport.get_extra_info("sockname"))
+            transport.sendto(_request(destination=BROADCAST))
+            await _until(lambda: seen)
+            transport.close()
+
+        assert seen[0].code is AnomalyCode.BROADCAST_NOT_ACTED_ON
+        assert seen[0].peer == sender
+
     async def test_an_anomaly_names_the_connection_it_arrived_on(self):
         seen: list[ProtocolAnomaly] = []
         async with _Listener(session=_session(anomaly_observer=seen.append)) as listening:
