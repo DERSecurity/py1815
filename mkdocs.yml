@@ -70,6 +70,7 @@ nav:
   - Serving an outstation: outstation.md
   - Serving a DER: der.md
   - Configuring the outstation: der-config.md
+  - Connection and anomaly reports: observers.md
   - The master: master.md
   - The console: console.md
   - The master's API: master-api.md
@@ -77,6 +78,7 @@ nav:
   - Configuring the master: master-config.md
   - Design decisions: DESIGN.md
   - Testing: testing.md
+  - Conformance run with dnp3c: conformance.md
   - Reference:
       - Session: reference/session.md
       - Listener: reference/server.md
@@ -86,3 +88,4 @@ nav:
       - DER profile: reference/profile.md
       - Master: reference/master.md
       - Protocol layers: reference/protocol.md
+      - Observers: reference/observers.md

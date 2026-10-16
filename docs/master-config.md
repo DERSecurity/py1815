@@ -148,10 +148,10 @@ These go in `defaults`, in an outstation's entry, or both.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `startup` | `true` | On connect and after a reported restart: disable unsolicited reporting, then run an integrity poll |
+| `startup` | `true` | On connect and after a reported restart: run an integrity poll. On connect, when `enable_unsolicited` names a class, a request to disable unsolicited reporting is sent first |
 | `clear_restart` | `true` | Clear the restart indication when a response sets it. Runs only when `allow_control` is on |
 | `write_time` | `true` | Write the time when a response asks for it. Runs only when `allow_control` is on |
-| `enable_unsolicited` | `[]` | Event classes (1, 2, 3) to enable unsolicited reporting for after startup |
+| `enable_unsolicited` | `[]` | Event classes (1, 2, 3) to enable unsolicited reporting for after startup. Empty means the master does not use unsolicited reporting with the outstation, and sends no request to enable or disable it |
 | `events_when_indicated` | `true` | Poll for events when a response says some are waiting |
 | `integrity_on_overflow` | `true` | Run an integrity poll when a response reports an event buffer overflow |
 | `time_procedure` | `null` | How `write_time` sets the clock. `null` writes the master's time as it stands; `"lan"` and `"non_lan"` follow the procedures of IEEE 1815-2012 10.3.3, which correct for the time the request takes |

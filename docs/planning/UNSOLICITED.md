@@ -93,15 +93,21 @@ was followed and the disagreement is recorded:
   and checks it is answered. TB2015-002a has that read held until the confirmation or
   the timeout. It is held, and answered within the step's wait.
 - Section 8.11.2.6, steps 14 and 15, expect a disable request refused when unsolicited
-  responses are configured off. It is agreed to, as D21 decided; the test catalog lists
-  this as a departure.
+  responses are configured off. It is refused (D21). It was agreed to when this was
+  built, and the test catalog listed that as a departure.
 
 ## What is not done
 
-- **Interoperability.** The independent masters in `interop/` run against an outstation
-  built without unsolicited responses, as before. Running one against an outstation that
-  sends them, and having it confirm, is the next thing worth doing; it is the only check
-  here that would come from an implementation other than this one.
+- **Interoperability, in part.** The conformance harness in `interop/dnp3c/` is a master
+  this project did not write. It runs the unsolicited procedures of section 8.11 against
+  an outstation that sends unsolicited responses: it confirms them, withholds the
+  confirmation, and sends the wrong one. [The summary](../conformance.md) has the
+  outcome. The procedures for class 1, 2 and 3 data and for unsolicited and polled
+  responses pass. The two that fail are the two points noted above: the held read of
+  8.11.2.1 and the departure of 8.11.2.6. The two independent masters in `interop/`,
+  built on opendnp3 and on the `dnp3` crate, still run against an outstation built
+  without unsolicited responses. Running one of them against an outstation that sends
+  them is still worth doing.
 - **Enabling by point.** The standard makes it optional. Only classes are accepted.
 - **A broadcast enable or disable** is noted and not acted on, the default AN2015-001
   recommends.

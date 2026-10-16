@@ -382,7 +382,7 @@ class TestUnsolicitedAndPolled:
 
 
 class TestConfiguredOff:
-    def test_8_11_2_6_steps_1_to_13_nothing_is_sent_and_enable_is_refused(self):
+    def test_8_11_2_6_nothing_is_sent_and_enable_and_disable_are_refused(self):
         dut = Dut()
         dut.restart()
 
@@ -403,8 +403,6 @@ class TestConfiguredOff:
         assert refused.iin2 & IIN2_BAD_FUNCTION and not refused.body
         assert _wait(dut, 10.0) == []
 
-        # Steps 14 and 15 expect the disable request refused as well. It is
-        # agreed to instead (D21): a device that sends none is already in the
-        # state it asks for. The catalog records this as a departure.
-        agreed = dut.master.request(DISABLE_UNSOLICITED, ALL_CLASSES).fragment
-        assert not agreed.iin2 & IIN2_BAD_FUNCTION
+        # 14 and 15: so is disabling (D21).
+        refused = dut.master.request(DISABLE_UNSOLICITED, ALL_CLASSES).fragment
+        assert refused.iin2 & IIN2_BAD_FUNCTION and not refused.body

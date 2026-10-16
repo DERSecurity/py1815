@@ -38,6 +38,7 @@ from ied_harness import (
     header,
 )
 
+from py1815.profile import device_profile
 from py1815.profile.binding import Quality
 from py1815.profile.model import Kind
 
@@ -421,6 +422,30 @@ class TestFrozenCounters:
         fragment = dut.master.read(header(21, 0)).fragment
         assert not fragment.body and fragment.iin2 & NO_POINTS
 
+    def test_8_16_2_2_2_a_device_whose_counters_do_not_freeze(self):
+        dut = Dut(frozen_counters=False)
+        assert dut.master.read(header(20, 0)).fragment.of(20), "the counters are there"
+        fragment = dut.master.read(header(21, 0)).fragment
+        assert not fragment.body and fragment.iin2 & NO_POINTS
+
+    def test_8_16_2_2_2_a_device_whose_counters_do_not_freeze_refuses_a_freeze(self):
+        """A freeze it accepted could not be read back, so it is a function it does not have."""
+        dut = Dut(frozen_counters=False)
+        fragment = dut.master.request(FREEZE, header(20, 0)).fragment
+        assert not fragment.body and fragment.iin2 & IIN2_BAD_FUNCTION
+        assert dut.outstation.frozen(0) is None
+
+    @pytest.mark.parametrize("frozen", [True, False], ids=["counters_that_freeze", "that_do_not"])
+    def test_8_16_2_2_2_the_device_profile_lists_frozen_counters_and_freezes_only_if_any_freeze(
+        self, frozen
+    ):
+        dut = Dut(frozen_counters=frozen)
+        rows = device_profile.implementation(dut.outstation, dut.session.facts).rows
+        freezes = {7, 8, 9, 10}
+        assert any(row.group == 20 and row.request[0] == 1 for row in rows), "counters are read"
+        assert any(row.group == 21 for row in rows) is frozen
+        assert any(row.group == 20 and row.request[0] in freezes for row in rows) is frozen
+
     @pytest.mark.parametrize(
         ("function", "answered"),
         [
@@ -617,6 +642,7 @@ RANGED = [
     pytest.param(10, 4, {"binary_outputs": False}, id="8_23_2_2_binary_output_status"),
     pytest.param(20, 3, {"counters": False}, id="8_23_2_3_counters"),
     pytest.param(21, 3, {"counters": False}, id="8_23_2_4_frozen_counters"),
+    pytest.param(21, 3, {"frozen_counters": False}, id="8_23_2_4_counters_that_do_not_freeze"),
     pytest.param(30, 4, {"analog_inputs": False}, id="8_23_2_5_analog_inputs"),
     pytest.param(40, 4, {"analog_outputs": False}, id="8_23_2_6_analog_output_status"),
 ]
@@ -679,30 +705,36 @@ class TestSpecificStaticVariations:
         assert {o.variation for o in objects} == {2} and {o.qualifier for o in objects} <= RANGES
         assert all(o.flags == FLAG_ONLINE for o in objects)
 
-    def test_8_24_2_4_counters(self):
+    @pytest.mark.parametrize("variation", [1, 2, 5, 6])
+    def test_8_24_2_4_counters_are_answered_at_32_bits(self, variation):
+        """Counters are kept in 32 bits: a 16-bit request gets a 32-bit answer (steps 10-11)."""
         dut = Dut()
-        objects = dut.master.read(header(20, 1)).fragment.of(20)
+        objects = dut.master.read(header(20, variation)).fragment.of(20)
+        assert len(objects) == len(dut.counts)
         assert {o.variation for o in objects} <= {1, 5} and {o.qualifier for o in objects} <= RANGES
         assert all(o.flags in (None, FLAG_ONLINE) for o in objects)
-        for variation in (2, 5, 6):
-            assert self._refused(dut.master.read(header(20, variation)).fragment), variation
+
+    @pytest.mark.parametrize("variation", [1, 2, 5, 6])
+    def test_8_24_2_4_a_counter_with_an_abnormal_flag_comes_back_with_flags(self, variation):
+        dut = Dut()
         dut.quality[(Kind.CTR, 0)] = Quality.COMM_LOST
-        flagged = dut.master.read(header(20, 1)).fragment.of(20)
+        flagged = dut.master.read(header(20, variation)).fragment.of(20)
         assert flagged[0].variation == 1 and flagged[0].flags == 0x04
+        assert all(o.flags in (None, FLAG_ONLINE) for o in flagged[1:])
 
     def test_8_24_2_5_frozen_counters(self):
         dut = Dut()
         dut.master.request(FREEZE, header(20, 0))
-        for variation, allowed in ((1, {1, 9}), (9, {1, 9})):
+        # Frozen counters are kept in 32 bits: a 16-bit request gets a 32-bit answer.
+        for variation in (1, 2, 9, 10):
             objects = dut.master.read(header(21, variation)).fragment.of(21)
-            assert {o.variation for o in objects} <= allowed, variation
+            assert len(objects) == len(dut.counts), variation
+            assert {o.variation for o in objects} <= {1, 9}, variation
             assert {o.qualifier for o in objects} <= RANGES
             assert all(o.flags in (None, FLAG_ONLINE) for o in objects)
-        for variation in (2, 10):
-            assert self._refused(dut.master.read(header(21, variation)).fragment), variation
         dut.quality[(Kind.CTR, 0)] = Quality.COMM_LOST
         dut.master.request(FREEZE, header(20, 0))
-        for variation in (1, 9):
+        for variation in (1, 2, 9, 10):
             flagged = dut.master.read(header(21, variation)).fragment.of(21)
             assert flagged[0].variation == 1 and flagged[0].flags == 0x04, variation
             assert all(o.flags in (None, FLAG_ONLINE) for o in flagged[1:])

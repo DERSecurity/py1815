@@ -130,6 +130,12 @@ class TestAnIntegrityPoll:
         values = _values(_read(session, CLASS_0, sequence=1))
         assert values[(21, 0)] == 10 and values[(21, 1)] == 20
 
+    def test_frozen_reports_the_value_a_counter_held_at_its_last_freeze(self):
+        outstation, _ = _built()
+        assert outstation.frozen(0) is None, "never frozen"
+        outstation.freeze_all()
+        assert outstation.frozen(0) == 10 and outstation.frozen(1) == 20
+
     def test_a_long_map_is_split_into_blocks_that_fit(self):
         rows = [analog(f"Point {index}", index, event_class=3) for index in range(400)]
         point_map = load.resolve(document({"AI": rows}), units(0))
@@ -767,6 +773,47 @@ class TestBinaryOutputsBehaveAsLatched:
         outstation, device = _built()
         status = _operate(outstation.session(), _crob(0, ControlRelayOutputBlock.build()))
         assert status is CommandStatus.NOT_SUPPORTED
+        assert device.applied == []
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param(
+                ControlRelayOutputBlock.build(OperationType.LATCH_ON, clear=True), id="latch on"
+            ),
+            pytest.param(
+                ControlRelayOutputBlock.build(OperationType.LATCH_OFF, clear=True), id="latch off"
+            ),
+            pytest.param(
+                ControlRelayOutputBlock.build(
+                    OperationType.PULSE_ON, trip_close=TripCloseCode.CLOSE, clear=True
+                ),
+                id="close",
+            ),
+            pytest.param(ControlRelayOutputBlock.build(clear=True), id="no operation"),
+        ],
+    )
+    def test_a_control_with_the_clear_bit_set_is_not_supported(self, block):
+        """The clear bit is not supported, so no combination with it set is (IEEE 1815-2012,
+        Annex A, group 12 variation 1). Carrying out the operation would skip the
+        cancellation the master asked for."""
+        outstation, device = _built()
+        assert _operate(outstation.session(), _crob(0, block)) is CommandStatus.NOT_SUPPORTED
+        assert device.applied == []
+
+    def test_a_control_with_the_clear_bit_set_is_refused_at_the_select(self):
+        outstation, device = _built()
+        block = ControlRelayOutputBlock.build(OperationType.LATCH_ON, clear=True)
+        selected = outstation.session()._handle_fragment(
+            _control(FunctionCode.SELECT, _crob(0, block), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.NOT_SUPPORTED
+        assert device.applied == []
+
+    def test_a_control_with_the_obsolete_queue_bit_set_is_not_supported(self):
+        outstation, device = _built()
+        block = ControlRelayOutputBlock(control_code=int(OperationType.LATCH_ON) | 0x10)
+        assert _operate(outstation.session(), _crob(0, block)) is CommandStatus.NOT_SUPPORTED
         assert device.applied == []
 
     def test_the_mirror_input_follows_the_output(self):

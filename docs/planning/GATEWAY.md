@@ -99,7 +99,7 @@ plan is; they are summarized here and ticked there. The others are tracked here.
   without limit. A read is held while one waits, and nothing unsolicited is sent while a
   solicited response waits. The session gained `initiate()` and still does no I/O;
   `OutstationServer` drives it, and `notify()` reports a new event at once. Off by default,
-  and off answers as before, refusing `ENABLE_UNSOLICITED`. D69 to D71 in
+  and off refuses both `ENABLE_UNSOLICITED` and `DISABLE_UNSOLICITED` (D21). D69 to D71 in
   [DESIGN.md](../DESIGN.md) and [UNSOLICITED.md](UNSOLICITED.md) record it. The
   destination is asked of one helper, which names the master being served and says nowhere
   when there is none. A session that takes any master (G4) reports to the master that

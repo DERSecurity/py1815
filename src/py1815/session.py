@@ -117,6 +117,14 @@ from py1815.objects import (
 # every object -- so the encoder is the same one, named for the first caller
 # rather than for the format.
 from py1815.objects import event_block as indexed_block
+from py1815.observers import (
+    SEVERITY,
+    AnomalyCode,
+    AnomalyObserver,
+    Endpoint,
+    ObserverGuard,
+    ProtocolAnomaly,
+)
 from py1815.transport import Reassembler, TransportError, segment
 
 logger = logging.getLogger(__name__)
@@ -188,10 +196,16 @@ _SUPPORTED_FUNCTIONS = frozenset(
         FunctionCode.CONFIRM,
         FunctionCode.READ,
         FunctionCode.WRITE,
-        FunctionCode.DISABLE_UNSOLICITED,
         FunctionCode.DELAY_MEASURE,
     }
     | _CONTROL_FUNCTIONS
+)
+
+#: Enabling and disabling unsolicited responses. Supported only by a session
+#: built with them (D69). One built without them refuses both, as a device
+#: that does not have the feature does (D21).
+_UNSOLICITED_FUNCTIONS = frozenset(
+    {FunctionCode.ENABLE_UNSOLICITED, FunctionCode.DISABLE_UNSOLICITED}
 )
 
 #: The freezes, answered and not. Supported only by an outstation that was
@@ -734,6 +748,7 @@ class Session:
         unsolicited_confirm_timeout: float = DEFAULT_UNSOLICITED_CONFIRM_TIMEOUT,
         unsolicited_retries: int | None = DEFAULT_UNSOLICITED_RETRIES,
         unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME,
+        anomaly_observer: AnomalyObserver | None = None,
     ) -> None:
         """
         Args:
@@ -813,7 +828,8 @@ class Session:
                 device and returns the milliseconds the master should wait.
                 The session answers with that delay and then stands as it
                 does at startup. Without a handler the function is refused,
-                which is how it is disabled.
+                which is how it is disabled. Settable later through the
+                property of the same name, with no restart.
             broadcast_controls: Whether a direct operate addressed to every
                 outstation is carried out. Off by default: a broadcast is
                 answered by nobody, so nothing reports how the control went.
@@ -855,7 +871,21 @@ class Session:
                 starts it again sooner. None leaves it to those three.
                 The events are kept either way, and a class poll reads
                 them.
+            anomaly_observer: Called with a :class:`~py1815.observers.ProtocolAnomaly`
+                for each frame, fragment or exchange this session drops or
+                gives up on, beside the log line it writes. Settable later
+                through the attribute of the same name. See
+                :mod:`py1815.observers`.
         """
+        #: Called with each protocol anomaly, or None.
+        self.anomaly_observer = anomaly_observer
+        #: The connection the session is serving, set by the listener that
+        #: owns the socket. Reported with each anomaly.
+        self.connection_peer: Endpoint | None = None
+        self._anomaly_guard = ObserverGuard("anomaly observer")
+        #: Set while octets from a broadcast channel are handled, so an
+        #: anomaly names their sender and not the connection.
+        self._datagram: tuple[Endpoint | None] | None = None
         self._provider = provider
         self._controls = control_provider
         self._events = events
@@ -1098,6 +1128,16 @@ class Session:
         if wanted and self._time_sink is None:
             raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = bool(wanted)
+
+    @property
+    def restart_handler(self) -> Callable[[], int] | None:
+        """The handler that carries out a cold restart, or None when cold restart is refused."""
+        return self._restart_handler
+
+    @restart_handler.setter
+    def restart_handler(self, handler: Callable[[], int] | None) -> None:
+        """Turn cold restart on with a handler, or off with None, from the next request on."""
+        self._restart_handler = handler
 
     def connection_reset(self) -> None:
         """Forget what a dead connection left behind, and nothing more.
@@ -1401,6 +1441,13 @@ class Session:
                 awaited.sequence,
                 awaited.retries,
             )
+            self._anomaly(
+                AnomalyCode.UNSOLICITED_NOT_CONFIRMED,
+                f"unsolicited sequence {awaited.sequence} not confirmed after "
+                f"{awaited.retries} retries; its events stay buffered",
+                source=self._outstation_address,
+                destination=self._peer,
+            )
             self._awaited = None
             self._rest(now, self._unsolicited_resume)
             return b""
@@ -1468,6 +1515,11 @@ class Session:
             logger.warning(
                 "dnp3: dropping link function %d: frame count valid bit is %s", function, frame.fcv
             )
+            self._frame_anomaly(
+                AnomalyCode.INVALID_FRAME_COUNT_VALID,
+                f"dropping link function {function}: frame count valid bit is {frame.fcv}",
+                frame,
+            )
             return b""
 
         carries_data = function in (
@@ -1482,6 +1534,11 @@ class Session:
                 "dnp3: dropping link function %d carrying %d octet(s)",
                 function,
                 len(frame.payload),
+            )
+            self._frame_anomaly(
+                AnomalyCode.LINK_PAYLOAD_MISMATCH,
+                f"dropping link function {function} carrying {len(frame.payload)} octet(s)",
+                frame,
             )
             return b""
 
@@ -1545,24 +1602,32 @@ class Session:
             fragment = self._reassembler.add(frame.payload)
         except TransportError as exc:
             logger.warning("dnp3: transport error from %d: %s", frame.source, exc)
+            self._frame_anomaly(
+                AnomalyCode.TRANSPORT_ERROR, f"transport error from {frame.source}: {exc}", frame
+            )
             return bytes(reply)
 
         if fragment is None:
             return bytes(reply)
         return bytes(reply) + self._send(self._handle_fragment(fragment))
 
-    def receive_broadcast(self, data: bytes) -> None:
+    def receive_broadcast(self, data: bytes, sender: Endpoint | None = None) -> None:
         """Handle octets from a channel that carries broadcasts and nothing else.
 
         For a listener that hears broadcasts apart from the master's own
         connection, as a datagram socket beside a stream does. Only frames
         addressed to a broadcast address are acted on; anything else arriving
         this way is dropped, since it could not be answered here and is not
-        from the connection this session trusts.
+        from the connection this session trusts. ``sender`` is where the
+        octets came from, and is reported with any anomaly they cause.
         """
-        for frame in link.FrameReader().feed(data):
-            if frame.is_broadcast:
-                self._handle_frame(frame)
+        self._datagram = (sender,)
+        try:
+            for frame in link.FrameReader().feed(data):
+                if frame.is_broadcast:
+                    self._handle_frame(frame)
+        finally:
+            self._datagram = None
 
     def _receive_broadcast(self, frame: link.LinkFrame) -> None:
         """Act on a broadcast request, and remember to say one was received (D50)."""
@@ -1579,6 +1644,11 @@ class Session:
             fragment = self._broadcast_reassembler.add(frame.payload)
         except TransportError as exc:
             logger.warning("dnp3: transport error in a broadcast: %s", exc)
+            self._frame_anomaly(
+                AnomalyCode.BROADCAST_TRANSPORT_ERROR,
+                f"transport error in a broadcast: {exc}",
+                frame,
+            )
             return
         if fragment is None:
             return
@@ -1595,6 +1665,11 @@ class Session:
         function = fragment[1]
         if function in self._disabled:
             logger.info("dnp3: broadcast function 0x%02X not acted on: disabled", function)
+            self._frame_anomaly(
+                AnomalyCode.BROADCAST_NOT_ACTED_ON,
+                f"broadcast function 0x{function:02X} not acted on: disabled",
+                frame,
+            )
         elif function == FunctionCode.RECORD_CURRENT_TIME:
             if self._time_sink is not None and len(fragment) == REQUEST_HEADER_SIZE:
                 self._recorded_at = self._clock()
@@ -1606,13 +1681,28 @@ class Session:
                 self._operate_unacknowledged(fragment)
             else:
                 logger.info("dnp3: broadcast control not operated: broadcast controls are off")
+                self._frame_anomaly(
+                    AnomalyCode.BROADCAST_NOT_ACTED_ON,
+                    "broadcast control not operated: broadcast controls are off",
+                    frame,
+                )
         elif function == FunctionCode.WRITE:
             try:
                 self._handle_write(parse_request(fragment))
             except RequestError as exc:
                 logger.warning("dnp3: unreadable broadcast write dropped: %s", exc)
+                self._frame_anomaly(
+                    AnomalyCode.MALFORMED_BROADCAST_WRITE,
+                    f"unreadable broadcast write dropped: {exc}",
+                    frame,
+                )
         else:
             logger.info("dnp3: broadcast function 0x%02X noted and not acted on", function)
+            self._frame_anomaly(
+                AnomalyCode.BROADCAST_NOT_ACTED_ON,
+                f"broadcast function 0x{function:02X} noted and not acted on",
+                frame,
+            )
 
     def _addressed_to_us(self, frame: link.LinkFrame) -> bool:
         if frame.destination != self._outstation_address and not frame.is_broadcast:
@@ -1623,6 +1713,11 @@ class Session:
                 logger.warning(
                     "dnp3: dropping frame from unexpected master address %d", frame.source
                 )
+                self._frame_anomaly(
+                    AnomalyCode.UNEXPECTED_MASTER_ADDRESS,
+                    f"dropping frame from unexpected master address {frame.source}",
+                    frame,
+                )
                 return False
             return True
         # No master yet, and none configured: the first to speak is the one.
@@ -1630,6 +1725,11 @@ class Session:
         if not link.is_valid_address(frame.source) or frame.source == self._outstation_address:
             logger.warning(
                 "dnp3: dropping frame from address %d, which no master has", frame.source
+            )
+            self._frame_anomaly(
+                AnomalyCode.INVALID_SOURCE_ADDRESS,
+                f"dropping frame from address {frame.source}, which no master has",
+                frame,
             )
             return False
         if not frame.is_broadcast:
@@ -1648,6 +1748,31 @@ class Session:
                 self._enabled.clear()
             self._enabled_for = frame.source
         return True
+
+    def _anomaly(
+        self, code: AnomalyCode, message: str, *, source: int | None, destination: int | None
+    ) -> None:
+        """Report an anomaly to the observer, if there is one."""
+        if self.anomaly_observer is None:
+            return
+        peer = self.connection_peer if self._datagram is None else self._datagram[0]
+        anomaly = ProtocolAnomaly(
+            code=code,
+            severity=SEVERITY[code],
+            message=message,
+            source=source,
+            destination=destination,
+            peer=peer,
+        )
+        self._anomaly_guard.deliver(self.anomaly_observer, anomaly)
+
+    def _frame_anomaly(self, code: AnomalyCode, message: str, frame: link.LinkFrame) -> None:
+        """Report an anomaly in a received frame."""
+        self._anomaly(code, message, source=frame.source, destination=frame.destination)
+
+    def _request_anomaly(self, code: AnomalyCode, message: str) -> None:
+        """Report an anomaly in a request from the master being served."""
+        self._anomaly(code, message, source=self._peer, destination=self._outstation_address)
 
     @property
     def master_address(self) -> int | None:
@@ -1767,6 +1892,10 @@ class Session:
             logger.warning(
                 "dnp3: dropping a fragment that is not a request: %s", fragment[:2].hex()
             )
+            self._request_anomaly(
+                AnomalyCode.NOT_A_REQUEST,
+                f"dropping a fragment that is not a request: {fragment[:2].hex()}",
+            )
             self._select = None
             return b""
         if len(fragment) < REQUEST_HEADER_SIZE or fragment[1] not in _KEEPS_A_SELECT:
@@ -1834,6 +1963,7 @@ class Session:
             request = parse_request(fragment)
         except RequestError as exc:
             logger.warning("dnp3: malformed request: %s", exc)
+            self._request_anomaly(AnomalyCode.MALFORMED_REQUEST, f"malformed request: {exc}")
             # The sequence number is the one field a malformed fragment still
             # yields, and answering on the wrong one would have the master
             # discard the answer it needs.
@@ -1959,7 +2089,7 @@ class Session:
             and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
             and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
             and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
-            and not (known is FunctionCode.ENABLE_UNSOLICITED and self._unsolicited)
+            and not (known in _UNSOLICITED_FUNCTIONS and self._unsolicited)
         ):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
@@ -1984,9 +2114,7 @@ class Session:
             return self._set_unsolicited(request, enable=True)
 
         if known is FunctionCode.DISABLE_UNSOLICITED:
-            if self._unsolicited:
-                return self._set_unsolicited(request, enable=False)
-            return self._disable_unsolicited(request)
+            return self._set_unsolicited(request, enable=False)
 
         if known in _FREEZE_FUNCTIONS:
             return self._acting(fragment, known, self._handle_freeze(request, known))
@@ -2034,34 +2162,6 @@ class Session:
         logger.info("dnp3: cold restart requested; restarting in %d ms", delay_ms)
         self.restart()
         return response
-
-    def _disable_unsolicited(self, request: Request) -> bytes:
-        """Agree, having nothing to stop (D21).
-
-        The asymmetry with ``ENABLE_UNSOLICITED`` is the point. This outstation
-        sends no unsolicited responses, so it is already in the state this
-        request asks for, and refusing it answers a question the master did not
-        ask. ``ENABLE`` asks for something this outstation does not do, and
-        saying so is the honest answer rather than the matching one.
-
-        Nothing is recorded. There is no state to enter that is not already the
-        state. This is the answer of a session built without unsolicited
-        responses, and only of one: with them on, the request goes to
-        ``_set_unsolicited``, which examines what it names (D69).
-
-        The classes named in the request are accepted without being examined,
-        because the answer is the same for any of them: none is being sent for.
-
-        Success is the absence of ``FUNC_NOT_SUPPORTED`` rather than an empty
-        indication field. ``DEVICE_RESTART`` stands until a master clears it,
-        and D22 and D23 put the class and overflow bits there on their own
-        terms -- a response reporting those is still a successful one.
-        """
-        logger.info(
-            "dnp3: DISABLE_UNSOLICITED accepted; none are sent (%d header(s))",
-            len(request.headers),
-        )
-        return null_response(sequence=request.control.sequence, iin=self._indications())
 
     def _set_unsolicited(self, request: Request, *, enable: bool) -> bytes:
         """Turn unsolicited reporting on or off for the classes a master names (D69).

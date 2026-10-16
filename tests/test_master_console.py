@@ -157,7 +157,7 @@ class TestAutomaticTasks:
     async def test_overview_lists_the_enabled_tasks(self, console):
         page = console.page
         card = await _tasks_card(page)
-        assert "Stops unsolicited reporting, reads everything" in card
+        assert "Reads everything" in card
         assert "Fetched when a response says so" in card
         assert "Made again, trying every 5 s" in card and "Not asked for" in card
         # A service that only reads leaves the two writes alone.
@@ -182,8 +182,9 @@ class TestAutomaticTasks:
             "document.querySelector('#log').textContent.includes('read everything, unasked')"
         )
         log = await page.text("#log")
-        assert "lab: stopped unsolicited reporting, on connecting, unasked" in log
         assert "lab: read everything, unasked" in log
+        # A master not set to use unsolicited reporting sends no request to stop it.
+        assert "stopped unsolicited reporting" not in log
 
     @pytest.mark.asyncio
     async def test_add_form_sets_manual_and_unsolicited(self, console):
