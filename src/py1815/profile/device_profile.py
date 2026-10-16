@@ -219,22 +219,25 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 rows.append(
                     Row(20, 0, "Counter - any variation", request=(function, tuple(_RANGE + _ALL)))
                 )
-        static(
-            21,
-            "Frozen Counter",
-            {
-                1: "Frozen Counter - 32-bit with flag",
-                5: "Frozen Counter - 32-bit with flag and time",
-                9: "Frozen Counter - 32-bit without flag",
-            },
-        )
-        widened(
-            21,
-            {
-                2: "Frozen Counter - 16-bit with flag",
-                10: "Frozen Counter - 16-bit without flag",
-            },
-        )
+        if any(point.frozen for point in served[Kind.CTR]):
+            # Only counters that freeze have frozen counters, and a read of group 21
+            # from a device with none is refused (D100).
+            static(
+                21,
+                "Frozen Counter",
+                {
+                    1: "Frozen Counter - 32-bit with flag",
+                    5: "Frozen Counter - 32-bit with flag and time",
+                    9: "Frozen Counter - 32-bit without flag",
+                },
+            )
+            widened(
+                21,
+                {
+                    2: "Frozen Counter - 16-bit with flag",
+                    10: "Frozen Counter - 16-bit without flag",
+                },
+            )
         if facts.events:
             for variation, description in (
                 (0, "Counter Event - any variation"),

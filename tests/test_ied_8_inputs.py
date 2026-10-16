@@ -38,6 +38,7 @@ from ied_harness import (
     header,
 )
 
+from py1815.profile import device_profile
 from py1815.profile.binding import Quality
 from py1815.profile.model import Kind
 
@@ -426,6 +427,24 @@ class TestFrozenCounters:
         assert dut.master.read(header(20, 0)).fragment.of(20), "the counters are there"
         fragment = dut.master.read(header(21, 0)).fragment
         assert not fragment.body and fragment.iin2 & NO_POINTS
+
+    def test_8_16_2_2_2_a_device_whose_counters_do_not_freeze_refuses_a_freeze(self):
+        """A freeze it accepted could not be read back, so it is a function it does not have."""
+        dut = Dut(frozen_counters=False)
+        fragment = dut.master.request(FREEZE, header(20, 0)).fragment
+        assert not fragment.body and fragment.iin2 & IIN2_BAD_FUNCTION
+        assert dut.outstation.frozen(0) is None
+
+    @pytest.mark.parametrize("frozen", [True, False], ids=["counters_that_freeze", "that_do_not"])
+    def test_8_16_2_2_2_the_device_profile_lists_frozen_counters_and_freezes_only_if_any_freeze(
+        self, frozen
+    ):
+        dut = Dut(frozen_counters=frozen)
+        rows = device_profile.implementation(dut.outstation, dut.session.facts).rows
+        freezes = {7, 8, 9, 10}
+        assert any(row.group == 20 and row.request[0] == 1 for row in rows), "counters are read"
+        assert any(row.group == 21 for row in rows) is frozen
+        assert any(row.group == 20 and row.request[0] in freezes for row in rows) is frozen
 
     @pytest.mark.parametrize(
         ("function", "answered"),

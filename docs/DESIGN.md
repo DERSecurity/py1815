@@ -1672,9 +1672,15 @@ not normal (D55). The Device Profile lists these as requests the outstation pars
 no response of their own. A frozen counter is reported only for a counter that freezes
 (`Point.frozen`): an outstation whose counters do not freeze has no frozen counters, and a
 read of group 21 is refused with `OBJECT_UNKNOWN`, where it used to be answered with
-nothing and clean indications, as if the type existed and were empty.
+nothing and clean indications, as if the type existed and were empty. Such an outstation
+also refuses a freeze, as a function it does not implement (`FUNC_NOT_SUPPORTED`), because
+a freeze it accepted would store nothing a read could return. The certification
+procedure's test for a device without frozen counters, 3.1 rev 1's 8.16.2.2.2, ends at the
+refused read, so it asks nothing of a freeze. Its Device Profile lists neither group 21
+nor the freeze functions, so the document and the answers agree.
 *Trade-off:* a master asking for 16 bits gets 32 and has to parse the wider object, which
-a Level 2 master is required to do.
+a Level 2 master is required to do. A master that freezes every outstation's counters
+gets a refusal from one whose counters do not freeze.
 
 ## Layering
 

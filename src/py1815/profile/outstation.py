@@ -1079,7 +1079,9 @@ class DerOutstation:
             self,
             control_provider=self if self._binding.outputs else None,
             events=self.events,
-            freeze_provider=self if self._served[Kind.CTR] else None,
+            # A freeze is offered only where a counter freezes. One accepted by a device
+            # whose counters do not would store nothing a read can return (D100).
+            freeze_provider=self if any(p.frozen for p in self._served[Kind.CTR]) else None,
             time_sink=self.set_time,
             max_response=max_response,
             **options,
