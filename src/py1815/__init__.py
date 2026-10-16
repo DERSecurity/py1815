@@ -36,14 +36,37 @@ from py1815.link import (
     PrimaryFunction,
     SecondaryFunction,
 )
+from py1815.observers import (
+    AnomalyCode,
+    AnomalyObserver,
+    AnomalySeverity,
+    ConnectionDirection,
+    ConnectionEvent,
+    ConnectionObserver,
+    ConnectionOutcome,
+    ConnectionRole,
+    ConnectionTransport,
+    Endpoint,
+    ProtocolAnomaly,
+)
 from py1815.server import OutstationServer, PeerRefused
 from py1815.session import ReadProvider, Session, UnknownObject
 from py1815.transport import Reassembler, TransportError, segment
 
 __all__ = [
     "IIN",
+    "AnomalyCode",
+    "AnomalyObserver",
+    "AnomalySeverity",
     "AppControl",
     "Broadcast",
+    "ConnectionDirection",
+    "ConnectionEvent",
+    "ConnectionObserver",
+    "ConnectionOutcome",
+    "ConnectionRole",
+    "ConnectionTransport",
+    "Endpoint",
     "FrameReader",
     "FunctionCode",
     "IIN2Bit",
@@ -53,6 +76,7 @@ __all__ = [
     "OutstationServer",
     "PeerRefused",
     "PrimaryFunction",
+    "ProtocolAnomaly",
     "QualifierCode",
     "ReadProvider",
     "Reassembler",

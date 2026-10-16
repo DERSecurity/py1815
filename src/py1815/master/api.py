@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import math
 import ssl
@@ -48,6 +49,16 @@ from py1815.master.store import Store
 from py1815.master.tasks import WRITING, Housekeeper, Tasks
 from py1815.master.timesync import Synchronized, TimeSync
 from py1815.master.trace import RECEIVED, Trace
+from py1815.observers import (
+    ConnectionDirection,
+    ConnectionEvent,
+    ConnectionObserver,
+    ConnectionOutcome,
+    ConnectionRole,
+    ConnectionTransport,
+    Endpoint,
+    ObserverGuard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +127,24 @@ class RetryReport:
         return level
 
 
+def _failure_reason(error: OSError, other: str = "unreachable") -> str:
+    """Return why a connection could not be made or was lost, in a few words.
+
+    ``other`` names an error that is not a TLS failure, a timeout, a refusal or
+    a reset.
+    """
+    if isinstance(error, ssl.SSLError):
+        detail = getattr(error, "verify_message", None) or error.reason or str(error)
+        return f"TLS failure: {detail}"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, ConnectionRefusedError):
+        return "refused"
+    if isinstance(error, ConnectionResetError):
+        return "connection reset"
+    return f"{other}: {error.strerror or error}"
+
+
 class NotConnected(ConnectionError):
     """A request was made of an outstation that has no connection."""
 
@@ -150,6 +179,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         on_unsolicited: Callable[[Unsolicited], None] | None = None,
         on_exchange: Callable[[Exchange], None] | None = None,
         on_connection: Callable[[bool], None] | None = None,
+        connection_observer: ConnectionObserver | None = None,
     ) -> None:
         """
         Args:
@@ -189,6 +219,12 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 objects have been stored.
             on_connection: Called with True when the connection is made and
                 False when it ends.
+            connection_observer: Called with a
+                :class:`~py1815.observers.ConnectionEvent` for each attempt
+                to connect, made or failed, each connection lost, and each
+                connection closed by :meth:`close`, with the endpoints and
+                the reason. Settable later through the attribute of the same
+                name. See :mod:`py1815.observers`.
         """
         self.name = name
         self.host = host
@@ -215,6 +251,11 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         self.on_unsolicited = on_unsolicited
         self.on_exchange = on_exchange
         self.on_connection = on_connection
+        #: Called with each connection event, or None.
+        self.connection_observer = connection_observer
+        self._connection_guard = ObserverGuard("connection observer")
+        #: The report of the connection made, kept to report its end.
+        self._connected_event: ConnectionEvent | None = None
         #: The protocol rules the master is breaking on purpose, off by default.
         #: Applied to what the association produced, on its way to the channel.
         self.deviations = Deviations()
@@ -344,9 +385,13 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 asyncio.open_connection(self.host, self.port, **secure), self._connect_timeout
             )
         except TimeoutError as exc:
+            self._report_failure("timeout")
             raise TimeoutError(
                 f"no connection to {self.host}:{self.port} within {self._connect_timeout} s"
             ) from exc
+        except OSError as exc:
+            self._report_failure(_failure_reason(exc))
+            raise
         self._reader, self._writer = reader, writer
         self.association.connection_reset()
         self.association.take()
@@ -356,6 +401,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         )
         self._receiving = asyncio.create_task(self._receive(), name=f"dnp3-master-{self.name}")
         logger.info("dnp3 master: connected to %s at %s:%d", self.name, self.host, self.port)
+        self._report_connected(writer)
         self._notify_connection(True)
         # Queue the startup tasks for the new connection.
         self._housekeeper.connected()
@@ -418,6 +464,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 self._reconnecting = None
                 return
             logger.info("dnp3 master: %s closed the new connection at once", self.name)
+            self._report_failure("closed at once")
 
     async def close(self) -> None:
         """Close the connection. The store and the association's counters stay."""
@@ -437,17 +484,20 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             writer.close()
             with contextlib.suppress(OSError):
                 await writer.wait_closed()
+            self._report_end(ConnectionOutcome.ENDED, "closed by the master")
         self.association.connection_reset()
         self._progress.set()
 
     async def _receive(self) -> None:
         reader, writer = self._reader, self._writer
         assert reader is not None and writer is not None
+        reason = "error"
         try:
             while True:
                 data = await reader.read(_READ_SIZE)
                 if not data:
                     logger.info("dnp3 master: %s closed the connection", self.name)
+                    reason = "closed by peer"
                     return
                 self.trace.record(RECEIVED, data)
                 reply = self.association.receive(data)
@@ -457,6 +507,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 self._progress.set()
         except OSError as exc:
             logger.info("dnp3 master: connection to %s lost: %s", self.name, exc)
+            reason = _failure_reason(exc, "error")
         finally:
             # Whatever was outstanding went with the connection. Say so, and
             # wake whoever was waiting for it.
@@ -465,6 +516,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 self._writer = None
                 writer.close()
                 self._stop_housekeeping()
+                self._report_end(ConnectionOutcome.LOST, reason)
                 self._notify_connection(False)
                 # The connection was lost, not closed by the caller: reconnect.
                 self._start_reconnecting()
@@ -487,6 +539,59 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
                 self.on_connection(connected)
             except Exception:  # pylint: disable=broad-exception-caught
                 logger.exception("dnp3 master: the connection handler for %s failed", self.name)
+
+    def _report(self, event: ConnectionEvent) -> None:
+        """Pass a connection event to the observer, if there is one."""
+        self._connection_guard.deliver(self.connection_observer, event)
+
+    def _event(self, outcome: ConnectionOutcome, **fields: Any) -> ConnectionEvent:
+        """Return a connection event of this outstation's connection."""
+        return ConnectionEvent(
+            role=ConnectionRole.MASTER,
+            direction=ConnectionDirection.OUTBOUND,
+            outcome=outcome,
+            transport=ConnectionTransport.TCP if self.tls is None else ConnectionTransport.TLS,
+            remote=Endpoint(self.host, self.port),
+            name=self.name,
+            **fields,
+        )
+
+    def _report_failure(self, reason: str) -> None:
+        """Report an attempt to connect that failed."""
+        self._report(self._event(ConnectionOutcome.FAILED, reason=reason))
+
+    def _report_connected(self, writer: asyncio.StreamWriter) -> None:
+        """Report the connection made, and keep the report for its end."""
+        event = self._event(
+            ConnectionOutcome.CONNECTED,
+            local=Endpoint.of(writer.get_extra_info("sockname")),
+            peer_identity=self._peer_identity(writer),
+        )
+        remote = Endpoint.of(writer.get_extra_info("peername"))
+        if remote is not None:
+            event = replace(event, remote=remote)
+        self._connected_event = event
+        self._report(event)
+
+    def _report_end(self, outcome: ConnectionOutcome, reason: str) -> None:
+        """Report the end of the connection made, once."""
+        connected, self._connected_event = self._connected_event, None
+        if connected is not None:
+            self._report(replace(connected, outcome=outcome, reason=reason, timestamp=time.time()))
+
+    def _peer_identity(self, writer: asyncio.StreamWriter) -> str | None:
+        """Return who the outstation proved to be over TLS, or None without TLS.
+
+        The name its certificate was checked against when the context checks
+        one, and otherwise the certificate's fingerprint.
+        """
+        if self.tls is None:
+            return None
+        if self.tls.check_hostname:
+            return self.server_name or self.host
+        ssl_object = writer.get_extra_info("ssl_object")
+        der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
+        return "sha256:" + hashlib.sha256(der).hexdigest() if der else None
 
     def _deliver_unsolicited(self) -> None:
         for unsolicited in self.association.take_unsolicited():

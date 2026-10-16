@@ -266,6 +266,15 @@ That ordering is the substance rather than a detail: an admitted connection
 displaces the active one, so a peer authorized too late would take the
 association down on its way to being refused. See [D8](DESIGN.md).
 
+## Reporting connections and anomalies
+
+Give the listener a `connection_observer` to receive a record of each connection
+accepted, refused, displaced or ended, with its addresses, the certificate
+identity it was admitted as and the reason it ended. Give the session an
+`anomaly_observer` to receive a record of each frame or request it drops, with a
+stable code and a severity. [Connection and anomaly reports](observers.md) lists
+the records and what produces each.
+
 ## What it refuses
 
 A function this outstation does not implement gets a response carrying

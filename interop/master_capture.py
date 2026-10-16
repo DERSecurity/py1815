@@ -5,10 +5,13 @@ through its JSON service with a capture file, which is how
 ``py1815-master serve --capture FILE`` writes one, so the file the dissectors
 read is the one a user of the master gets.
 
-The master settles the outstation as it does on connecting (unsolicited
-reporting disabled, the restart indication cleared, an integrity poll that
-confirms the events it carries), then polls for events and by each class,
-writes the time, reads named points and reads output status. Wireshark and
+The master settles the outstation as it does on connecting (an integrity
+poll that confirms the events it carries, the restart indication cleared, the
+time written), then asks it to disable unsolicited reporting, polls for events
+and by each class, writes the time, reads named points and reads output
+status. The request to disable is asked for by name: a master not set to use
+unsolicited reporting does not send one on connecting, and the dissectors are
+to judge that request as this master builds it. Wireshark and
 Suricata then judge both directions: the requests and confirmations this
 master built, and the responses the outstation sent.
 
@@ -45,6 +48,7 @@ NAME = "fixture"
 
 #: What the master asks for after its startup tasks, as service messages.
 STEPS: list[tuple[str, dict[str, Any]]] = [
+    ("disable_unsolicited", {}),
     ("scan", {"kind": "events"}),
     ("scan", {"kind": "class1"}),
     ("scan", {"kind": "class2"}),
