@@ -98,9 +98,9 @@ each peer's driver.
 One more job in that workflow, `dnp3c-conformance`, runs the outstation certification
 procedures of revision 3.1 rev 1 at Subset Level 2 with
 [dnp3c](https://github.com/stepfunc/dnp3c), the conformance test harness from Step
-Function I/O. Every procedure it runs passes. It is not behind the `interop` gate, because
-it takes as long as the procedures' timeouts and fetches the tool from Maven Central, so
-read it before merging a change to the outstation. What it guards is the record in
+Function I/O. Every procedure it runs passes. The `interop` gate waits for it, so a pull
+request does not merge while it fails. It takes about fifteen minutes, most of it timeouts
+the procedures call for. What it guards is the record in
 `interop/dnp3c/expected.json`. A change to the outstation that makes a procedure end
 differently fails the job's comparison step, and the change then updates the record,
 [docs/conformance.md](docs/conformance.md) and the report in `compliance/` with the

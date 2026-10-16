@@ -265,9 +265,9 @@ fails the job until the record and the page are brought up to date. `tests/test_
 control channel against the outstation it drives, and `tests/test_conformance_record.py`
 tests the comparison and holds the page to the record. Neither needs Java.
 
-The job is not one of the peers the `interop` gate waits for, because it takes as long as
-the procedures' timeouts and fetches the tool from Maven Central. Read it before merging a
-change to the outstation.
+The `interop` gate waits for the job, so a change that makes a procedure end otherwise than
+on record does not merge until the record says why. The job takes about fifteen minutes,
+most of it timeouts the procedures call for.
 
 Setting the run up showed that a device needs four decisions the library leaves to
 whoever builds on it: whether a control sent to a broadcast address is carried out,

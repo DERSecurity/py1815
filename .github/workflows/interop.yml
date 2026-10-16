@@ -49,7 +49,8 @@ on:
 # freeze as a function it does not support, which is checked as a refusal, and
 # its Python bindings cannot open a TLS server.
 #
-# One job is not behind the gate at the end of this file:
+# One job is not a peer, and the gate at the end of this file waits for it
+# too:
 #
 #   dnp3c-conformance    dnp3c (https://github.com/stepfunc/dnp3c), the
 #                        conformance test harness from Step Function I/O, runs
@@ -565,12 +566,13 @@ jobs:
     # interop/dnp3c/README.md says more, and deleting that directory,
     # interop/conformance_outstation.py and this job removes dnp3c entirely.
     #
-    # This job is not in the `needs` of the `interop` job below: it takes as
-    # long as the procedures' timeouts, and depends on a tool fetched from
-    # Maven Central. What it guards is the record in
-    # interop/dnp3c/expected.json, which has every procedure that runs passing:
-    # the run step fails when a procedure fails, and the comparison step fails
-    # when a procedure ends in any way other than the one on record.
+    # The `interop` job below needs this one, so a pull request cannot merge
+    # while it fails. It takes about fifteen minutes, most of it timeouts the
+    # procedures call for, and fetches the tool from Maven Central. What it
+    # guards is the record in interop/dnp3c/expected.json, which has every
+    # procedure that runs passing: the run step fails when a procedure fails,
+    # and the comparison step fails when a procedure ends in any way other
+    # than the one on record.
     steps:
       - uses: actions/checkout@v4
 
@@ -711,7 +713,8 @@ jobs:
   interop:
     name: interop
     runs-on: ubuntu-latest
-    needs: [opendnp3-master, rust-master, parsers, opendnp3-outstation, rust-outstation]
+    needs:
+      [opendnp3-master, rust-master, parsers, opendnp3-outstation, rust-outstation, dnp3c-conformance]
     if: always()
     # One gate the branch protection can name, in front of however many peer
     # jobs there turn out to be.
@@ -722,7 +725,8 @@ jobs:
     # runs is not a check that fails, it is a pull request that can never merge.
     # Adding a peer should not require an administrator.
     #
-    # dnp3c-conformance is left out on purpose; its own comment says why.
+    # dnp3c-conformance is not a peer, but a pull request that breaks the
+    # conformance record does not merge either, so the gate waits for it.
     steps:
       - name: Every peer agreed
         run: |
@@ -734,4 +738,4 @@ jobs:
               exit 1
             fi
           done
-          echo "every peer agreed with this library, as outstation and as master"
+          echo "every peer agreed with this library, as outstation and as master, and the conformance run is the one on record"
