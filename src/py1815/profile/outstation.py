@@ -1128,8 +1128,14 @@ def _latched(command: ControlRelayOutputBlock) -> bool | None:
     The profile permits every operation pair and has the outstation behave as
     if each point were latched, ignoring pulse times: close and the "on"
     operations set the point, trip and the "off" operations clear it.
+
+    None, which is answered ``NOT_SUPPORTED``, for a block with the obsolete
+    queue bit set, and for one with the clear bit set. This outstation does not
+    support the clear bit, so it supports no combination that sets it (IEEE
+    1815-2012, Annex A, group 12 variation 1). Carrying out the operation and
+    ignoring the bit would skip the cancellation the master asked for (D101).
     """
-    if command.queued:
+    if command.queued or command.clear:
         return None
     if command.trip_close is TripCloseCode.CLOSE:
         return True
