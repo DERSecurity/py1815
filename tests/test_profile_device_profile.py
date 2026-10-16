@@ -202,11 +202,26 @@ class TestEveryRequestTheTableListsIsAnswered:
         session = simulation.outstation.session()
         table = device_profile.implementation(simulation.outstation, session.facts)
         sender = Sender(session)
-        assert set(table.function_codes) == {0, 21, 23, 24}
+        assert set(table.function_codes) == {0, 23, 24}
         assert sender.send(FunctionCode.CONFIRM) == b""
-        assert not _refused(sender.send(FunctionCode.DISABLE_UNSOLICITED, bytes([60, 2, 6])))
         assert not _refused(sender.send(FunctionCode.DELAY_MEASURE))
         assert not _refused(sender.send(FunctionCode.RECORD_CURRENT_TIME))
+
+
+class TestUnsolicitedRequestsOfASessionWithoutThem:
+    @pytest.mark.parametrize(
+        "function",
+        [FunctionCode.ENABLE_UNSOLICITED, FunctionCode.DISABLE_UNSOLICITED],
+        ids=["enable", "disable"],
+    )
+    def test_without_unsolicited_responses_neither_request_is_listed_or_agreed_to(
+        self, simulation, function
+    ):
+        session = simulation.outstation.session()
+        table = device_profile.implementation(simulation.outstation, session.facts)
+        assert int(function) not in table.function_codes
+        assert not [row for row in table.rows if row.request and row.request[0] == int(function)]
+        assert _refused(Sender(session).send(function, bytes([60, 2, 6])))
 
 
 class TestEveryResponseTheTableListsIsWhatIsSent:

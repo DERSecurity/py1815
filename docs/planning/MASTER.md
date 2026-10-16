@@ -183,7 +183,7 @@ through the association:
 
 | Task | Runs | Default |
 |---|---|---|
-| Disable unsolicited, then integrity poll | On connecting, and when the outstation reports a restart | On |
+| Integrity poll, preceded on connecting by a request to disable unsolicited when the master is set to use it | On connecting, and when the outstation reports a restart | On |
 | Clear the restart indication | When the outstation reports a restart | On |
 | Write the time, plainly or by the LAN or non-LAN procedure | When the outstation asks for it | On, plainly |
 | Enable unsolicited for the classes configured | After startup | Off |

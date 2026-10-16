@@ -106,8 +106,10 @@ the events it has not read, exactly where it left them. See [D7](DESIGN.md).
 
 An outstation can report events without waiting to be polled, once a master has
 enabled the classes it wants. It is off unless you turn it on, and a session
-with it off answers every request exactly as one built before the option
-existed: `ENABLE_UNSOLICITED` is refused as unsupported.
+with it off answers as a device without the feature does: `ENABLE_UNSOLICITED`
+and `DISABLE_UNSOLICITED` are both refused as unsupported, with IIN2.0. Many
+masters send a disable request when they connect, and will report that refusal.
+Turn unsolicited responses on if the master expects to manage them.
 
 ```python
 from py1815.events import EventBuffers, EventClass
@@ -263,6 +265,15 @@ A peer outside the list is disconnected before any session state is touched.
 That ordering is the substance rather than a detail: an admitted connection
 displaces the active one, so a peer authorized too late would take the
 association down on its way to being refused. See [D8](DESIGN.md).
+
+## Reporting connections and anomalies
+
+Give the listener a `connection_observer` to receive a record of each connection
+accepted, refused, displaced or ended, with its addresses, the certificate
+identity it was admitted as and the reason it ended. Give the session an
+`anomaly_observer` to receive a record of each frame or request it drops, with a
+stable code and a severity. [Connection and anomaly reports](observers.md) lists
+the records and what produces each.
 
 ## What it refuses
 

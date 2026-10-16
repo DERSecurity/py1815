@@ -128,17 +128,30 @@ class TestTaskSettings:
 
 
 class TestStartup:
-    def test_connect_queues_disable_unsolicited_then_integrity_poll(self):
+    def test_connect_queues_an_integrity_poll_and_no_disable_request(self):
+        # A master not set to use unsolicited reporting sends no request to
+        # disable it (IEEE 1815-2012 5.1.1.2, rule 1).
         housekeeper = Housekeeper()
         housekeeper.connected()
-        assert housekeeper.due == ("disable_unsolicited", "integrity")
+        assert housekeeper.due == ("integrity",)
+
+        only = housekeeper.next()
+
+        # Function code 1, and the class headers it carries.
+        assert (only.function, only.body.hex()) == (1, "3c02063c03063c04063c0106")
+        assert housekeeper.next() is None
+
+    def test_connect_disables_unsolicited_first_for_a_master_set_to_use_it(self):
+        housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
+        housekeeper.connected()
+        assert housekeeper.due == ("disable_unsolicited", "integrity", "enable_unsolicited")
 
         first, second = housekeeper.next(), housekeeper.next()
 
-        # Function codes 21 and 1, and the class headers each carries.
+        # Function codes 21 and 1, and the class headers each carries. The
+        # disable request names every class, whichever the master enables.
         assert (first.function, first.body.hex()) == (21, "3c02063c03063c0406")
         assert (second.function, second.body.hex()) == (1, "3c02063c03063c04063c0106")
-        assert housekeeper.next() is None
 
     def test_startup_order_with_restart_and_need_time(self):
         housekeeper = Housekeeper(Tasks(enable_unsolicited=(1, 2, 3)), clock_ms=lambda: 1_000)
@@ -178,19 +191,26 @@ class TestStartup:
         housekeeper.connected()
         assert _drain(housekeeper) == ["enable_unsolicited"]
 
-    def test_restart_seen_during_startup_does_not_restart_startup(self):
-        housekeeper = Housekeeper()
+    def test_restart_seen_before_the_integrity_poll_does_not_restart_startup(self):
+        housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
         housekeeper.connected()
-        done = _answered(housekeeper, RESTART, QUIET, QUIET)
-        assert done == ["disable_unsolicited", "clear_restart", "integrity"]
+        done = _answered(housekeeper, RESTART, QUIET, QUIET, QUIET)
+        assert done == ["disable_unsolicited", "clear_restart", "integrity", "enable_unsolicited"]
 
-    def test_restart_first_seen_in_integrity_response_does_not_restart_startup(self):
+    def test_restart_first_seen_in_the_integrity_response_is_cleared_and_polled_again(self):
+        # The poll comes after the clearing (IEEE 1815-2012 5.1.1.1.2, rule 2).
         housekeeper = Housekeeper()
         housekeeper.connected()
-        # The first request went unanswered, so the poll is where it is seen.
-        first = housekeeper.next()
-        housekeeper.saw(None, answering=(first.function, first.body))
-        assert _answered(housekeeper, RESTART) == ["integrity", "clear_restart"]
+        assert _answered(housekeeper, RESTART, QUIET, QUIET) == [
+            "integrity",
+            "clear_restart",
+            "integrity",
+        ]
+
+    def test_a_master_that_does_not_clear_the_restart_does_not_poll_again_for_it(self):
+        housekeeper = Housekeeper(Tasks(clear_restart=False))
+        housekeeper.connected()
+        assert _answered(housekeeper, RESTART, RESTART) == ["integrity"]
 
     def test_restart_after_startup_runs_startup_again(self):
         housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
@@ -199,8 +219,9 @@ class TestStartup:
 
         housekeeper.saw(RESTART, answering=A_READ)
 
+        # No request to disable: an outstation that restarted has disabled
+        # unsolicited reporting itself (IEEE 1815-2012 5.1.1.1.2, rule 2).
         assert _answered(housekeeper) == [
-            "disable_unsolicited",
             "clear_restart",
             "integrity",
             "enable_unsolicited",
@@ -211,7 +232,7 @@ class TestStartup:
         housekeeper.connected()
         _answered(housekeeper)
         housekeeper.saw(RESTART)
-        assert housekeeper.due == ("disable_unsolicited", "clear_restart", "integrity")
+        assert housekeeper.due == ("clear_restart", "integrity")
 
     def test_unanswered_integrity_poll_still_ends_startup(self):
         housekeeper = Housekeeper()
@@ -226,7 +247,7 @@ class TestStartup:
         housekeeper = Housekeeper()
         housekeeper.saw(IIN(first=IINBit.DEVICE_RESTART | IINBit.NEED_TIME))
         housekeeper.connected()
-        assert housekeeper.due == ("disable_unsolicited", "integrity")
+        assert housekeeper.due == ("integrity",)
         # Seen again on the new connection, the restart is acted on again.
         assert "clear_restart" in _answered(housekeeper, RESTART)
 
@@ -238,7 +259,7 @@ class TestStuckIndications:
         housekeeper = Housekeeper()
         housekeeper.connected()
         done = _answered(housekeeper, *[RESTART] * 20)
-        assert done == ["disable_unsolicited", "clear_restart", "integrity"]
+        assert done == ["integrity", "clear_restart", "integrity"]
         housekeeper.saw(RESTART, answering=A_READ)
         assert housekeeper.due == ()
 
@@ -298,11 +319,7 @@ class TestLeftoverEvents:
     def test_an_integrity_poll_that_leaves_events_waiting_is_followed_by_an_event_poll(self):
         housekeeper = Housekeeper()
         housekeeper.connected()
-        assert _answered(housekeeper, QUIET, EVENTS, QUIET) == [
-            "disable_unsolicited",
-            "integrity",
-            "events",
-        ]
+        assert _answered(housekeeper, EVENTS, QUIET) == ["integrity", "events"]
 
     @pytest.mark.parametrize("bound", [0, 1, 3, 5])
     def test_follow_up_polls_stop_at_the_bound(self, bound):
@@ -351,7 +368,20 @@ class TestChangingTasks:
         assert "write_time" in housekeeper.due
         housekeeper.tasks = Tasks.none()
         # The startup sequence the restart began finishes; nothing else is done.
-        assert housekeeper.due == ("disable_unsolicited", "integrity")
+        assert housekeeper.due == ("integrity",)
+
+    def test_a_disable_request_that_is_due_is_dropped_when_no_class_is_left_to_enable(self):
+        housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
+        housekeeper.connected()
+        assert housekeeper.due == ("disable_unsolicited", "integrity", "enable_unsolicited")
+        housekeeper.tasks = Tasks()
+        assert housekeeper.due == ("integrity",)
+
+    def test_a_disable_request_that_is_due_is_kept_while_a_class_is_still_named(self):
+        housekeeper = Housekeeper(Tasks(enable_unsolicited=(1,)))
+        housekeeper.connected()
+        housekeeper.tasks = Tasks(enable_unsolicited=(2,))
+        assert housekeeper.due == ("disable_unsolicited", "integrity", "enable_unsolicited")
 
     def test_a_due_task_left_on_is_still_done(self):
         housekeeper = Housekeeper()
@@ -508,7 +538,9 @@ class TestLoopback:
 
         done = master.start()
 
-        assert _names(done) == ["disable_unsolicited", "clear_restart", "write_time", "integrity"]
+        # The first poll reports the restart, so it is made again once the
+        # restart is cleared and the time written.
+        assert _names(done) == ["integrity", "clear_restart", "write_time", "integrity"]
         assert all(exchange.complete for exchange in done)
         assert done[-1].iin == IIN(), "not restarted, not asking for the time, nothing waiting"
         assert len(master.store.points(PointType.ANALOG_INPUT)) == len(
@@ -543,12 +575,7 @@ class TestLoopback:
         asked = master.read(binary_inputs=[0])
 
         assert asked.task is None and asked.iin.is_set(IINBit.DEVICE_RESTART)
-        assert _names(master.unasked) == [
-            "disable_unsolicited",
-            "clear_restart",
-            "write_time",
-            "integrity",
-        ]
+        assert _names(master.unasked) == ["clear_restart", "write_time", "integrity"]
         assert not session.restart_indication
         now = master.store.analog_input(WATTS).value
         assert now == round(simulation.der.watts) and now != before
@@ -631,8 +658,9 @@ class TestLoopback:
         (announcement,) = master.listen()
 
         assert announcement.null and announcement.iin.is_set(IINBit.DEVICE_RESTART)
+        # No request to disable: the outstation that restarted has disabled
+        # unsolicited reporting itself (IEEE 1815-2012 5.1.1.1.2, rule 2).
         assert _names(master.unasked) == [
-            "disable_unsolicited",
             "clear_restart",
             "write_time",
             "integrity",
@@ -697,7 +725,7 @@ class TestOverTcp:
             await server.stop()
 
         assert _names(seen) == [
-            "disable_unsolicited",
+            "integrity",
             "clear_restart",
             "write_time",
             "integrity",
@@ -812,7 +840,9 @@ class TestOverTcp:
                 await lab.idle()
         finally:
             await server.stop()
-        assert lab.tasks == lab_tasks and lab.counts == {"complete": 2}
+        # The integrity poll alone: this master is not set to use unsolicited
+        # reporting, so it sends no request to disable it.
+        assert lab.tasks == lab_tasks and lab.counts == {"complete": 1}
 
     @pytest.mark.asyncio
     async def test_reconnect_none_stays_disconnected(self, simulation):
@@ -891,7 +921,6 @@ class TestOverTcp:
             await server.stop()
 
         assert _names(seen) == [
-            "disable_unsolicited",
             "clear_restart",
             "write_time",
             "integrity",

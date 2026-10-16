@@ -259,16 +259,25 @@ today; event objects come from the buffers; both travel in one response, events 
 Events first because a master applies them in order: a static value written after the events that
 led to it leaves the point at its current value, which is what the master should end up holding.
 
-**D21 -- `DISABLE_UNSOLICITED` succeeds; `ENABLE_UNSOLICITED` is still refused.** The asymmetry is
-the point. An outstation that sends no unsolicited responses is already in the state `DISABLE` asks
-for, so refusing it answers a question the master did not ask. `ENABLE` asks for something this
-outstation does not do, and saying so is the honest answer.
+**D21 -- A session built without unsolicited responses refuses `ENABLE_UNSOLICITED` and
+`DISABLE_UNSOLICITED` alike.** Each is answered with a null response carrying `IIN2.0`. An
+outstation that does not support unsolicited responses is not obliged to implement either function
+(IEEE 1815-2012 4.4.13), and a function code an outstation does not support is reported with
+`IIN2.0` (4.5.9). The certification procedure has a device whose unsolicited mode is configured off
+behave exactly as one without the feature, and expects that answer to each of the two requests
+(IED Certification Procedure 3.1 rev 1, 8.11.1 and the steps of 8.11.2 for the mode configured
+off). The Device Profile such a session writes lists neither function, and its answers agree
+with it.
 
-This halves the warnings a real master's startup produces -- the roadmap's complaint -- without
-implementing anything that sends.
+The disable request was agreed to until this was changed, on the argument that an outstation which
+sends none is already in the state the request asks for, and to spare a master's startup one
+warning. That was a departure from the procedure, and an independent conformance harness reported it
+as one. A master is to send the disable request at startup only to an outstation it is configured to
+use unsolicited reporting with (5.1.1.2), so the warning marks a master and an outstation that are
+configured differently, which is worth an operator's attention.
 
-This remains the answer of a session built without unsolicited responses, which is the
-default. One built with them takes both requests by class instead (D69).
+This is the answer of a session built without unsolicited responses, which is the default. One
+built with them takes both requests by class instead (D69).
 
 **D22 -- The class-event indication bits are derived from the buffers, not tracked separately.**
 `IIN1.1`, `1.2` and `1.3` say which classes have events waiting. A master polling on indications
@@ -337,7 +346,7 @@ an exchange that never happened, and retiring the solicited selection on the str
 from a different counter would delete events the master has not acknowledged.
 
 Ignored rather than consumed: the master's real confirmation may still be coming, and swallowing the
-selection here would lose the events instead of merely mistiming them. This is the same asymmetry as
+selection here would lose the events instead of merely mistiming them. This is the same stance as
 **D21** -- an outstation that does not send unsolicited responses answers questions about them by
 declining to act, not by pretending the exchange exists.
 
@@ -1006,9 +1015,9 @@ configuration.
 **D69 -- Unsolicited responses are off unless a session is built with them, and a master
 enables them by class.** `Session(unsolicited=True)` turns them on. Off is the default,
 which is also what the DNP Users Group's guidance on default settings recommends
-(AN2015-001), and off means a session answers exactly as it did before the option
-existed: `ENABLE_UNSOLICITED` is refused as unsupported, `DISABLE_UNSOLICITED` is agreed
-to (D21), and a confirmation carrying the unsolicited bit is ignored (D26). The
+(AN2015-001), and off means a session answers as a device without the feature does:
+`ENABLE_UNSOLICITED` and `DISABLE_UNSOLICITED` are refused as unsupported (D21), and a
+confirmation carrying the unsolicited bit is ignored (D26). The
 certification procedures put it the same way: a device with the mode off behaves like
 one without the feature. When this was built, a corpus of some forty thousand framed
 exchanges was run through sessions before and after the change and returned the same
@@ -1616,6 +1625,35 @@ no schema cannot say a document is invalid, and lays out a wrong document as fai
 as a right one. A file chosen in the console is read by the browser as UTF-8, where the
 command decodes a file as it declares.
 
+**D99 -- Unasked, a master asks an outstation to stop unsolicited reporting only when it
+is set to use it, and only on connecting.** This is about the startup task. The
+`disable_unsolicited` operation sends the request whenever it is asked for. The startup
+sequence used to begin with `DISABLE_UNSOLICITED` for every master. The standard has a
+master send that request when it is configured to use unsolicited reporting with the
+outstation (IEEE 1815-2012 5.1.1.2, rule 1), and an outstation without the feature need
+not support the function (4.4.13), so a master that names no class in
+`enable_unsolicited` now sends none of its own accord. A master that does name one
+sends it on connecting, before anything else, as before, when its `startup` task is on;
+with `startup` off it sends the request to enable alone, as it always has. Neither sends
+the request to disable when an
+outstation reports a restart: the sequence for that has no such request (5.1.1.1.2, rule
+2), since an outstation that restarted has disabled unsolicited reporting itself.
+
+The request to disable was also the first exchange of a connection, and so the one that
+showed a restart before the integrity poll was made. Without it the poll is first, and a
+restart it reports has not been cleared when it was made. The same rule has the poll come
+after the clearing, so the poll is made once more, after the restart is cleared, and
+after the time is written when the outstation asked for it. This is the one place the
+answer to a task's own request makes that task
+due again, against the rule of D81. It is bounded as the rest are: the restart is acted on
+when it appears and not again until it has cleared, so it costs one poll for each restart,
+and a master that does not clear the restart does not poll again for it.
+*Trade-off:* connecting to an outstation that has just restarted now takes two integrity
+polls where it took a request to disable and one poll. And classes left enabled by an
+earlier master, or by this one under other settings, are not disabled by a master no
+longer set to use unsolicited reporting; the `disable_unsolicited` operation does that
+when asked.
+
 **D101 -- A control relay output block with the clear bit set is not supported.** The
 clear bit asks an outstation to remove the commands pending for a point and stop any
 operation in progress there, and then to start the new one, if one is named (IEEE
@@ -1669,6 +1707,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
   from that outstation and its session. `profile.device_profile_view` reads the XML of any
   Device Profile into facts, sections and tables, and writes them as a page. It knows a
   few element names and no schema, and nothing of points, sessions or the wire.
+- `observers` defines the records the listener, the session and the master report to the
+  host application, and knows nothing of sockets or frames.
 
 ## Testing
 
@@ -1726,9 +1766,9 @@ asking nothing of this outstation, with the reason.
   Landed. The outstation commands as well as reports; output status readback is served by the
   caller's provider, per D6.
 - ~~Events, classes 1 through 3, read from the buffers, confirmed, and reported through the
-  indication bits, with D17 through D27.~~ Landed. `DISABLE_UNSOLICITED` is answered rather than
-  refused: an outstation that sends none is already in the state the master is asking for, so
-  refusing it answered a question the master did not ask.
+  indication bits, with D17 through D27.~~ Landed. `DISABLE_UNSOLICITED` was agreed to when this
+  landed, and is now refused by a session without unsolicited responses, as the certification
+  procedure expects (D21).
 - ~~Responses larger than one fragment, with D28 through D35.~~ Landed. A response too large to
   send at once is a conversation: the master confirms each fragment and the next follows. A provider
   may also say where its own objects end, so a point map too large for one fragment reaches a master
