@@ -1682,6 +1682,22 @@ nor the freeze functions, so the document and the answers agree.
 a Level 2 master is required to do. A master that freezes every outstation's counters
 gets a refusal from one whose counters do not freeze.
 
+**D101 -- A control relay output block with the clear bit set is not supported.** The
+clear bit asks an outstation to remove the commands pending for a point and stop any
+operation in progress there, and then to start the new one, if one is named (IEEE
+1815-2012, Annex A, group 12 variation 1). Support is optional. A device that supports it
+has to support it with no operation named, and has to answer `NOT_SUPPORTED` to a
+combination it does not support. The IEEE 1815.2 outstation keeps no queue of commands to
+remove and runs no operation over time, since every point behaves as latched and pulse
+times are ignored. It does not support the bit, and it answers every block that sets it
+with `NOT_SUPPORTED`, on select, operate and direct operate alike, as it does the obsolete
+queue bit. It used to refuse the bit alone and carry out an operation that came with it,
+which ignored the cancellation the master had asked for. The Device Profile lists no clear
+support for a binary output, so the two agree. `ControlRelayOutputBlock` still decodes the
+bit and the master still builds it, so a provider of its own can support it.
+*Trade-off:* a master that sets the clear bit out of habit, with an operation, gets a
+refusal where it used to get the operation.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
