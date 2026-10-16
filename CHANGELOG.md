@@ -11,6 +11,27 @@ Nothing yet.
 
 ## [0.3.0] - 2026-10-16
 
+A master, and the outstation held to an independent conformance run. `py1815.master` polls,
+reads named points, commands outputs, synchronizes time, takes unsolicited responses, runs
+startup tasks, speaks TLS, and serves a JSON API and a web console; it reads an IEEE 1815.2
+DER by its profile, and `py1815-master evaluate` runs named checks against an outstation,
+deviations among them. Connections and protocol anomalies are reported to an observer. CI
+runs Step Function I/O's dnp3c under revision 3.1 rev 1 of the DNP3 IED Certification
+Procedure at Subset Level 2, every procedure that runs passes, and the report is kept in
+`compliance/`. The project is now marked Beta.
+
+**Breaking changes.** This release changes what the outstation answers, what the master
+sends, and two names, and the entry for each says what to do about it. The outstation acts
+on a broadcast sent as confirmed user data (#93); refuses a disable request when built
+without unsolicited responses (#97); refuses a read of group 21 and a freeze when its
+counters do not freeze (#100); refuses a control relay output block with the clear bit set,
+where it carried out the operation (#102); and stamps an event with the time its reading
+gives (#75). The master runs a startup sequence when it connects, where it sent nothing
+(#78); sends a disable request at startup only when it is set to use unsolicited reporting
+(#98); and sends named reads as start-stop ranges (#81). `der.AO_POWER_LIMIT_MAXIMUM` is
+replaced by `der.AO_POWER_LIMIT_GENERATION` and `der.AO_POWER_LIMIT_CHARGING` (#73), and
+`py1815.profile.probe` keeps only its object parser (#86).
+
 ### Added
 
 - **A master for exercising outstations, in a first version that reads (#70).**
