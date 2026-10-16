@@ -68,8 +68,10 @@ confirmation.
 
 The same four bits mean different things in the two directions, so a decoder
 reads the primary bit before it reads the function. This library's master sends
-`UNCONFIRMED_USER_DATA` and leaves delivery to TCP, and its outstation accepts
-user data sent either way.
+`UNCONFIRMED_USER_DATA` and leaves delivery to TCP. Its outstation accepts either
+form, but confirmed user data only once the master has reset the link: before
+that there is no frame count to check it against, and the frame is dropped
+without a reply.
 
 Addresses are 16-bit and little endian. Anything at or above `0xFFF0` is
 reserved, leaving `0` through `0xFFEF` for stations, and three of the reserved
@@ -327,9 +329,11 @@ The control code is the octet to read carefully. Its low nibble is the
 operation: `1` pulse on, `2` pulse off, `3` latch on, `4` latch off. Its top
 two bits are the trip-close code, `1` close and `2` trip, which is how a
 single point operates equipment with a pair of coils. Between them sit two
-more bits. The queue bit is obsolete in IEEE 1815-2012 and required to be zero,
-and a master that sets it is asking for behavior the standard withdrew. The
-clear bit is not obsolete: this library builds it and reads it back.
+more bits. The queue bit is obsolete in IEEE 1815-2012: a master sets it to
+zero, and an outstation answers a control that sets it with `NOT_SUPPORTED`.
+The clear bit asks the outstation to cancel any pending or running control on
+that point first, and then to carry out the new one, if there is one. Support
+for it is optional.
 
 A direct operate of latch-on against point 3. Thirty-three octets, and this
 one needs two data blocks:
@@ -395,8 +399,9 @@ master assumed. The restart bit is why the write happens, the clock bit is why
 the time follows, and an outstation that never asks for either is one the
 master leaves alone.
 
-A master configured to use unsolicited reporting also asks the outstation to
-enable it (5.1.1.2, and the same rule). That is not a step every master takes,
+A master configured to use unsolicited reporting, once it has received the
+outstation's null unsolicited response, also asks the outstation to enable it
+(5.1.1.2, and the same rule). That is not a step every master takes,
 and an outstation built without unsolicited responses, which is this library's
 default, refuses the request.
 

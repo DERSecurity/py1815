@@ -7,6 +7,9 @@ pinned here rather than inferred from a session test.
 
 from __future__ import annotations
 
+import pathlib
+import re
+
 import pytest
 
 from py1815 import crc
@@ -109,6 +112,9 @@ class TestWireVectors:
         assert build(0xC0, destination=1, source=10) != self.RESET_LINK
 
 
+GUIDE = pathlib.Path(__file__).parent.parent / "docs" / "dnp3.md"
+
+
 class TestTheFramesTheGuideShows:
     """The two frames printed in docs/dnp3.md, pinned so the page cannot drift.
 
@@ -165,6 +171,20 @@ class TestTheFramesTheGuideShows:
     def test_both_frames_declare_the_length_they_carry(self):
         for frame in (self.INTEGRITY_POLL, self.DIRECT_OPERATE):
             assert frame[2] == MIN_LENGTH + len(parse(frame).payload)
+
+    @pytest.mark.skipif(not GUIDE.is_file(), reason="the documentation is not beside the tests")
+    def test_the_page_prints_the_frames_pinned_here(self):
+        """The constants above hold the library; this holds the page to them."""
+        printed = []
+        for block in re.findall(r"```text\n(.*?)```", GUIDE.read_text(encoding="utf-8"), re.S):
+            octets = "".join(
+                match.group(1)
+                for line in block.splitlines()
+                if (match := re.match(r"((?:[0-9A-F]{2} ?)+?)(?:\s{2,}|$)", line))
+            ).replace(" ", "")
+            if octets.startswith("0564"):
+                printed.append(bytes.fromhex(octets))
+        assert printed == [self.INTEGRITY_POLL, self.DIRECT_OPERATE]
 
 
 class TestBuildAndParse:
