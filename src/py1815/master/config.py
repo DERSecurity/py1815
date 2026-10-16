@@ -86,7 +86,8 @@ class OutstationConfig:
     #: tables.
     profile: bool = False
     #: Path of the outstation's DNP3 Device Profile document, which
-    #: ``der.compare`` compares what it serves with. None for none.
+    #: ``der.compare`` compares what it serves with and ``der.document``
+    #: lays out for reading. None for none.
     device_profile: str | None = None
     #: The automatic tasks. The two that write (``clear_restart`` and
     #: ``write_time``) only run when ``allow_control`` is on.

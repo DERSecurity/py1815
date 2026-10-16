@@ -438,6 +438,80 @@ py1815-der profile --out device-profile.xml --validate DNP3DeviceProfile021200.x
 xsltproc DNP3DeviceProfile021200.xslt device-profile.xml > device-profile.html
 ```
 
+### Reading the document, and printing it
+
+The XML is for a program. To read the document, or to hand it to someone,
+write it as a page:
+
+```
+py1815-der profile --out device-profile.xml --html device-profile.html
+```
+
+`--html FILE` writes one HTML file beside the document. It carries its own
+style, runs no script and refers to nothing outside itself, so it opens from
+a disk and can be mailed. To make a PDF, open it in a browser, print it, and
+choose **Save as PDF**: each table's headings are repeated on every page, and
+a row is never split between two.
+
+The same command lays out a Device Profile that already exists, such as one a
+vendor sent you:
+
+```
+py1815-der profile --from vendor.xml --html vendor.html
+```
+
+`--from FILE` reads a document instead of building one. It takes a document
+written for any edition of the schema, since it reads the element names and
+not a schema, and it decodes the file as its XML declaration says. It builds
+no outstation, so it needs no point tables, and the configuration file and the
+flags that describe an outstation are not read. It is used with `--html`.
+`--out` and `--validate` apply to a document the command builds, and are
+refused with `--from`.
+
+| Flag | Does |
+|---|---|
+| `--out FILE` | Writes the document's XML to the file. Without it, the XML goes to standard output |
+| `--validate XSD` | Checks the document built against your copy of the schema |
+| `--html FILE` | Also writes the document as an HTML page to read and to print |
+| `--from FILE` | Lays out this Device Profile XML file instead of building one. Used with `--html` |
+
+These flags say what the command does with a document. They are not settings
+of the outstation, so they have no place in the
+[configuration file](der-config.md).
+
+The page opens with the document's name, what its header states and the
+device's vendor, name and versions, and then has a section for each part of
+the document: the revision history, the configuration, the database, the
+implementation table and the point lists. A setting is a row with its
+capabilities, its current value and, where the document gives them, the
+methods by which it is configured. Each point type is a table with a row for
+each point and a column for each property the points carry.
+
+The layout is this library's own. It is not the layout the Users Group's
+stylesheet produces, and the page says so. A heading or a label is the
+element's own name made readable: `maxReceivedFragmentSize` is shown as "Max
+received fragment size", and `applConfig` as "Appl config", which is not the
+wording of the Users Group's template. Nothing is added to what the document
+states. A value it does not state is an empty cell, and an element the layout
+does not recognize is still shown, by its label and its text. For the Users
+Group's own layout, use their stylesheet as above.
+
+A document that is not XML, or is not a Device Profile, is refused with a
+message that says which, and so is one that declares a document type or is
+larger than 8 MiB. A table has a column for each property any of its records
+carries, so a document whose tables would be wider or larger than any real
+profile's is refused as well.
+
+The console lays a document out the same way, on the **DER** tab: see
+[The console](console.md#der). From Python:
+
+```python
+from py1815.profile import device_profile_view
+
+document = device_profile_view.read(xml)   # text, or the octets of a file
+html = device_profile_view.page(document)
+```
+
 A profile generated from the IEEE 1815.2 tables carries that standard's point
 names. Publishing one for your own device is what the document is for;
 the tables themselves stay where they were.

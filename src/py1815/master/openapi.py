@@ -32,6 +32,7 @@ from py1815.master.operations import BROADCASTS
 from py1815.master.requests import SCAN_KINDS
 from py1815.master.service import INDICATIONS
 from py1815.master.timesync import PROCEDURES
+from py1815.profile import device_profile_view
 
 #: Every deviation's name, for the ``deviate`` operation's description.
 DEVIATION_NAMES = Deviations.names()
@@ -684,6 +685,61 @@ SCHEMAS: dict[str, Schema] = {
         },
         required=["type", "index", "name", "event_class", "class_0", "deadband"],
         description="One point as a Device Profile document declares it.",
+    ),
+    "DocumentTable": _object(
+        {
+            "title": {
+                "type": "string",
+                "description": "What the table holds. Empty for a section's own settings.",
+            },
+            "columns": {
+                "type": "array",
+                "items": _STRING,
+                "description": "The column headings. A table of settings has `Item`, "
+                "`Capabilities` and `Current value`, `Methods` when a setting gives them, "
+                "and `Stated` for anything else a setting holds. A table of points or of "
+                "the implementation table has a column for each property its rows carry.",
+            },
+            "rows": {
+                "type": "array",
+                "items": {"type": "array", "items": _STRING},
+                "description": "A cell for every column. A cell that states several things "
+                "separates them with a newline, and a cell the document says nothing for "
+                "is empty.",
+            },
+        },
+        required=["title", "columns", "rows"],
+        description="One table of a Device Profile document.",
+    ),
+    "DocumentSection": _object(
+        {
+            "title": _STRING,
+            "tables": {"type": "array", "items": _ref("DocumentTable")},
+        },
+        required=["title", "tables"],
+        description="One part of a Device Profile document, and the tables under it.",
+    ),
+    "DeviceProfileDocument": _object(
+        {
+            "title": {
+                "type": "string",
+                "description": "The document's name, or the device's when it has none.",
+            },
+            "notice": {
+                "type": "string",
+                "description": "Whose layout this is, in one line, to show with the document.",
+            },
+            "facts": {
+                "type": "array",
+                "items": _object({"label": _STRING, "value": _STRING}, required=["label", "value"]),
+                "description": "What the header states, and the device's identification.",
+            },
+            "sections": {"type": "array", "items": _ref("DocumentSection")},
+        },
+        required=["title", "notice", "facts", "sections"],
+        description="A Device Profile document laid out for reading: a title, header "
+        "facts, and sections of tables. Every label is an element's own name made "
+        "readable, and nothing is stated that the document does not state.",
     ),
     "DerSwitched": _object(
         {
@@ -1719,6 +1775,36 @@ OPERATIONS: dict[str, dict[str, Any]] = {
             },
             required=["declared", "served", "absent", "undeclared", "class_0", "points"],
         ),
+        "example": {"outstation": "lab"},
+    },
+    "der.document": {
+        "summary": "Lay a Device Profile document out for reading",
+        "description": "Reads the XML of a DNP3 Device Profile document, of any edition of "
+        "the schema, and answers with it as a title, header facts and sections of tables: "
+        "the settings with their capabilities, current values and methods, the "
+        "implementation table, and a table of points for each point type. The layout is "
+        "this library's own and not the DNP Users Group's. Nothing is read from the "
+        "outstation and nothing is sent to it, so the operation is allowed in a service "
+        "that was not started to command, and needs no connection and no profile. A "
+        "document that is not XML or not a Device Profile, that declares a document type, "
+        f"or that is larger than {device_profile_view.MAX_SIZE >> 20} MiB is refused as a "
+        "`request` error that says which.",
+        "tag": "DER profile",
+        "params": _object(
+            {
+                "outstation": {
+                    **_OUTSTATION_NAME,
+                    "description": "The outstation whose document is wanted. Not needed "
+                    "when `document` is sent.",
+                },
+                "document": {
+                    "type": "string",
+                    "description": "The document's XML. The one the outstation was given "
+                    "with `--device-profile` when left out.",
+                },
+            }
+        ),
+        "result": _ref("DeviceProfileDocument"),
         "example": {"outstation": "lab"},
     },
     "stop": {

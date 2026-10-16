@@ -989,6 +989,50 @@ class TestTheLineService:
             writer.close()
             await lines.stop()
 
+    @pytest.mark.asyncio
+    async def test_a_line_longer_than_a_stream_reads_by_default_is_answered(self, service):
+        # A Device Profile document sent in a message is far longer than the
+        # 64 KiB a stream reads as one line unless told otherwise.
+        lines = LineServer(service)
+        await lines.start()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", lines.port, limit=4 * 1024 * 1024
+        )
+        try:
+            padding = "x" * (200 * 1024)
+            writer.write(
+                json.dumps({"id": 1, "op": "status", "params": {}, "pad": padding}).encode()
+            )
+            writer.write(b"\n")
+            await writer.drain()
+            async with asyncio.timeout(5):
+                answer = json.loads(await reader.readline())
+            assert answer["id"] == 1 and answer["ok"]
+        finally:
+            writer.close()
+            await lines.stop()
+
+    @pytest.mark.asyncio
+    async def test_a_line_over_the_limit_is_refused_and_the_connection_closed(
+        self, service, monkeypatch
+    ):
+        monkeypatch.setattr("py1815.master.service._MAX_REQUEST_BODY", 1 << 20)
+        lines = LineServer(service)
+        await lines.start()
+        reader, writer = await asyncio.open_connection("127.0.0.1", lines.port)
+        try:
+            writer.write(b"x" * ((1 << 20) + 4096))
+            await writer.drain()
+            async with asyncio.timeout(5):
+                answer = json.loads(await reader.readline())
+                closed = await reader.read()
+            assert not answer["ok"] and answer["error"]["kind"] == "request"
+            assert answer["error"]["message"] == "a line is at most 1 MiB; the connection is closed"
+            assert closed == b""
+        finally:
+            writer.close()
+            await lines.stop()
+
     def test_it_listens_on_this_machine_only(self, service):
         with pytest.raises(ValueError, match="this machine only"):
             LineServer(service, bind="0.0.0.0:0")

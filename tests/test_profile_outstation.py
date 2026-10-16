@@ -130,6 +130,12 @@ class TestAnIntegrityPoll:
         values = _values(_read(session, CLASS_0, sequence=1))
         assert values[(21, 0)] == 10 and values[(21, 1)] == 20
 
+    def test_frozen_reports_the_value_a_counter_held_at_its_last_freeze(self):
+        outstation, _ = _built()
+        assert outstation.frozen(0) is None, "never frozen"
+        outstation.freeze_all()
+        assert outstation.frozen(0) == 10 and outstation.frozen(1) == 20
+
     def test_a_long_map_is_split_into_blocks_that_fit(self):
         rows = [analog(f"Point {index}", index, event_class=3) for index in range(400)]
         point_map = load.resolve(document({"AI": rows}), units(0))

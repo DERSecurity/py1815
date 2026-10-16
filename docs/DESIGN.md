@@ -758,7 +758,9 @@ for more than Level 2 offers in places (32-bit setpoints, counters that are neve
 so this is a mode for testing against the subset and for masters that implement only that,
 and not the default. A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
-process it does not own.
+process it does not own. The property of the same name sets or removes the handler later,
+which turns the function on or off from the next request with no restart: a device whose
+configuration turns cold restart off does not have to drop its master to apply it.
 
 **D56 -- Curves live in a store with the standard's three rules, and a function gets its
 curve by asking.** `py1815.profile.curves.CurveStore` is the state behind the multiplexed
@@ -1587,6 +1589,64 @@ browser is not in another. The master's own repeated scans, which outlive the pa
 still the Commands tab's. An evaluation started from the console writes no capture file,
 so its results name their frames in the trace and not packets.
 
+**D98 -- A Device Profile document is laid out for reading by this library's own reader,
+with labels made from the element names, and the service answers with the layout as data.**
+A Device Profile is XML, and what a person reads is the document it renders to. The DNP
+Users Group renders it with a stylesheet, and that stylesheet and the schema are the Users
+Group's, with no grant to redistribute them, so this repository carries neither
+(D48) and cannot copy the layout or the wording of either. The reader in
+`profile.device_profile_view` is therefore written from the shape of the XML alone. It
+knows the root element and a handful of names every edition shares: the document header,
+the revision history, the three parts a setting is stated in (`capabilities`,
+`currentValue`, `methods`), and the lists of points, files and implementation table rows.
+Everything else is laid out by its shape: an element with those parts is a row of a table
+of settings, elements that repeat are rows of a table with a column for each property,
+and anything else is a group laid out the same way in turn. A label is derived
+mechanically from the element's name, so `maxReceivedFragmentSize` reads "Max received
+fragment size" and a nested value is flattened into text, a minimum and a maximum into
+"0 to 65519". Deriving the labels is what lets one reader take every edition of the schema
+and a vendor's own extensions, compare local names only since each edition has its own
+namespace, and show an element it has never seen instead of dropping it. A table of
+published names would have to be the Users Group's, and would go out of date with the
+next edition. The reader states nothing the document does not: an absent value is an
+empty cell. The document is untrusted, as everything from outside is: a document type
+declaration is refused where it starts, so no entity can be defined to expand without
+bound or to name something to fetch (D93 refuses the same for the same reason), nothing
+the document refers to is followed, and its size, its element count and its nesting depth
+are bounded (D89). The service's `der.document` answers with the model, a title, facts
+and sections of tables, and not with a page: the console lays the same data out with its
+own elements and never sets markup from a string, a script gets the settings and points
+as rows, and the page that `py1815-der profile --html` writes is one more rendering of
+the model. The operation reads nothing from the outstation and sends nothing to it, so it
+is allowed in a service that was not started to command (D80).
+*Trade-off:* the labels are the schema's element names made readable and not the Users
+Group's published wording, so "Appl config" stands where their document has a fuller
+title, and the layout is not the official one: a reader who needs that renders the XML
+with the Users Group's stylesheet, which the document still names. A reader that knows
+no schema cannot say a document is invalid, and lays out a wrong document as faithfully
+as a right one. A file chosen in the console is read by the browser as UTF-8, where the
+command decodes a file as it declares.
+
+**D100 -- A counter read in a narrow or flagless variation is answered at 32 bits with
+flags, and frozen counters are the counters that freeze.** Counters and frozen counters
+are kept in 32 bits (the reason is on `FrozenCounterVariation`), and the outstation used
+to refuse a read of any other counter variation with `OBJECT_UNKNOWN`. IEEE 1815-2012
+requires a Level 2 outstation to parse only variation 0 of groups 20 and 21, so the
+refusal was within the subset. It was not consistent, though: variation 1 was answered and
+variation 2 refused, and DNP3 IED Certification Procedure 3.1 rev 1, 8.24.2, lets a Level 2
+device refuse only on its first read of a type, which for counters is variation 1. The
+same section says what to send instead: a device that keeps only 32-bit values answers a
+16-bit request with a 32-bit variation, and a variation with flags stands for one without.
+So a read of group 20 variation 2, 5 or 6 is answered in variation 1, and a read of group
+21 variation 2 or 10 in variation 1 or 9, which falls to variation 1 whenever a flag is
+not normal (D55). The Device Profile lists these as requests the outstation parses, with
+no response of their own. A frozen counter is reported only for a counter that freezes
+(`Point.frozen`): an outstation whose counters do not freeze has no frozen counters, and a
+read of group 21 is refused with `OBJECT_UNKNOWN`, where it used to be answered with
+nothing and clean indications, as if the type existed and were empty.
+*Trade-off:* a master asking for 16 bits gets 32 and has to parse the wider object, which
+a Level 2 master is required to do.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1620,6 +1680,10 @@ Each layer is testable without the ones above it, and the session does no I/O.
   The line socket, the HTTP server and the console are each a way to reach it.
 - `master.capture` writes pcap files and knows nothing of DNP3. `master.trace` turns the
   frames it kept into that file's segments.
+- `profile.device_profile` writes the Device Profile document of an outstation built here,
+  from that outstation and its session. `profile.device_profile_view` reads the XML of any
+  Device Profile into facts, sections and tables, and writes them as a page. It knows a
+  few element names and no schema, and nothing of points, sessions or the wire.
 
 ## Testing
 
@@ -1689,8 +1753,8 @@ asking nothing of this outstation, with the reason.
   through D71, and off unless a session is built with `unsolicited=True`. The session gained
   a second entry point, `initiate()`, so it still does no I/O, and `OutstationServer` drives
   it. An independent conformance harness now runs the unsolicited procedures against it
-  ([Conformance run with dnp3c](conformance.md)). Still to do: running the two
-  interoperability masters against it, and the planning notes in
+  ([Conformance run with dnp3c](conformance.md)). Still to do: running the interoperability
+  masters against it, and the planning notes in
   [`planning/UNSOLICITED.md`](planning/UNSOLICITED.md) list what else was left out.
 - ~~The point-map loader and an IEEE 1815.2 outstation built from it, with D36 through D47.~~
   Landed as `py1815.profile`: the loader, the builder, a simulated DER and the `py1815-der`

@@ -145,7 +145,8 @@ In the console:
   layer.
 - **DER**, for an outstation with a profile, shows its nameplate and measurements in
   engineering units, each function with its settings and an enable switch, its curve as a
-  plot, and what it serves against its Device Profile document.
+  plot, what it serves against its Device Profile document, and that document laid out
+  as a page to read and to print.
 
 The same master answers a script. Over HTTP, while the console is running:
 
@@ -231,7 +232,10 @@ certification body:
 
 `py1815-der profile` writes the outstation's DNP3 Device Profile document (schema version
 2.12.00), generated from the running configuration: its point lists, limits and
-implementation table. See [Serving a DER](https://dersecurity.github.io/py1815/der/).
+implementation table. With `--html` it also writes the document as a page a person can read
+and print to PDF, and `py1815-der profile --from vendor.xml --html vendor.html` does the same
+for any vendor's Device Profile XML. The layout is this library's own, not the DNP Users
+Group's. See [Serving a DER](https://dersecurity.github.io/py1815/der/).
 
 To put a real device or a DER simulator behind the same outstation, bind its values to the
 profile's points instead of the simulation's: see

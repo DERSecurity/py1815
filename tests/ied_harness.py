@@ -500,7 +500,7 @@ DEADBAND = 10
 WIDE_OUTPUT = 3
 
 
-def _tables(extra_analogs: int = 0) -> dict[str, Any]:
+def _tables(extra_analogs: int = 0, *, frozen_counters: bool = True) -> dict[str, Any]:
     measures = dict(ANALOG_INPUTS)
     more = range(len(ANALOG_INPUTS), len(ANALOG_INPUTS) + extra_analogs)
     measures.update(dict.fromkeys(more, 3))
@@ -518,7 +518,12 @@ def _tables(extra_analogs: int = 0) -> dict[str, Any]:
                 )
                 for i in ANALOG_OUTPUTS
             ],
-            "CTR": [row(f"Count {i}", i, frozen=True, frozen_event_class=3) for i in COUNTERS],
+            "CTR": [
+                row(f"Count {i}", i, frozen=True, frozen_event_class=3)
+                if frozen_counters
+                else row(f"Count {i}", i)
+                for i in COUNTERS
+            ],
         }
     )
 
@@ -549,6 +554,7 @@ class Dut:
         binary_outputs: bool = True,
         analog_outputs: bool = True,
         counters: bool = True,
+        frozen_counters: bool = True,
         binary_inputs: bool = True,
         analog_inputs: bool = True,
         capacity: int = 50,
@@ -585,7 +591,7 @@ class Dut:
                 binding.output(Kind.AO, index, self._writer("AO", index), initial=0.0)
 
         self.outstation = DerOutstation(
-            load.resolve(_tables(extra_analogs), Composition()),
+            load.resolve(_tables(extra_analogs, frozen_counters=frozen_counters), Composition()),
             binding,
             strict=False,
             event_capacity=capacity,

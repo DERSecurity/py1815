@@ -78,6 +78,7 @@ disagree.
 | `POST /api/der.curve` | The curve the curve block shows |
 | `POST /api/der.write_curve` | A curve: its selector, its fields and its points, then read back |
 | `POST /api/der.compare` | What the outstation serves, against its Device Profile document |
+| `POST /api/der.document` | A Device Profile document laid out for reading: header facts, and sections of tables |
 | `POST /api/stop` | Ends the service |
 | `POST /api` | Any of the above as one message: see below |
 | `GET /events` | What happens unasked, as server-sent events |
@@ -286,6 +287,7 @@ only, and a name that still means two points is refused with both addresses.
 | `der.curve` | `number`, `mode` | Reads the curve the curve block shows. Given `number`, writes the selector first, which commands |
 | `der.write_curve` | `number`, `type`, `x_units`, `y_units`, `points`, `mode` | Writes the selector, then the type, the number of points and the units, then X and Y of each point, each only when the one before it was accepted, and reads the curve back. `stopped_at` names the write that was not accepted, and `matches` says whether the curve read back is the one written |
 | `der.compare` | `document` | Compares what the outstation serves with a DNP3 Device Profile document: the one sent, or the one given with `--device-profile` |
+| `der.document` | `document` | Lays a DNP3 Device Profile document out for reading: the one sent, or the one given with `--device-profile`. Sends nothing to the outstation, and needs no `outstation` when `document` is sent |
 
 A read that the outstation refuses whole, because one range in it holds no
 point it serves, is made again a range at a time, and a point no read returned
@@ -303,6 +305,65 @@ neither returned. `absent` lists what is declared and was not returned,
 points a class 0 read does or does not carry against the declaration. A point's
 event class and deadband cannot be asked of an outstation, so `points` lists
 them as declared. It needs no profile.
+
+### A Device Profile document, laid out
+
+`der.document` reads the XML of a Device Profile document and answers with it
+as a person reads it. It takes a document of any edition of the schema, from
+any vendor, since it reads element names and not a schema:
+
+```bash
+curl -s -X POST http://127.0.0.1:8815/api/der.document \
+     -H 'Content-Type: application/json' -d '{"outstation": "lab"}'
+```
+
+```json
+{"ok": true, "result": {
+  "title": "EX-100 Device Profile",
+  "notice": "Laid out by py1815 from the Device Profile XML. This is py1815's own layout, not the DNP Users Group's.",
+  "facts": [{"label": "Schema version", "value": "2.12.00"},
+            {"label": "Vendor name", "value": "Example Co"}],
+  "sections": [
+    {"title": "Configuration", "tables": [
+      {"title": "Link config",
+       "columns": ["Item", "Capabilities", "Current value"],
+       "rows": [["Data link address", "0 to 65519", "1024"],
+                ["Source address validation", "Never\nAlways single address", "Always single address"]]}]},
+    {"title": "Data points list", "tables": [
+      {"title": "Analog input points",
+       "columns": ["Index", "Name", "Change event class", "Units"],
+       "rows": [["4", "Active power", "two", "W"]]}]}]}}
+```
+
+| Field | Holds |
+|---|---|
+| `title` | The document's name, or the device's when the document has none |
+| `notice` | One line saying whose layout this is, to show with the document |
+| `facts` | What the document header states, and the device's vendor, name and versions |
+| `sections` | The parts of the document in its own order: the header's revision history, the configuration, the database, the implementation table and the point lists, and any part an edition or a vendor adds |
+
+A table of settings has a row for each setting, with the columns `Item`,
+`Capabilities` and `Current value`, `Methods` when a setting says how it is
+configured, and `Stated` for anything else a setting holds. The implementation
+table and each point list have a row for each entry and a column for each
+property the entries carry. Every cell is text. A cell that states several
+things separates them with a newline, and a cell the document says nothing for
+is empty.
+
+The layout is this library's own. A label is the element's own name made
+readable, as in `Max received fragment size` for `maxReceivedFragmentSize`, so
+it is not the wording of the DNP Users Group's stylesheet, and an element the
+layout does not recognize is still shown, by its label and its text.
+
+Nothing is asked of the outstation, so the operation is answered by a service
+that was not started to command, for an outstation that is not connected, and
+with no outstation at all when `document` is sent. A document that is not XML,
+is not a Device Profile, declares a document type, or is larger than 8 MiB is
+refused with a `request` error that says which, and so is one whose tables
+would be wider or larger than the reader lays out. Over HTTP a message of more
+than 4 MiB is refused before that, with status 413, and over the line socket a
+line of more than 4 MiB is answered with a `request` error and the connection
+is closed.
 
 ## Values
 

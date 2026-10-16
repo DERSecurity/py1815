@@ -105,6 +105,19 @@ _SERVED_VARIATIONS = {
     GROUP_ANALOG_OUTPUT_STATUS: {1, 2},
 }
 
+#: Counter reads a master may name that this outstation answers in another
+#: variation. Counters are kept in 32 bits, so a request for a 16-bit or a
+#: flagless variation is answered in the 32-bit one with flags. DNP3 IED
+#: Certification Procedure 3.1 rev 1, 8.24.2, accepts a 32-bit answer from a
+#: device that keeps only 32-bit values, and one with flags for one without.
+_WIDENED_VARIATIONS = {
+    GROUP_COUNTER: {2: COUNTER_VARIATION, 5: COUNTER_VARIATION, 6: COUNTER_VARIATION},
+    GROUP_FROZEN_COUNTER: {
+        2: int(FrozenCounterVariation.INT32_WITH_FLAG),
+        10: int(FrozenCounterVariation.INT32),
+    },
+}
+
 #: The analog input variation that carries the same value with its flags.
 _FLAGGED_ANALOG = {
     int(AnalogVariation.INT32): int(AnalogVariation.INT32_WITH_FLAG),
@@ -510,6 +523,11 @@ class DerOutstation:
         """The last value an output accepted, or None if it has none yet."""
         return self._state.get((kind, index))
 
+    def frozen(self, index: int) -> int | None:
+        """Return what counter *index* held at its last freeze, or None if never frozen."""
+        held = self._frozen.get(index)
+        return None if held is None else held[0].value
+
     def coverage(self) -> Coverage:
         """Every point of the map against what this outstation serves.
 
@@ -653,7 +671,7 @@ class DerOutstation:
         for header in headers:
             if header.group == CLASS_GROUP and header.event_class == 0:
                 for group in _CLASS_0_GROUPS:
-                    points = [p for p in self._served[_GROUP_KINDS[group]] if p.in_class_0]
+                    points = [p for p in self._points(group) if p.in_class_0]
                     blocks += self._ranges(group, self._defaults[group], points)
                 continue
             variation = self._variation(header)
@@ -671,6 +689,9 @@ class DerOutstation:
             raise UnknownObject(f"group {header.group} is not served")
         if header.variation == 0:
             return self._defaults[header.group]
+        widened = _WIDENED_VARIATIONS.get(header.group, {}).get(header.variation)
+        if widened is not None:
+            return widened
         if header.variation not in served:
             raise UnknownObject(f"group {header.group} variation {header.variation} is not offered")
         return header.variation
@@ -685,7 +706,7 @@ class DerOutstation:
         are; an index is a statement that a point is there, and one that is
         not there is the master's error to hear about (D63).
         """
-        points = self._served[_GROUP_KINDS[header.group]]
+        points = self._points(header.group)
         if not points:
             raise UnknownObject(f"group {header.group} holds no points")
         if not header.indices:
@@ -696,9 +717,16 @@ class DerOutstation:
             raise ParameterError(f"group {header.group} has no point at index {absent[0]}")
         return [by_index[index] for index in header.indices]
 
+    def _points(self, group: int) -> list[Point]:
+        """Return the served points a static group reports. Only counters that freeze are frozen."""
+        points = self._served[_GROUP_KINDS[group]]
+        if group == GROUP_FROZEN_COUNTER:
+            return [p for p in points if p.frozen]
+        return points
+
     def _selected(self, header: ObjectHeader) -> list[Point]:
         """The served points a static read header names."""
-        points = self._served[_GROUP_KINDS[header.group]]
+        points = self._points(header.group)
         if not points:
             # A kind this outstation has none of is, to a master, an object
             # it does not have. Answering with nothing and no indication
