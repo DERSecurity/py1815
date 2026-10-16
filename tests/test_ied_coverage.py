@@ -129,7 +129,7 @@ TESTED: dict[str, Tested] = {
     "8.11.2.5.7 abandons a read upon a later read": ("8_11_2_5_7_",),
     "8.11.2.5.8 no unsolicited response until a polled one is confirmed": ("8_11_2_5_8_",),
     "8.11.2.5.9 a configurable number of retries": ("8_11_2_5_9_",),
-    "8.11.2.6 steps 1 to 13 unsolicited responses configured off": ("8_11_2_6_",),
+    "8.11.2.6 unsolicited responses configured off": ("8_11_2_6_",),
     # 8.13 to 8.26
     "8.13.2.2 no binary inputs": ("8_13_2_2_",),
     "8.13.2.3 binary inputs": ("8_13_2_3_",),
@@ -200,10 +200,6 @@ NOT_APPLICABLE: dict[str, str] = {
     "8.6.4 local": "no local or disabled state for outputs is modeled, so IIN1.5 is never set",
     "8.6.6.2.3 buffer overflow, counter events": "counter change events are not generated",
     "8.6.6.2.4 buffer overflow, double-bit events": "double-bit inputs are not supported",
-    "8.11.2.6 steps 14 and 15": (
-        "a departure: with unsolicited responses off, a disable request is agreed to (D21), "
-        "since a device that sends none is already in the state it asks for"
-    ),
     "8.12 collision avoidance": "a serial multi-drop feature; the outstation is TCP only",
     "8.13.2.1": "for a level 1 device that cannot read binary inputs; this one can",
     "8.14.2.1": "for a level 1 device that cannot read binary input events; this one can",

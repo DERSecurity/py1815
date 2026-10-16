@@ -106,8 +106,10 @@ the events it has not read, exactly where it left them. See [D7](DESIGN.md).
 
 An outstation can report events without waiting to be polled, once a master has
 enabled the classes it wants. It is off unless you turn it on, and a session
-with it off answers every request exactly as one built before the option
-existed: `ENABLE_UNSOLICITED` is refused as unsupported.
+with it off answers as a device without the feature does: `ENABLE_UNSOLICITED`
+and `DISABLE_UNSOLICITED` are both refused as unsupported, with IIN2.0. Many
+masters send a disable request when they connect, and will report that refusal.
+Turn unsolicited responses on if the master expects to manage them.
 
 ```python
 from py1815.events import EventBuffers, EventClass
