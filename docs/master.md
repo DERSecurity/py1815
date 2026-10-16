@@ -212,6 +212,11 @@ await lab.connect(wait=60, every=2.0)                      # every two seconds
 It tries once a second unless told otherwise, and raises the last error when
 the time is up.
 
+`on_connection` is called with `True` when the connection is made and `False`
+when it is lost. For the endpoints and the reason as well, including each
+attempt that failed, give a `connection_observer`; see
+[Connection and anomaly reports](observers.md).
+
 ### Over TLS
 
 Give the outstation a TLS context, and the connection is made over TLS:

@@ -39,6 +39,16 @@ import logging
 import ssl
 from dataclasses import dataclass
 
+from py1815.observers import (
+    ConnectionDirection,
+    ConnectionEvent,
+    ConnectionObserver,
+    ConnectionOutcome,
+    ConnectionRole,
+    ConnectionTransport,
+    Endpoint,
+    ObserverGuard,
+)
 from py1815.session import Session
 
 logger = logging.getLogger(__name__)
@@ -71,8 +81,28 @@ UNSOLICITED_INTERVAL = 0.5
 _MIN_INITIATE_WAIT = 0.01
 
 
+#: Why an admitted connection ended, by the exception that ended it.
+_END_REASONS: dict[type[BaseException], str] = {
+    TimeoutError: "timeout",
+    ConnectionResetError: "connection reset",
+    BrokenPipeError: "broken pipe",
+}
+
+
 class PeerRefused(Exception):
     """A connection whose certificate is not on the allow-list."""
+
+
+@dataclass
+class _Connection:
+    """What the listener reports about one connection."""
+
+    remote: Endpoint | None
+    local: Endpoint | None
+    identity: str | None = None
+    #: Whether the end of this connection has been reported, so that it is
+    #: reported once whichever path ends it.
+    ended: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,7 +202,7 @@ class _BroadcastDatagrams(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr: object) -> None:
         try:
-            self._session.receive_broadcast(data)
+            self._session.receive_broadcast(data, Endpoint.of(addr))
         except Exception:  # pylint: disable=broad-exception-caught
             # Nothing is owed to the sender of a datagram, and one that
             # cannot be handled must not take the listener down with it.
@@ -192,6 +222,7 @@ class OutstationServer:
         idle_timeout: float = IDLE_TIMEOUT,
         broadcast_datagrams: bool = False,
         unsolicited_interval: float = UNSOLICITED_INTERVAL,
+        connection_observer: ConnectionObserver | None = None,
     ) -> None:
         """
         Args:
@@ -221,6 +252,11 @@ class OutstationServer:
                 :meth:`notify` is called, so this is the longest an event
                 recorded without calling :meth:`notify` waits to be
                 reported.
+            connection_observer: Called with a
+                :class:`~py1815.observers.ConnectionEvent` when a connection
+                is accepted, refused, displaced or ended. Settable later
+                through the attribute of the same name. See
+                :mod:`py1815.observers`.
 
         Raises:
             ValueError: If TLS is configured without an allow-list, or with a
@@ -284,6 +320,35 @@ class OutstationServer:
         #: Set to have the session looked at now for something to send
         #: unasked, and not at the next interval.
         self._wake = asyncio.Event()
+        #: Called with each connection event, or None.
+        self.connection_observer = connection_observer
+        self._connection_guard = ObserverGuard("connection observer")
+        #: What is reported about the active connection.
+        self._active_connection: _Connection | None = None
+
+    def _report(
+        self, connection: _Connection, outcome: ConnectionOutcome, reason: str = ""
+    ) -> None:
+        """Report what happened to a connection to the observer, if there is one."""
+        if self.connection_observer is None:
+            return
+        event = ConnectionEvent(
+            role=ConnectionRole.OUTSTATION,
+            direction=ConnectionDirection.INBOUND,
+            outcome=outcome,
+            transport=ConnectionTransport.TLS if self._ssl else ConnectionTransport.TCP,
+            remote=connection.remote,
+            local=connection.local,
+            peer_identity=connection.identity,
+            reason=reason,
+        )
+        self._connection_guard.deliver(self.connection_observer, event)
+
+    def _report_end(self, connection: _Connection, outcome: ConnectionOutcome, reason: str) -> None:
+        """Report the end of an admitted connection, unless it has been reported."""
+        if not connection.ended:
+            connection.ended = True
+            self._report(connection, outcome, reason)
 
     def notify(self) -> None:
         """Say that events were recorded, so they are reported now.
@@ -344,12 +409,12 @@ class OutstationServer:
             server, self._server = self._server, None
             if server is not None:
                 server.close()
-            await self._close_active(abort=False)
+            await self._close_active(abort=False, reason="listener stopped")
         if server is not None:
             with contextlib.suppress(Exception):
                 await server.wait_closed()
 
-    async def _close_active(self, *, abort: bool) -> None:
+    async def _close_active(self, *, abort: bool, reason: str) -> None:
         """End the active connection and stop its handler.
 
         ``abort`` is the difference between the two callers, and they want
@@ -372,9 +437,17 @@ class OutstationServer:
         in ``read`` until the transport notices, and a handler that woke
         afterwards would go on feeding a session that now belongs to someone
         else.
+
+        The connection is reported as displaced when aborted and as ended
+        otherwise, with ``reason``.
         """
         writer, self._active = self._active, None
         task, self._active_task = self._active_task, None
+        connection, self._active_connection = self._active_connection, None
+        self._session.connection_peer = None
+        if connection is not None:
+            outcome = ConnectionOutcome.DISPLACED if abort else ConnectionOutcome.ENDED
+            self._report_end(connection, outcome, reason)
 
         if writer is not None:
             if abort:
@@ -399,11 +472,15 @@ class OutstationServer:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
+        connection = _Connection(
+            remote=Endpoint.of(peer), local=Endpoint.of(writer.get_extra_info("sockname"))
+        )
 
         if self._ssl is not None:
             ssl_object = writer.get_extra_info("ssl_object")
             if ssl_object is None:
                 logger.error("dnp3: TLS listener received a connection with no TLS object")
+                self._report(connection, ConnectionOutcome.REFUSED, "no TLS session")
                 writer.close()
                 return
             try:
@@ -411,11 +488,13 @@ class OutstationServer:
             except PeerRefused as exc:
                 # Before admission, so a refused peer cannot displace the master.
                 logger.warning("dnp3: refusing %s: %s", peer, exc)
+                self._report(connection, ConnectionOutcome.REFUSED, f"not authorized: {exc}")
                 writer.close()
                 with contextlib.suppress(Exception):
                     await writer.wait_closed()
                 return
             logger.info("dnp3: admitted %s as %s", peer, identity)
+            connection.identity = identity
 
         try:
             async with self._admission:
@@ -423,19 +502,25 @@ class OutstationServer:
                     # The listener stopped while this connection was being
                     # authorized. Admitting it now would outlive stop().
                     logger.info("dnp3: dropping %s: the listener has stopped", peer)
+                    self._report(connection, ConnectionOutcome.REFUSED, "listener stopped")
                     writer.close()
                     return
 
                 if self._active is not None:
                     logger.info("dnp3: %s displaces the connection already established", peer)
-                    await self._close_active(abort=True)
+                    await self._close_active(
+                        abort=True, reason=f"displaced by {connection.remote or 'a new connection'}"
+                    )
 
                 self._active = writer
                 self._active_task = asyncio.current_task()
+                self._active_connection = connection
                 # Framing state belongs to the socket that is gone; the
                 # association's own state survives, which is what a reconnecting
                 # master expects.
                 self._session.connection_reset()
+                self._session.connection_peer = connection.remote
+                self._report(connection, ConnectionOutcome.ACCEPTED)
         except BaseException:
             # Admission runs before the serve loop, and therefore before the
             # cleanup below. A failure here -- displacing a writer whose
@@ -450,13 +535,21 @@ class OutstationServer:
             if self._active is writer:
                 self._active = None
                 self._active_task = None
+                self._active_connection = None
+                self._session.connection_peer = None
+            self._report_end(connection, ConnectionOutcome.REFUSED, "admission failed")
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
             raise
 
+        # The reason reported when this handler is cancelled. Displacement and
+        # stop() report the end with their own reason before they cancel it,
+        # so this applies only to a cancellation from elsewhere.
+        reason = "cancelled"
         try:
             await self._serve(reader, writer)
+            reason = "closed by peer"
         except asyncio.CancelledError:
             # Displacement cancels this handler. Re-raised so the task finishes
             # cancelled rather than appearing to have returned normally, which
@@ -465,13 +558,18 @@ class OutstationServer:
             raise
         except (TimeoutError, ConnectionResetError, BrokenPipeError) as exc:
             logger.info("dnp3: connection from %s ended: %s", peer, exc)
-        except Exception:
+            reason = _END_REASONS.get(type(exc), f"error: {type(exc).__name__}")
+        except Exception as exc:
             # One connection's failure must not take the listener with it.
             logger.exception("dnp3: connection from %s failed", peer)
+            reason = f"error: {type(exc).__name__}"
         finally:
             if self._active is writer:
                 self._active = None
                 self._active_task = None
+                self._active_connection = None
+                self._session.connection_peer = None
+            self._report_end(connection, ConnectionOutcome.ENDED, reason)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
