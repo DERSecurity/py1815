@@ -32,6 +32,13 @@ import scala.util.control.NonFatal
  *   PY1815_CONFORMANCE_PYTHON    the Python interpreter that has py1815 installed (required)
  *   PY1815_CONFORMANCE_FIXTURE   the device script; ../conformance_outstation.py when not set
  */
+// One procedure's outcome, the harness's words for it, and what it noted or warned about a pass.
+private final case class Outcome(
+    outcome: String,
+    detail: String,
+    notes: List[String] = Nil,
+    warnings: List[String] = Nil)
+
 object Main {
 
   private val pythonVariable = "PY1815_CONFORMANCE_PYTHON"
@@ -90,15 +97,17 @@ object Main {
     val harness = new Harness(options, new Py1815Plugin(PluginSettings(command)), revision)
 
     // each procedure's outcome and the harness's words for it, in the order the procedures ran
-    val outcomes = mutable.LinkedHashMap[String, (String, String)]()
+    val outcomes = mutable.LinkedHashMap[String, Outcome]()
     var broken = false
 
     def record(results: List[ProcedureResult]): Unit = results.foreach { r =>
-      outcomes(r.id) = r.outcome match {
+      val (outcome, detail) = r.outcome match {
         case ProcedureOutcome.Passed => ("passed", "")
         case ProcedureOutcome.Skipped(reason) => ("skipped", reason)
+        case ProcedureOutcome.Excluded(reason) => ("excluded", reason)
         case ProcedureOutcome.Failed(message) => ("failed", message)
       }
+      outcomes(r.id) = Outcome(outcome, detail, r.notes, r.warnings)
     }
 
     // Run one procedure or section, and return the procedures the run stopped short of.
@@ -114,7 +123,7 @@ object Main {
           // the harness or the plugin failed around the procedure, which then has no result of its own
           broken = true
           record(ex.partial.results)
-          outcomes.getOrElseUpdate(ex.procedureId, ("error", ex.getMessage))
+          outcomes.getOrElseUpdate(ex.procedureId, Outcome("error", ex.getMessage))
           ex.partial.unreached
       }
 
@@ -138,13 +147,14 @@ object Main {
     }
 
     println()
-    outcomes.foreach { case (procedure, (outcome, detail)) =>
+    outcomes.foreach { case (procedure, Outcome(outcome, detail, _, warnings)) =>
       if (outcome != "passed") println(s"$procedure: $outcome${if (detail.isEmpty) "" else s" ($detail)"}")
+      warnings.foreach(warning => println(s"$procedure: warning: $warning"))
     }
-    val counts = outcomes.values.groupBy(_._1).view.mapValues(_.size).toList.sorted
+    val counts = outcomes.values.groupBy(_.outcome).view.mapValues(_.size).toList.sorted
     println(counts.map { case (outcome, count) => s"$count $outcome" }.mkString(", "))
 
-    val failed = outcomes.values.exists { case (outcome, _) => outcome == "failed" || outcome == "error" }
+    val failed = outcomes.values.exists(o => o.outcome == "failed" || o.outcome == "error")
     if (broken || failed) 1 else 0
   }
 
@@ -171,10 +181,14 @@ object Main {
         s"Unexpected argument: $other\nusage: -rev <revision> [-config <file>] [-run <procedure, section or all>]")
   }
 
-  private def write(file: Path, outcomes: mutable.LinkedHashMap[String, (String, String)]): Unit = {
+  private def write(file: Path, outcomes: mutable.LinkedHashMap[String, Outcome]): Unit = {
     val procedures = ujson.Obj()
-    outcomes.foreach { case (id, (outcome, detail)) =>
-      procedures(id) = ujson.Obj("outcome" -> outcome, "detail" -> detail)
+    outcomes.foreach { case (id, Outcome(outcome, detail, notes, warnings)) =>
+      procedures(id) = ujson.Obj(
+        "outcome" -> outcome,
+        "detail" -> detail,
+        "notes" -> ujson.Arr.from(notes.map(ujson.Str(_))),
+        "warnings" -> ujson.Arr.from(warnings.map(ujson.Str(_))))
     }
     Files.createDirectories(file.toAbsolutePath.getParent)
     Files.write(file, (ujson.write(ujson.Obj("procedures" -> procedures), indent = 2) + "\n").getBytes(UTF_8))
