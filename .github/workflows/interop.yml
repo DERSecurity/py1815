@@ -575,12 +575,56 @@ jobs:
     # than the one on record.
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, so the change can be compared with its base.
+          fetch-depth: 0
+
+      - name: Find out whether the change reaches the outstation
+        id: scope
+        # The full run takes about fifteen minutes, so it runs only for a
+        # change that can alter what it tests: the library outside the master
+        # (the outstation, its session, link, transport and objects, and the
+        # IEEE 1815.2 profile), the device script, the harness and its record,
+        # this workflow, or the project's dependencies. Any other change skips
+        # the run and passes this job, so the gate below does not wait on it.
+        # A manual run, and anything whose changes cannot be listed, runs it.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          run=true
+          case "$EVENT" in
+            pull_request) range="$BASE...HEAD" ;;
+            push) range="$BEFORE..HEAD" ;;
+            *) range="" ;;
+          esac
+          if [ -n "$range" ] && changed=$(git diff --name-only "$range" 2>/dev/null); then
+            reaching=$(printf '%s\n' "$changed" \
+              | grep -E '^(src/py1815/|interop/conformance_outstation\.py$|interop/dnp3c/|\.github/workflows/interop\.yml$|pyproject\.toml$)' \
+              | grep -v '^src/py1815/master/' || true)
+            if [ -z "$reaching" ]; then run=false; fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = true ]; then
+            echo "the change reaches the outstation, or its scope cannot be told: every procedure runs"
+            if [ -n "${reaching:-}" ]; then printf '%s\n' "$reaching"; fi
+          else
+            echo "no change reaches the outstation: the conformance run is skipped"
+            {
+              echo "### dnp3c conformance run"
+              echo
+              echo "Not run: nothing this change touches reaches the outstation or the harness."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run == 'true'
         with:
           python-version: "3.11"
 
       - name: Install the library
+        if: steps.scope.outputs.run == 'true'
         run: |
           pip install --quiet -e .
           # The plugin starts the device with this interpreter. It is named
@@ -588,6 +632,7 @@ jobs:
           echo "PY1815_CONFORMANCE_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
+        if: steps.scope.outputs.run == 'true'
         with:
           distribution: temurin
           java-version: "17"
@@ -595,10 +640,12 @@ jobs:
           cache-dependency-path: interop/dnp3c/pom.xml
 
       - name: Build the plugin
+        if: steps.scope.outputs.run == 'true'
         working-directory: interop/dnp3c
         run: mvn --batch-mode --no-transfer-progress compile
 
       - name: Find out whether packets can be captured here
+        if: steps.scope.outputs.run == 'true'
         id: capture
         working-directory: interop/dnp3c
         # dnp3c saves each procedure's traffic as a capture when it is given a
@@ -635,7 +682,7 @@ jobs:
           fi
 
       - name: Run every procedure, capturing its traffic
-        if: steps.capture.outputs.works == 'true'
+        if: steps.scope.outputs.run == 'true' && steps.capture.outputs.works == 'true'
         working-directory: interop/dnp3c
         # Bounded well inside the job, so a hang fails here with the results
         # so far and not at the job's limit with none. A whole run is about
@@ -652,13 +699,13 @@ jobs:
           exit "$status"
 
       - name: Run every procedure
-        if: steps.capture.outputs.works != 'true'
+        if: steps.scope.outputs.run == 'true' && steps.capture.outputs.works != 'true'
         working-directory: interop/dnp3c
         timeout-minutes: 40
         run: mvn --batch-mode --no-transfer-progress -q scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1"
 
       - name: Every procedure that sent a frame captured packets
-        if: always() && steps.capture.outputs.works == 'true'
+        if: always() && steps.scope.outputs.run == 'true' && steps.capture.outputs.works == 'true'
         working-directory: interop/dnp3c/results/3.1r1/L2
         # A capture that silently recorded nothing looks like a capture. Each
         # procedure whose log shows a frame sent ("--P->") has to have one with
@@ -678,7 +725,7 @@ jobs:
           [ "$sent" -gt 0 ] && [ "$empty" -eq 0 ]
 
       - name: Compare the run with the record
-        if: always()
+        if: always() && steps.scope.outputs.run == 'true'
         # The step that guards the record. It reads the result file dnp3c
         # leaves for each procedure and fails when one ended in any way other
         # than interop/dnp3c/expected.json says: newly failing, newly passing,
@@ -699,11 +746,11 @@ jobs:
           exit "$status"
 
       - name: Device log
-        if: always()
+        if: always() && steps.scope.outputs.run == 'true'
         run: tail -n 200 interop/dnp3c/results/3.1r1/L2/outstation.log || true
 
       - name: Keep the report, the logs and the captures
-        if: always()
+        if: always() && steps.scope.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dnp3c-conformance-results
@@ -738,4 +785,4 @@ jobs:
               exit 1
             fi
           done
-          echo "every peer agreed with this library, as outstation and as master, and the conformance run is the one on record"
+          echo "every peer agreed with this library, as outstation and as master, and the conformance run, where the change reaches the outstation, is the one on record"

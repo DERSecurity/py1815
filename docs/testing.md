@@ -266,8 +266,8 @@ control channel against the outstation it drives, and `tests/test_conformance_re
 tests the comparison and holds the page to the record. Neither needs Java.
 
 The `interop` gate waits for the job, so a change that makes a procedure end otherwise than
-on record does not merge until the record says why. The job takes about fifteen minutes,
-most of it timeouts the procedures call for.
+on record does not merge until the record says why. The full run takes about fifteen minutes,
+most of it timeouts the procedures call for, so it runs only for a change that reaches the outstation: the library outside `py1815.master`, `interop/conformance_outstation.py`, `interop/dnp3c/`, `.github/workflows/interop.yml` or `pyproject.toml`. For any other change it passes in seconds without running.
 
 Setting the run up showed that a device needs four decisions the library leaves to
 whoever builds on it: whether a control sent to a broadcast address is carried out,

@@ -27,7 +27,7 @@ library. It is what their tool reported when this project ran it.
 | Procedures | Revision 3.1 rev 1 (13 September 2022), at Subset Level 2 |
 | Device | A Subset Level 2 configuration of this library's outstation, served over TCP on a loopback address of its own by `interop/conformance_outstation.py` |
 | Steps a master cannot perform | Done by a plugin through the device's control channel: cycling power, changing inputs and flags, setting up the network, and checking each response against what the device holds |
-| Where | The `dnp3c-conformance` job of the `interop` workflow, on every pull request. The `interop` gate waits for it, so a pull request does not merge while it fails |
+| Where | The `dnp3c-conformance` job of the `interop` workflow, on every pull request that reaches the outstation: the library outside the master, the device script, the harness and its record, the workflow or the dependencies. The `interop` gate waits for it, so such a pull request does not merge while it fails |
 
 The device is built from the library's defaults. A few things a device built on the
 library decides for itself are decided as the procedures expect:
