@@ -95,14 +95,16 @@ answers should expect to be caught here rather than by the unit tests. Run it
 locally before pushing if you can -- `interop/` holds the outstation fixture and
 each peer's driver.
 
-One more job in that workflow, `dnp3c-conformance`, runs the Level 2 outstation
-certification procedures with [dnp3c](https://github.com/stepfunc/dnp3c), the conformance
-test harness from Step Function I/O. It is not behind the `interop` gate: some of its
-procedures fail on every run, each for a reason on record in
-`interop/dnp3c/expected.json`, so the job is red and has to be read. What it guards is
-the record. A change to the outstation that makes a procedure end differently fails the
-job's comparison step, and the change then updates the record and
-[docs/conformance.md](docs/conformance.md) with the reason.
+One more job in that workflow, `dnp3c-conformance`, runs the outstation certification
+procedures of revision 3.1 rev 1 at Subset Level 2 with
+[dnp3c](https://github.com/stepfunc/dnp3c), the conformance test harness from Step
+Function I/O. Every procedure it runs passes. It is not behind the `interop` gate, because
+it takes as long as the procedures' timeouts and fetches the tool from Maven Central, so
+read it before merging a change to the outstation. What it guards is the record in
+`interop/dnp3c/expected.json`. A change to the outstation that makes a procedure end
+differently fails the job's comparison step, and the change then updates the record,
+[docs/conformance.md](docs/conformance.md) and the report in `compliance/` with the
+reason.
 `interop/dnp3c/README.md` says how to run it, which needs Java and Maven.
 
 ## What a good change looks like

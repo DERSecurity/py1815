@@ -1,9 +1,10 @@
 # The dnp3c conformance run
 
 [dnp3c](https://github.com/stepfunc/dnp3c) is a DNP3 conformance test harness published
-by [Step Function I/O](https://stepfunc.io). It acts as a master, runs the DNP3 IED
-Level 2 outstation certification test procedures against a device, and writes an HTML
-report with a log of every step and frame.
+by [Step Function I/O](https://stepfunc.io). It acts as a master, runs the outstation
+test procedures of the DNP3 IED Certification Procedure against a device, and writes an
+HTML report with a log of every step and frame. This directory runs revision 3.1 rev 1
+at Subset Level 2.
 
 This directory runs it against this library's outstation in continuous integration. The
 unit suite carries out the same procedures in process (`tests/test_ied_*.py`), but that
@@ -25,6 +26,7 @@ Function I/O's. So is the `dnp3` crate that two other jobs in this repository us
 | `pom.xml` | The Maven project. Every version in it is pinned |
 | `expected.json` | How each procedure ends, on record |
 | `check_outcomes.py` | Compares a run with the record |
+| `../../compliance/` | The report of the run on record |
 
 ## The license, and how this directory is scoped
 
@@ -52,30 +54,47 @@ To stop using dnp3c, delete this directory and `../conformance_outstation.py`, a
 
 ## What the outstation is told to be
 
-The device is a Level 2 configuration of the library with its defaults. Three things a
-device built on the library decides for itself are decided the way the procedures
-expect of a device, and `../conformance_outstation.py` says why for each: it carries
-out a cold restart request, it carries out a control sent to a broadcast address, and
-it asks for the time again ten seconds after a master writes it.
+The device is a Level 2 configuration of the library with its defaults. A few things a
+device built on the library decides for itself are decided the way the procedures expect
+of a device, and `../conformance_outstation.py` says why for each:
 
-`device.ini` states every option dnp3c has. A `supports.*` option is off only where the
-outstation does not have the feature:
+- it carries out a cold restart request, and can be set not to without a restart;
+- it carries out a control sent to a broadcast address, and takes broadcasts sent as UDP
+  datagrams to its port beside the TCP connection;
+- it asks for the time again ten seconds after a master writes it, and stops trusting
+  its clock twenty seconds after the write.
+
+It listens on 127.0.0.2, a loopback address of its own, because the network tests of
+section 9 connect from `network.master.address`, 127.0.0.1, some of them from port 20000.
+
+Before each procedure the plugin freezes the counters once, as an operator would before
+testing. A frozen counter holds a value only after a freeze, and some procedures read
+frozen counters before freezing them.
+
+`device.ini` states every option dnp3c has. An option is off only where the outstation
+does not have the feature:
 
 | Option turned off | Why |
 |---|---|
-| `supports.doubleBit`, `supports.disable.doubleBit`, `supports.doubleBitChangeEvents` | The outstation has no double-bit binary inputs |
+| `supports.doubleBitInput`, `supports.disable.doubleBitInput`, `supports.doubleBitInputChangeEvents` | The outstation has no double-bit binary inputs |
 | `supports.counterChangeEvents`, `supports.counterEventsQueuedPerPoint` | A counter reports no change events |
 | `supports.frozenCounterChangeEvents` | Held to Level 2, a freeze buffers no event |
-| `supports.analogEventsQueuedPerPoint` | An analog input keeps one event, its newest |
-| `supports.binaryOutputChangeEvents`, `supports.analogOutputChangeEvents` | Output events are not offered |
+| `supports.analogInputEventsQueuedPerPoint` | An analog input keeps one event, its newest |
+| `supports.binaryOutputChangeEvents`, `supports.binaryOutputCommandEvents`, `supports.analogOutputChangeEvents`, `supports.analogOutputCommandEvents` | Output events are not offered |
 | `supports.dataLinkConfirmRequests`, `supports.dataLinkRetries` | The outstation never requests data link confirmation, so it has nothing to retry |
 | `supports.selfAddress` | The outstation does not answer the self-address |
-| `supports.noClassAssignment` | Assign class is not implemented. A point's class is fixed when the outstation is built |
+| `supports.multipleAddresses` | The outstation answers to one link address |
+| `supports.assignNoClass` | Assign class is not implemented. A point's class is fixed when the outstation is built |
 | `supports.globalRemoteSupervisoryControl`, `supports.individualRemoteSupervisoryControl` | Outputs have no local state |
 | `supports.deviceAttributes` | Device attributes are not served |
+| `network.udp`, `network.udp.unsolicited` | The outstation answers requests and sends unsolicited responses over TCP only |
+| `network.tcp.specificAddress`, `network.tcp.wildcard` | The outstation accepts a connection from any master and keeps no list of masters |
+| `network.tcp.multicast` | The outstation joins no multicast group |
+| `serial.enabled` | The outstation is reached over TCP. This library has no serial link |
 
 `expected.json` carries the same reasons, and `tests/test_conformance_record.py` fails
-when an option is off in `device.ini` without one, or without a row here.
+when an option the record depends on is off in `device.ini` without one, or without a
+row here.
 
 Each binary output accepts every control code and behaves as a latch. So the points
 `device.ini` names for one code or a pair of codes do accept those codes, and none of
@@ -92,7 +111,15 @@ The plugin never answers a check from what dnp3c parsed alone. It asks the devic
   plugin allows a request one second to be carried out, and a check that nothing operated
   watches for that whole second before it says so.
 - **Values**: each value in a response is compared with the value the device holds for
-  that point, and a class 0 response has to carry every installed input.
+  that point, a frozen counter's with the value the device froze, and a class 0 response
+  has to carry every installed input.
+- **Flags**: a point set abnormal has its source marked as having lost communication,
+  and the device reports what it then reports. A frozen counter takes its counter's flags
+  at a freeze, so one is set abnormal by marking the counter and freezing.
+- **The network**: the device is moved to the port a section 9 test asks for, and a
+  test that asks for something the device does not offer, such as a list of accepted
+  masters, makes the plugin throw, so the test fails instead of passing on a setup the
+  device lacks.
 - **Events**: the plugin generates events by changing inputs, and the device answers
   each change with whether it buffered an event and the time it gave it. A response has
   to hold those events, in order, with those times.
@@ -115,7 +142,7 @@ pip install -e .
 cd interop/dnp3c
 export PY1815_CONFORMANCE_PYTHON="$(command -v python)"
 mvn --batch-mode compile
-mvn --batch-mode scala:run -Dlauncher=conformance
+mvn --batch-mode scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1"
 python check_outcomes.py
 ```
 
@@ -126,10 +153,10 @@ timeouts the procedures call for.
 One procedure or section is run by adding its number:
 
 ```bash
-mvn --batch-mode scala:run -Dlauncher=conformance "-DaddArgs=-run|8.11.2.5"
+mvn --batch-mode scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-run|8.11.2a"
 ```
 
-The results are written to `results/`, which Git ignores:
+The results are written to `results/3.1r1/L2/`, which Git ignores:
 
 | File | What it is |
 |---|---|
@@ -137,7 +164,7 @@ The results are written to `results/`, which Git ignores:
 | `<procedure>/log.html` | Every step, frame and check of one procedure |
 | `<procedure>/dump.pcap` | The procedure's traffic, when capture is on |
 | `outstation.log` | The device's own log |
-| `outcomes.json` | Each procedure's outcome, with dnp3c's words for a skip or a failure |
+| `outcomes.json` | Each procedure's outcome, with dnp3c's words for a skip or a failure, and its notes and warnings |
 
 dnp3c stops a run at the first procedure that fails. The program here then runs each
 procedure it did not reach, one at a time, so that one failure does not hide the rest.
@@ -149,11 +176,14 @@ adapter's address as `dnp3c -adapters` prints it, and run as a user that may cap
 
 ## The record
 
-`expected.json` holds how every procedure ends: passed, skipped for a named option, not
-implemented by dnp3c, or failed, with the reason. `check_outcomes.py` compares a run
-with it and fails when a procedure ends differently, when one on record did not run,
-and when one ran that is not on record. So a procedure that starts to fail is caught,
-and so is one that starts to pass.
+`expected.json` holds how every procedure ends, for the revision and subset level it
+names: passed, with any warning dnp3c gave; skipped, with dnp3c's reason; excluded or
+failed, with this project's reason; or not implemented by dnp3c. `check_outcomes.py`
+compares a run with it and fails when a procedure ends differently, when one on record
+did not run, when one ran that is not on record, and when a pass gains or loses a
+warning. So a procedure that starts to fail is caught, and so is one that starts to pass.
+Today every procedure that runs passes, with no warning, and a test keeps it that way
+until a failure is put on record with its reason.
 
 When a run differs for a good reason, put it on record and say why:
 
@@ -165,4 +195,5 @@ That keeps the reasons already given and leaves an empty one for anything new, w
 the comparison refuses until it is filled in. A new failure is a finding. Work out
 which side is right from IEEE Std 1815-2012, the technical bulletins and the
 certification procedure, in that order, before writing its reason down. Then update
-[`docs/conformance.md`](../../docs/conformance.md), which a test holds to the record.
+[`docs/conformance.md`](../../docs/conformance.md), which a test holds to the record,
+and copy the run's report into [`compliance/`](../../compliance) as its README says.

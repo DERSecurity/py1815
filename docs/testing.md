@@ -244,9 +244,9 @@ profile the outstation generates does not claim one.
 The tests above are this project reading the procedures and then checking its own
 reading. [dnp3c](https://github.com/stepfunc/dnp3c), a conformance test harness published
 by [Step Function I/O](https://stepfunc.io), is other people's reading of the same
-procedures. The `dnp3c-conformance` job of the `interop` workflow runs every procedure it
-has against a Level 2 configuration of this outstation, served over TCP by
-`interop/conformance_outstation.py`.
+procedures. The `dnp3c-conformance` job of the `interop` workflow runs every procedure of
+revision 3.1 rev 1 it has against a Level 2 configuration of this outstation, served over
+TCP by `interop/conformance_outstation.py`, and every procedure that runs passes.
 
 A certification procedure has steps a master cannot perform over DNP3: cycle power to the
 device, change an input, check that an output operated. dnp3c asks a person to do those,
@@ -257,21 +257,22 @@ writes that reached its outputs. Nothing is answered from what dnp3c parsed alon
 step waits for a person.
 
 [Conformance run with dnp3c](conformance.md) says how every procedure ends: which pass,
-which are skipped and for what, which dnp3c does not implement, and which fail, with the
-document each failure turns on. That page is written from
+which are skipped and for what, and how each difference an earlier run found was settled.
+The tool's report is kept in `compliance/`. That page is written from
 `interop/dnp3c/expected.json`, and the job compares every run with that record. A
-procedure that starts to fail, starts to pass or stops running fails the job until the
-record and the page are brought up to date. `tests/test_conformance_fixture.py` tests the
+procedure that starts to fail, starts to pass, stops running or passes with a new warning
+fails the job until the record and the page are brought up to date. `tests/test_conformance_fixture.py` tests the
 control channel against the outstation it drives, and `tests/test_conformance_record.py`
 tests the comparison and holds the page to the record. Neither needs Java.
 
-The job is not one of the peers the `interop` gate waits for, because some procedures
-fail on every run and the job reports that as a failure. Read it before merging a change
-to the outstation.
+The job is not one of the peers the `interop` gate waits for, because it takes as long as
+the procedures' timeouts and fetches the tool from Maven Central. Read it before merging a
+change to the outstation.
 
-Setting the run up showed that a device needs three decisions the library leaves to
+Setting the run up showed that a device needs four decisions the library leaves to
 whoever builds on it: whether a control sent to a broadcast address is carried out,
-whether a cold restart request is, and when to ask for the time again.
+whether a cold restart request is, when to ask for the time again, and when to stop
+trusting a time a master wrote.
 `interop/conformance_outstation.py` says how each is decided and why.
 
 ## Bulletins and application notes are checked one document at a time

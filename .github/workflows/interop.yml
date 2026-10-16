@@ -53,11 +53,10 @@ on:
 #
 #   dnp3c-conformance    dnp3c (https://github.com/stepfunc/dnp3c), the
 #                        conformance test harness from Step Function I/O, runs
-#                        the Level 2 outstation certification procedures
-#                        against this outstation. Some of its procedures fail on
-#                        every run, each for a reason on record, so the job is
-#                        red and is read, not waited for. docs/conformance.md
-#                        says how each procedure ends.
+#                        the outstation certification procedures of revision
+#                        3.1 rev 1 at Subset Level 2 against this outstation.
+#                        It fails when a procedure ends other than as recorded.
+#                        docs/conformance.md says how each procedure ends.
 
 jobs:
   opendnp3-master:
@@ -544,8 +543,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # dnp3c (https://github.com/stepfunc/dnp3c) is Step Function I/O's
-    # conformance test harness. It acts as a master and runs the DNP3 IED
-    # Level 2 outstation certification test procedures. The unit suite carries
+    # conformance test harness. It acts as a master and runs the outstation
+    # test procedures of the DNP3 IED Certification Procedure, revision 3.1
+    # rev 1, at Subset Level 2. The unit suite carries
     # the same procedures out from this project's own reading of them; this is
     # a reading by people who did not write this library.
     #
@@ -565,13 +565,12 @@ jobs:
     # interop/dnp3c/README.md says more, and deleting that directory,
     # interop/conformance_outstation.py and this job removes dnp3c entirely.
     #
-    # This job is not in the `needs` of the `interop` job below. Some
-    # procedures fail on every run, each for a reason on record in
-    # interop/dnp3c/expected.json, and the run step reports a failed procedure
-    # as a failure. A gate that is always red is no gate. What this job guards
-    # is the record: the comparison step fails when a procedure ends in any way
-    # other than the one on record, which is how a change that breaks one, or
-    # mends one, is noticed.
+    # This job is not in the `needs` of the `interop` job below: it takes as
+    # long as the procedures' timeouts, and depends on a tool fetched from
+    # Maven Central. What it guards is the record in
+    # interop/dnp3c/expected.json, which has every procedure that runs passing:
+    # the run step fails when a procedure fails, and the comparison step fails
+    # when a procedure ends in any way other than the one on record.
     steps:
       - uses: actions/checkout@v4
 
@@ -619,8 +618,8 @@ jobs:
           if sudo --preserve-env=PY1815_CONFORMANCE_PYTHON,JAVA_HOME env "PATH=$PATH" \
               mvn --batch-mode --no-transfer-progress -q \
               "-Dmaven.repo.local=$HOME/.m2/repository" \
-              scala:run -Dlauncher=conformance "-DaddArgs=-config|probe.ini|-run|6.3.2"; then
-            size=$(sudo stat -c %s capture-probe/6.3.2/dump.pcap 2>/dev/null || echo 0)
+              scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-config|probe.ini|-run|6.3.2"; then
+            size=$(sudo stat -c %s capture-probe/3.1r1/L2/6.3.2/dump.pcap 2>/dev/null || echo 0)
             if [ "$size" -gt 24 ]; then works=true; fi
           fi
           sudo rm -rf capture-probe
@@ -638,14 +637,14 @@ jobs:
         working-directory: interop/dnp3c
         # Bounded well inside the job, so a hang fails here with the results
         # so far and not at the job's limit with none. A whole run is about
-        # ten minutes, most of it timeouts the procedures call for.
+        # fifteen minutes, most of it timeouts the procedures call for.
         timeout-minutes: 40
         run: |
           status=0
           sudo --preserve-env=PY1815_CONFORMANCE_PYTHON,JAVA_HOME env "PATH=$PATH" \
             mvn --batch-mode --no-transfer-progress -q \
             "-Dmaven.repo.local=$HOME/.m2/repository" \
-            scala:run -Dlauncher=conformance "-DaddArgs=-config|capture.ini" || status=$?
+            scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-config|capture.ini" || status=$?
           # The run was root's. The steps after it, and the cache, are not.
           sudo chown -R "$(id -u):$(id -g)" . "$HOME/.m2"
           exit "$status"
@@ -654,11 +653,11 @@ jobs:
         if: steps.capture.outputs.works != 'true'
         working-directory: interop/dnp3c
         timeout-minutes: 40
-        run: mvn --batch-mode --no-transfer-progress -q scala:run -Dlauncher=conformance
+        run: mvn --batch-mode --no-transfer-progress -q scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1"
 
       - name: Every procedure that sent a frame captured packets
         if: always() && steps.capture.outputs.works == 'true'
-        working-directory: interop/dnp3c/results
+        working-directory: interop/dnp3c/results/3.1r1/L2
         # A capture that silently recorded nothing looks like a capture. Each
         # procedure whose log shows a frame sent ("--P->") has to have one with
         # packets in it.
@@ -681,7 +680,7 @@ jobs:
         # The step that guards the record. It reads the result file dnp3c
         # leaves for each procedure and fails when one ended in any way other
         # than interop/dnp3c/expected.json says: newly failing, newly passing,
-        # skipped for another reason, missing, or new.
+        # skipped for another reason, passing with a new warning, missing, or new.
         run: |
           status=0
           python interop/dnp3c/check_outcomes.py > comparison.txt || status=$?
@@ -699,7 +698,7 @@ jobs:
 
       - name: Device log
         if: always()
-        run: tail -n 200 interop/dnp3c/results/outstation.log || true
+        run: tail -n 200 interop/dnp3c/results/3.1r1/L2/outstation.log || true
 
       - name: Keep the report, the logs and the captures
         if: always()

@@ -115,6 +115,9 @@ include = [
 exclude = [
     "docs/planning",
     "interop",
+    # The conformance report: the harness's output, kept in the repository as
+    # evidence and not part of what ships. Named for its README, as above.
+    "compliance",
     # Test the interoperability fixture and scripts, which are not in the
     # allow-list and so are not here to be tested. What ships is the library and the tests of the
     # library; a test whose subject was left out is one that cannot pass, and a
