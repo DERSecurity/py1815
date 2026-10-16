@@ -775,6 +775,47 @@ class TestBinaryOutputsBehaveAsLatched:
         assert status is CommandStatus.NOT_SUPPORTED
         assert device.applied == []
 
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param(
+                ControlRelayOutputBlock.build(OperationType.LATCH_ON, clear=True), id="latch on"
+            ),
+            pytest.param(
+                ControlRelayOutputBlock.build(OperationType.LATCH_OFF, clear=True), id="latch off"
+            ),
+            pytest.param(
+                ControlRelayOutputBlock.build(
+                    OperationType.PULSE_ON, trip_close=TripCloseCode.CLOSE, clear=True
+                ),
+                id="close",
+            ),
+            pytest.param(ControlRelayOutputBlock.build(clear=True), id="no operation"),
+        ],
+    )
+    def test_a_control_with_the_clear_bit_set_is_not_supported(self, block):
+        """The clear bit is not supported, so no combination with it set is (IEEE 1815-2012,
+        Annex A, group 12 variation 1). Carrying out the operation would skip the
+        cancellation the master asked for."""
+        outstation, device = _built()
+        assert _operate(outstation.session(), _crob(0, block)) is CommandStatus.NOT_SUPPORTED
+        assert device.applied == []
+
+    def test_a_control_with_the_clear_bit_set_is_refused_at_the_select(self):
+        outstation, device = _built()
+        block = ControlRelayOutputBlock.build(OperationType.LATCH_ON, clear=True)
+        selected = outstation.session()._handle_fragment(
+            _control(FunctionCode.SELECT, _crob(0, block), 0)
+        )
+        assert CommandStatus(selected[-1]) is CommandStatus.NOT_SUPPORTED
+        assert device.applied == []
+
+    def test_a_control_with_the_obsolete_queue_bit_set_is_not_supported(self):
+        outstation, device = _built()
+        block = ControlRelayOutputBlock(control_code=int(OperationType.LATCH_ON) | 0x10)
+        assert _operate(outstation.session(), _crob(0, block)) is CommandStatus.NOT_SUPPORTED
+        assert device.applied == []
+
     def test_the_mirror_input_follows_the_output(self):
         outstation, _ = _built()
         session = outstation.session()

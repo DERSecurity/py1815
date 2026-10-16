@@ -1627,6 +1627,35 @@ no schema cannot say a document is invalid, and lays out a wrong document as fai
 as a right one. A file chosen in the console is read by the browser as UTF-8, where the
 command decodes a file as it declares.
 
+**D99 -- Unasked, a master asks an outstation to stop unsolicited reporting only when it
+is set to use it, and only on connecting.** This is about the startup task. The
+`disable_unsolicited` operation sends the request whenever it is asked for. The startup
+sequence used to begin with `DISABLE_UNSOLICITED` for every master. The standard has a
+master send that request when it is configured to use unsolicited reporting with the
+outstation (IEEE 1815-2012 5.1.1.2, rule 1), and an outstation without the feature need
+not support the function (4.4.13), so a master that names no class in
+`enable_unsolicited` now sends none of its own accord. A master that does name one
+sends it on connecting, before anything else, as before, when its `startup` task is on;
+with `startup` off it sends the request to enable alone, as it always has. Neither sends
+the request to disable when an
+outstation reports a restart: the sequence for that has no such request (5.1.1.1.2, rule
+2), since an outstation that restarted has disabled unsolicited reporting itself.
+
+The request to disable was also the first exchange of a connection, and so the one that
+showed a restart before the integrity poll was made. Without it the poll is first, and a
+restart it reports has not been cleared when it was made. The same rule has the poll come
+after the clearing, so the poll is made once more, after the restart is cleared, and
+after the time is written when the outstation asked for it. This is the one place the
+answer to a task's own request makes that task
+due again, against the rule of D81. It is bounded as the rest are: the restart is acted on
+when it appears and not again until it has cleared, so it costs one poll for each restart,
+and a master that does not clear the restart does not poll again for it.
+*Trade-off:* connecting to an outstation that has just restarted now takes two integrity
+polls where it took a request to disable and one poll. And classes left enabled by an
+earlier master, or by this one under other settings, are not disabled by a master no
+longer set to use unsolicited reporting; the `disable_unsolicited` operation does that
+when asked.
+
 **D100 -- A counter read in a narrow or flagless variation is answered at 32 bits with
 flags, and frozen counters are the counters that freeze.** Counters and frozen counters
 are kept in 32 bits (the reason is on `FrozenCounterVariation`), and the outstation used
@@ -1643,9 +1672,31 @@ not normal (D55). The Device Profile lists these as requests the outstation pars
 no response of their own. A frozen counter is reported only for a counter that freezes
 (`Point.frozen`): an outstation whose counters do not freeze has no frozen counters, and a
 read of group 21 is refused with `OBJECT_UNKNOWN`, where it used to be answered with
-nothing and clean indications, as if the type existed and were empty.
+nothing and clean indications, as if the type existed and were empty. Such an outstation
+also refuses a freeze, as a function it does not implement (`FUNC_NOT_SUPPORTED`), because
+a freeze it accepted would store nothing a read could return. The certification
+procedure's test for a device without frozen counters, 3.1 rev 1's 8.16.2.2.2, ends at the
+refused read, so it asks nothing of a freeze. Its Device Profile lists neither group 21
+nor the freeze functions, so the document and the answers agree.
 *Trade-off:* a master asking for 16 bits gets 32 and has to parse the wider object, which
-a Level 2 master is required to do.
+a Level 2 master is required to do. A master that freezes every outstation's counters
+gets a refusal from one whose counters do not freeze.
+
+**D101 -- A control relay output block with the clear bit set is not supported.** The
+clear bit asks an outstation to remove the commands pending for a point and stop any
+operation in progress there, and then to start the new one, if one is named (IEEE
+1815-2012, Annex A, group 12 variation 1). Support is optional. A device that supports it
+has to support it with no operation named, and has to answer `NOT_SUPPORTED` to a
+combination it does not support. The IEEE 1815.2 outstation keeps no queue of commands to
+remove and runs no operation over time, since every point behaves as latched and pulse
+times are ignored. It does not support the bit, and it answers every block that sets it
+with `NOT_SUPPORTED`, on select, operate and direct operate alike, as it does the obsolete
+queue bit. It used to refuse the bit alone and carry out an operation that came with it,
+which ignored the cancellation the master had asked for. The Device Profile lists no clear
+support for a binary output, so the two agree. `ControlRelayOutputBlock` still decodes the
+bit and the master still builds it, so a provider of its own can support it.
+*Trade-off:* a master that sets the clear bit out of habit, with an operation, gets a
+refusal where it used to get the operation.
 
 ## Layering
 
@@ -1684,6 +1735,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
   from that outstation and its session. `profile.device_profile_view` reads the XML of any
   Device Profile into facts, sections and tables, and writes them as a page. It knows a
   few element names and no schema, and nothing of points, sessions or the wire.
+- `observers` defines the records the listener, the session and the master report to the
+  host application, and knows nothing of sockets or frames.
 
 ## Testing
 

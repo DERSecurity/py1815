@@ -14,7 +14,9 @@ Loop prevention: a task is never triggered without bound by the responses to
 its own requests.
 
 - Restart and need-time are edge-triggered. They fire when the bit appears and
-  not again until it has cleared and reappeared.
+  not again until it has cleared and reappeared. The integrity poll that
+  follows a restart is made once for each appearance, including when the
+  restart was first reported by an integrity poll.
 - An overflow poll fires on any response that carries the bit, except the
   response to the integrity poll itself.
 - An event poll fires on any response that says events are waiting. When the
@@ -58,6 +60,8 @@ DEFAULT_EVENT_FOLLOW_UPS = 3
 
 #: Execution order when several tasks are due:
 #: 1. Disable unsolicited reporting, so it cannot interleave with the polls.
+#:    Due only on connecting, and only for a master set to use unsolicited
+#:    reporting with the outstation (IEEE 1815-2012 5.1.1.2).
 #: 2. Clear the restart bit, so the integrity poll does not report it again.
 #: 3. Write the time, so later events are timestamped with it.
 #: 4. Poll.
@@ -78,15 +82,17 @@ _EVENT_BITS = (IINBit.CLASS_1_EVENTS, IINBit.CLASS_2_EVENTS, IINBit.CLASS_3_EVEN
 class Tasks:
     """Which automatic tasks are enabled."""
 
-    #: Run the startup sequence (disable unsolicited, then integrity poll) on
-    #: connect and when the outstation reports a restart.
+    #: Run the startup sequence on connect and when the outstation reports a
+    #: restart: an integrity poll, preceded on connect by a request to disable
+    #: unsolicited reporting when ``enable_unsolicited`` names a class.
     startup: bool = True
     #: Clear the restart bit (IIN1.7) when a response sets it.
     clear_restart: bool = True
     #: Write the time when a response sets need-time (IIN1.4).
     write_time: bool = True
     #: Event classes to enable unsolicited reporting for after startup.
-    #: Empty means do not enable it.
+    #: Empty means the master does not use unsolicited reporting with the
+    #: outstation: it sends no request to enable it, and none to disable it.
     enable_unsolicited: tuple[int, ...] = ()
     #: Poll for events when a response sets a class 1, 2 or 3 events bit.
     events_when_indicated: bool = True
@@ -221,12 +227,15 @@ class Housekeeper:
 
         A startup sequence under way finishes, and an integrity poll already
         due is still made, whatever the new settings say: either may have been
-        queued for more than one reason.
+        queued for more than one reason. A request to disable unsolicited
+        reporting is part of startup only for a master set to use it, so one
+        that is due is dropped when the classes to enable are taken away.
         """
         self._tasks = tasks
         off = {
             "clear_restart": not tasks.clear_restart,
             "write_time": not tasks.write_time,
+            "disable_unsolicited": not tasks.enable_unsolicited,
             "enable_unsolicited": not tasks.enable_unsolicited,
             "events": not tasks.events_when_indicated,
         }
@@ -244,14 +253,26 @@ class Housekeeper:
         self._starting = False
         self._follow_ups = 0
         if self.tasks.startup:
-            self._begin_startup()
+            self._begin_startup(connecting=True)
         elif self.tasks.enable_unsolicited:
             self._due.add("enable_unsolicited")
 
-    def _begin_startup(self) -> None:
+    def _begin_startup(self, *, connecting: bool) -> None:
+        """Queue the startup sequence, for a new connection or a reported restart.
+
+        A master set to use unsolicited reporting with the outstation first
+        asks it to stop, when the master is the one starting (IEEE 1815-2012
+        5.1.1.2, rule 1). A master not set to use it sends no such request: an
+        outstation without the feature need not support the function. An
+        outstation that reports a restart has disabled unsolicited reporting
+        itself, and the sequence for that has no request to disable it
+        (5.1.1.1.2, rule 2).
+        """
         self._starting = True
-        self._due |= {"disable_unsolicited", "integrity"}
+        self._due.add("integrity")
         if self.tasks.enable_unsolicited:
+            if connecting:
+                self._due.add("disable_unsolicited")
             self._due.add("enable_unsolicited")
 
     def saw(
@@ -279,8 +300,16 @@ class Housekeeper:
                 self._restart_seen = True
                 if tasks.clear_restart:
                     self._due.add("clear_restart")
-                if tasks.startup and not starting:
-                    self._begin_startup()
+                # A restart seen while startup is under way is the one it is
+                # settling, with one exception. Seen first in the answer to
+                # startup's own integrity poll, it was not cleared before
+                # that poll, and the poll comes after the clearing (IEEE
+                # 1815-2012 5.1.1.1.2, rule 2). So the poll is made once more,
+                # by a master that clears the indication. This is once for
+                # each time the indication appears, so it cannot repeat.
+                again = integrity and tasks.clear_restart
+                if tasks.startup and (not starting or again):
+                    self._begin_startup(connecting=False)
         else:
             self._restart_seen = False
 

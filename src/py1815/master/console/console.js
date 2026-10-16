@@ -327,7 +327,7 @@ function facts(target, pairs) {
 
 // Automatic tasks: [setting name, Overview label, text when enabled].
 const TASKS = [
-  ["startup", "On connecting, and after a restart", "Stops unsolicited reporting, reads everything"],
+  ["startup", "On connecting, and after a restart", "Reads everything"],
   ["clear_restart", "Restart indication", "Cleared when seen"],
   ["write_time", "Clock", "Set when the outstation asks"],
   ["events_when_indicated", "Events waiting", "Fetched when a response says so"],
