@@ -1805,7 +1805,9 @@ asking nothing of this outstation, with the reason.
   `ENABLE_UNSOLICITED` becoming something this outstation can agree to.~~ Landed, with D69
   through D71, and off unless a session is built with `unsolicited=True`. The session gained
   a second entry point, `initiate()`, so it still does no I/O, and `OutstationServer` drives
-  it. Still to do: running the interoperability masters against it, and the planning notes in
+  it. An independent conformance harness now runs the unsolicited procedures against it
+  ([Conformance run with dnp3c](conformance.md)). Still to do: running the interoperability
+  masters against it, and the planning notes in
   [`planning/UNSOLICITED.md`](planning/UNSOLICITED.md) list what else was left out.
 - ~~The point-map loader and an IEEE 1815.2 outstation built from it, with D36 through D47.~~
   Landed as `py1815.profile`: the loader, the builder, a simulated DER and the `py1815-der`

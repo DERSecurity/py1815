@@ -1,0 +1,3 @@
+# The conformance report is the harness's output, written by a run and never by
+# hand, so a pull request that refreshes it shows it collapsed.
+compliance/** linguist-generated=true

@@ -1,0 +1,1390 @@
+{
+  "procedures": {
+    "6.1.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.3.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.4.2": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.dataLinkConfirmRequests != true: Can the DUT be configured to request data link layer confirmation?",
+      "notes": [],
+      "warnings": []
+    },
+    "6.5.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.2a": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.2d": {
+      "outcome": "skipped",
+      "detail": "disabled because it needs serial.enabled == true or supports.multipleAddresses == true",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.2e": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.2f": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.3a": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.dataLinkConfirmRequests != true: Can the DUT be configured to request data link layer confirmation?",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.3b": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.dataLinkConfirmRequests != true: Can the DUT be configured to request data link layer confirmation?",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.3c": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.dataLinkConfirmRequests != true: Can the DUT be configured to request data link layer confirmation?",
+      "notes": [],
+      "warnings": []
+    },
+    "6.6.3d": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.dataLinkConfirmRequests != true: Can the DUT be configured to request data link layer confirmation?",
+      "notes": [],
+      "warnings": []
+    },
+    "6.7.2": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.selfAddress != true: Does the DUT support link-layer self addressing?",
+      "notes": [],
+      "warnings": []
+    },
+    "7.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.1.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.5": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.6": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.7": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.8": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.9": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.10": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.11": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.12": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.13": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.14": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.1.2.15": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.2.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.2.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.2.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.3.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.3.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.3.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.5.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.5.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.2.6": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.3.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.5": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.6": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.7": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.8": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.9": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.10": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.11": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.12": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.1.2.13": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.2.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.2.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.2.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.3.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.3.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.3.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.4.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.2.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.2.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.2.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.2.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.3.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.3.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.3.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.3.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.4.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.4.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.4.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.4.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.5.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.5.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.5.6": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.4a": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.globalRemoteSupervisoryControl != true: Can the DUT put its binary outputs under local control?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.4b": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.individualRemoteSupervisoryControl != true: Can the DUT switch individual binary outputs to local control?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.5a": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.5b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.6.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.6.2.2": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.analogInputEventsQueuedPerPoint != true: Does the DUT queue multiple Analog Input change events for the same point?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.6.2.3": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.6.6.2.4": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.7.1.1.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.7.1.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.7.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.8.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.9.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.9.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.10.2": {
+      "outcome": "skipped",
+      "detail": "disabled because serial.enabled != true: Connect to the DUT over a serial port (serial.port) rather than over TCP (tcp.device.*)",
+      "notes": [],
+      "warnings": []
+    },
+    "8.11.2a": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.11.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.11.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.11.2d": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.11.2.5": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.11.2e": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.12.2": {
+      "outcome": "skipped",
+      "detail": "disabled because serial.enabled != true: Connect to the DUT over a serial port (serial.port) rather than over TCP (tcp.device.*)",
+      "notes": [],
+      "warnings": []
+    },
+    "8.13.2a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.13.2b": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.binaryInput != false: Does the DUT support Binary Input points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.13.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.13.2d": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2b": {
+      "outcome": "skipped",
+      "detail": "disabled because it needs not (supports.binaryInput == true and supports.binaryInputChangeEvents == true)",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2d": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2e": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2f": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2g": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2h": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2i": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2j": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2k": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2l": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2m": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2n": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2o": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.14.2p": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.15.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.15.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.1.2.1": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.1.2.2": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.counter != false: Does the DUT support Counter points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.1.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.1.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.2.2.1": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.2.2.2": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.frozenCounter != false: Does the DUT support Frozen Counter points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.2.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.2.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.2.2.5": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.16.2.2.6": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2c": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2d": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2e": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2f": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.18.2a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.18.2b": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.analogInput != false: Does the DUT support Analog Input points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.18.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.19.2a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.19.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.19.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.19.2.4": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.20.2a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.20.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.21.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.21a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.21b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.21c": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.21d": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22a": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22c": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22d": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22e": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22f": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22g": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22h": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22i": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22j": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22k": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22l": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22m": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22n": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22o": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.22p": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.doubleBitInput != true: Does the DUT support Double Bit points?",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.1.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.1.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.1.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.2.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.2.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.3.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.3.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.3.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.4.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.4.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.4.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.5.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.5.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.5.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.6.1": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.6.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.23.2.6.3": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.24.2a": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "the DUT answers a read of g1v1 with IIN2.1 or IIN2.2, as a subset level 1 or 2 device may"
+      ],
+      "warnings": []
+    },
+    "8.24.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.24.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "with one of its flags set abnormal, binary output status 0 came back with flags 0x04"
+      ],
+      "warnings": []
+    },
+    "8.24.2d": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "with one of its flags set abnormal, counter 0 came back with flags 0x04"
+      ],
+      "warnings": []
+    },
+    "8.24.2e": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "with one of its flags set abnormal, frozen counter 0 came back with flags 0x04"
+      ],
+      "warnings": []
+    },
+    "8.24.2f": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "with one of its flags set abnormal, analog input 0 came back with flags 0x04"
+      ],
+      "warnings": []
+    },
+    "8.24.2g": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.25.2a": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.25.2b": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.25.2c": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "the DUT answers a read of g22v1 with a Null Response, having no such events"
+      ],
+      "warnings": []
+    },
+    "8.25.2d": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "the DUT answers a read of g23v1 with a Null Response, having no such events"
+      ],
+      "warnings": []
+    },
+    "8.25.2e": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "8.26.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "the DUT answers Assign Class with IIN2.0, as a subset level 1 or 2 device may"
+      ],
+      "warnings": []
+    },
+    "8.26.3": {
+      "outcome": "skipped",
+      "detail": "not applicable: it applies to subset level(s) 3, and the device is configured for level 2",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.1.1.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [
+        "connected from source port 55612"
+      ],
+      "warnings": []
+    },
+    "9.5.1.2.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.1.3.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.tcp.specificAddress != true: Can the DUT accept TCP connections from one IP address only? 3.1r1's 9.5.1 tests it, with network.otherMasterAddress",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.1.4.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.tcp.wildcard != true: Can the DUT accept TCP connections from a range of IP addresses given by a wildcard (network.wildcardRange)? 3.1r1's 9.5.1 tests it, connecting from network.master.address and network.master.wildcardAddress, then network.master.outsideAddress",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.1.5.2": {
+      "outcome": "passed",
+      "detail": "",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.1.6.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.tcp.multicast != true: Does the DUT, while using TCP, accept broadcasts sent over UDP to a multicast group (network.multicastGroup)? 3.1r1's 9.5.1 tests it",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.2.1.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp != true: Can the DUT answer requests over UDP? 3.1r1's UDP Solicited tests (9.5.2) run where it can, connecting to its port 20000 over UDP from network.master.address",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.2.2.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp != true: Can the DUT answer requests over UDP? 3.1r1's UDP Solicited tests (9.5.2) run where it can, connecting to its port 20000 over UDP from network.master.address",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.2.3.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp != true: Can the DUT answer requests over UDP? 3.1r1's UDP Solicited tests (9.5.2) run where it can, connecting to its port 20000 over UDP from network.master.address",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.2.4.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp != true: Can the DUT answer requests over UDP? 3.1r1's UDP Solicited tests (9.5.2) run where it can, connecting to its port 20000 over UDP from network.master.address",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.2.5.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp != true: Can the DUT answer requests over UDP? 3.1r1's UDP Solicited tests (9.5.2) run where it can, connecting to its port 20000 over UDP from network.master.address",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.3.1.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp.unsolicited != true: Can the DUT send unsolicited responses over UDP? 3.1r1's UDP Unsolicited tests (9.5.3) run where it can, and supports.unsolicitedResponse is true",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.3.2.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp.unsolicited != true: Can the DUT send unsolicited responses over UDP? 3.1r1's UDP Unsolicited tests (9.5.3) run where it can, and supports.unsolicitedResponse is true",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.3.3.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp.unsolicited != true: Can the DUT send unsolicited responses over UDP? 3.1r1's UDP Unsolicited tests (9.5.3) run where it can, and supports.unsolicitedResponse is true",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.3.4.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp.unsolicited != true: Can the DUT send unsolicited responses over UDP? 3.1r1's UDP Unsolicited tests (9.5.3) run where it can, and supports.unsolicitedResponse is true",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.3.5.2": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp.unsolicited != true: Can the DUT send unsolicited responses over UDP? 3.1r1's UDP Unsolicited tests (9.5.3) run where it can, and supports.unsolicitedResponse is true",
+      "notes": [],
+      "warnings": []
+    },
+    "9.5.4": {
+      "outcome": "skipped",
+      "detail": "disabled because network.udp.unsolicited != true: Can the DUT send unsolicited responses over UDP? 3.1r1's UDP Unsolicited tests (9.5.3) run where it can, and supports.unsolicitedResponse is true",
+      "notes": [],
+      "warnings": []
+    },
+    "10.3.2": {
+      "outcome": "skipped",
+      "detail": "disabled because it needs supports.binaryOutputChangeEvents == true or supports.binaryOutputCommandEvents == true",
+      "notes": [],
+      "warnings": []
+    },
+    "10.3.3": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.binaryOutputChangeEvents != true: Does the DUT support Binary Output change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "10.3.4": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.binaryOutputCommandEvents != true: Does the DUT support Binary Output command events?",
+      "notes": [],
+      "warnings": []
+    },
+    "10.4.2": {
+      "outcome": "skipped",
+      "detail": "disabled because it needs supports.analogOutputChangeEvents == true or supports.analogOutputCommandEvents == true",
+      "notes": [],
+      "warnings": []
+    },
+    "10.4.3": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.analogOutputChangeEvents != true: Does the DUT support Analog Output change events?",
+      "notes": [],
+      "warnings": []
+    },
+    "10.4.4": {
+      "outcome": "skipped",
+      "detail": "disabled because supports.analogOutputCommandEvents != true: Does the DUT support Analog Output command events?",
+      "notes": [],
+      "warnings": []
+    }
+  }
+}

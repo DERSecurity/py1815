@@ -1,0 +1,789 @@
+{
+  "tool": "dnp3c",
+  "version": "0.2.0",
+  "revision": "3.1r1",
+  "level": 2,
+  "options": {
+    "network.tcp.multicast": "The outstation joins no multicast group.",
+    "network.tcp.specificAddress": "The outstation accepts a connection from any master and keeps no list of masters.",
+    "network.tcp.wildcard": "The outstation keeps no list of masters, so no range of them either.",
+    "network.udp": "The outstation answers requests over TCP only. It takes broadcasts as UDP datagrams beside TCP, and nothing else over UDP.",
+    "network.udp.unsolicited": "The outstation sends unsolicited responses over TCP only.",
+    "serial.enabled": "The outstation is reached over TCP. This library has no serial link.",
+    "supports.analogInputEventsQueuedPerPoint": "An analog input keeps one event, its newest.",
+    "supports.analogOutputChangeEvents": "Analog output events are not offered.",
+    "supports.analogOutputCommandEvents": "Analog output events are not offered.",
+    "supports.assignNoClass": "Assign class is not implemented. A point's class is fixed when the outstation is built.",
+    "supports.binaryOutputChangeEvents": "Binary output events are not offered.",
+    "supports.binaryOutputCommandEvents": "Binary output events are not offered.",
+    "supports.counterChangeEvents": "A counter reports no change events.",
+    "supports.counterEventsQueuedPerPoint": "A counter reports no change events, so none are queued.",
+    "supports.dataLinkConfirmRequests": "The outstation never requests data link confirmation.",
+    "supports.dataLinkRetries": "The outstation never requests data link confirmation, so it has nothing to send again.",
+    "supports.deviceAttributes": "Device attributes are not served.",
+    "supports.disable.doubleBitInput": "The outstation has no double-bit binary inputs to disable.",
+    "supports.doubleBitInput": "The outstation has no double-bit binary inputs.",
+    "supports.doubleBitInputChangeEvents": "The outstation has no double-bit binary inputs, so none report events.",
+    "supports.frozenCounterChangeEvents": "Held to Subset Level 2, a freeze buffers no event.",
+    "supports.globalRemoteSupervisoryControl": "Outputs have no local state, so no switch puts them all in it.",
+    "supports.individualRemoteSupervisoryControl": "Outputs have no local state.",
+    "supports.multipleAddresses": "The outstation answers to one link address.",
+    "supports.selfAddress": "The outstation does not answer the self-address."
+  },
+  "procedures": {
+    "6.1.2": {
+      "outcome": "passed"
+    },
+    "6.3.2": {
+      "outcome": "passed"
+    },
+    "6.4.2": {
+      "outcome": "skipped",
+      "because": "supports.dataLinkConfirmRequests != true"
+    },
+    "6.5.2": {
+      "outcome": "passed"
+    },
+    "6.6.2a": {
+      "outcome": "passed"
+    },
+    "6.6.2b": {
+      "outcome": "passed"
+    },
+    "6.6.2c": {
+      "outcome": "passed"
+    },
+    "6.6.2d": {
+      "outcome": "skipped",
+      "because": "it needs serial.enabled == true or supports.multipleAddresses == true"
+    },
+    "6.6.2e": {
+      "outcome": "passed"
+    },
+    "6.6.2f": {
+      "outcome": "passed"
+    },
+    "6.6.3a": {
+      "outcome": "skipped",
+      "because": "supports.dataLinkConfirmRequests != true"
+    },
+    "6.6.3b": {
+      "outcome": "skipped",
+      "because": "supports.dataLinkConfirmRequests != true"
+    },
+    "6.6.3c": {
+      "outcome": "skipped",
+      "because": "supports.dataLinkConfirmRequests != true"
+    },
+    "6.6.3d": {
+      "outcome": "skipped",
+      "because": "supports.dataLinkConfirmRequests != true"
+    },
+    "6.7.2": {
+      "outcome": "skipped",
+      "because": "supports.selfAddress != true"
+    },
+    "7.2": {
+      "outcome": "passed"
+    },
+    "8.1.2": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.1": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.2": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.3": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.4": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.5": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.6": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.7": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.8": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.9": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.10": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.11": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.12": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.13": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.14": {
+      "outcome": "passed"
+    },
+    "8.2.1.2.15": {
+      "outcome": "passed"
+    },
+    "8.2.2.2.1": {
+      "outcome": "passed"
+    },
+    "8.2.2.2.2": {
+      "outcome": "passed"
+    },
+    "8.2.2.2.3": {
+      "outcome": "passed"
+    },
+    "8.2.3.2.1": {
+      "outcome": "passed"
+    },
+    "8.2.3.2.2": {
+      "outcome": "passed"
+    },
+    "8.2.3.2.3": {
+      "outcome": "passed"
+    },
+    "8.2.4": {
+      "outcome": "passed"
+    },
+    "8.2.5.2.1": {
+      "outcome": "passed"
+    },
+    "8.2.5.2.2": {
+      "outcome": "passed"
+    },
+    "8.2.6": {
+      "outcome": "passed"
+    },
+    "8.3.2": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.1": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.2": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.3": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.4": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.5": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.6": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.7": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.8": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.9": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.10": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.11": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.12": {
+      "outcome": "passed"
+    },
+    "8.4.1.2.13": {
+      "outcome": "passed"
+    },
+    "8.4.2.2.1": {
+      "outcome": "passed"
+    },
+    "8.4.2.2.2": {
+      "outcome": "passed"
+    },
+    "8.4.2.2.3": {
+      "outcome": "passed"
+    },
+    "8.4.3.2.1": {
+      "outcome": "passed"
+    },
+    "8.4.3.2.2": {
+      "outcome": "passed"
+    },
+    "8.4.3.2.3": {
+      "outcome": "passed"
+    },
+    "8.4.4": {
+      "outcome": "passed"
+    },
+    "8.5.1": {
+      "outcome": "passed"
+    },
+    "8.5.2.2.1": {
+      "outcome": "passed"
+    },
+    "8.5.2.2.2": {
+      "outcome": "passed"
+    },
+    "8.5.2.2.3": {
+      "outcome": "passed"
+    },
+    "8.5.2.2.4": {
+      "outcome": "passed"
+    },
+    "8.5.3.2.1": {
+      "outcome": "passed"
+    },
+    "8.5.3.2.2": {
+      "outcome": "passed"
+    },
+    "8.5.3.2.3": {
+      "outcome": "passed"
+    },
+    "8.5.3.2.4": {
+      "outcome": "passed"
+    },
+    "8.5.4.2.1": {
+      "outcome": "passed"
+    },
+    "8.5.4.2.2": {
+      "outcome": "passed"
+    },
+    "8.5.4.2.3": {
+      "outcome": "passed"
+    },
+    "8.5.4.2.4": {
+      "outcome": "passed"
+    },
+    "8.5.5.2.1": {
+      "outcome": "passed"
+    },
+    "8.5.5.2.2": {
+      "outcome": "passed"
+    },
+    "8.5.6": {
+      "outcome": "passed"
+    },
+    "8.6.1": {
+      "outcome": "passed"
+    },
+    "8.6.2": {
+      "outcome": "passed"
+    },
+    "8.6.3": {
+      "outcome": "passed"
+    },
+    "8.6.4a": {
+      "outcome": "skipped",
+      "because": "supports.globalRemoteSupervisoryControl != true"
+    },
+    "8.6.4b": {
+      "outcome": "skipped",
+      "because": "supports.individualRemoteSupervisoryControl != true"
+    },
+    "8.6.5a": {
+      "outcome": "passed"
+    },
+    "8.6.5b": {
+      "outcome": "passed"
+    },
+    "8.6.6.2.1": {
+      "outcome": "passed"
+    },
+    "8.6.6.2.2": {
+      "outcome": "skipped",
+      "because": "supports.analogInputEventsQueuedPerPoint != true"
+    },
+    "8.6.6.2.3": {
+      "outcome": "skipped",
+      "because": "supports.counterChangeEvents != true"
+    },
+    "8.6.6.2.4": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.7.1.1.2": {
+      "outcome": "passed"
+    },
+    "8.7.1.2.2": {
+      "outcome": "passed"
+    },
+    "8.7.2": {
+      "outcome": "passed"
+    },
+    "8.8.2": {
+      "outcome": "passed"
+    },
+    "8.9.1": {
+      "outcome": "passed"
+    },
+    "8.9.2": {
+      "outcome": "passed"
+    },
+    "8.10.2": {
+      "outcome": "skipped",
+      "because": "serial.enabled != true"
+    },
+    "8.11.2.5": {
+      "outcome": "passed"
+    },
+    "8.11.2a": {
+      "outcome": "passed"
+    },
+    "8.11.2b": {
+      "outcome": "passed"
+    },
+    "8.11.2c": {
+      "outcome": "passed"
+    },
+    "8.11.2d": {
+      "outcome": "passed"
+    },
+    "8.11.2e": {
+      "outcome": "passed"
+    },
+    "8.12.2": {
+      "outcome": "skipped",
+      "because": "serial.enabled != true"
+    },
+    "8.13.2a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.13.2b": {
+      "outcome": "skipped",
+      "because": "supports.binaryInput != false"
+    },
+    "8.13.2c": {
+      "outcome": "passed"
+    },
+    "8.13.2d": {
+      "outcome": "passed"
+    },
+    "8.14.2a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.14.2b": {
+      "outcome": "skipped",
+      "because": "it needs not (supports.binaryInput == true and supports.binaryInputChangeEvents == true)"
+    },
+    "8.14.2c": {
+      "outcome": "passed"
+    },
+    "8.14.2d": {
+      "outcome": "passed"
+    },
+    "8.14.2e": {
+      "outcome": "passed"
+    },
+    "8.14.2f": {
+      "outcome": "passed"
+    },
+    "8.14.2g": {
+      "outcome": "passed"
+    },
+    "8.14.2h": {
+      "outcome": "passed"
+    },
+    "8.14.2i": {
+      "outcome": "passed"
+    },
+    "8.14.2j": {
+      "outcome": "passed"
+    },
+    "8.14.2k": {
+      "outcome": "passed"
+    },
+    "8.14.2l": {
+      "outcome": "passed"
+    },
+    "8.14.2m": {
+      "outcome": "passed"
+    },
+    "8.14.2n": {
+      "outcome": "passed"
+    },
+    "8.14.2o": {
+      "outcome": "passed"
+    },
+    "8.14.2p": {
+      "outcome": "passed"
+    },
+    "8.15.2": {
+      "outcome": "passed"
+    },
+    "8.15.3": {
+      "outcome": "passed"
+    },
+    "8.16.1.2.1": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.16.1.2.2": {
+      "outcome": "skipped",
+      "because": "supports.counter != false"
+    },
+    "8.16.1.2.3": {
+      "outcome": "passed"
+    },
+    "8.16.1.2.4": {
+      "outcome": "passed"
+    },
+    "8.16.2.2.1": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.16.2.2.2": {
+      "outcome": "skipped",
+      "because": "supports.frozenCounter != false"
+    },
+    "8.16.2.2.3": {
+      "outcome": "passed"
+    },
+    "8.16.2.2.4": {
+      "outcome": "passed"
+    },
+    "8.16.2.2.5": {
+      "outcome": "passed"
+    },
+    "8.16.2.2.6": {
+      "outcome": "passed"
+    },
+    "8.17.2a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.17.2b": {
+      "outcome": "passed"
+    },
+    "8.17.2c": {
+      "outcome": "skipped",
+      "because": "supports.counterChangeEvents != true"
+    },
+    "8.17.2d": {
+      "outcome": "skipped",
+      "because": "supports.counterChangeEvents != true"
+    },
+    "8.17.2e": {
+      "outcome": "skipped",
+      "because": "supports.counterChangeEvents != true"
+    },
+    "8.17.2f": {
+      "outcome": "skipped",
+      "because": "supports.counterChangeEvents != true"
+    },
+    "8.18.2a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.18.2b": {
+      "outcome": "skipped",
+      "because": "supports.analogInput != false"
+    },
+    "8.18.2c": {
+      "outcome": "passed"
+    },
+    "8.19.2.4": {
+      "outcome": "passed"
+    },
+    "8.19.2a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.19.2b": {
+      "outcome": "passed"
+    },
+    "8.19.2c": {
+      "outcome": "passed"
+    },
+    "8.20.2a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.20.2b": {
+      "outcome": "passed"
+    },
+    "8.21.1": {
+      "outcome": "passed"
+    },
+    "8.21a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.21b": {
+      "outcome": "passed"
+    },
+    "8.21c": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.21d": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22.1": {
+      "outcome": "passed"
+    },
+    "8.22a": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+    },
+    "8.22b": {
+      "outcome": "passed"
+    },
+    "8.22c": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22d": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22e": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22f": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22g": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22h": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22i": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22j": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22k": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22l": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22m": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22n": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22o": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.22p": {
+      "outcome": "skipped",
+      "because": "supports.doubleBitInput != true"
+    },
+    "8.23.2.1.1": {
+      "outcome": "passed"
+    },
+    "8.23.2.1.2": {
+      "outcome": "passed"
+    },
+    "8.23.2.1.3": {
+      "outcome": "passed"
+    },
+    "8.23.2.2.1": {
+      "outcome": "passed"
+    },
+    "8.23.2.2.2": {
+      "outcome": "passed"
+    },
+    "8.23.2.2.3": {
+      "outcome": "passed"
+    },
+    "8.23.2.3.1": {
+      "outcome": "passed"
+    },
+    "8.23.2.3.2": {
+      "outcome": "passed"
+    },
+    "8.23.2.3.3": {
+      "outcome": "passed"
+    },
+    "8.23.2.4.1": {
+      "outcome": "passed"
+    },
+    "8.23.2.4.2": {
+      "outcome": "passed"
+    },
+    "8.23.2.4.3": {
+      "outcome": "passed"
+    },
+    "8.23.2.5.1": {
+      "outcome": "passed"
+    },
+    "8.23.2.5.2": {
+      "outcome": "passed"
+    },
+    "8.23.2.5.3": {
+      "outcome": "passed"
+    },
+    "8.23.2.6.1": {
+      "outcome": "passed"
+    },
+    "8.23.2.6.2": {
+      "outcome": "passed"
+    },
+    "8.23.2.6.3": {
+      "outcome": "passed"
+    },
+    "8.24.2a": {
+      "outcome": "passed"
+    },
+    "8.24.2b": {
+      "outcome": "passed"
+    },
+    "8.24.2c": {
+      "outcome": "passed"
+    },
+    "8.24.2d": {
+      "outcome": "passed"
+    },
+    "8.24.2e": {
+      "outcome": "passed"
+    },
+    "8.24.2f": {
+      "outcome": "passed"
+    },
+    "8.24.2g": {
+      "outcome": "passed"
+    },
+    "8.25.2a": {
+      "outcome": "passed"
+    },
+    "8.25.2b": {
+      "outcome": "passed"
+    },
+    "8.25.2c": {
+      "outcome": "passed"
+    },
+    "8.25.2d": {
+      "outcome": "passed"
+    },
+    "8.25.2e": {
+      "outcome": "passed"
+    },
+    "8.26.2": {
+      "outcome": "passed"
+    },
+    "8.26.3": {
+      "outcome": "skipped",
+      "because": "not applicable: it applies to subset level(s) 3, and the device is configured for level 2"
+    },
+    "9.5.1.1.2": {
+      "outcome": "passed"
+    },
+    "9.5.1.2.2": {
+      "outcome": "passed"
+    },
+    "9.5.1.3.2": {
+      "outcome": "skipped",
+      "because": "network.tcp.specificAddress != true"
+    },
+    "9.5.1.4.2": {
+      "outcome": "skipped",
+      "because": "network.tcp.wildcard != true"
+    },
+    "9.5.1.5.2": {
+      "outcome": "passed"
+    },
+    "9.5.1.6.2": {
+      "outcome": "skipped",
+      "because": "network.tcp.multicast != true"
+    },
+    "9.5.2.1.2": {
+      "outcome": "skipped",
+      "because": "network.udp != true"
+    },
+    "9.5.2.2.2": {
+      "outcome": "skipped",
+      "because": "network.udp != true"
+    },
+    "9.5.2.3.2": {
+      "outcome": "skipped",
+      "because": "network.udp != true"
+    },
+    "9.5.2.4.2": {
+      "outcome": "skipped",
+      "because": "network.udp != true"
+    },
+    "9.5.2.5.2": {
+      "outcome": "skipped",
+      "because": "network.udp != true"
+    },
+    "9.5.3.1.2": {
+      "outcome": "skipped",
+      "because": "network.udp.unsolicited != true"
+    },
+    "9.5.3.2.2": {
+      "outcome": "skipped",
+      "because": "network.udp.unsolicited != true"
+    },
+    "9.5.3.3.2": {
+      "outcome": "skipped",
+      "because": "network.udp.unsolicited != true"
+    },
+    "9.5.3.4.2": {
+      "outcome": "skipped",
+      "because": "network.udp.unsolicited != true"
+    },
+    "9.5.3.5.2": {
+      "outcome": "skipped",
+      "because": "network.udp.unsolicited != true"
+    },
+    "9.5.4": {
+      "outcome": "skipped",
+      "because": "network.udp.unsolicited != true"
+    },
+    "10.3.2": {
+      "outcome": "skipped",
+      "because": "it needs supports.binaryOutputChangeEvents == true or supports.binaryOutputCommandEvents == true"
+    },
+    "10.3.3": {
+      "outcome": "skipped",
+      "because": "supports.binaryOutputChangeEvents != true"
+    },
+    "10.3.4": {
+      "outcome": "skipped",
+      "because": "supports.binaryOutputCommandEvents != true"
+    },
+    "10.4.2": {
+      "outcome": "skipped",
+      "because": "it needs supports.analogOutputChangeEvents == true or supports.analogOutputCommandEvents == true"
+    },
+    "10.4.3": {
+      "outcome": "skipped",
+      "because": "supports.analogOutputChangeEvents != true"
+    },
+    "10.4.4": {
+      "outcome": "skipped",
+      "because": "supports.analogOutputCommandEvents != true"
+    }
+  }
+}

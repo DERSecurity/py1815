@@ -95,6 +95,18 @@ answers should expect to be caught here rather than by the unit tests. Run it
 locally before pushing if you can -- `interop/` holds the outstation fixture and
 each peer's driver.
 
+One more job in that workflow, `dnp3c-conformance`, runs the outstation certification
+procedures of revision 3.1 rev 1 at Subset Level 2 with
+[dnp3c](https://github.com/stepfunc/dnp3c), the conformance test harness from Step
+Function I/O. Every procedure it runs passes. The `interop` gate waits for it, so a pull
+request does not merge while it fails. The full run takes about fifteen minutes, most of it
+timeouts the procedures call for, so it runs only for a change that reaches the outstation: the library outside `py1815.master`, `interop/conformance_outstation.py`, `interop/dnp3c/`, `.github/workflows/interop.yml` or `pyproject.toml`. For any other change it passes in seconds without running. What it guards is the record in
+`interop/dnp3c/expected.json`. A change to the outstation that makes a procedure end
+differently fails the job's comparison step, and the change then updates the record,
+[docs/conformance.md](docs/conformance.md) and the report in `compliance/` with the
+reason.
+`interop/dnp3c/README.md` says how to run it, which needs Java and Maven.
+
 ## What a good change looks like
 
 **Tests that could fail.** A test that passes against the broken code tests

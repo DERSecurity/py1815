@@ -48,6 +48,16 @@ on:
 # counter freezes and logs them, and it listens with TLS. opendnp3 answers a
 # freeze as a function it does not support, which is checked as a refusal, and
 # its Python bindings cannot open a TLS server.
+#
+# One job is not a peer, and the gate at the end of this file waits for it
+# too:
+#
+#   dnp3c-conformance    dnp3c (https://github.com/stepfunc/dnp3c), the
+#                        conformance test harness from Step Function I/O, runs
+#                        the outstation certification procedures of revision
+#                        3.1 rev 1 at Subset Level 2 against this outstation.
+#                        It fails when a procedure ends other than as recorded.
+#                        docs/conformance.md says how each procedure ends.
 
 jobs:
   opendnp3-master:
@@ -529,10 +539,229 @@ jobs:
           cat outstation.log || true
           cat outstation-tls.log || true
 
+  dnp3c-conformance:
+    name: a conformance harness runs the certification procedures
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # dnp3c (https://github.com/stepfunc/dnp3c) is Step Function I/O's
+    # conformance test harness. It acts as a master and runs the outstation
+    # test procedures of the DNP3 IED Certification Procedure, revision 3.1
+    # rev 1, at Subset Level 2. The unit suite carries
+    # the same procedures out from this project's own reading of them; this is
+    # a reading by people who did not write this library.
+    #
+    # The steps a master cannot perform over DNP3 (cycle power, change an
+    # input, check that an output operated) are done by the plugin in
+    # interop/dnp3c, through a control channel that
+    # interop/conformance_outstation.py serves beside the outstation. The
+    # plugin starts that device for each procedure, and no step waits for a
+    # person: the plugin implements the harness's plugin interface directly, so
+    # there is no default that prompts.
+    #
+    # dnp3c is licensed under the GNU General Public License v3.0 only:
+    #   https://github.com/stepfunc/dnp3c/blob/main/LICENSE
+    # The plugin is a separate program that links the tool's library, which
+    # Maven fetches when this job runs. Nothing of the tool or the plugin is in
+    # the library, its wheel or its source distribution.
+    # interop/dnp3c/README.md says more, and deleting that directory,
+    # interop/conformance_outstation.py and this job removes dnp3c entirely.
+    #
+    # The `interop` job below needs this one, so a pull request cannot merge
+    # while it fails. It takes about fifteen minutes, most of it timeouts the
+    # procedures call for, and fetches the tool from Maven Central. What it
+    # guards is the record in interop/dnp3c/expected.json, which has every
+    # procedure that runs passing: the run step fails when a procedure fails,
+    # and the comparison step fails when a procedure ends in any way other
+    # than the one on record.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, so the change can be compared with its base.
+          fetch-depth: 0
+
+      - name: Find out whether the change reaches the outstation
+        id: scope
+        # The full run takes about fifteen minutes, so it runs only for a
+        # change that can alter what it tests: the library outside the master
+        # (the outstation, its session, link, transport and objects, and the
+        # IEEE 1815.2 profile), the device script, the harness and its record,
+        # this workflow, or the project's dependencies. Any other change skips
+        # the run and passes this job, so the gate below does not wait on it.
+        # A manual run, and anything whose changes cannot be listed, runs it.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          run=true
+          case "$EVENT" in
+            pull_request) range="$BASE...HEAD" ;;
+            push) range="$BEFORE..HEAD" ;;
+            *) range="" ;;
+          esac
+          if [ -n "$range" ] && changed=$(git diff --name-only "$range" 2>/dev/null); then
+            reaching=$(printf '%s\n' "$changed" \
+              | grep -E '^(src/py1815/|interop/conformance_outstation\.py$|interop/dnp3c/|\.github/workflows/interop\.yml$|pyproject\.toml$)' \
+              | grep -v '^src/py1815/master/' || true)
+            if [ -z "$reaching" ]; then run=false; fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = true ]; then
+            echo "the change reaches the outstation, or its scope cannot be told: every procedure runs"
+            if [ -n "${reaching:-}" ]; then printf '%s\n' "$reaching"; fi
+          else
+            echo "no change reaches the outstation: the conformance run is skipped"
+            {
+              echo "### dnp3c conformance run"
+              echo
+              echo "Not run: nothing this change touches reaches the outstation or the harness."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.scope.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Install the library
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          pip install --quiet -e .
+          # The plugin starts the device with this interpreter. It is named
+          # here and not looked up, so the device runs the library just installed.
+          echo "PY1815_CONFORMANCE_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        if: steps.scope.outputs.run == 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: interop/dnp3c/pom.xml
+
+      - name: Build the plugin
+        if: steps.scope.outputs.run == 'true'
+        working-directory: interop/dnp3c
+        run: mvn --batch-mode --no-transfer-progress compile
+
+      - name: Find out whether packets can be captured here
+        if: steps.scope.outputs.run == 'true'
+        id: capture
+        working-directory: interop/dnp3c
+        # dnp3c saves each procedure's traffic as a capture when it is given a
+        # network adapter. It captures with libpcap, which needs root, and a
+        # capture that cannot be opened fails every procedure. So one procedure
+        # is run with capture on first. If that leaves a capture with packets
+        # in it, the whole run captures; if not, the run goes ahead without,
+        # and says so.
+        #
+        # A capture file with no packet is 24 octets, its header.
+        run: |
+          # A later line of a properties file replaces an earlier one, so each
+          # of these is device.ini with one or two options changed.
+          cp device.ini capture.ini
+          echo "tcp.capture.adapter = /127.0.0.1" >> capture.ini
+          cp capture.ini probe.ini
+          echo "test.output.directory = ./capture-probe" >> probe.ini
+          works=false
+          if sudo --preserve-env=PY1815_CONFORMANCE_PYTHON,JAVA_HOME env "PATH=$PATH" \
+              mvn --batch-mode --no-transfer-progress -q \
+              "-Dmaven.repo.local=$HOME/.m2/repository" \
+              scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-config|probe.ini|-run|6.3.2"; then
+            size=$(sudo stat -c %s capture-probe/3.1r1/L2/6.3.2/dump.pcap 2>/dev/null || echo 0)
+            if [ "$size" -gt 24 ]; then works=true; fi
+          fi
+          sudo rm -rf capture-probe
+          # The probe was root's. The steps after it, and the cache, are not.
+          sudo chown -R "$(id -u):$(id -g)" . "$HOME/.m2"
+          echo "works=$works" >> "$GITHUB_OUTPUT"
+          if [ "$works" = true ]; then
+            echo "packets can be captured: the run keeps each procedure's traffic"
+          else
+            echo "::warning::packets cannot be captured on this runner: the run keeps no captures"
+          fi
+
+      - name: Run every procedure, capturing its traffic
+        if: steps.scope.outputs.run == 'true' && steps.capture.outputs.works == 'true'
+        working-directory: interop/dnp3c
+        # Bounded well inside the job, so a hang fails here with the results
+        # so far and not at the job's limit with none. A whole run is about
+        # fifteen minutes, most of it timeouts the procedures call for.
+        timeout-minutes: 40
+        run: |
+          status=0
+          sudo --preserve-env=PY1815_CONFORMANCE_PYTHON,JAVA_HOME env "PATH=$PATH" \
+            mvn --batch-mode --no-transfer-progress -q \
+            "-Dmaven.repo.local=$HOME/.m2/repository" \
+            scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-config|capture.ini" || status=$?
+          # The run was root's. The steps after it, and the cache, are not.
+          sudo chown -R "$(id -u):$(id -g)" . "$HOME/.m2"
+          exit "$status"
+
+      - name: Run every procedure
+        if: steps.scope.outputs.run == 'true' && steps.capture.outputs.works != 'true'
+        working-directory: interop/dnp3c
+        timeout-minutes: 40
+        run: mvn --batch-mode --no-transfer-progress -q scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1"
+
+      - name: Every procedure that sent a frame captured packets
+        if: always() && steps.scope.outputs.run == 'true' && steps.capture.outputs.works == 'true'
+        working-directory: interop/dnp3c/results/3.1r1/L2
+        # A capture that silently recorded nothing looks like a capture. Each
+        # procedure whose log shows a frame sent ("--P->") has to have one with
+        # packets in it.
+        run: |
+          sent=0
+          empty=0
+          for dir in */; do
+            grep -qE -- '--P-(>|&gt;)' "$dir/log.html" 2>/dev/null || continue
+            sent=$((sent + 1))
+            if [ ! -f "$dir/dump.pcap" ] || [ "$(stat -c %s "$dir/dump.pcap")" -le 24 ]; then
+              echo "no packets captured for ${dir%/}"
+              empty=$((empty + 1))
+            fi
+          done
+          echo "$sent procedures sent frames; $empty captured no packets"
+          [ "$sent" -gt 0 ] && [ "$empty" -eq 0 ]
+
+      - name: Compare the run with the record
+        if: always() && steps.scope.outputs.run == 'true'
+        # The step that guards the record. It reads the result file dnp3c
+        # leaves for each procedure and fails when one ended in any way other
+        # than interop/dnp3c/expected.json says: newly failing, newly passing,
+        # skipped for another reason, passing with a new warning, missing, or new.
+        run: |
+          status=0
+          python interop/dnp3c/check_outcomes.py > comparison.txt || status=$?
+          cat comparison.txt
+          {
+            echo "### dnp3c conformance run"
+            echo
+            echo '```'
+            cat comparison.txt
+            echo '```'
+            echo
+            echo "docs/conformance.md says how each procedure ends, and why."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Device log
+        if: always() && steps.scope.outputs.run == 'true'
+        run: tail -n 200 interop/dnp3c/results/3.1r1/L2/outstation.log || true
+
+      - name: Keep the report, the logs and the captures
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnp3c-conformance-results
+          path: interop/dnp3c/results
+          if-no-files-found: warn
+
   interop:
     name: interop
     runs-on: ubuntu-latest
-    needs: [opendnp3-master, rust-master, parsers, opendnp3-outstation, rust-outstation]
+    needs:
+      [opendnp3-master, rust-master, parsers, opendnp3-outstation, rust-outstation, dnp3c-conformance]
     if: always()
     # One gate the branch protection can name, in front of however many peer
     # jobs there turn out to be.
@@ -542,6 +771,9 @@ jobs:
     # protection silently stops matching -- and a required check that no longer
     # runs is not a check that fails, it is a pull request that can never merge.
     # Adding a peer should not require an administrator.
+    #
+    # dnp3c-conformance is not a peer, but a pull request that breaks the
+    # conformance record does not merge either, so the gate waits for it.
     steps:
       - name: Every peer agreed
         run: |
@@ -553,4 +785,4 @@ jobs:
               exit 1
             fi
           done
-          echo "every peer agreed with this library, as outstation and as master"
+          echo "every peer agreed with this library, as outstation and as master, and the conformance run, where the change reaches the outstation, is the one on record"
