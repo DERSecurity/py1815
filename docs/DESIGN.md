@@ -758,7 +758,9 @@ for more than Level 2 offers in places (32-bit setpoints, counters that are neve
 so this is a mode for testing against the subset and for masters that implement only that,
 and not the default. A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
-process it does not own.
+process it does not own. The property of the same name sets or removes the handler later,
+which turns the function on or off from the next request with no restart: a device whose
+configuration turns cold restart off does not have to drop its master to apply it.
 
 **D56 -- Curves live in a store with the standard's three rules, and a function gets its
 curve by asking.** `py1815.profile.curves.CurveStore` is the state behind the multiplexed
@@ -1653,6 +1655,32 @@ polls where it took a request to disable and one poll. And classes left enabled 
 earlier master, or by this one under other settings, are not disabled by a master no
 longer set to use unsolicited reporting; the `disable_unsolicited` operation does that
 when asked.
+
+**D100 -- A counter read in a narrow or flagless variation is answered at 32 bits with
+flags, and frozen counters are the counters that freeze.** Counters and frozen counters
+are kept in 32 bits (the reason is on `FrozenCounterVariation`), and the outstation used
+to refuse a read of any other counter variation with `OBJECT_UNKNOWN`. IEEE 1815-2012
+requires a Level 2 outstation to parse only variation 0 of groups 20 and 21, so the
+refusal was within the subset. It was not consistent, though: variation 1 was answered and
+variation 2 refused, and DNP3 IED Certification Procedure 3.1 rev 1, 8.24.2, lets a Level 2
+device refuse only on its first read of a type, which for counters is variation 1. The
+same section says what to send instead: a device that keeps only 32-bit values answers a
+16-bit request with a 32-bit variation, and a variation with flags stands for one without.
+So a read of group 20 variation 2, 5 or 6 is answered in variation 1, and a read of group
+21 variation 2 or 10 in variation 1 or 9, which falls to variation 1 whenever a flag is
+not normal (D55). The Device Profile lists these as requests the outstation parses, with
+no response of their own. A frozen counter is reported only for a counter that freezes
+(`Point.frozen`): an outstation whose counters do not freeze has no frozen counters, and a
+read of group 21 is refused with `OBJECT_UNKNOWN`, where it used to be answered with
+nothing and clean indications, as if the type existed and were empty. Such an outstation
+also refuses a freeze, as a function it does not implement (`FUNC_NOT_SUPPORTED`), because
+a freeze it accepted would store nothing a read could return. The certification
+procedure's test for a device without frozen counters, 3.1 rev 1's 8.16.2.2.2, ends at the
+refused read, so it asks nothing of a freeze. Its Device Profile lists neither group 21
+nor the freeze functions, so the document and the answers agree.
+*Trade-off:* a master asking for 16 bits gets 32 and has to parse the wider object, which
+a Level 2 master is required to do. A master that freezes every outstation's counters
+gets a refusal from one whose counters do not freeze.
 
 **D101 -- A control relay output block with the clear bit set is not supported.** The
 clear bit asks an outstation to remove the commands pending for a point and stop any

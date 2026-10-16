@@ -828,7 +828,8 @@ class Session:
                 device and returns the milliseconds the master should wait.
                 The session answers with that delay and then stands as it
                 does at startup. Without a handler the function is refused,
-                which is how it is disabled.
+                which is how it is disabled. Settable later through the
+                property of the same name, with no restart.
             broadcast_controls: Whether a direct operate addressed to every
                 outstation is carried out. Off by default: a broadcast is
                 answered by nobody, so nothing reports how the control went.
@@ -1127,6 +1128,16 @@ class Session:
         if wanted and self._time_sink is None:
             raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = bool(wanted)
+
+    @property
+    def restart_handler(self) -> Callable[[], int] | None:
+        """The handler that carries out a cold restart, or None when cold restart is refused."""
+        return self._restart_handler
+
+    @restart_handler.setter
+    def restart_handler(self, handler: Callable[[], int] | None) -> None:
+        """Turn cold restart on with a handler, or off with None, from the next request on."""
+        self._restart_handler = handler
 
     def connection_reset(self) -> None:
         """Forget what a dead connection left behind, and nothing more.
