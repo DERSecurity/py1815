@@ -48,6 +48,7 @@ from py1815.observers import (
     ConnectionTransport,
     Endpoint,
     ObserverGuard,
+    RequestObserver,
 )
 from py1815.session import Session
 
@@ -223,6 +224,7 @@ class OutstationServer:
         broadcast_datagrams: bool = False,
         unsolicited_interval: float = UNSOLICITED_INTERVAL,
         connection_observer: ConnectionObserver | None = None,
+        request_observer: RequestObserver | None = None,
     ) -> None:
         """
         Args:
@@ -256,6 +258,14 @@ class OutstationServer:
                 :class:`~py1815.observers.ConnectionEvent` when a connection
                 is accepted, refused, displaced or ended. Settable later
                 through the attribute of the same name. See
+                :mod:`py1815.observers`.
+            request_observer: Called with a
+                :class:`~py1815.observers.RequestRecord` for each request the
+                session handles, with the response it sent and the connection
+                the request arrived on, and for each unsolicited response it
+                sends. Given to the session, as its own
+                ``request_observer``; None leaves the session's as it is.
+                Settable later through the attribute of the same name. See
                 :mod:`py1815.observers`.
 
         Raises:
@@ -295,6 +305,8 @@ class OutstationServer:
             )
 
         self._session = session
+        if request_observer is not None:
+            session.request_observer = request_observer
         self._host, self._port = _split_bind(bind)
         self._ssl = ssl_context
         self._allowed = frozenset(authorized_peers or ())
@@ -361,6 +373,15 @@ class OutstationServer:
         hand it over with ``loop.call_soon_threadsafe(server.notify)``.
         """
         self._wake.set()
+
+    @property
+    def request_observer(self) -> RequestObserver | None:
+        """The session's request observer: called with each request record, or None."""
+        return self._session.request_observer
+
+    @request_observer.setter
+    def request_observer(self, observer: RequestObserver | None) -> None:
+        self._session.request_observer = observer
 
     @property
     def running(self) -> bool:

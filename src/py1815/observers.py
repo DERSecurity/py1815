@@ -1,11 +1,11 @@
-"""Structured reports of connections and protocol anomalies, for the host application.
+"""Structured reports of connections, requests and protocol anomalies, for the host application.
 
 The outstation and the master log what happens to their connections, and the
 session logs a frame or a fragment it drops. A log line is for a person. A host
-application that keeps a record of every connection attempt, or that passes
-protocol anomalies to its own security monitoring, needs the same facts as
-fields. This module defines those records and the type of the callable that
-receives each one.
+application that keeps a record of every connection attempt, that logs or
+forwards the requests its outstation serves, or that passes protocol anomalies
+to its own security monitoring, needs the same facts as fields. This module
+defines those records and the type of the callable that receives each one.
 
 - :class:`ConnectionEvent` is one thing that happened to a connection: accepted,
   refused, displaced or ended at the outstation's listener, and connected,
@@ -15,10 +15,16 @@ receives each one.
   dropped or gave up on, with a stable :class:`AnomalyCode` and a
   :class:`AnomalySeverity`. :class:`~py1815.session.Session` takes an
   ``anomaly_observer``.
+- :class:`RequestRecord` is one request the outstation's session handled, with
+  the response it sent back, or one unsolicited response it sent.
+  :class:`~py1815.server.OutstationServer` and :class:`~py1815.session.Session`
+  take a ``request_observer``.
 
 Each record is a frozen dataclass of plain values, so it can be logged, queued
-or converted to JSON with :func:`dataclasses.asdict`. The log lines are written
-as before; an observer is an addition to them, not a replacement.
+or converted to a dictionary with :func:`dataclasses.asdict`. The octets of a
+:class:`RequestRecord` are ``bytes``; write them as hex, for example, before
+converting the dictionary to JSON. The log lines are written as before; an
+observer is an addition to them, not a replacement.
 
 An observer is called on the event loop, or for a session on whatever thread
 called it, and must return quickly. An observer that raises does not affect the
@@ -240,11 +246,63 @@ class ProtocolAnomaly:
     timestamp: float = field(default_factory=time.time)
 
 
+@dataclass(frozen=True)
+class RequestRecord:
+    """One request the outstation handled, or one unsolicited response it sent.
+
+    The session reports each request once, after it has built the response.
+    That covers every function a master sends, including a confirmation, a
+    request refused with an indication, a function that takes no response, a
+    request repeated by a master that did not hear the answer, and a request
+    sent to a broadcast address. A fragment reported as a
+    :class:`ProtocolAnomaly` is not reported here as well.
+
+    A read held back while an unsolicited response waits for its confirmation
+    (D71) is reported when it is answered, with that answer, or when it is
+    discarded unanswered, with no response.
+
+    Attributes:
+        peer: The connection the request arrived on, or the sender of a
+            broadcast datagram, when the session was told. None for a session
+            driven without a listener.
+        source: The link address that sent the first fragment: the master for
+            a request, this outstation for an unsolicited response.
+        destination: The link address that fragment was sent to: this
+            outstation or a broadcast address for a request, the master for an
+            unsolicited response.
+        function: The application function code of ``request``, or for an
+            unsolicited response, of the response (130).
+        request: The request fragment, from the application control octet to
+            the last object. Empty for an unsolicited response.
+        response: The response fragment sent back, from the application
+            control octet to the last object, or None when nothing was sent.
+            A response that spans several fragments is reported in parts: the
+            first with the request, and each later one with the confirmation
+            that drew it out.
+        unsolicited: True for an unsolicited response, which answers no
+            request. Each transmission is reported, retries included.
+        timestamp: When the record was reported, in seconds since the Unix
+            epoch.
+    """
+
+    peer: Endpoint | None
+    source: int
+    destination: int
+    function: int
+    request: bytes
+    response: bytes | None
+    unsolicited: bool = False
+    timestamp: float = field(default_factory=time.time)
+
+
 #: Receives each connection event.
 ConnectionObserver = Callable[[ConnectionEvent], None]
 
 #: Receives each protocol anomaly.
 AnomalyObserver = Callable[[ProtocolAnomaly], None]
+
+#: Receives each request record.
+RequestObserver = Callable[[RequestRecord], None]
 
 _Record = TypeVar("_Record")
 
@@ -295,4 +353,6 @@ __all__ = [
     "Endpoint",
     "ObserverGuard",
     "ProtocolAnomaly",
+    "RequestObserver",
+    "RequestRecord",
 ]

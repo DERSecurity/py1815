@@ -41,6 +41,11 @@ layer. And a function the caller disabled is dropped unexecuted when it is one
 that never takes a response, since refusing it out loud would answer a master
 that asked for no answer. Everything else that is refused gets a response.
 
+The session reports to observers its owner gives it, beside its log lines: each
+frame or request it drops as a protocol anomaly, and each request it handles,
+with the response it built, as a request record (D102). See
+:mod:`py1815.observers`.
+
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
 
@@ -124,6 +129,8 @@ from py1815.observers import (
     Endpoint,
     ObserverGuard,
     ProtocolAnomaly,
+    RequestObserver,
+    RequestRecord,
 )
 from py1815.transport import Reassembler, TransportError, segment
 
@@ -618,6 +625,17 @@ class _Unsolicited:
     broadcast: bool = False
 
 
+@dataclass(frozen=True)
+class _Held:
+    """A read held behind an unsolicited response, and who sent it (D71)."""
+
+    fragment: bytes
+    #: The link address of the master that sent it.
+    source: int
+    #: The connection it arrived on, for its request record.
+    peer: Endpoint | None
+
+
 @dataclass
 class _Conversation:
     """What a multi-fragment response needs that outlives one fragment.
@@ -749,6 +767,7 @@ class Session:
         unsolicited_retries: int | None = DEFAULT_UNSOLICITED_RETRIES,
         unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME,
         anomaly_observer: AnomalyObserver | None = None,
+        request_observer: RequestObserver | None = None,
     ) -> None:
         """
         Args:
@@ -876,6 +895,11 @@ class Session:
                 gives up on, beside the log line it writes. Settable later
                 through the attribute of the same name. See
                 :mod:`py1815.observers`.
+            request_observer: Called with a :class:`~py1815.observers.RequestRecord`
+                for each request this session handles, after the response is
+                built, and for each unsolicited response it sends. Settable
+                later through the attribute of the same name. See
+                :mod:`py1815.observers`.
         """
         #: Called with each protocol anomaly, or None.
         self.anomaly_observer = anomaly_observer
@@ -883,6 +907,13 @@ class Session:
         #: owns the socket. Reported with each anomaly.
         self.connection_peer: Endpoint | None = None
         self._anomaly_guard = ObserverGuard("anomaly observer")
+        #: Called with each request record, or None.
+        self.request_observer = request_observer
+        self._request_guard = ObserverGuard("request observer")
+        #: Set while a fragment is handled when its record is not reported
+        #: with its response: it was reported as an anomaly, or it is a read
+        #: held for later and is reported when answered or discarded.
+        self._reported_elsewhere = False
         #: Set while octets from a broadcast channel are handled, so an
         #: anomaly names their sender and not the connection.
         self._datagram: tuple[Endpoint | None] | None = None
@@ -1024,7 +1055,10 @@ class Session:
         self._unsolicited_sequence = 0
         #: A read that arrived while an unsolicited response was unconfirmed,
         #: held until that is settled one way or the other (D71).
-        self._deferred: bytes | None = None
+        self._deferred: _Held | None = None
+        #: A held read the confirmation being handled has released, answered
+        #: once that confirmation is reported.
+        self._released: _Held | None = None
         #: Whether the retries ran out and reporting is waiting for a reason
         #: to start again: when it gives up waiting, and how many events had
         #: been recorded when it began to.
@@ -1164,7 +1198,7 @@ class Session:
         and keeps what was enabled only if it is the same one.
         """
         self._awaited = None
-        self._deferred = None
+        self._drop_held()
         self._resting = False
         self._frames = link.FrameReader()
         self._reassembler.reset()
@@ -1405,6 +1439,19 @@ class Session:
             "null" if null else f"{len(selected)} event(s)",
             self._awaited.retries + 1,
         )
+        if self.request_observer is not None:
+            # An unsolicited response answers no request, so it is reported
+            # with an empty request and its own function code.
+            record = RequestRecord(
+                peer=self.connection_peer,
+                source=self._outstation_address,
+                destination=self._destination(),
+                function=int(FunctionCode.UNSOLICITED_RESPONSE),
+                request=b"",
+                response=response,
+                unsolicited=True,
+            )
+            self._request_guard.deliver(self.request_observer, record)
         return response
 
     def _unconfirmed(self, awaited: _Unsolicited, now: float) -> bytes:
@@ -1427,7 +1474,7 @@ class Session:
                 awaited.sequence,
             )
             self._awaited = None
-            out = self._send(self._handle_fragment(deferred))
+            out = self._send(self._handle_fragment(deferred.fragment, deferred))
             wait = self._initiate_wait(now)
             if wait is not None and wait <= 0:
                 out += self._send(self._unsolicited_response(now))
@@ -1475,7 +1522,9 @@ class Session:
 
         The read held behind the response, if there is one, is answered now
         and as though it had only just arrived, after the events are retired
-        so that it does not report them again.
+        so that it does not report them again. :meth:`_handle_fragment`
+        answers it once this confirmation is reported, so that the two are
+        reported in the order they arrived.
         """
         awaited = self._awaited
         if awaited is None or awaited.sequence != sequence:
@@ -1490,10 +1539,8 @@ class Session:
         if awaited.null:
             self._announced = True
         self._awaited = None
-        deferred, self._deferred = self._deferred, None
-        if deferred is None:
-            return b""
-        return self._handle_fragment(deferred)
+        self._released, self._deferred = self._deferred, None
+        return b""
 
     def _handle_frame(self, frame: link.LinkFrame) -> bytes:
         if not self._addressed_to_us(frame):
@@ -1656,12 +1703,13 @@ class Session:
         # A request from the master, like any other, ends an armed select.
         self._select = None
         # And the wait of a read held behind an unsolicited response.
-        self._deferred = None
+        self._drop_held()
         # And a rest after the retries ran out: a master that speaks, by
         # broadcast or otherwise, is a reason to start reporting again.
         self._resting = False
         if len(fragment) < REQUEST_HEADER_SIZE:
             return
+        self._reported_elsewhere = False
         function = fragment[1]
         if function in self._disabled:
             logger.info("dnp3: broadcast function 0x%02X not acted on: disabled", function)
@@ -1702,6 +1750,15 @@ class Session:
                 AnomalyCode.BROADCAST_NOT_ACTED_ON,
                 f"broadcast function 0x{function:02X} noted and not acted on",
                 frame,
+            )
+        if not self._reported_elsewhere:
+            # Nothing is sent in answer to a broadcast, so it has no response.
+            self._report_request(
+                fragment,
+                b"",
+                source=frame.source,
+                destination=frame.destination,
+                peer=self._sender(),
             )
 
     def _addressed_to_us(self, frame: link.LinkFrame) -> bool:
@@ -1753,18 +1810,56 @@ class Session:
         self, code: AnomalyCode, message: str, *, source: int | None, destination: int | None
     ) -> None:
         """Report an anomaly to the observer, if there is one."""
+        self._reported_elsewhere = True
         if self.anomaly_observer is None:
             return
-        peer = self.connection_peer if self._datagram is None else self._datagram[0]
         anomaly = ProtocolAnomaly(
             code=code,
             severity=SEVERITY[code],
             message=message,
             source=source,
             destination=destination,
-            peer=peer,
+            peer=self._sender(),
         )
         self._anomaly_guard.deliver(self.anomaly_observer, anomaly)
+
+    def _sender(self) -> Endpoint | None:
+        """Return the sender of the octets being handled: a datagram's sender, or the connection."""
+        return self.connection_peer if self._datagram is None else self._datagram[0]
+
+    def _report_request(
+        self,
+        request: bytes,
+        response: bytes,
+        *,
+        source: int,
+        destination: int,
+        peer: Endpoint | None,
+    ) -> None:
+        """Report a handled request to the request observer. An empty response is none."""
+        if self.request_observer is None:
+            return
+        record = RequestRecord(
+            peer=peer,
+            source=source,
+            destination=destination,
+            function=request[1],
+            request=request,
+            response=response or None,
+        )
+        self._request_guard.deliver(self.request_observer, record)
+
+    def _drop_held(self) -> None:
+        """Discard the read held behind an unsolicited response, and report it unanswered."""
+        held, self._deferred = self._deferred, None
+        if held is not None:
+            self._report_request(
+                held.fragment,
+                b"",
+                source=held.source,
+                destination=self._outstation_address,
+                peer=held.peer,
+            )
 
     def _frame_anomaly(self, code: AnomalyCode, message: str, frame: link.LinkFrame) -> None:
         """Report an anomaly in a received frame."""
@@ -1842,10 +1937,30 @@ class Session:
         second = IIN2Bit.EVENT_BUFFER_OVERFLOW if self._events.overflowed() else 0
         return IIN(first=first, second=second)
 
-    def _handle_fragment(self, fragment: bytes) -> bytes:
+    def _handle_fragment(self, fragment: bytes, held: _Held | None = None) -> bytes:
+        """Answer a fragment from the master, and report it to the request observer.
+
+        ``held`` is given for a read that was held behind an unsolicited
+        response, and names who sent it.
+        """
+        self._reported_elsewhere = False
         response = self._dispatch_fragment(fragment)
         if response and self._broadcast is not None:
             response = self._report_broadcast(response, fragment)
+        if not self._reported_elsewhere:
+            self._report_request(
+                fragment,
+                response,
+                source=self._destination() if held is None else held.source,
+                destination=self._outstation_address,
+                peer=self.connection_peer if held is None else held.peer,
+            )
+        released, self._released = self._released, None
+        if released is not None:
+            # This was the confirmation of an unsolicited response, and a read
+            # was held behind it. The confirmation itself sends nothing, so the
+            # answer to the read is all that goes back.
+            return self._handle_fragment(released.fragment, released)
         return response
 
     def _report_broadcast(self, response: bytes, fragment: bytes) -> bytes:
@@ -2069,7 +2184,8 @@ class Session:
                 sequence,
                 self._awaited.sequence,
             )
-            self._deferred = fragment
+            self._deferred = _Held(fragment, self._destination(), self.connection_peer)
+            self._reported_elsewhere = True
             return b""
 
         if known in _CONTROL_FUNCTIONS and self._controls is None:
@@ -2699,7 +2815,7 @@ class Session:
         self._conversation = None
         # A read held behind an unsolicited response goes with it: the master
         # sent something else, and is not waiting for that answer any more.
-        self._deferred = None
+        self._drop_held()
         # And a master that speaks is a reason to start reporting again.
         self._resting = False
 

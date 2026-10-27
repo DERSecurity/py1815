@@ -1698,6 +1698,23 @@ bit and the master still builds it, so a provider of its own can support it.
 *Trade-off:* a master that sets the clear bit out of habit, with an operation, gets a
 refusal where it used to get the operation.
 
+**D102 -- The outstation reports each request it handles once, with the response it sent,
+and reports each unsolicited response it sends.** An application that embeds the
+outstation and logs or forwards the traffic it serves needs each exchange as fields, with
+the connection it arrived on, as the master's `on_exchange` gives them at the other end.
+The session reports a request after it has built the response, so the record holds the
+octets that were sent. A confirmation is reported as a request with function code 0: the
+master sends it, and it draws out the next fragment of a response that spans several, which
+is reported with it. A read held behind an unsolicited response (D71) is reported when it
+is answered or discarded, so its record holds its answer or says it had none. A fragment
+reported as a protocol anomaly is not reported as a request too, so a monitor that counts
+both counts it once. An unsolicited response is reported with `unsolicited` set and no
+request, so a log of the outstation's traffic holds the responses its confirmations name.
+*Trade-off:* the error response to a request whose object headers could not be read is in
+no record; a held read's record can follow the records of requests that arrived after it;
+and the observer runs on the session's path for every request, so a slow observer slows
+the outstation.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.

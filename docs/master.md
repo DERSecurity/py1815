@@ -215,7 +215,7 @@ the time is up.
 `on_connection` is called with `True` when the connection is made and `False`
 when it is lost. For the endpoints and the reason as well, including each
 attempt that failed, give a `connection_observer`; see
-[Connection and anomaly reports](observers.md).
+[Connection, request and anomaly reports](observers.md).
 
 ### Over TLS
 
