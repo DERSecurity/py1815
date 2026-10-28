@@ -271,6 +271,9 @@ copy with `load_schema()`.
 ```
 
 - `version` is this library's release, or `2.0` when it has none.
+- `timestamp` is the record's time in UTC, as an ISO 8601 date and time with
+  its offset. A `ProtocolMessage` built or read with a timestamp that has no
+  UTC offset, or no time, is refused with `ValueError`.
 - `direction` is `upstream` for every DNP3 message, whichever end sent it.
 - `client_id` is the outstation's link address: the source address of a
   response and the destination address of a request.

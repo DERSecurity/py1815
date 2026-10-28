@@ -21,8 +21,9 @@ runtime dependency (D1). Its serialized form is the contract, as
 - ``destination``, ``protocol_data`` and ``validation_error`` appear only
   when set. An optional field is left out, not written as null: a consumer
   matches on presence, and adding a field is a compatible change.
-- ``timestamp`` is ISO 8601 with an offset. A trailing ``Z`` is rewritten to
-  ``+00:00`` on construction.
+- ``timestamp`` is an ISO 8601 date and time with a UTC offset. A trailing
+  ``Z`` is rewritten to ``+00:00`` on construction. A date with no time, or a
+  time with no offset, is refused: neither names one instant.
 - ``hash`` is a UUIDv3 over the protocol, the client id, the timestamp and the
   payload text, so a consumer can find a message published twice without
   asking the producer.
@@ -37,7 +38,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -214,6 +215,35 @@ class ProtocolMetadata:
         return cls(extra=dict(extra or {}), passthrough=passthrough)
 
 
+_TIMESTAMP_EXAMPLE = "such as '2026-01-15T12:00:00+00:00'"
+
+
+def _check_timestamp(timestamp: str) -> None:
+    """Check that a timestamp is an ISO 8601 date and time with a UTC offset.
+
+    ``datetime.fromisoformat`` also accepts a date alone and a time with no
+    offset. Neither says which instant is meant, so a consumer could not order
+    the message or trust its hash, and both are refused here.
+
+    Raises:
+        ValueError: If the timestamp is not such a date and time.
+    """
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"timestamp must be ISO 8601, {_TIMESTAMP_EXAMPLE}: {exc}") from exc
+    try:
+        date.fromisoformat(timestamp)
+    except ValueError:
+        pass
+    else:
+        raise ValueError(f"timestamp {timestamp!r} has no time; give one, {_TIMESTAMP_EXAMPLE}")
+    if parsed.utcoffset() is None:
+        raise ValueError(
+            f"timestamp {timestamp!r} has no UTC offset; give one, {_TIMESTAMP_EXAMPLE}"
+        )
+
+
 @dataclass
 class ProtocolMessage:
     """One captured protocol message, ready to publish.
@@ -241,8 +271,8 @@ class ProtocolMessage:
         """Normalize the fields given as plain values, check them, and compute the hash.
 
         Raises:
-            ValueError: If ``client_id`` is empty or ``timestamp`` is not ISO
-                8601.
+            ValueError: If ``client_id`` is empty, or ``timestamp`` is not an
+                ISO 8601 date and time with a UTC offset.
         """
         if isinstance(self.protocol, str):
             self.protocol = Protocol.from_string(self.protocol)
@@ -252,12 +282,7 @@ class ProtocolMessage:
             self.payload = PayloadEnvelope.from_dict(self.payload)
         if self.timestamp.endswith("Z"):
             self.timestamp = self.timestamp[:-1] + "+00:00"
-        try:
-            datetime.fromisoformat(self.timestamp)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"timestamp must be ISO 8601, such as '2026-01-15T12:00:00+00:00': {exc}"
-            ) from exc
+        _check_timestamp(self.timestamp)
         if not self.client_id or not self.client_id.strip():
             raise ValueError("client_id must be a non-empty string")
         self.forwarder_id = self.forwarder_id.strip()

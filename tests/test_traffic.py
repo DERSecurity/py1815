@@ -943,6 +943,46 @@ class TestEnvelope:
 
         assert message.timestamp == "2026-10-27T12:00:00+00:00"
 
+    @pytest.mark.parametrize(
+        "timestamp, problem",
+        [
+            pytest.param("2026-10-27T12:00:00", "no UTC offset", id="no offset"),
+            pytest.param("2026-10-27 12:00:00.250", "no UTC offset", id="no offset, space"),
+            pytest.param("2026-10-27", "no time", id="date only"),
+            pytest.param("20261027", "no time", id="basic date only"),
+            pytest.param("27 October 2026", "ISO 8601", id="not ISO 8601"),
+        ],
+    )
+    def test_a_timestamp_that_names_no_instant_is_refused(self, timestamp, problem):
+        with pytest.raises(ValueError, match=problem):
+            ProtocolMessage(
+                protocol=Protocol.DNP3,
+                direction=WireDirection.UPSTREAM,
+                client_id="1024",
+                payload={},
+                source=NetworkEndpoint("198.51.100.5", 20000),
+                timestamp=timestamp,
+            )
+
+    def test_a_serialized_envelope_without_an_offset_is_refused(self):
+        written = envelope(_request("C0 01"), outstation=OUTSTATION_END, at=0.0).to_dict()
+        written["timestamp"] = "1970-01-01T00:00:00"
+
+        with pytest.raises(ValueError, match="no UTC offset"):
+            ProtocolMessage.from_dict(written)
+
+    def test_a_timestamp_with_an_offset_other_than_utc_is_kept(self):
+        message = ProtocolMessage(
+            protocol=Protocol.DNP3,
+            direction=WireDirection.UPSTREAM,
+            client_id="1024",
+            payload={},
+            source=NetworkEndpoint("198.51.100.5", 20000),
+            timestamp="2026-10-27T05:00:00-07:00",
+        )
+
+        assert message.to_dict()["timestamp"] == "2026-10-27T05:00:00-07:00"
+
     def test_an_empty_client_id_is_refused(self):
         with pytest.raises(ValueError, match="client_id"):
             ProtocolMessage(
