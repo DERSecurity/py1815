@@ -891,12 +891,16 @@ class TestOutstationRequests:
         async with _Listener(session=dut.session, request_observer=seen.append) as listening:
             _, writer = await _hold_a_read(dut, listening, seen)
             client = Endpoint.of(writer.get_extra_info("sockname"))
+            port = listening.server.port
 
             writer.close()
             await _until(lambda: len(seen) == 2)
 
         _, read = seen
         assert (read.peer, read.source, read.destination) == (client, MASTER, OUTSTATION)
+        # Both ends are those of the connection the read arrived on, though
+        # the record is reported after that connection ended.
+        assert read.local == Endpoint("127.0.0.1", port)
         assert read.request == bytes.fromhex("C0 01 3C 01 06")
         assert read.response is None
 

@@ -58,7 +58,8 @@ from py1815.envelope import (
     wire_version,
 )
 from py1815.master import Master, Tasks
-from py1815.observers import Endpoint, RequestRecord
+from py1815.master.association import Outcome
+from py1815.observers import ConnectionEvent, ConnectionOutcome, Endpoint, RequestRecord
 from py1815.traffic import (
     _LAYOUTS,
     IIN_BITS,
@@ -1110,6 +1111,64 @@ class TestRequestRecords:
 
 
 class TestExchanges:
+    @pytest.mark.asyncio
+    async def test_the_guide_publishes_an_exchange_abandoned_by_a_disconnect(self):
+        # The pattern docs/traffic.md gives: the connection is kept from the
+        # connection observer, because Outstation.connection is None by the
+        # time an exchange abandoned with its connection is reported.
+        async def accept_then_close(reader, writer):
+            await reader.read(4096)
+            writer.close()
+
+        server = await asyncio.start_server(accept_then_close, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        connections: dict[str, ConnectionEvent] = {}
+        published: list[ProtocolMessage] = []
+        seen_in_handler: list[object] = []
+
+        def remember(event: ConnectionEvent) -> None:
+            if event.outcome is ConnectionOutcome.CONNECTED:
+                connections[event.name] = event
+
+        try:
+            async with Master() as master:
+                lab = await master.add(
+                    "lab",
+                    host="127.0.0.1",
+                    port=port,
+                    tasks=Tasks.none(),
+                    reconnect=None,
+                    connection_observer=remember,
+                )
+
+                def publish(exchange):
+                    seen_in_handler.append(lab.connection)
+                    connection = connections["lab"]
+                    published.extend(
+                        exchange_messages(
+                            exchange,
+                            master_address=lab.association.master_address,
+                            outstation_address=lab.association.outstation_address,
+                            master=connection.local,
+                            outstation=connection.remote,
+                        )
+                    )
+
+                lab.on_exchange = publish
+                exchange = await lab.scan("class0")
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert exchange.outcome is Outcome.ABANDONED
+        assert seen_in_handler == [None], "the connection had ended when the exchange was reported"
+        (request,) = published
+        assert request.source == NetworkEndpoint("127.0.0.1", port)
+        body = request.body
+        assert body is not None
+        assert (body["direction"], body["destination_port"]) == ("request", port)
+        assert body["source_port"] == connections["lab"].local.port
+
     @pytest.mark.asyncio
     async def test_an_exchange_gives_its_request_and_each_response_fragment(self):
         dut = Dut(analog_inputs=False, counters=False)

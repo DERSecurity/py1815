@@ -304,7 +304,10 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
 
         Its ``local`` and ``remote`` are this master's end of the connection
         and the outstation's, which :mod:`py1815.traffic` puts in the records
-        it builds from this master's exchanges.
+        it builds from this master's exchanges. It is None once the
+        connection ends, and an exchange in flight then is passed to
+        ``on_exchange``, as abandoned, after that. To describe that exchange,
+        keep the event from ``connection_observer`` instead.
         """
         return self._connected_event
 

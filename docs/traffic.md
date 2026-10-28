@@ -36,7 +36,9 @@ request alone when nothing was sent back. An unsolicited response gives one.
 Every envelope is stamped with the record's time.
 
 The record's `peer` and `local` are the master's and the outstation's ends of
-the connection. They fill each body's IP addresses and ports and the
+the connection the request arrived on, kept with the record. A read held behind
+an unsolicited response and reported after its connection ends still carries
+them. They fill each body's IP addresses and ports and the
 envelope's `source`. A record without `local`, from a broadcast datagram or a
 session driven without a listener, needs the outstation's address given:
 `record_messages(record, outstation=Endpoint("198.51.100.5", 20000))`.
@@ -46,18 +48,29 @@ alone.
 ## From the master
 
 Give the outstation an `on_exchange` and an `on_unsolicited`, and build the
-envelopes from each exchange and unsolicited response. `connection` holds the
-two ends of the connection the master made:
+envelopes from each exchange and unsolicited response. The bodies need the two
+ends of the connection the request went out on. Keep them from the connection
+observer:
 
 ```python
 from py1815.master import Master
+from py1815.observers import ConnectionEvent, ConnectionOutcome
 from py1815.traffic import exchange_messages, unsolicited_message
 
+#: The connection each outstation was last connected over, by name.
+connections: dict[str, ConnectionEvent] = {}
+
+
+def remember(event: ConnectionEvent) -> None:
+    if event.outcome is ConnectionOutcome.CONNECTED:
+        connections[event.name] = event
+
+
 async with Master() as master:
-    lab = await master.add("lab", host="198.51.100.5")
+    lab = await master.add("lab", host="198.51.100.5", connection_observer=remember)
 
     def publish(exchange):
-        connection = lab.connection
+        connection = connections["lab"]
         for message in exchange_messages(
             exchange,
             master_address=lab.association.master_address,
@@ -69,6 +82,12 @@ async with Master() as master:
 
     lab.on_exchange = publish
 ```
+
+Do not read `lab.connection` in the handler. It is None from the moment the
+connection ends, and a request still in flight then is reported to
+`on_exchange`, as abandoned, after that. The connection kept from the
+observer is the one the request went out on, so that exchange is published
+too.
 
 An exchange gives one envelope for the request and one for each response
 fragment. The responses are stamped with the time the exchange ended, `at`,
