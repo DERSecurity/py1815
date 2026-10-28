@@ -71,7 +71,7 @@ nav:
   - Serving a DER: der.md
   - Configuring the outstation: der-config.md
   - Connection, request and anomaly reports: observers.md
-  - Traffic records for a network monitor: traffic.md
+  - DNP3 traffic records: traffic.md
   - The master: master.md
   - The console: console.md
   - The master's API: master-api.md

@@ -549,8 +549,8 @@ connection ends, and starts again when the connection is made again.
 
 Each outstation keeps a `trace`: every frame sent and received, with its time,
 its octets and a reading of them one layer at a time. To publish each exchange
-in the format a network monitor uses for captured DNP3 traffic, see
-[Traffic records for a network monitor](traffic.md).
+as a JSON body per fragment, defined by a versioned JSON Schema, see
+[DNP3 traffic records](traffic.md).
 
 ```python
 for entry in lab.trace.since():

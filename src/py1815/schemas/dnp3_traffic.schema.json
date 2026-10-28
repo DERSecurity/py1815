@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dersec.com/schemas/dnp3-traffic/v1",
+  "title": "DNP3 application fragment",
+  "description": "One DNP3 application fragment (IEEE 1815): a request, a response or an unsolicited response, carried as the JSON payload of a ProtocolMessage on the <sentry_id>/out/dnp3-raw topic. Open to new fields: a field not listed here is allowed and should not be relied on until it is listed. A listed field must have its type and bound, and is null only where stated. `schema` is raised only for a change a consumer must handle. Integers that IEEE 1815 carries as octets or unsigned integers are bounded to their wire width. The `format` keywords on the IP fields are checked only by a validator with format assertion turned on.",
+  "type": "object",
+  "required": ["schema", "source_address", "destination_address", "function_code", "prm", "direction", "unsolicited", "objects", "points"],
+  "properties": {
+    "schema": {"const": 1, "description": "Body shape version."},
+    "source_address": {"$ref": "#/$defs/uint16", "description": "Link-layer source address of the station that sent the fragment."},
+    "destination_address": {"$ref": "#/$defs/uint16", "description": "Link-layer destination address."},
+    "function_code": {"$ref": "#/$defs/uint8", "description": "Application function code, as on the wire. 129 RESPONSE, 130 UNSOLICITED_RESPONSE and 131 AUTHENTICATE_RESP come from an outstation; every other defined code comes from a master."},
+    "prm": {"type": "integer", "minimum": 0, "maximum": 1, "description": "Link-layer primary-message (PRM) bit of the frames that carried the fragment. Application data travels in primary frames, so conforming traffic has 1."},
+    "direction": {"enum": ["request", "response"], "description": "request: sent by the master. response: sent by the outstation, including an unsolicited response."},
+    "unsolicited": {"type": "boolean", "description": "The application control UNS bit as on the wire. A conforming outstation sets it on every unsolicited response (function code 130), and a conforming master sets it on the CONFIRM of one."},
+    "iin": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/iin_bit"},
+      "uniqueItems": true,
+      "maxItems": 16,
+      "description": "Internal indications of a response: the names of the bits set in IIN1 and IIN2. An empty list means no bit is set. Required on a response unless apdu_rejected is present; never present on a request."
+    },
+    "source_ip": {"$ref": "#/$defs/ip", "description": "IP address of the sender. Absent when the fragment did not travel over IP or the producer withholds it."},
+    "source_port": {"$ref": "#/$defs/uint16", "description": "TCP or UDP port of the sender."},
+    "destination_ip": {"$ref": "#/$defs/ip", "description": "IP address of the receiver."},
+    "destination_port": {"$ref": "#/$defs/uint16", "description": "TCP or UDP port of the receiver."},
+    "objects": {"type": "array", "items": {"$ref": "#/$defs/object_header"}, "maxItems": 4096, "description": "One entry per object header, in wire order."},
+    "points": {"type": "array", "items": {"$ref": "#/$defs/point"}, "maxItems": 65536, "description": "Every point the fragment carries, status and command objects alike, in wire order."},
+    "apdu_rejected": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "maxLength": 64,
+      "description": "Present when the fragment's object data cannot be trusted, with the reason: malformed (it could not be decoded to its end) or point_count (an object header's range or count disagrees with the objects that follow). A rejected fragment reports no objects and no points."
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"direction": {"const": "request"}}}, "then": {"not": {"required": ["iin"]}}},
+    {"if": {"properties": {"direction": {"const": "response"}}, "not": {"required": ["apdu_rejected"]}}, "then": {"required": ["iin"]}},
+    {"if": {"required": ["apdu_rejected"]}, "then": {"properties": {"objects": {"maxItems": 0}, "points": {"maxItems": 0}}}}
+  ],
+  "$defs": {
+    "uint8": {"type": "integer", "minimum": 0, "maximum": 255},
+    "uint16": {"type": "integer", "minimum": 0, "maximum": 65535},
+    "uint32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "ip": {"type": "string", "maxLength": 45, "anyOf": [{"format": "ipv4"}, {"format": "ipv6"}]},
+    "iin_bit": {
+      "enum": [
+        "broadcast", "class_1_events", "class_2_events", "class_3_events",
+        "need_time", "local_control", "device_trouble", "device_restart",
+        "no_func_code_support", "object_unknown", "parameter_error", "event_buffer_overflow",
+        "already_executing", "config_corrupt", "reserved_2", "reserved_1"
+      ],
+      "description": "An internal indication bit by its IEEE 1815 name, IIN1.0 (broadcast) through IIN2.7 (reserved_1), in that order."
+    },
+    "object_header": {
+      "type": "object",
+      "description": "One object header. The qualifier's low nibble, the range specifier code, decides the range fields: codes 0 to 5 carry start and stop (indices for 0 to 2, virtual addresses for 3 to 5), codes 7, 8, 9 and 11 carry count, and every other code carries none.",
+      "required": ["group", "variation", "qualifier"],
+      "properties": {
+        "group": {"$ref": "#/$defs/uint8"},
+        "variation": {"$ref": "#/$defs/uint8", "description": "0 asks for any variation, in a read."},
+        "qualifier": {"$ref": "#/$defs/uint8", "description": "The qualifier octet: object prefix code in bits 4 to 6, range specifier code in bits 0 to 3."},
+        "start": {"$ref": "#/$defs/uint32"},
+        "stop": {"$ref": "#/$defs/uint32"},
+        "count": {"$ref": "#/$defs/uint32"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"qualifier": {"enum": [0, 1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 32, 33, 34, 35, 36, 37, 48, 49, 50, 51, 52, 53, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 96, 97, 98, 99, 100, 101, 112, 113, 114, 115, 116, 117, 128, 129, 130, 131, 132, 133, 144, 145, 146, 147, 148, 149, 160, 161, 162, 163, 164, 165, 176, 177, 178, 179, 180, 181, 192, 193, 194, 195, 196, 197, 208, 209, 210, 211, 212, 213, 224, 225, 226, 227, 228, 229, 240, 241, 242, 243, 244, 245]}}},
+          "then": {"required": ["start", "stop"], "not": {"required": ["count"]}},
+          "else": {
+            "if": {"properties": {"qualifier": {"enum": [7, 8, 9, 11, 23, 24, 25, 27, 39, 40, 41, 43, 55, 56, 57, 59, 71, 72, 73, 75, 87, 88, 89, 91, 103, 104, 105, 107, 119, 120, 121, 123, 135, 136, 137, 139, 151, 152, 153, 155, 167, 168, 169, 171, 183, 184, 185, 187, 199, 200, 201, 203, 215, 216, 217, 219, 231, 232, 233, 235, 247, 248, 249, 251]}}},
+            "then": {"required": ["count"], "not": {"anyOf": [{"required": ["start"]}, {"required": ["stop"]}]}},
+            "else": {"not": {"anyOf": [{"required": ["start"]}, {"required": ["stop"]}, {"required": ["count"]}]}}
+          }
+        }
+      ]
+    },
+    "point": {
+      "type": "object",
+      "description": "One point. type is the point type, set by the group; group and variation say which object carried it (static, event, frozen, command). index is the point index on the wire. Fields a group does not carry are absent.",
+      "required": ["type", "group", "variation", "index", "command"],
+      "properties": {
+        "type": {"enum": ["binary", "double_bit_binary", "binary_output", "counter", "analog", "analog_deadband", "analog_output", "octet_string"]},
+        "group": {"$ref": "#/$defs/uint8"},
+        "variation": {"type": "integer", "minimum": 1, "maximum": 255},
+        "index": {"$ref": "#/$defs/uint32"},
+        "command": {"type": "boolean", "description": "true for a control object: a CROB (group 12) or an analog output block (group 41), in a request or echoed in a response."},
+        "value": {"description": "The point's value, typed by point type. Null only for an analog type whose floating-point value is not finite, with non_finite saying which."},
+        "non_finite": {"enum": ["nan", "inf", "-inf"], "description": "Present exactly when value is null: the non-finite floating-point value on the wire."},
+        "flags": {"$ref": "#/$defs/uint8", "description": "The flag octet as on the wire, for a variation that carries one. For binary types it includes the state bits. Absent for a variation without flags, which IEEE 1815 defines as online."},
+        "time": {"type": "integer", "minimum": 0, "maximum": 281474976710655, "description": "DNP3 time: milliseconds since 1970-01-01T00:00:00Z on the outstation's clock. A relative-time object is resolved against its common time of occurrence."},
+        "op_type": {"type": "integer", "minimum": 0, "maximum": 15, "description": "CROB: control code bits 0 to 3. 0 NUL, 1 PULSE_ON, 2 PULSE_OFF, 3 LATCH_ON, 4 LATCH_OFF."},
+        "trip_close": {"type": "integer", "minimum": 0, "maximum": 3, "description": "CROB: control code bits 6 and 7, the trip-close code. 0 NUL, 1 CLOSE, 2 TRIP, 3 RESERVED."},
+        "clear": {"type": "boolean", "description": "CROB: control code bit 5."},
+        "queue": {"type": "boolean", "description": "CROB: control code bit 4, obsolete and required to be clear."},
+        "count": {"$ref": "#/$defs/uint8", "description": "CROB: how many times to repeat the operation."},
+        "on_time": {"$ref": "#/$defs/uint32", "description": "CROB: on time, milliseconds."},
+        "off_time": {"$ref": "#/$defs/uint32", "description": "CROB: off time, milliseconds."},
+        "status": {"$ref": "#/$defs/uint8", "description": "Control status code as on the wire (0 SUCCESS), on a CROB, an analog output block, and their command events (groups 13 and 43)."}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "binary"}}}, "then": {"properties": {"group": {"enum": [1, 2]}, "value": {"type": "integer", "minimum": 0, "maximum": 1}}}},
+        {"if": {"properties": {"type": {"const": "double_bit_binary"}}}, "then": {"properties": {"group": {"enum": [3, 4]}, "value": {"type": "integer", "minimum": 0, "maximum": 3}}}},
+        {"if": {"properties": {"type": {"const": "binary_output"}}}, "then": {"properties": {"group": {"enum": [10, 11, 12, 13]}, "value": {"type": "integer", "minimum": 0, "maximum": 1}}}},
+        {"if": {"properties": {"type": {"const": "counter"}}}, "then": {"properties": {"group": {"enum": [20, 21, 22, 23]}, "value": {"$ref": "#/$defs/uint32"}}}},
+        {"if": {"properties": {"type": {"const": "analog"}}}, "then": {"properties": {"group": {"enum": [30, 31, 32, 33]}, "value": {"type": ["number", "null"]}}}},
+        {"if": {"properties": {"type": {"const": "analog_deadband"}}}, "then": {"properties": {"group": {"enum": [34]}, "value": {"type": ["number", "null"]}}}},
+        {"if": {"properties": {"type": {"const": "analog_output"}}}, "then": {"properties": {"group": {"enum": [40, 41, 42, 43]}, "value": {"type": ["number", "null"]}}}},
+        {"if": {"properties": {"type": {"const": "octet_string"}}}, "then": {"properties": {"group": {"enum": [110, 111]}, "value": {"type": "string", "pattern": "^([0-9a-f]{2})*$", "maxLength": 510}}}},
+        {
+          "if": {"required": ["value"], "properties": {"value": {"type": "null"}}},
+          "then": {"required": ["non_finite"]},
+          "else": {"not": {"required": ["non_finite"]}}
+        },
+        {
+          "if": {"properties": {"group": {"enum": [12, 41]}}},
+          "then": {"properties": {"command": {"const": true}}},
+          "else": {"properties": {"command": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"group": {"const": 12}}},
+          "then": {
+            "required": ["op_type", "trip_close", "clear", "queue", "count", "on_time", "off_time"],
+            "not": {"anyOf": [{"required": ["value"]}, {"required": ["non_finite"]}]}
+          },
+          "else": {
+            "required": ["value"],
+            "not": {"anyOf": [{"required": ["op_type"]}, {"required": ["trip_close"]}, {"required": ["clear"]}, {"required": ["queue"]}, {"required": ["count"]}, {"required": ["on_time"]}, {"required": ["off_time"]}]}
+          }
+        },
+        {
+          "if": {"properties": {"group": {"enum": [12, 13, 41, 43]}}},
+          "then": {"required": ["status"]},
+          "else": {"not": {"required": ["status"]}}
+        },
+        {
+          "if": {"properties": {"group": {"enum": [12, 13, 34, 41, 43, 110, 111]}}},
+          "then": {"not": {"required": ["flags"]}}
+        },
+        {
+          "if": {"properties": {"group": {"enum": [1, 3, 10, 12, 20, 30, 34, 40, 41, 110]}}},
+          "then": {"not": {"required": ["time"]}}
+        }
+      ]
+    }
+  }
+}

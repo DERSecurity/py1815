@@ -1,16 +1,16 @@
-# Traffic records for a network monitor
+# DNP3 traffic records
 
-A passive network monitor that watches DNP3 traffic dissects each application
-fragment with Wireshark's DNP3 dissector and publishes a description of it: a
-JSON message body inside a message envelope. An application that embeds this
-library's outstation or master already knows every fragment it sends and
-receives. `py1815.traffic` turns those fragments into the same bodies and
-envelopes, so the application can publish its own traffic on the monitor's
-channel and the monitor's consumers handle it as captured traffic, without
-conversion code of their own.
+An application that embeds this library's outstation or master knows every
+fragment it sends and receives. `py1815.traffic` describes each fragment as a
+JSON body and wraps it in a message envelope, so the application can publish
+its own DNP3 traffic to consumers that also take traffic captured from the
+network, without conversion code of its own.
 
-The envelope type is in `py1815.envelope`. It is a copy of the published
-envelope format and needs no other package.
+The body is defined by a versioned JSON Schema, the DNP3 traffic schema,
+version 1, with the `$id` `https://dersec.com/schemas/dnp3-traffic/v1`. A copy
+ships in the package, and `py1815.traffic.load_schema()` returns it as a
+dictionary. Every body this library builds is valid against it. The envelope
+type is in `py1815.envelope`. Neither needs another package.
 
 ## From the outstation
 
@@ -36,7 +36,7 @@ request alone when nothing was sent back. An unsolicited response gives one.
 Every envelope is stamped with the record's time.
 
 The record's `peer` and `local` are the master's and the outstation's ends of
-the connection, and fill the body's `source_ip` and `destination_ip` and the
+the connection. They fill each body's IP addresses and ports and the
 envelope's `source`. A record without `local`, from a broadcast datagram or a
 session driven without a listener, needs the outstation's address given:
 `record_messages(record, outstation=Endpoint("198.51.100.5", 20000))`.
@@ -77,78 +77,173 @@ sent. A request sent again after a timeout is described once.
 `unsolicited_message` does the same for an unsolicited response, and
 `exchange_bodies` and `unsolicited_body` return the bodies alone.
 
+## From any fragment
+
+`fragment_body` describes one application fragment, from the application
+control octet to the last object, given which end sent it and the link
+addresses:
+
+```python
+from py1815.observers import Endpoint
+from py1815.traffic import fragment_body
+
+body = fragment_body(
+    bytes.fromhex("C3 05 0C 01 28 01 00 03 00 03 01 00 00 00 00 00 00 00 00 00"),
+    direction="request",
+    source=1,
+    destination=10,
+    sender=Endpoint("192.0.2.10", 50123),
+    receiver=Endpoint("192.0.2.20", 20000),
+)
+```
+
+`direction` is `"request"` for a fragment the master sent and `"response"`
+for one the outstation sent, an unsolicited response included. A response is
+read with its internal indications. `sender` and `receiver` are optional; an
+end that is not given is left out of the body.
+
 ## The body
 
+The direct operate above, a CROB that latches output 3 on:
+
 ```json
-{"source_address": 1, "destination_address": 1024, "function_code": 2, "prm": 1,
- "source_ip": "192.0.2.10", "destination_ip": "198.51.100.5",
- "points": [{"type": "binary", "index": 7, "value": 0}],
- "direction": "request", "objects": [{"group": 80, "variation": 1}]}
+{"schema": 1, "source_address": 1, "destination_address": 10, "function_code": 5,
+ "prm": 1, "direction": "request", "unsolicited": false,
+ "source_ip": "192.0.2.10", "source_port": 50123,
+ "destination_ip": "192.0.2.20", "destination_port": 20000,
+ "objects": [{"group": 12, "variation": 1, "qualifier": 40, "count": 1}],
+ "points": [{"type": "binary_output", "group": 12, "variation": 1, "index": 3,
+             "command": true, "op_type": 3, "trip_close": 0, "clear": false,
+             "queue": false, "count": 1, "on_time": 0, "off_time": 0, "status": 0}]}
 ```
 
 | Key | Value |
 |---|---|
+| `schema` | `1`, the version of the body's shape |
 | `source_address`, `destination_address` | The link addresses of the sender and the receiver |
-| `function_code` | The application function code |
+| `function_code` | The application function code, as sent |
 | `prm` | The link layer's primary-message bit: 1, since every fragment travels as user data |
-| `source_ip`, `destination_ip` | The addresses of the sender and the receiver, or null where they are not known |
-| `points` | The values the fragment carries, described below |
-| `direction` | `response` for function codes 129 and 130, otherwise `request` |
-| `objects` | One `{"group", "variation"}` per object header, in the order sent |
-| `apdu_rejected` | Only on a response that ends inside an object: `malformed`, with `points` and `objects` empty |
+| `direction` | `request` from the master, `response` from the outstation |
+| `unsolicited` | The UNS bit of the application control octet |
+| `iin` | On a response only: the names of the internal indication bits set, `[]` when none is |
+| `source_ip`, `source_port`, `destination_ip`, `destination_port` | The ends of the connection. Left out when not known; an address that is not an IP address is left out and its port kept |
+| `objects` | One entry per object header, in the order sent |
+| `points` | Every point the fragment carries, in the order sent |
+| `apdu_rejected` | Only on a fragment that cannot be read to its end; see below |
 
-The keys are always in this order, which matters to a consumer: the envelope's
-`hash` covers the payload text.
+The keys are always in this order, which matters to a consumer that
+deduplicates: the envelope's `hash` covers the payload text.
 
-Object headers are listed for the requests whose headers the dissector reads:
-read, write, select, operate, the two direct operates, the four freezes,
-enable and disable unsolicited, and the file functions. Other requests, such as
-a cold restart or a confirmation, list none.
+The internal indication names, IIN1.0 to IIN2.7, are `broadcast`,
+`class_1_events`, `class_2_events`, `class_3_events`, `need_time`,
+`local_control`, `device_trouble`, `device_restart`, `no_func_code_support`,
+`object_unknown`, `parameter_error`, `event_buffer_overflow`,
+`already_executing`, `config_corrupt`, `reserved_2` and `reserved_1`.
+
+### Object headers
+
+Each entry has `group`, `variation` and `qualifier`, the qualifier octet as
+sent. Range specifier codes 0 to 5 add `start` and `stop`, codes 7, 8, 9 and
+11 add `count`, and code 6 adds neither. Every header is listed, those that
+carry no points included: a class read, a time write, a write of the internal
+indications.
 
 ### Points
 
-Each point is `{"type", "index", "value"}`, with `"quality"` added where the
-monitor reads one. The monitor reports a value only where the dissector
-exposes one, so some objects give no point:
+Every point has `type`, `group`, `variation`, `index` and `command`. `index`
+is the index on the wire: the range start plus the object's position, or the
+index in front of the object. Points of different types keep their own
+indices, so binary input 5 and binary output 5 are different points.
+`command` is true for a CROB (group 12) and an analog output block (group 41),
+in a request or echoed in a response.
 
-| Objects | `type` | `value` | `quality` |
-|---|---|---|---|
-| Packed binary: group 1, 10 and 80 variation 1 | `binary` | 0 or 1 | none |
-| Counters and frozen counters, and their events: groups 20 to 23 | `counter` | an integer | none |
-| Analog inputs: group 30 variations 1 to 5, and their events, group 32 variations 1 to 5 and 7 | `analog` | a number | the flag octet, for a variation that has one |
-| Binary objects with flags, double-bit inputs, double-precision analog values, frozen analog inputs, analog outputs, commands, times | no point | | |
+| `type` | Groups | `value` |
+|---|---|---|
+| `binary` | 1, 2 | 0 or 1 |
+| `double_bit_binary` | 3, 4 | 0 intermediate, 1 off, 2 on, 3 indeterminate |
+| `binary_output` | 10, 11, 12, 13 | 0 or 1; none on a CROB |
+| `counter` | 20, 21, 22, 23 | An integer |
+| `analog` | 30, 31, 32, 33 | A number |
+| `analog_deadband` | 34 | A number |
+| `analog_output` | 40, 41, 42, 43 | A number |
+| `octet_string` | 110, 111 | The octets in lowercase hex |
 
-A single-precision analog value is rounded to six significant digits, as the
-dissector displays it. Every group 80 point in an octet takes the octet's
-lowest bit as its value, not its own bit, because that is how the dissector
-reports the internal indications.
+The other fields appear where the object carries them:
 
-Points are listed analog first, then binary, then counter, each in the order
-sent, and at most 2000 of one type. Indices are those on the wire, except where
-two groups of one type share a fragment: the first group to give points of the
-type keeps its indices, and each header of another group of that type is
-numbered on from the highest index used so far. A class poll that returns
-packed binary inputs 0 to 3 and then packed binary outputs 0 and 1 lists the
-outputs as 4 and 5.
+- `flags`: the flag octet as sent. A binary object's state bits are part of
+  it. A variation without flags has none.
+- `time`: milliseconds since 1970 on the outstation's clock. A relative-time
+  event is counted from the common time of occurrence before it in the same
+  fragment, and has no `time` when there is none.
+- `status`: the control status octet of a CROB, an analog output block, and
+  their command events (groups 13 and 43). A binary output command event
+  carries its commanded state in bit 7, as `value`, and its status in bits 0
+  to 6.
+- `op_type`, `trip_close`, `clear`, `queue`, `count`, `on_time` and
+  `off_time`: a CROB's control code, split into its fields, and the rest of
+  the block. A pattern control (group 12 variations 2 and 3) gives one CROB
+  point, with variation 2, for each output its mask selects.
+- `non_finite`: on a floating-point value that is not finite, `nan`, `inf` or
+  `-inf`. `value` is then null, since JSON has no such numbers.
 
-A response is read as far as the master's decoder reads it. Objects after a
-group or variation it does not read are not listed, where the monitor would
-list them.
+An integer variation gives an integer `value`, and a floating-point variation
+the exact value sent: single precision `0.1` is `0.10000000149011612`.
+
+Points come only from those groups. Objects of other groups, such as the time,
+class data, files and the internal indications, appear in `objects` only.
+
+### Rejected fragments
+
+A fragment that cannot be read to its end is described with
+`apdu_rejected` and with `objects` and `points` empty, since values read from
+it cannot be trusted. Its addresses, function code and, when the response
+header was complete, `iin` remain.
+
+| `apdu_rejected` | When |
+|---|---|
+| `point_count` | The object data ends after a whole object, before the objects a header's range or count declares |
+| `malformed` | Anything else that stops the reading: a fragment cut short inside a header or an object, a reserved qualifier, an inverted range in object data, a point sent with no index, an object this library cannot size, or more than 65536 points or 4096 object headers |
+
+This library reads every object group and variation in the tables above, the
+time and date (group 50 variations 1 to 4), the common time of occurrence
+(51), the time delay (52), class data (60), the internal indications (80),
+virtual terminal objects (112, 113), and any object sent with a size prefix,
+which it walks past. A fragment that carries object data of any other group
+or variation, such as device attributes (group 0) or the obsolete delta
+counters, is reported as `malformed`.
+
+## Validating
+
+The schema is a JSON Schema, draft 2020-12. To check bodies with it, install a
+validator such as `jsonschema`, which this library does not depend on:
+
+```python
+import jsonschema
+from py1815.traffic import load_schema
+
+schema = load_schema()
+validator = jsonschema.Draft202012Validator(
+    schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
+)
+validator.validate(body)
+```
+
+The IP address fields are checked only with a format checker, as here.
 
 ## The envelope
 
 ```json
 {"version": "0.3.0", "protocol": "dnp3", "direction": "upstream",
- "timestamp": "2026-10-27T12:00:00.250000+00:00", "client_id": "1024",
+ "timestamp": "2026-10-27T12:00:00.250000+00:00", "client_id": "10",
  "forwarder_id": "", "payload": {"content_type": "application/json",
- "data": "{\"source_address\": 1, ...}", "encoding": "utf-8"},
- "source": {"ip": "198.51.100.5", "port": 20000},
- "hash": "b2e5ecfe-3fc1-30db-bf63-f2f00479ead3", "is_valid": true,
+ "data": "{\"schema\": 1, \"source_address\": 10, ...}", "encoding": "utf-8"},
+ "source": {"ip": "192.0.2.20", "port": 20000},
+ "hash": "…", "is_valid": true,
  "protocol_data": {"extra": {"capture_origin": "live", "client_id_source": ""}}}
 ```
 
 - `version` is this library's release, or `2.0` when it has none.
-- `direction` is `upstream` for every DNP3 message, as the monitor writes it.
+- `direction` is `upstream` for every DNP3 message, whichever end sent it.
 - `client_id` is the outstation's link address: the source address of a
   response and the destination address of a request.
 - `source` is the outstation's address and port, whichever end sent the
@@ -156,8 +251,8 @@ list them.
 - `forwarder_id` is the `forwarder_id` given, empty by default.
 - `protocol_data.extra.capture_origin` is the `capture_origin` given, `live` by
   default.
-- `hash` is a UUIDv3 over the protocol, `client_id`, `timestamp` and the
-  payload text.
+- `hash` is a UUIDv3, in the DNS namespace, over
+  `"<protocol>:<client_id>:<timestamp>:<payload text>"`.
 
 `ProtocolMessage.from_json` reads an envelope back, and `message.body` returns
 its payload as a dictionary.

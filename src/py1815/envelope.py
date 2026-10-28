@@ -1,13 +1,14 @@
-"""The message envelope captured DNP3 traffic is published in.
+"""The message envelope DNP3 traffic records are published in.
 
-A network monitor that watches DNP3 traffic publishes each application fragment
-it sees as a :class:`ProtocolMessage`: an envelope that names the protocol, the
-device and the time, and carries the fragment's description as a JSON payload.
-:mod:`py1815.traffic` builds those payloads and envelopes from what the
-outstation and the master report, so an application can publish their traffic
-on the same channel as the monitor without converting it. This module is the
-envelope alone. It knows nothing of DNP3 beyond the protocol's name, and
-nothing in the outstation or the master depends on it.
+Each DNP3 application fragment, captured from the network or reported by one
+end of the association, is published as a :class:`ProtocolMessage`: an
+envelope that names the protocol, the device and the time, and carries the
+fragment's description as a JSON payload. :mod:`py1815.traffic` builds those
+payloads and envelopes from what the outstation and the master report, so an
+application can publish their traffic beside captured traffic without
+converting it. This module is the envelope alone. It knows nothing of DNP3
+beyond the protocol's name, and nothing in the outstation or the master depends
+on it.
 
 The envelope is a published contract shared with consumers that also ingest
 other protocols. It is copied here, not imported, so the library keeps no

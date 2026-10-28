@@ -19,7 +19,6 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import struct
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -239,37 +238,8 @@ class Decoded:
         return self.problem is None
 
 
-@dataclass(frozen=True)
-class DecodedBlock:
-    """One object header and the objects read under it."""
-
-    group: int
-    variation: int
-    qualifier: int
-    objects: tuple[DecodedObject, ...]
-
-
-@dataclass(frozen=True)
-class DecodedBlocks:
-    """What was read from a body, header by header, and what was not."""
-
-    blocks: tuple[DecodedBlock, ...]
-    #: The octets from the first header that could not be read to the end.
-    unread: bytes = b""
-    #: Why reading stopped there, or None if the whole body was read.
-    problem: str | None = None
-    #: Whether reading stopped because the body ended inside a header or an
-    #: object, and not at a group, variation or qualifier this module does
-    #: not read.
-    truncated: bool = False
-
-
 class _Stop(Exception):
     """Reading cannot continue from here. Carries the reason."""
-
-
-class _Truncated(_Stop):
-    """The body ends before the header or object being read."""
 
 
 @dataclass
@@ -282,7 +252,7 @@ class _CommonTime:
 
 def _need(body: bytes, offset: int, count: int, what: str) -> None:
     if offset + count > len(body):
-        raise _Truncated(f"the response ends inside {what}")
+        raise _Stop(f"the response ends inside {what}")
 
 
 def _one(
@@ -360,14 +330,12 @@ def _packed(
     ]
 
 
-def _block(
-    body: bytes, offset: int, common: _CommonTime, layouts: Mapping[tuple[int, int], Layout]
-) -> tuple[list[DecodedObject], int]:
+def _block(body: bytes, offset: int, common: _CommonTime) -> tuple[list[DecodedObject], int]:
     """Read one object header and the objects under it."""
     _need(body, offset, 3, "an object header")
     group, variation, raw_qualifier = body[offset : offset + 3]
     offset += 3
-    layout = layouts.get((group, variation))
+    layout = LAYOUTS.get((group, variation))
     if layout is None:
         raise _Stop(f"group {group} variation {variation} is not an object this library reads")
     try:
@@ -453,35 +421,14 @@ def decode_objects(body: bytes) -> Decoded:
     A common time of occurrence applies to the relative-time events after it
     in the same body, as the standard has it, and to none before it.
     """
-    decoded = decode_blocks(body)
-    objects = tuple(each for block in decoded.blocks for each in block.objects)
-    return Decoded(objects, decoded.unread, decoded.problem)
-
-
-def decode_blocks(
-    body: bytes, layouts: Mapping[tuple[int, int], Layout] | None = None
-) -> DecodedBlocks:
-    """Read a body as :func:`decode_objects` does, keeping each object header apart.
-
-    ``layouts`` replaces :data:`LAYOUTS`, for a caller that reads objects this
-    module does not, such as the internal indications a master writes.
-    """
-    if layouts is None:
-        layouts = LAYOUTS
-    blocks: list[DecodedBlock] = []
+    objects: list[DecodedObject] = []
     common = _CommonTime()
     offset = 0
     while offset < len(body):
         try:
-            objects, end = _block(body, offset, common, layouts)
+            block, end = _block(body, offset, common)
         except _Stop as stop:
-            return DecodedBlocks(
-                tuple(blocks),
-                bytes(body[offset:]),
-                str(stop),
-                truncated=isinstance(stop, _Truncated),
-            )
-        group, variation, qualifier = body[offset : offset + 3]
-        blocks.append(DecodedBlock(group, variation, qualifier, tuple(objects)))
+            return Decoded(tuple(objects), bytes(body[offset:]), str(stop))
+        objects.extend(block)
         offset = end
-    return DecodedBlocks(tuple(blocks))
+    return Decoded(tuple(objects))

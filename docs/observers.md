@@ -66,9 +66,9 @@ The listener passes its `request_observer` to the session, so
 attribute. A session driven without a listener takes a `request_observer` of
 its own.
 
-To publish the requests in the format a network monitor uses for captured
-DNP3 traffic, pass each record to `py1815.traffic`; see
-[Traffic records for a network monitor](traffic.md).
+To publish the requests as a JSON body per fragment, defined by a versioned
+JSON Schema, pass each record to `py1815.traffic`; see
+[DNP3 traffic records](traffic.md).
 
 A connection accepted and then closed by the master is reported as two events:
 

@@ -10,14 +10,7 @@ from __future__ import annotations
 import pytest
 from ied_harness import SIZES
 
-from py1815.decode import (
-    LAYOUTS,
-    DecodedObject,
-    Layout,
-    PointType,
-    decode_blocks,
-    decode_objects,
-)
+from py1815.decode import LAYOUTS, DecodedObject, PointType, decode_objects
 
 #: Ten billion milliseconds after the epoch, as the six octets of a DNP3 time.
 TIME = 10_000_000_000
@@ -278,40 +271,6 @@ class TestWhatCannotBeRead:
     def test_an_empty_body_is_read_in_full(self):
         decoded = decode_objects(b"")
         assert decoded.complete and decoded.objects == ()
-
-
-class TestBlocks:
-    """The same walk, keeping each object header apart."""
-
-    def test_each_header_is_its_own_block_even_when_it_repeats_the_one_before(self):
-        # Group 1 variation 1, qualifier 0x00, 0 to 1, then the same for 5 to 6.
-        decoded = decode_blocks(bytes.fromhex("01 01 00 00 01 01   01 01 00 05 06 03"))
-
-        assert [(b.group, b.variation, b.qualifier) for b in decoded.blocks] == [
-            (1, 1, 0x00),
-            (1, 1, 0x00),
-        ]
-        assert [[o.index for o in b.objects] for b in decoded.blocks] == [[0, 1], [5, 6]]
-        assert decoded.problem is None and not decoded.truncated
-
-    def test_a_body_that_ends_inside_an_object_is_truncated(self):
-        decoded = decode_blocks(bytes.fromhex("1E 01 00 00 01  01 01 00 00 00"))
-        assert decoded.truncated and decoded.blocks == ()
-
-    def test_an_unknown_group_is_not_truncated(self):
-        decoded = decode_blocks(bytes.fromhex("1E 02 00 00 00  01 2C 01   6E 04 00 00 00  41 42"))
-        assert not decoded.truncated
-        assert [(b.group, b.variation) for b in decoded.blocks] == [(30, 2)]
-        assert "group 110 variation 4" in decoded.problem
-
-    def test_a_table_given_reads_what_the_default_table_does_not(self):
-        # Group 80 variation 1, qualifier 0x00, 7 to 7, the bit clear.
-        body = bytes.fromhex("50 01 00 07 07 00")
-        layouts = {**LAYOUTS, (80, 1): Layout(None, flags=False, packed=True)}
-
-        assert decode_blocks(body).blocks == ()
-        (block,) = decode_blocks(body, layouts).blocks
-        assert [(o.index, o.value) for o in block.objects] == [(7, False)]
 
 
 class TestSign:

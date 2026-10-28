@@ -413,20 +413,23 @@ The master is tested the way the outstation is, and from the same argument.
   Chrome, Chromium or Edge skips these, and says so. CI has one, and there a
   skip is a failure. Point `PY1815_BROWSER` at a browser to name one.
 
-## Traffic records are held to a recording
+## Traffic records are held to test vectors and to the schema
 
-The bodies and envelopes `py1815.traffic` builds have to be the ones a
-Wireshark-based network monitor publishes, so they are checked against what
-that monitor published, not against a description of it (D103).
-`tests/traffic_records.json` holds fragments of real exchanges with this
-library's outstation and fragments written by hand for each object variation,
-each with the body the monitor published after Wireshark 4.0.17 dissected it,
-and a few of those bodies in the envelope it published them in.
-`tests/test_traffic.py` compares each body and envelope as JSON text, so the
-key order counts, and lists the fragments this library describes differently,
-with the reason. A listed fragment that starts to match fails until it is taken
-off the list. The recording is made outside this repository, and a change to
-the monitor's parser or to the dissector means making it again.
+The bodies `py1815.traffic` builds are defined by the DNP3 traffic schema
+(D103), so they are checked two ways. `tests/traffic_vectors.json` pairs
+application fragments, in hex, with the body the schema's authors wrote for
+each from the IEEE 1815 object layouts: reads, writes, direct operate and
+select-then-operate of a CROB and an analog output block with their echoes,
+unsolicited responses and their confirmations, and rejected fragments.
+`tests/test_traffic.py` reads each fragment and compares the body to the
+vector as JSON text, so the key order counts. Then every body the tests
+build is validated against the copy of the schema in the package: the
+vectors, a response of each object variation the module reads, the traffic
+of a session put through polls, events, controls, freezes and an unsolicited
+response, and a master's exchange over the loopback interface. The schema
+checks need `jsonschema`, from the dev extra, and skip without it. The rest
+of the file pins each way an object is read, and each reason a fragment is
+rejected, to literal octets.
 
 ## Running them
 
