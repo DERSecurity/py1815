@@ -6,10 +6,12 @@ fragment is read here by this library and its body must match the vector
 exactly, key order included, since the order is part of the payload text that
 the envelope's hash covers.
 
-The schema checks need ``jsonschema``, which is in the dev extra. Every body
-this library produces in these tests is validated against the copy of the
-schema in the package: the vectors, a body for every object variation it
-reads, and the traffic of a session and a master over the loopback interface.
+The schema checks need ``jsonschema``, which is in the dev extra. Without it
+this file fails to import, with a message that says to reinstall the extra,
+rather than skipping the checks. Every body this library produces in these
+tests is validated against the copy of the schema in the package: the
+vectors, a body for every object variation it reads, and the traffic of a
+session and a master over the loopback interface.
 The rest pins how each kind of object is read, with literal octets.
 """
 
@@ -74,6 +76,16 @@ from py1815.traffic import (
     record_messages,
 )
 
+try:
+    import jsonschema
+except ImportError as missing:
+    # jsonschema is a declared dev dependency, so its absence means a stale
+    # environment. Fail here instead of skipping the schema checks.
+    raise ImportError(
+        "the traffic schema checks need jsonschema, from the dev extra: "
+        'reinstall it with pip install -e ".[dev]"'
+    ) from missing
+
 VECTORS: dict[str, dict[str, Any]] = json.loads(
     (pathlib.Path(__file__).parent / "traffic_vectors.json").read_text(encoding="utf-8")
 )
@@ -110,7 +122,6 @@ def _response(hex_octets: str) -> dict[str, Any]:
 
 
 def _validator() -> Any:
-    jsonschema = pytest.importorskip("jsonschema", reason="the schema checks validate with it")
     schema = load_schema()
     cls = jsonschema.validators.validator_for(schema)
     cls.check_schema(schema)

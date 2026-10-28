@@ -429,7 +429,9 @@ build is validated against the copy of the schema in the package: the
 vectors, a response of each object variation the module reads, the traffic
 of a session put through polls, events, controls, freezes and an unsolicited
 response, and a master's exchange over the loopback interface. The schema
-checks need `jsonschema`, from the dev extra, and skip without it. The rest
+checks need `jsonschema`, from the dev extra. Without it the file fails to
+import with a message that names the extra, so a stale environment cannot
+skip the checks and still report a green run. The rest
 of the file pins each way an object is read, and each reason a fragment is
 rejected, to literal octets.
 
