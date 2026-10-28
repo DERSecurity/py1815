@@ -18,6 +18,7 @@ The rest pins how each kind of object is read, with literal octets.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import pathlib
 import re
@@ -52,6 +53,7 @@ from py1815.envelope import (
     NetworkEndpoint,
     Protocol,
     ProtocolMessage,
+    ProtocolMetadata,
     WireDirection,
     wire_version,
 )
@@ -319,10 +321,20 @@ def _session_bodies() -> list[dict[str, Any]]:
 
 
 class TestSchema:
-    def test_the_schema_is_the_one_named(self):
+    def test_the_schema_copy_is_the_version_the_module_names(self):
+        # The copy, the $id the module names and the version it writes change
+        # together. Updating one of them without the others fails here.
         schema = load_schema()
         assert schema["$id"] == SCHEMA_ID
+        assert SCHEMA_ID.endswith(f"/v{SCHEMA_VERSION}")
         assert schema["properties"]["schema"]["const"] == SCHEMA_VERSION
+        assert "schema" in schema["required"]
+
+    def test_every_body_names_the_schema_version(self):
+        bodies = [_vector_body(case) for case in VECTORS.values()] + _session_bodies()
+        assert {body["schema"] for body in bodies} == {SCHEMA_VERSION}
+
+    def test_the_schema_copy_is_a_valid_json_schema(self):
         _validator()
 
     @pytest.mark.parametrize("name", list(VECTORS))
@@ -805,6 +817,47 @@ class TestEnvelope:
             "is_valid": True,
             "protocol_data": {"extra": {"capture_origin": "live", "client_id_source": ""}},
         }
+
+    def test_the_serialized_fields_are_the_ones_the_contract_lists(self):
+        # The fields py1815.envelope documents: always present, and present
+        # only when set. A field added to the class and not to the contract,
+        # or the reverse, fails here.
+        always = {
+            "version",
+            "protocol",
+            "direction",
+            "timestamp",
+            "client_id",
+            "forwarder_id",
+            "payload",
+            "source",
+            "hash",
+            "is_valid",
+        }
+        when_set = {"destination", "protocol_data", "validation_error"}
+        bare = ProtocolMessage(
+            protocol=Protocol.DNP3,
+            direction=WireDirection.UPSTREAM,
+            client_id="10",
+            payload={},
+            source=NetworkEndpoint("192.0.2.20", 20000),
+        )
+        full = ProtocolMessage(
+            protocol=Protocol.DNP3,
+            direction=WireDirection.UPSTREAM,
+            client_id="10",
+            payload={},
+            source=NetworkEndpoint("192.0.2.20", 20000),
+            destination=NetworkEndpoint("192.0.2.10", 50123),
+            protocol_data=ProtocolMetadata(extra={"capture_origin": "live"}),
+            validation_error="example",
+        )
+
+        assert set(bare.to_dict()) == always
+        assert set(full.to_dict()) == always | when_set
+        assert {each.name for each in dataclasses.fields(ProtocolMessage)} == (
+            always | when_set
+        ) - {"version"}
 
     def test_a_serialized_envelope_reads_back_unchanged(self):
         body = _vector_body(VECTORS["unsolicited/event response"])

@@ -247,6 +247,17 @@ validator.validate(body)
 
 The IP address fields are checked only with a format checker, as here.
 
+## Schema versions
+
+The schema's `$id` ends in its version, and every body's `schema` field says
+which version the body follows. `py1815.traffic.SCHEMA_ID` and
+`py1815.traffic.SCHEMA_VERSION` name the version this release writes, and the
+copy `load_schema()` returns is that version. A new version of the schema, or
+a change to the envelope, comes in a new release of this library, with the
+copy, the constants and the bodies changed together. An application that pins
+both this library and its own copy of the published schema can compare that
+copy with `load_schema()`.
+
 ## The envelope
 
 ```json
