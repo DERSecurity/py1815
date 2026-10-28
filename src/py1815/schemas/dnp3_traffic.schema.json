@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dersec.com/schemas/dnp3-traffic/v1",
   "title": "DNP3 application fragment",
-  "description": "One DNP3 application fragment (IEEE 1815): a request, a response or an unsolicited response, carried as the JSON payload of a ProtocolMessage on the <sentry_id>/out/dnp3-raw topic. Open to new fields: a field not listed here is allowed and should not be relied on until it is listed. A listed field must have its type and bound, and is null only where stated. `schema` is raised only for a change a consumer must handle. Integers that IEEE 1815 carries as octets or unsigned integers are bounded to their wire width. The `format` keywords on the IP fields are checked only by a validator with format assertion turned on.",
+  "description": "One DNP3 application fragment (IEEE 1815): a request, a response or an unsolicited response, carried as the JSON payload of a ProtocolMessage on the <topic_base>/out/dnp3-raw topic. Open to new fields: a field not listed here is allowed and should not be relied on until it is listed. A listed field must have its type and bound, and is null only where stated. `schema` is raised only for a change a consumer must handle. Integers that IEEE 1815 carries as octets or unsigned integers are bounded to their wire width. The `format` keywords on the IP fields are checked only by a validator with format assertion turned on.",
   "type": "object",
   "required": ["schema", "source_address", "destination_address", "function_code", "prm", "direction", "unsolicited", "objects", "points"],
   "properties": {
