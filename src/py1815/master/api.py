@@ -299,6 +299,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         return self._writer is not None and not self._writer.is_closing()
 
     @property
+    def connection(self) -> ConnectionEvent | None:
+        """The report of the connection made, or None while none is.
+
+        Its ``local`` and ``remote`` are this master's end of the connection
+        and the outstation's, which :mod:`py1815.traffic` puts in the records
+        it builds from this master's exchanges.
+        """
+        return self._connected_event
+
+    @property
     def tasks(self) -> Tasks:
         """The automatic task settings for this outstation.
 

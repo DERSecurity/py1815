@@ -283,6 +283,9 @@ class RequestRecord:
             request. Each transmission is reported, retries included.
         timestamp: When the record was reported, in seconds since the Unix
             epoch.
+        local: This outstation's end of the connection the request arrived
+            on, when the session was told. None for a broadcast datagram and
+            for a session driven without a listener.
     """
 
     peer: Endpoint | None
@@ -293,6 +296,7 @@ class RequestRecord:
     response: bytes | None
     unsolicited: bool = False
     timestamp: float = field(default_factory=time.time)
+    local: Endpoint | None = None
 
 
 #: Receives each connection event.

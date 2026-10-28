@@ -413,6 +413,21 @@ The master is tested the way the outstation is, and from the same argument.
   Chrome, Chromium or Edge skips these, and says so. CI has one, and there a
   skip is a failure. Point `PY1815_BROWSER` at a browser to name one.
 
+## Traffic records are held to a recording
+
+The bodies and envelopes `py1815.traffic` builds have to be the ones a
+Wireshark-based network monitor publishes, so they are checked against what
+that monitor published, not against a description of it (D103).
+`tests/traffic_records.json` holds fragments of real exchanges with this
+library's outstation and fragments written by hand for each object variation,
+each with the body the monitor published after Wireshark 4.0.17 dissected it,
+and a few of those bodies in the envelope it published them in.
+`tests/test_traffic.py` compares each body and envelope as JSON text, so the
+key order counts, and lists the fragments this library describes differently,
+with the reason. A listed fragment that starts to match fails until it is taken
+off the list. The recording is made outside this repository, and a change to
+the monitor's parser or to the dissector means making it again.
+
 ## Running them
 
 ```bash

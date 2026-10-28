@@ -66,6 +66,10 @@ The listener passes its `request_observer` to the session, so
 attribute. A session driven without a listener takes a `request_observer` of
 its own.
 
+To publish the requests in the format a network monitor uses for captured
+DNP3 traffic, pass each record to `py1815.traffic`; see
+[Traffic records for a network monitor](traffic.md).
+
 A connection accepted and then closed by the master is reported as two events:
 
 ```json
@@ -162,16 +166,18 @@ are answers the protocol defines and are not reported as anomalies.
 Each request the session handles is reported once, after the response is
 built. `request` and `response` are the application fragments, from the
 application control octet to the last object, without the link and transport
-framing. `peer` is the connection the request arrived on, or the sender of a
-broadcast datagram, when the session is served by `OutstationServer`; it is
-None for a session driven some other way.
+framing. `peer` is the master's end of the connection the request arrived on,
+or the sender of a broadcast datagram, and `local` is the outstation's end,
+when the session is served by `OutstationServer`. `local` is None for a
+broadcast datagram, and both are None for a session driven some other way.
 
 An integrity poll, with the octets written as hex:
 
 ```json
 {"peer": {"host": "192.0.2.10", "port": 49152}, "source": 1, "destination": 1024,
  "function": 1, "request": "c1013c02063c03063c04063c0106",
- "response": "c1810000010200000301010101", "unsolicited": false, "timestamp": 1792310400.0}
+ "response": "c1810000010200000301010101", "unsolicited": false, "timestamp": 1792310400.0,
+ "local": {"host": "198.51.100.5", "port": 20000}}
 ```
 
 | What arrived or was sent | `function` | `response` |

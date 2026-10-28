@@ -277,7 +277,9 @@ fragment and the response fragment sent back. Unsolicited responses are
 reported to it too. Give the session an `anomaly_observer` to receive a record
 of each frame or request it drops, with a stable code and a severity.
 [Connection, request and anomaly reports](observers.md) lists the records and
-what produces each.
+what produces each. [Traffic records for a network monitor](traffic.md) turns
+the request records into the messages a network monitor publishes for captured
+DNP3 traffic.
 
 ## What it refuses
 

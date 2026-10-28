@@ -626,14 +626,23 @@ class _Unsolicited:
 
 
 @dataclass(frozen=True)
+class _Origin:
+    """Who sent a request, and over which connection, for its request record."""
+
+    #: The link address the request came from.
+    source: int
+    #: The master's end of the connection, or the sender of a datagram.
+    peer: Endpoint | None
+    #: This outstation's end of the connection.
+    local: Endpoint | None
+
+
+@dataclass(frozen=True)
 class _Held:
     """A read held behind an unsolicited response, and who sent it (D71)."""
 
     fragment: bytes
-    #: The link address of the master that sent it.
-    source: int
-    #: The connection it arrived on, for its request record.
-    peer: Endpoint | None
+    origin: _Origin
 
 
 @dataclass
@@ -906,6 +915,9 @@ class Session:
         #: The connection the session is serving, set by the listener that
         #: owns the socket. Reported with each anomaly.
         self.connection_peer: Endpoint | None = None
+        #: This outstation's end of that connection, set by the same listener.
+        #: Reported with each request.
+        self.connection_local: Endpoint | None = None
         self._anomaly_guard = ObserverGuard("anomaly observer")
         #: Called with each request record, or None.
         self.request_observer = request_observer
@@ -1450,6 +1462,7 @@ class Session:
                 request=b"",
                 response=response,
                 unsolicited=True,
+                local=self.connection_local,
             )
             self._request_guard.deliver(self.request_observer, record)
         return response
@@ -1753,13 +1766,12 @@ class Session:
             )
         if not self._reported_elsewhere:
             # Nothing is sent in answer to a broadcast, so it has no response.
-            self._report_request(
-                fragment,
-                b"",
-                source=frame.source,
-                destination=frame.destination,
-                peer=self._sender(),
+            origin = _Origin(
+                frame.source,
+                self._sender(),
+                self.connection_local if self._datagram is None else None,
             )
+            self._report_request(fragment, b"", origin=origin, destination=frame.destination)
 
     def _addressed_to_us(self, frame: link.LinkFrame) -> bool:
         if frame.destination != self._outstation_address and not frame.is_broadcast:
@@ -1827,25 +1839,24 @@ class Session:
         """Return the sender of the octets being handled: a datagram's sender, or the connection."""
         return self.connection_peer if self._datagram is None else self._datagram[0]
 
+    def _origin(self) -> _Origin:
+        """Return who sent the request being handled over the master's connection."""
+        return _Origin(self._destination(), self.connection_peer, self.connection_local)
+
     def _report_request(
-        self,
-        request: bytes,
-        response: bytes,
-        *,
-        source: int,
-        destination: int,
-        peer: Endpoint | None,
+        self, request: bytes, response: bytes, *, origin: _Origin, destination: int
     ) -> None:
         """Report a handled request to the request observer. An empty response is none."""
         if self.request_observer is None:
             return
         record = RequestRecord(
-            peer=peer,
-            source=source,
+            peer=origin.peer,
+            source=origin.source,
             destination=destination,
             function=request[1],
             request=request,
             response=response or None,
+            local=origin.local,
         )
         self._request_guard.deliver(self.request_observer, record)
 
@@ -1854,11 +1865,7 @@ class Session:
         held, self._deferred = self._deferred, None
         if held is not None:
             self._report_request(
-                held.fragment,
-                b"",
-                source=held.source,
-                destination=self._outstation_address,
-                peer=held.peer,
+                held.fragment, b"", origin=held.origin, destination=self._outstation_address
             )
 
     def _frame_anomaly(self, code: AnomalyCode, message: str, frame: link.LinkFrame) -> None:
@@ -1951,9 +1958,8 @@ class Session:
             self._report_request(
                 fragment,
                 response,
-                source=self._destination() if held is None else held.source,
+                origin=self._origin() if held is None else held.origin,
                 destination=self._outstation_address,
-                peer=self.connection_peer if held is None else held.peer,
             )
         released, self._released = self._released, None
         if released is not None:
@@ -2184,7 +2190,7 @@ class Session:
                 sequence,
                 self._awaited.sequence,
             )
-            self._deferred = _Held(fragment, self._destination(), self.connection_peer)
+            self._deferred = _Held(fragment, self._origin())
             self._reported_elsewhere = True
             return b""
 

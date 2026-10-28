@@ -1,0 +1,3139 @@
+{
+ "description": "DNP3 message bodies and envelopes as a passive network monitor publishes them, recorded by passing each fragment through Wireshark's DNP3 dissector and the monitor's parser. Each fragment was sent as its own TCP segment between the two endpoints below. Each envelope is shown without its version field, which names the producer's own release.",
+ "dissector": "TShark (Wireshark) 4.0.17 (Git v4.0.17 packaged as 4.0.17-0+deb12u3).",
+ "master": {
+  "address": 1,
+  "ip": "192.0.2.10",
+  "port": 49152
+ },
+ "outstation": {
+  "address": 1024,
+  "ip": "198.51.100.5",
+  "port": 20000
+ },
+ "fragments": [
+  {
+   "label": "clear the restart indication: request",
+   "from": "master",
+   "fragment": "c0 02 50 01 00 07 07 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "binary",
+      "index": 7,
+      "value": 0
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 80,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "clear the restart indication: response",
+   "from": "outstation",
+   "fragment": "c0 81 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": []
+   }
+  },
+  {
+   "label": "integrity poll: request",
+   "from": "master",
+   "fragment": "c1 01 3c 02 06 3c 03 06 3c 04 06 3c 01 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 1,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 60,
+      "variation": 2
+     },
+     {
+      "group": 60,
+      "variation": 3
+     },
+     {
+      "group": 60,
+      "variation": 4
+     },
+     {
+      "group": 60,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "integrity poll: response",
+   "from": "outstation",
+   "fragment": "c1 81 00 00 01 02 00 00 03 01 01 01 01 14 01 00 00 02 01 05 00 00 00 01 05 00 00 00 01 05 00 00 00 1e 01 00 00 03 01 64 00 00 00 01 64 00 00 00 01 64 00 00 00 01 64 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 100.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 1,
+      "value": 100.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 2,
+      "value": 100.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 100.0,
+      "quality": 1
+     },
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 5
+     },
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 5
+     },
+     {
+      "type": "counter",
+      "index": 2,
+      "value": 5
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 2
+     },
+     {
+      "group": 20,
+      "variation": 1
+     },
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "event poll: request",
+   "from": "master",
+   "fragment": "c2 01 3c 02 06 3c 03 06 3c 04 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 1,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 60,
+      "variation": 2
+     },
+     {
+      "group": 60,
+      "variation": 3
+     },
+     {
+      "group": 60,
+      "variation": 4
+     }
+    ]
+   }
+  },
+  {
+   "label": "event poll: response",
+   "from": "outstation",
+   "fragment": "e2 81 00 00 02 02 17 01 00 81 4a 42 0f 00 00 00 20 01 17 01 01 01 96 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 1,
+      "value": 150.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 2,
+      "variation": 2
+     },
+     {
+      "group": 32,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "direct operate of an analog output: request",
+   "from": "master",
+   "fragment": "c3 05 29 02 17 01 01 fa 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 5,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 41,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "direct operate of an analog output: response",
+   "from": "outstation",
+   "fragment": "c3 81 06 00 29 02 17 01 01 fa 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 41,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "select of a binary output: request",
+   "from": "master",
+   "fragment": "c4 03 0c 01 17 01 02 03 01 64 00 00 00 c8 00 00 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 3,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "select of a binary output: response",
+   "from": "outstation",
+   "fragment": "c4 81 06 00 0c 01 17 01 02 03 01 64 00 00 00 c8 00 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "operate of a binary output: request",
+   "from": "master",
+   "fragment": "c5 04 0c 01 17 01 02 03 01 64 00 00 00 c8 00 00 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 4,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "operate of a binary output: response",
+   "from": "outstation",
+   "fragment": "c5 81 06 00 0c 01 17 01 02 03 01 64 00 00 00 c8 00 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "cold restart: request",
+   "from": "master",
+   "fragment": "c6 0d",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 13,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  },
+  {
+   "label": "cold restart: response",
+   "from": "outstation",
+   "fragment": "c6 81 06 00 34 02 07 01 dc 05",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 52,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "unsolicited null response",
+   "from": "outstation",
+   "fragment": "f0 82 80 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 130,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": []
+   }
+  },
+  {
+   "label": "confirmation of an unsolicited response: request",
+   "from": "master",
+   "fragment": "d0 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 0,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  },
+  {
+   "label": "enable unsolicited responses: request",
+   "from": "master",
+   "fragment": "c0 14 3c 02 06 3c 03 06 3c 04 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 20,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 60,
+      "variation": 2
+     },
+     {
+      "group": 60,
+      "variation": 3
+     },
+     {
+      "group": 60,
+      "variation": 4
+     }
+    ]
+   }
+  },
+  {
+   "label": "enable unsolicited responses: response",
+   "from": "outstation",
+   "fragment": "c0 81 80 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": []
+   }
+  },
+  {
+   "label": "g1v1 packed",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 01 00 00 09 8d 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 3,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 4,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 5,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 6,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 7,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 8,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 9,
+      "value": 0
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g1v1 packed start 3",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 01 00 03 05 05",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 3,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 4,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 5,
+      "value": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g1v2 flagged",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 02 00 00 02 81 01 83",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g2v1 event",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 02 01 17 02 02 81 05 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 2,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g2v2 event time",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 02 02 17 01 02 81 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 2,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g2v3 event reltime",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 33 01 07 01 7b 54 06 4e a1 01 02 03 17 01 02 81 10 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 51,
+      "variation": 1
+     },
+     {
+      "group": 2,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "g10v1 packed",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 0a 01 00 00 03 06",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 3,
+      "value": 0
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 10,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g10v2 flagged",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 0a 02 00 00 01 81 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 10,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g11v1 event",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 0b 01 17 01 01 81",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 11,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g11v2 event time",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 0b 02 17 01 01 81 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 11,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g1v1 + g10v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 01 00 00 02 05 0a 01 00 00 01 02",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 3,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 4,
+      "value": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 1
+     },
+     {
+      "group": 10,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g10v1 + g1v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 0a 01 00 00 01 02 01 01 00 00 02 05",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 3,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 4,
+      "value": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 10,
+      "variation": 1
+     },
+     {
+      "group": 1,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g1v1 two headers",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 01 00 00 01 01 01 01 00 05 06 03",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 5,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 6,
+      "value": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 1
+     },
+     {
+      "group": 1,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g20v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 14 01 00 00 01 01 07 00 00 00 01 00 28 6b ee",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 7
+     },
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 4000000000
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 20,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g20v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 14 02 00 00 00 01 07 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 7
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 20,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g20v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 14 05 00 00 00 09 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 9
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 20,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g20v6",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 14 06 00 00 00 09 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 9
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 20,
+      "variation": 6
+     }
+    ]
+   }
+  },
+  {
+   "label": "g21v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 15 01 00 00 00 01 0b 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 11
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 21,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g21v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 15 02 00 00 00 01 0b 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 11
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 21,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g21v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 15 05 00 00 00 01 0b 00 00 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 11
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 21,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g21v6",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 15 06 00 00 00 01 0b 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 11
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 21,
+      "variation": 6
+     }
+    ]
+   }
+  },
+  {
+   "label": "g21v9",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 15 09 00 00 00 0c 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 12
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 21,
+      "variation": 9
+     }
+    ]
+   }
+  },
+  {
+   "label": "g21v10",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 15 0a 00 00 00 0c 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 12
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 21,
+      "variation": 10
+     }
+    ]
+   }
+  },
+  {
+   "label": "g22v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 16 01 17 01 01 01 0d 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 13
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 22,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g22v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 16 02 17 01 01 01 0d 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 13
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 22,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g22v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 16 05 17 01 01 01 0d 00 00 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 13
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 22,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g22v6",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 16 06 17 01 01 01 0d 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 13
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 22,
+      "variation": 6
+     }
+    ]
+   }
+  },
+  {
+   "label": "g23v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 17 01 17 01 01 01 0e 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 14
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 23,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g23v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 17 02 17 01 01 01 0e 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 14
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 23,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g23v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 17 05 17 01 01 01 0e 00 00 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 14
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 23,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g23v6",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 17 06 17 01 01 01 0e 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 14
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 23,
+      "variation": 6
+     }
+    ]
+   }
+  },
+  {
+   "label": "g20v1 + g21v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 14 01 00 00 00 01 07 00 00 00 15 01 00 00 00 01 08 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 7
+     },
+     {
+      "type": "counter",
+      "index": 1,
+      "value": 8
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 20,
+      "variation": 1
+     },
+     {
+      "group": 21,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 01 00 00 01 01 64 00 00 00 21 fb ff ff ff",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 100.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 1,
+      "value": -5.0,
+      "quality": 33
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 02 00 00 00 01 d4 fe",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": -300.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v3",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 03 00 00 00 ff ff ff 7f",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 2147483647.0
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v4",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 04 00 00 00 ff ff",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": -1.0
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 4
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 05 00 00 07 01 cd cc cc 3d 01 79 e9 f6 42 01 f9 02 15 50 01 00 00 20 c0 01 ff ff 7f 7f 01 95 bf d6 33 01 00 00 80 4b 01 ab aa aa 3e",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 0.1,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 1,
+      "value": 123.456,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 2,
+      "value": 10000000000.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 3,
+      "value": -2.5,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 4,
+      "value": 3.40282e+38,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 5,
+      "value": 1e-07,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 6,
+      "value": 16777200.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 7,
+      "value": 0.333333,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v6",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 06 00 00 05 01 9a 99 99 99 99 99 b9 3f 01 ad fa 5c 6d 45 4a 93 40 01 9c 75 00 88 3c e4 37 7e 01 00 00 00 00 00 00 04 c0 01 34 33 33 33 33 33 d3 3f 01 55 55 55 55 55 55 d5 3f",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 6
+     }
+    ]
+   }
+  },
+  {
+   "label": "g31v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1f 01 00 00 00 01 07 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 31,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 01 17 01 03 01 96 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 150.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 02 17 01 03 01 96 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 150.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v3",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 03 17 01 03 01 96 00 00 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 150.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v4",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 04 17 01 03 01 96 00 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 150.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 4
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 05 17 01 03 01 00 00 c0 3f",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 1.5,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v6",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 06 17 01 03 01 00 00 00 00 00 00 f8 3f",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 6
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v7",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 07 17 01 03 01 00 00 c0 3f 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 3,
+      "value": 1.5,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 7
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v8",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 08 17 01 03 01 00 00 00 00 00 00 f8 3f 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 8
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v1 + g32v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 01 00 00 01 01 01 00 00 00 01 02 00 00 00 20 01 17 01 00 01 03 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 1.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 1,
+      "value": 2.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 2,
+      "value": 3.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     },
+     {
+      "group": 32,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g32v1 + g30v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 20 01 17 01 05 01 03 00 00 00 1e 01 00 00 01 01 01 00 00 00 01 02 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 5,
+      "value": 3.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 6,
+      "value": 1.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 7,
+      "value": 2.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 1
+     },
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v1 two headers",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 01 00 02 02 01 01 00 00 00 1e 01 00 00 00 01 02 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 2,
+      "value": 1.0,
+      "quality": 1
+     },
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 2.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     },
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g30v3 + g30v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 1e 03 00 00 00 01 00 00 00 1e 01 00 00 00 01 02 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 1.0
+     },
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 2.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 3
+     },
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g40v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 28 01 00 00 00 01 fa 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 40,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g40v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 28 02 00 00 00 01 fa 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 40,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g40v3",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 28 03 00 00 00 01 00 00 20 40",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 40,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "g40v4",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 28 04 00 00 00 01 00 00 00 00 00 00 04 40",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 40,
+      "variation": 4
+     }
+    ]
+   }
+  },
+  {
+   "label": "g42v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 2a 01 17 01 01 01 fa 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 42,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g42v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 2a 05 17 01 01 01 00 00 20 40",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 42,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g41v1 echo",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 29 01 17 01 01 fa 00 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 41,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g41v3 echo",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 29 03 17 01 01 00 00 20 40 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 41,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "g12v1 echo",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 0c 01 17 01 02 03 01 64 00 00 00 c8 00 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g50v1",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 32 01 07 01 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 50,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g52v2",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 34 02 07 01 dc 05",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 52,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g80v1 iin",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 50 01 00 00 07 80",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 3,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 4,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 5,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 6,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 7,
+      "value": 0
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 80,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "unsolicited g32v1",
+   "from": "outstation",
+   "fragment": "f0 82 00 00 20 01 17 01 00 01 09 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 130,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 9.0,
+      "quality": 1
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 32,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "mixed class 0",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 01 00 00 01 01 0a 02 00 00 00 81 14 01 00 00 00 01 05 00 00 00 1e 01 00 00 00 01 06 00 00 00 28 02 00 00 00 01 07 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 6.0,
+      "quality": 1
+     },
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 5
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 1
+     },
+     {
+      "group": 10,
+      "variation": 2
+     },
+     {
+      "group": 20,
+      "variation": 1
+     },
+     {
+      "group": 30,
+      "variation": 1
+     },
+     {
+      "group": 40,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g1v2 + g30v3 + g20v5",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 01 02 00 00 00 81 1e 03 00 00 00 06 00 00 00 14 05 00 00 00 05 00 00 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 6.0
+     },
+     {
+      "type": "counter",
+      "index": 0,
+      "value": 5
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 2
+     },
+     {
+      "group": 30,
+      "variation": 3
+     },
+     {
+      "group": 20,
+      "variation": 5
+     }
+    ]
+   }
+  },
+  {
+   "label": "g34v1 deadband",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 22 01 00 00 00 0a 00",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 10.0
+     }
+    ],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 34,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "g3v2 double bit",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 03 02 00 00 00 41",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 3,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "g4v1 double bit event",
+   "from": "outstation",
+   "fragment": "c0 81 00 00 04 01 17 01 00 41",
+   "body": {
+    "source_address": 1024,
+    "destination_address": 1,
+    "function_code": 129,
+    "prm": 1,
+    "source_ip": "198.51.100.5",
+    "destination_ip": "192.0.2.10",
+    "points": [],
+    "direction": "response",
+    "objects": [
+     {
+      "group": 4,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "read class 0",
+   "from": "master",
+   "fragment": "c0 01 3c 01 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 1,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 60,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "read g30v1 range",
+   "from": "master",
+   "fragment": "c0 01 1e 01 00 00 03",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 1,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "read g30v1 count",
+   "from": "master",
+   "fragment": "c0 01 1e 01 07 02",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 1,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "read g30v1 index",
+   "from": "master",
+   "fragment": "c0 01 1e 01 17 02 00 03",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 1,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g80v1",
+   "from": "master",
+   "fragment": "c0 02 50 01 00 07 07 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "binary",
+      "index": 7,
+      "value": 0
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 80,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g80v1 two",
+   "from": "master",
+   "fragment": "c0 02 50 01 00 06 07 01",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "binary",
+      "index": 6,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 7,
+      "value": 1
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 80,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g50v1",
+   "from": "master",
+   "fragment": "c0 02 32 01 07 01 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 50,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g50v3",
+   "from": "master",
+   "fragment": "c0 02 32 03 07 01 7b 54 06 4e a1 01",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 50,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g34v1",
+   "from": "master",
+   "fragment": "c0 02 22 01 00 00 00 0a 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 10.0
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 34,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g30v1",
+   "from": "master",
+   "fragment": "c0 02 1e 01 00 00 00 01 05 00 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "analog",
+      "index": 0,
+      "value": 5.0,
+      "quality": 1
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 30,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g1v1",
+   "from": "master",
+   "fragment": "c0 02 01 01 00 00 02 05",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 1
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 1,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "write g10v1",
+   "from": "master",
+   "fragment": "c0 02 0a 01 00 00 02 05",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 2,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [
+     {
+      "type": "binary",
+      "index": 0,
+      "value": 1
+     },
+     {
+      "type": "binary",
+      "index": 1,
+      "value": 0
+     },
+     {
+      "type": "binary",
+      "index": 2,
+      "value": 1
+     }
+    ],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 10,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "select g12v1",
+   "from": "master",
+   "fragment": "c0 03 0c 01 17 01 02 03 01 64 00 00 00 c8 00 00 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 3,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "direct operate g41v2",
+   "from": "master",
+   "fragment": "c0 05 29 02 17 01 01 fa 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 5,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 41,
+      "variation": 2
+     }
+    ]
+   }
+  },
+  {
+   "label": "direct operate g41v3",
+   "from": "master",
+   "fragment": "c0 05 29 03 17 01 01 00 00 20 40 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 5,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 41,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "direct operate nr g12v1 two",
+   "from": "master",
+   "fragment": "c0 06 0c 01 17 02 01 41 01 00 00 00 00 00 00 00 00 00 02 81 01 00 00 00 00 00 00 00 00 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 6,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 12,
+      "variation": 1
+     }
+    ]
+   }
+  },
+  {
+   "label": "freeze g20v0",
+   "from": "master",
+   "fragment": "c0 07 14 00 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 7,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 20,
+      "variation": 0
+     }
+    ]
+   }
+  },
+  {
+   "label": "enable unsolicited",
+   "from": "master",
+   "fragment": "c0 14 3c 02 06 3c 03 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 20,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": [
+     {
+      "group": 60,
+      "variation": 2
+     },
+     {
+      "group": 60,
+      "variation": 3
+     }
+    ]
+   }
+  },
+  {
+   "label": "assign class",
+   "from": "master",
+   "fragment": "c0 16 3c 02 06 1e 00 06",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 22,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  },
+  {
+   "label": "cold restart",
+   "from": "master",
+   "fragment": "c0 0d",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 13,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  },
+  {
+   "label": "record current time",
+   "from": "master",
+   "fragment": "c0 18",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 24,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  },
+  {
+   "label": "confirm",
+   "from": "master",
+   "fragment": "c0 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 0,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  },
+  {
+   "label": "confirmation with the unsolicited bit",
+   "from": "master",
+   "fragment": "d0 00",
+   "body": {
+    "source_address": 1,
+    "destination_address": 1024,
+    "function_code": 0,
+    "prm": 1,
+    "source_ip": "192.0.2.10",
+    "destination_ip": "198.51.100.5",
+    "points": [],
+    "direction": "request",
+    "objects": []
+   }
+  }
+ ],
+ "envelopes": [
+  {
+   "body": 0,
+   "timestamp": "2026-10-27T12:00:00.250000+00:00",
+   "envelope": {
+    "protocol": "dnp3",
+    "direction": "upstream",
+    "timestamp": "2026-10-27T12:00:00.250000+00:00",
+    "client_id": "1024",
+    "forwarder_id": "",
+    "payload": {
+     "content_type": "application/json",
+     "data": "{\"source_address\": 1, \"destination_address\": 1024, \"function_code\": 2, \"prm\": 1, \"source_ip\": \"192.0.2.10\", \"destination_ip\": \"198.51.100.5\", \"points\": [{\"type\": \"binary\", \"index\": 7, \"value\": 0}], \"direction\": \"request\", \"objects\": [{\"group\": 80, \"variation\": 1}]}",
+     "encoding": "utf-8"
+    },
+    "source": {
+     "ip": "198.51.100.5",
+     "port": 20000
+    },
+    "hash": "b2e5ecfe-3fc1-30db-bf63-f2f00479ead3",
+    "is_valid": true,
+    "protocol_data": {
+     "extra": {
+      "capture_origin": "live",
+      "client_id_source": ""
+     }
+    }
+   }
+  },
+  {
+   "body": 1,
+   "timestamp": "2026-10-27T12:00:01+00:00",
+   "envelope": {
+    "protocol": "dnp3",
+    "direction": "upstream",
+    "timestamp": "2026-10-27T12:00:01+00:00",
+    "client_id": "1024",
+    "forwarder_id": "",
+    "payload": {
+     "content_type": "application/json",
+     "data": "{\"source_address\": 1024, \"destination_address\": 1, \"function_code\": 129, \"prm\": 1, \"source_ip\": \"198.51.100.5\", \"destination_ip\": \"192.0.2.10\", \"points\": [], \"direction\": \"response\", \"objects\": []}",
+     "encoding": "utf-8"
+    },
+    "source": {
+     "ip": "198.51.100.5",
+     "port": 20000
+    },
+    "hash": "b57b5455-27f2-306f-b9a3-5d94f5a6299d",
+    "is_valid": true,
+    "protocol_data": {
+     "extra": {
+      "capture_origin": "live",
+      "client_id_source": ""
+     }
+    }
+   }
+  },
+  {
+   "body": 3,
+   "timestamp": "2026-10-27T12:00:02.000125+00:00",
+   "envelope": {
+    "protocol": "dnp3",
+    "direction": "upstream",
+    "timestamp": "2026-10-27T12:00:02.000125+00:00",
+    "client_id": "1024",
+    "forwarder_id": "",
+    "payload": {
+     "content_type": "application/json",
+     "data": "{\"source_address\": 1024, \"destination_address\": 1, \"function_code\": 129, \"prm\": 1, \"source_ip\": \"198.51.100.5\", \"destination_ip\": \"192.0.2.10\", \"points\": [{\"type\": \"analog\", \"index\": 0, \"value\": 100.0, \"quality\": 1}, {\"type\": \"analog\", \"index\": 1, \"value\": 100.0, \"quality\": 1}, {\"type\": \"analog\", \"index\": 2, \"value\": 100.0, \"quality\": 1}, {\"type\": \"analog\", \"index\": 3, \"value\": 100.0, \"quality\": 1}, {\"type\": \"counter\", \"index\": 0, \"value\": 5}, {\"type\": \"counter\", \"index\": 1, \"value\": 5}, {\"type\": \"counter\", \"index\": 2, \"value\": 5}], \"direction\": \"response\", \"objects\": [{\"group\": 1, \"variation\": 2}, {\"group\": 20, \"variation\": 1}, {\"group\": 30, \"variation\": 1}]}",
+     "encoding": "utf-8"
+    },
+    "source": {
+     "ip": "198.51.100.5",
+     "port": 20000
+    },
+    "hash": "3df2e5a9-c114-3569-9996-b68d3b111964",
+    "is_valid": true,
+    "protocol_data": {
+     "extra": {
+      "capture_origin": "live",
+      "client_id_source": ""
+     }
+    }
+   }
+  }
+ ]
+}

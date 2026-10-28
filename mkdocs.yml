@@ -71,6 +71,7 @@ nav:
   - Serving a DER: der.md
   - Configuring the outstation: der-config.md
   - Connection, request and anomaly reports: observers.md
+  - Traffic records for a network monitor: traffic.md
   - The master: master.md
   - The console: console.md
   - The master's API: master-api.md
@@ -89,3 +90,4 @@ nav:
       - Master: reference/master.md
       - Protocol layers: reference/protocol.md
       - Observers: reference/observers.md
+      - Traffic records: reference/traffic.md

@@ -1715,6 +1715,29 @@ no record; a held read's record can follow the records of requests that arrived 
 and the observer runs on the session's path for every request, so a slow observer slows
 the outstation.
 
+**D103 -- Traffic records match what a Wireshark-based network monitor publishes, octet
+for octet, including where the dissector misreads.** An application that forwards the
+traffic its outstation serves, or its master polls, to a network monitor's consumers wants
+those consumers to treat it as captured traffic, so `traffic` builds the monitor's message
+body and envelope and not a description of its own. The monitor's body is what its parser
+reads out of Wireshark's DNP3 dissector, and so is this one: a point only where the
+dissector exposes a value (packed binaries, counters, and the 32-bit, 16-bit and
+single-precision analog inputs), single-precision values at the six significant digits the
+dissector displays, renumbered indices where two groups of one point type share a fragment,
+and object headers only for the request functions Wireshark 4.0 reads them for. Group 80
+variation 1 is the case that departs from the standard: the dissector reports each
+internal indication bit as the lowest bit of its octet, and the body does the same, so a
+consumer's rules see the value they would see on the wire. The envelope is copied into
+`envelope` rather than imported, to keep D1. The contract is a recording,
+`tests/traffic_records.json`, made by passing fragments through Wireshark 4.0.17 and the
+monitor's parser; `tests/test_traffic.py` holds each body and envelope to it, key order
+included, and lists the fragments it describes differently. `RequestRecord` carries the
+outstation's own end of the connection, `local`, so that both addresses in a body come from
+the connection. *Trade-off:* the bodies inherit the dissector's gaps (no point for a binary
+input with flags, a double-precision value or an analog output) and its group 80 reading;
+objects after a variation `decode` does not read are left out where the monitor lists
+them; and a change to the monitor's parser or to the dissector has to be recorded again.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1754,6 +1777,10 @@ Each layer is testable without the ones above it, and the session does no I/O.
   few element names and no schema, and nothing of points, sessions or the wire.
 - `observers` defines the records the listener, the session and the master report to the
   host application, and knows nothing of sockets or frames.
+- `envelope` is a copy of a published message envelope, and knows nothing of DNP3 beyond
+  its name. `traffic` describes application fragments in the shape a network monitor
+  publishes them, reading them with `decode`, and takes the master's exchanges as values
+  without importing the master.
 
 ## Testing
 

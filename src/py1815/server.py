@@ -466,6 +466,7 @@ class OutstationServer:
         task, self._active_task = self._active_task, None
         connection, self._active_connection = self._active_connection, None
         self._session.connection_peer = None
+        self._session.connection_local = None
         if connection is not None:
             outcome = ConnectionOutcome.DISPLACED if abort else ConnectionOutcome.ENDED
             self._report_end(connection, outcome, reason)
@@ -541,6 +542,7 @@ class OutstationServer:
                 # master expects.
                 self._session.connection_reset()
                 self._session.connection_peer = connection.remote
+                self._session.connection_local = connection.local
                 self._report(connection, ConnectionOutcome.ACCEPTED)
         except BaseException:
             # Admission runs before the serve loop, and therefore before the
@@ -558,6 +560,7 @@ class OutstationServer:
                 self._active_task = None
                 self._active_connection = None
                 self._session.connection_peer = None
+                self._session.connection_local = None
             self._report_end(connection, ConnectionOutcome.REFUSED, "admission failed")
             writer.close()
             with contextlib.suppress(Exception):
@@ -590,6 +593,7 @@ class OutstationServer:
                 self._active_task = None
                 self._active_connection = None
                 self._session.connection_peer = None
+                self._session.connection_local = None
             self._report_end(connection, ConnectionOutcome.ENDED, reason)
             writer.close()
             with contextlib.suppress(Exception):

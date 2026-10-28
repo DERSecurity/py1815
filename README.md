@@ -260,6 +260,7 @@ variations are served and named in the device profile.
 | Events | `events` | Class 1 to 3 buffers, deadbands and confirmation |
 | Session | `session` | One master association: octets in, octets out |
 | Reports | `observers` | Records of each connection, each request the outstation handles and each protocol anomaly, for the host application's own logging and monitoring |
+| Traffic records | `traffic`, `envelope` | The outstation's requests and the master's exchanges as the message bodies and envelopes a network monitor publishes for captured DNP3 traffic |
 | DER profile | `profile` | The IEEE 1815.2 point map, a builder that turns a map and a binding into an outstation, and a simulated DER |
 | Master | `master`, `decode` | A master for exercising outstations, over TCP or TLS: it polls, reads named points, takes unsolicited responses and keeps what it was told, sets the clock, broadcasts, operates outputs by direct operate or by select and operate, and breaks named protocol rules on purpose to test what an outstation refuses, from Python (asynchronous or blocking), a JSON service, or a web console (`py1815-master console`). The service commands only when started with `--allow-control`. A first version |
 

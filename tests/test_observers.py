@@ -612,6 +612,7 @@ class TestRequestRecords:
             "response": None,
             "unsolicited": False,
             "timestamp": 1.5,
+            "local": None,
         }
 
 
@@ -838,7 +839,8 @@ class TestOutstationRequests:
         dut = _dut()
         seen: list[RequestRecord] = []
         async with _Listener(session=dut.session, request_observer=seen.append) as listening:
-            reader, writer = await asyncio.open_connection("127.0.0.1", listening.server.port)
+            port = listening.server.port
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
             client = Endpoint.of(writer.get_extra_info("sockname"))
             # FIR FIN sequence 2, DIRECT_OPERATE; group 41 variation 2,
             # qualifier 0x17, one object: index 3, value -5, status 0.
@@ -851,6 +853,8 @@ class TestOutstationRequests:
 
         (record,) = seen
         assert (record.peer, record.source, record.destination) == (client, MASTER, OUTSTATION)
+        assert record.local == Endpoint("127.0.0.1", port)
+        assert dut.session.connection_local is None, "cleared when the connection ends"
         assert record.function == DIRECT_OPERATE
         assert record.request == request
         assert record.response == bytes.fromhex("C2 81 00 00 29 02 17 01 03 FB FF 00")
