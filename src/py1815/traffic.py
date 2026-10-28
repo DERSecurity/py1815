@@ -23,7 +23,9 @@ fragment in IEEE 1815 terms:
   time, and the fields of a control object.
 
 The fragment is read by this module's own walk of the object headers, written
-from the object layouts of IEEE 1815-2012. It reads requests and responses,
+from the object layouts of IEEE 1815-2012. An object the master's decoder also
+reads takes its layout from :data:`py1815.decode.LAYOUTS`, so both read its
+octets the same way. The walk reads requests and responses,
 every qualifier the standard defines, and the command objects a master sends
 and an outstation echoes. A fragment it cannot read to its end is described as
 rejected, with no objects and no points (:data:`REJECTED_MALFORMED`,
@@ -46,6 +48,7 @@ from importlib import resources
 from typing import TYPE_CHECKING, Any
 
 from py1815.application import UNS_MASK, build_response
+from py1815.decode import LAYOUTS, Layout, PointType, _Time
 from py1815.envelope import (
     NetworkEndpoint,
     Protocol,
@@ -261,17 +264,54 @@ def _groups(**groups: dict[int, _Layout]) -> dict[tuple[int, int], _Layout]:
 _CROB = _Layout(_BINARY_OUTPUT, (_F.CONTROL, _F.STATUS))
 _TIME_OBJECT = _Layout(None, (_F.TIME,))
 
-#: Every object this module reads, by group and variation, from the object
-#: layouts of IEEE 1815-2012. Octet strings, whose length is their variation,
-#: are in ``_OCTET_GROUPS``. An object absent from both ends the walk.
-_LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
-    # Binary inputs, packed and with flags, and their events.
-    g1={1: _Layout(_BINARY, packed_bits=1), 2: _state(_BINARY)},
-    g2={
-        1: _state(_BINARY),
-        2: _state(_BINARY, _F.TIME),
-        3: _state(_BINARY, _F.RELATIVE_TIME),
+#: The point type a body names for each point type :mod:`py1815.decode`
+#: reads. A frozen counter is a counter in a body.
+_KINDS = {
+    PointType.BINARY_INPUT: _BINARY,
+    PointType.BINARY_OUTPUT: _BINARY_OUTPUT,
+    PointType.COUNTER: _COUNTER,
+    PointType.FROZEN_COUNTER: _COUNTER,
+    PointType.ANALOG_INPUT: _ANALOG,
+    PointType.ANALOG_OUTPUT: _ANALOG_OUTPUT,
+}
+
+
+def _from_decode(layout: Layout) -> _Layout:
+    """Return a layout from :data:`py1815.decode.LAYOUTS` as the fields a body lists."""
+    kind = None if layout.point is None else _KINDS[layout.point]
+    if layout.packed:
+        return _Layout(kind, packed_bits=1)
+    if layout.opaque:
+        return _Layout(None, opaque=layout.opaque)
+    fields: list[_Field] = []
+    if layout.flags:
+        # A binary object carries its state in the flag octet; a number follows it.
+        fields.append(_F.FLAGS_STATE if layout.number is None else _F.FLAGS)
+    if layout.number is not None:
+        fields.append(_F.VALUE)
+    if layout.time is _Time.ABSOLUTE:
+        fields.append(_F.TIME)
+    elif layout.time is _Time.RELATIVE:
+        fields.append(_F.RELATIVE_TIME)
+    return _Layout(kind, tuple(fields), layout.number)
+
+
+#: The command objects :mod:`py1815.decode` walks past and a body reads: the
+#: CROB and the analog output block, as a master sends them and an outstation
+#: echoes them. Each takes the octets that ``decode`` gives it.
+_COMMAND_LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
+    g12={1: _CROB},
+    g41={
+        1: _number(_ANALOG_OUTPUT, "<i", _F.STATUS, flags=False),
+        2: _number(_ANALOG_OUTPUT, "<h", _F.STATUS, flags=False),
+        3: _number(_ANALOG_OUTPUT, "<f", _F.STATUS, flags=False),
+        4: _number(_ANALOG_OUTPUT, "<d", _F.STATUS, flags=False),
     },
+)
+
+#: The objects a body reads that :mod:`py1815.decode` does not, from the
+#: object layouts of IEEE 1815-2012.
+_BODY_ONLY_LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
     # Double-bit binary inputs, two bits per point when packed, and their events.
     g3={1: _Layout(_DOUBLE_BIT_BINARY, packed_bits=2), 2: _state(_DOUBLE_BIT_BINARY)},
     g4={
@@ -279,51 +319,13 @@ _LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
         2: _state(_DOUBLE_BIT_BINARY, _F.TIME),
         3: _state(_DOUBLE_BIT_BINARY, _F.RELATIVE_TIME),
     },
-    # Binary output status, its events, the CROB and the pattern control block
-    # and mask, and the binary output command events.
-    g10={1: _Layout(_BINARY_OUTPUT, packed_bits=1), 2: _state(_BINARY_OUTPUT)},
-    g11={1: _state(_BINARY_OUTPUT), 2: _state(_BINARY_OUTPUT, _F.TIME)},
-    g12={1: _CROB, 2: _CROB, 3: _Layout(_BINARY_OUTPUT, packed_bits=1)},
+    # The pattern control block and mask, and the binary output command events.
+    g12={2: _CROB, 3: _Layout(_BINARY_OUTPUT, packed_bits=1)},
     g13={
         1: _Layout(_BINARY_OUTPUT, (_F.STATE_STATUS,)),
         2: _Layout(_BINARY_OUTPUT, (_F.STATE_STATUS, _F.TIME)),
     },
-    # Counters, frozen counters, and their events.
-    g20={
-        1: _number(_COUNTER, "<I"),
-        2: _number(_COUNTER, "<H"),
-        5: _number(_COUNTER, "<I", flags=False),
-        6: _number(_COUNTER, "<H", flags=False),
-    },
-    g21={
-        1: _number(_COUNTER, "<I"),
-        2: _number(_COUNTER, "<H"),
-        5: _number(_COUNTER, "<I", _F.TIME),
-        6: _number(_COUNTER, "<H", _F.TIME),
-        9: _number(_COUNTER, "<I", flags=False),
-        10: _number(_COUNTER, "<H", flags=False),
-    },
-    g22={
-        1: _number(_COUNTER, "<I"),
-        2: _number(_COUNTER, "<H"),
-        5: _number(_COUNTER, "<I", _F.TIME),
-        6: _number(_COUNTER, "<H", _F.TIME),
-    },
-    g23={
-        1: _number(_COUNTER, "<I"),
-        2: _number(_COUNTER, "<H"),
-        5: _number(_COUNTER, "<I", _F.TIME),
-        6: _number(_COUNTER, "<H", _F.TIME),
-    },
-    # Analog inputs, frozen analog inputs, and their events.
-    g30={
-        1: _number(_ANALOG, "<i"),
-        2: _number(_ANALOG, "<h"),
-        3: _number(_ANALOG, "<i", flags=False),
-        4: _number(_ANALOG, "<h", flags=False),
-        5: _number(_ANALOG, "<f"),
-        6: _number(_ANALOG, "<d"),
-    },
+    # Frozen analog inputs and frozen analog input events.
     g31={
         1: _number(_ANALOG, "<i"),
         2: _number(_ANALOG, "<h"),
@@ -334,7 +336,6 @@ _LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
         7: _number(_ANALOG, "<f"),
         8: _number(_ANALOG, "<d"),
     },
-    g32=_event_numbers(_ANALOG),
     g33=_event_numbers(_ANALOG),
     # Analog input deadbands: unsigned 16 and 32 bits, and single precision.
     g34={
@@ -342,21 +343,7 @@ _LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
         2: _number(_ANALOG_DEADBAND, "<I", flags=False),
         3: _number(_ANALOG_DEADBAND, "<f", flags=False),
     },
-    # Analog output status, the analog output block (value, then status), its
-    # events, and the analog output command events (status, then value).
-    g40={
-        1: _number(_ANALOG_OUTPUT, "<i"),
-        2: _number(_ANALOG_OUTPUT, "<h"),
-        3: _number(_ANALOG_OUTPUT, "<f"),
-        4: _number(_ANALOG_OUTPUT, "<d"),
-    },
-    g41={
-        1: _number(_ANALOG_OUTPUT, "<i", _F.STATUS, flags=False),
-        2: _number(_ANALOG_OUTPUT, "<h", _F.STATUS, flags=False),
-        3: _number(_ANALOG_OUTPUT, "<f", _F.STATUS, flags=False),
-        4: _number(_ANALOG_OUTPUT, "<d", _F.STATUS, flags=False),
-    },
-    g42=_event_numbers(_ANALOG_OUTPUT),
+    # The analog output command events: status, then value.
     g43={
         1: _status_first("<i"),
         2: _status_first("<h"),
@@ -367,23 +354,25 @@ _LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
         7: _status_first("<f", _F.TIME),
         8: _status_first("<d", _F.TIME),
     },
-    # Time and date: absolute, with an interval, the last recorded time, and
-    # indexed with a long interval and its units.
-    g50={
-        1: _TIME_OBJECT,
-        2: _Layout(None, opaque=10),
-        3: _TIME_OBJECT,
-        4: _Layout(None, opaque=11),
-    },
-    # The common time of occurrence, synchronized and unsynchronized.
-    g51={1: _TIME_OBJECT, 2: _TIME_OBJECT},
-    # The time delay, coarse and fine.
-    g52={1: _Layout(None, opaque=2), 2: _Layout(None, opaque=2)},
+    # Time and date with an interval, the last recorded time, and indexed
+    # with a long interval and its units.
+    g50={2: _Layout(None, opaque=10), 3: _TIME_OBJECT, 4: _Layout(None, opaque=11)},
     # Class data: a header with no objects.
     g60={1: _Layout(None), 2: _Layout(None), 3: _Layout(None), 4: _Layout(None)},
     # The internal indications, one bit each, indexed by bit (IEEE 1815-2012 A.28).
     g80={1: _Layout(_INTERNAL_INDICATION, packed_bits=1)},
 )
+
+#: Every object this module reads, by group and variation. An object that
+#: :mod:`py1815.decode` also reads takes its layout from
+#: :data:`py1815.decode.LAYOUTS`, so the master and a body read its octets the
+#: same way. Octet strings, whose length is their variation, are in
+#: ``_OCTET_GROUPS``. An object absent from both ends the walk.
+_LAYOUTS: dict[tuple[int, int], _Layout] = {
+    **{key: _from_decode(layout) for key, layout in LAYOUTS.items()},
+    **_COMMAND_LAYOUTS,
+    **_BODY_ONLY_LAYOUTS,
+}
 
 #: Groups whose variation is the length of each object in octets: octet
 #: strings and their events, which are points, and the virtual terminal

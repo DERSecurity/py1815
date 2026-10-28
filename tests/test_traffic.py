@@ -44,6 +44,7 @@ from ied_harness import (
 )
 from test_observers import _Listener, _until
 
+from py1815.decode import LAYOUTS, _Time
 from py1815.envelope import (
     WIRE_FORMAT_VERSION,
     NetworkEndpoint,
@@ -55,6 +56,7 @@ from py1815.envelope import (
 from py1815.master import Master, Tasks
 from py1815.observers import Endpoint, RequestRecord
 from py1815.traffic import (
+    _LAYOUTS,
     IIN_BITS,
     MAX_DATA_OCTETS,
     MAX_OBJECTS,
@@ -62,6 +64,7 @@ from py1815.traffic import (
     SCHEMA_ID,
     SCHEMA_VERSION,
     Direction,
+    _Field,
     envelope,
     exchange_bodies,
     exchange_messages,
@@ -353,6 +356,41 @@ class TestSessionTraffic:
 
 
 # --------------------------------------------------------------- reading
+
+
+def _flags(layout: Any) -> bool:
+    return bool(layout.fields) and layout.fields[0] in (_Field.FLAGS, _Field.FLAGS_STATE)
+
+
+def _time(layout: Any) -> _Time:
+    if _Field.TIME in layout.fields:
+        return _Time.ABSOLUTE
+    if _Field.RELATIVE_TIME in layout.fields:
+        return _Time.RELATIVE
+    return _Time.NONE
+
+
+class TestLayouts:
+    # A body and the master's decoder read the octets of an object both know
+    # in one way. A correction to one that does not reach the other fails here.
+    @pytest.mark.parametrize(
+        "group, variation", [pytest.param(*key, id=f"g{key[0]}v{key[1]}") for key in LAYOUTS]
+    )
+    def test_an_object_the_master_decodes_is_read_with_the_same_layout(self, group, variation):
+        decoded = LAYOUTS[(group, variation)]
+        ours = _LAYOUTS[(group, variation)]
+
+        assert bool(ours.packed_bits) == decoded.packed
+        if decoded.packed:
+            assert ours.packed_bits == 1
+            return
+        assert ours.size(variation) == decoded.size
+        if decoded.opaque:
+            # The master walks past a command object; a body reads its fields.
+            return
+        assert _flags(ours) == decoded.flags
+        assert ours.number == decoded.number
+        assert _time(ours) is decoded.time
 
 
 class TestFragment:

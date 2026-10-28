@@ -1731,8 +1731,14 @@ and events and internal indication writes included, flags, times, the octets of 
 object a request sets, bounds that a 2048-octet fragment never exceeds, and a rejected
 fragment that lists nothing. `traffic`
 reads fragments with its own walk of the object headers, written from IEEE 1815-2012's object
-layouts, not with any capture tool and not with `decode`, which reads only responses, for
-the values a master keeps. The envelope is copied into `envelope` rather than imported, to
+layouts, not with any capture tool and not with `decode`'s walk, which reads only responses, for
+the values a master keeps. The walk takes the layout of every object `decode` also reads from
+`decode.LAYOUTS`, so the master and a body read those octets one way, and a test holds the two to
+the same size, flags, number and time. It adds the objects only a body reads, and reads the
+fields of the command objects that `decode` walks past by size. Those objects stay out of
+`decode.LAYOUTS`, whose `Layout` has no double-bit state, no status before a value and no
+control code, and whose results are the point types a master keeps; adding them would change
+what the master's decoder returns. The envelope is copied into `envelope` rather than imported, to
 keep D1. `RequestRecord` carries the outstation's own end of the connection, `local`, so
 that both addresses and ports in a body come from the connection and not from a guess. The
 contract test is the schema copy, which every body the tests build must validate against,
@@ -1783,8 +1789,8 @@ Each layer is testable without the ones above it, and the session does no I/O.
   host application, and knows nothing of sockets or frames.
 - `envelope` is a copy of a published message envelope, and knows nothing of DNP3 beyond
   its name. `traffic` describes application fragments as the DNP3 traffic schema defines
-  them, reading them with its own walk of the object headers, and takes the master's
-  exchanges as values without importing the master.
+  them, reading them with its own walk of the object headers and the object layouts `decode`
+  shares, and takes the master's exchanges as values without importing the master.
 
 ## Testing
 
