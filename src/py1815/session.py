@@ -1185,6 +1185,19 @@ class Session:
         """Turn cold restart on with a handler, or off with None, from the next request on."""
         self._restart_handler = handler
 
+    def connection_closed(self) -> None:
+        """Discard the read held behind an unsolicited response, and report it unanswered.
+
+        For the listener that owns the socket, when the connection the read
+        arrived on ends, the listener's own shutdown included. The master that
+        sent the read can no longer receive the answer. Reporting the read
+        here, and not at the next :meth:`connection_reset`, means its record
+        is delivered even when no connection follows. Everything else the
+        connection left behind is forgotten by :meth:`connection_reset` when
+        the next connection is admitted.
+        """
+        self._drop_held()
+
     def connection_reset(self) -> None:
         """Forget what a dead connection left behind, and nothing more.
 

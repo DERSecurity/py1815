@@ -658,6 +658,29 @@ def _tls_listener(pki) -> _Listener:
     )
 
 
+async def _hold_a_read(
+    dut: Dut, listening: _Listener, seen: list[RequestRecord]
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Connect, and send a class 0 read while the startup null response is unconfirmed.
+
+    Return the connection once the outstation has handled the read and held it.
+    """
+    reader, writer = await asyncio.open_connection("127.0.0.1", listening.server.port)
+    # The null unsolicited response the outstation sends when the connection opens.
+    await _until(lambda: seen)
+    await asyncio.wait_for(reader.read(4096), timeout=5)
+    # The read, then a request for link status. The read is held and not
+    # answered, so the link status answer is all that comes back, and shows
+    # the read has been handled.
+    writer.write(dut.master.frames(CLASS_0_READ) + dut.master.frame(REQUEST_LINK_STATUS))
+    await writer.drain()
+    answer = await asyncio.wait_for(reader.read(4096), timeout=5)
+    (status,) = link.FrameReader().feed(answer)
+    assert status.control & 0x0F == link.SecondaryFunction.LINK_STATUS
+    assert [record.unsolicited for record in seen] == [True], "the held read is not reported"
+    return reader, writer
+
+
 @pytest.mark.asyncio
 class TestOutstationConnections:
     async def test_a_connection_is_reported_accepted_and_then_ended_by_the_peer(self):
@@ -860,6 +883,36 @@ class TestOutstationRequests:
         assert record.response == bytes.fromhex("C2 81 00 00 29 02 17 01 03 FB FF 00")
         assert record.response in answer, "the response reported is the one sent"
         assert dut.operated == [("AO", 3, -5.0)]
+
+    @pytest.mark.asyncio
+    async def test_a_held_read_is_reported_unanswered_when_the_master_disconnects(self):
+        dut = _unsolicited_dut()
+        seen: list[RequestRecord] = []
+        async with _Listener(session=dut.session, request_observer=seen.append) as listening:
+            _, writer = await _hold_a_read(dut, listening, seen)
+            client = Endpoint.of(writer.get_extra_info("sockname"))
+
+            writer.close()
+            await _until(lambda: len(seen) == 2)
+
+        _, read = seen
+        assert (read.peer, read.source, read.destination) == (client, MASTER, OUTSTATION)
+        assert read.request == bytes.fromhex("C0 01 3C 01 06")
+        assert read.response is None
+
+    @pytest.mark.asyncio
+    async def test_a_held_read_is_reported_unanswered_when_the_listener_stops(self):
+        dut = _unsolicited_dut()
+        seen: list[RequestRecord] = []
+        async with _Listener(session=dut.session, request_observer=seen.append) as listening:
+            _, writer = await _hold_a_read(dut, listening, seen)
+
+            await listening.server.stop()
+
+            _, read = seen
+            assert read.request == bytes.fromhex("C0 01 3C 01 06")
+            assert read.response is None
+            writer.close()
 
     @pytest.mark.asyncio
     async def test_a_request_observer_that_raises_does_not_break_the_connection(self, caplog):

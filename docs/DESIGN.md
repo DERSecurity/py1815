@@ -1706,7 +1706,10 @@ The session reports a request after it has built the response, so the record hol
 octets that were sent. A confirmation is reported as a request with function code 0: the
 master sends it, and it draws out the next fragment of a response that spans several, which
 is reported with it. A read held behind an unsolicited response (D71) is reported when it
-is answered or discarded, so its record holds its answer or says it had none. A fragment
+is answered or discarded, so its record holds its answer or says it had none. The
+listener discards a held read when the connection it arrived on ends, the listener's
+own shutdown included, so the record is not left waiting for a connection that may
+never come. A fragment
 reported as a protocol anomaly is not reported as a request too, so a monitor that counts
 both counts it once. An unsolicited response is reported with `unsolicited` set and no
 request, so a log of the outstation's traffic holds the responses its confirmations name.

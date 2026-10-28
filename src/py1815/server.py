@@ -460,11 +460,14 @@ class OutstationServer:
         else.
 
         The connection is reported as displaced when aborted and as ended
-        otherwise, with ``reason``.
+        otherwise, with ``reason``. A read held for the connection behind an
+        unsolicited response is reported unanswered before that.
         """
         writer, self._active = self._active, None
         task, self._active_task = self._active_task, None
         connection, self._active_connection = self._active_connection, None
+        # A read held for the connection being closed has no one to answer.
+        self._session.connection_closed()
         self._session.connection_peer = None
         self._session.connection_local = None
         if connection is not None:
@@ -592,6 +595,9 @@ class OutstationServer:
                 self._active = None
                 self._active_task = None
                 self._active_connection = None
+                # The master that sent a held read has gone, so the read is
+                # reported unanswered now and not when another master connects.
+                self._session.connection_closed()
                 self._session.connection_peer = None
                 self._session.connection_local = None
             self._report_end(connection, ConnectionOutcome.ENDED, reason)

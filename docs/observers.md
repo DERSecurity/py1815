@@ -194,7 +194,10 @@ A response that spans several fragments is reported in parts: the first
 fragment with the request, and each later one with the confirmation that drew
 it out. A read held behind an unsolicited response is reported when it is
 answered or discarded, not when it arrives, so it may follow the record of a
-request that arrived after it.
+request that arrived after it. A held read is discarded when another request
+arrives, when the session restarts, and when the connection it arrived on ends,
+whether the master closes it, a new connection displaces it or the listener
+stops.
 
 A frame or fragment reported as a protocol anomaly is not reported as a
 request as well. That includes a request whose object headers could not be
