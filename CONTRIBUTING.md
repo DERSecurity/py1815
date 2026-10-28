@@ -44,9 +44,11 @@ pip install -e ".[dev]"
 
 There are no runtime dependencies, and that is deliberate -- an outstation that
 drags a dependency tree onto an embedded target is harder to justify than one
-that does not. The development extra is `pytest`, `pytest-asyncio`, `ruff` and
-`mypy`, and it pulls the documentation toolchain with them so `mkdocs` works
-without a second install.
+that does not. The development extra is `pytest` and its plugins, `ruff`,
+`mypy`, and the packages some tests need (`jsonschema`, `xmlschema` and
+`cryptography`), and it pulls the documentation toolchain with them so `mkdocs`
+works without a second install. The traffic tests fail without `jsonschema`;
+reinstall the extra if they report it missing.
 
 Then:
 

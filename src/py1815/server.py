@@ -48,6 +48,7 @@ from py1815.observers import (
     ConnectionTransport,
     Endpoint,
     ObserverGuard,
+    RequestObserver,
 )
 from py1815.session import Session
 
@@ -223,6 +224,7 @@ class OutstationServer:
         broadcast_datagrams: bool = False,
         unsolicited_interval: float = UNSOLICITED_INTERVAL,
         connection_observer: ConnectionObserver | None = None,
+        request_observer: RequestObserver | None = None,
     ) -> None:
         """
         Args:
@@ -256,6 +258,14 @@ class OutstationServer:
                 :class:`~py1815.observers.ConnectionEvent` when a connection
                 is accepted, refused, displaced or ended. Settable later
                 through the attribute of the same name. See
+                :mod:`py1815.observers`.
+            request_observer: Called with a
+                :class:`~py1815.observers.RequestRecord` for each request the
+                session handles, with the response it sent and the connection
+                the request arrived on, and for each unsolicited response it
+                sends. Given to the session, as its own
+                ``request_observer``; None leaves the session's as it is.
+                Settable later through the attribute of the same name. See
                 :mod:`py1815.observers`.
 
         Raises:
@@ -295,6 +305,8 @@ class OutstationServer:
             )
 
         self._session = session
+        if request_observer is not None:
+            session.request_observer = request_observer
         self._host, self._port = _split_bind(bind)
         self._ssl = ssl_context
         self._allowed = frozenset(authorized_peers or ())
@@ -361,6 +373,15 @@ class OutstationServer:
         hand it over with ``loop.call_soon_threadsafe(server.notify)``.
         """
         self._wake.set()
+
+    @property
+    def request_observer(self) -> RequestObserver | None:
+        """The session's request observer: called with each request record, or None."""
+        return self._session.request_observer
+
+    @request_observer.setter
+    def request_observer(self, observer: RequestObserver | None) -> None:
+        self._session.request_observer = observer
 
     @property
     def running(self) -> bool:
@@ -439,12 +460,16 @@ class OutstationServer:
         else.
 
         The connection is reported as displaced when aborted and as ended
-        otherwise, with ``reason``.
+        otherwise, with ``reason``. A read held for the connection behind an
+        unsolicited response is reported unanswered before that.
         """
         writer, self._active = self._active, None
         task, self._active_task = self._active_task, None
         connection, self._active_connection = self._active_connection, None
+        # A read held for the connection being closed has no one to answer.
+        self._session.connection_closed()
         self._session.connection_peer = None
+        self._session.connection_local = None
         if connection is not None:
             outcome = ConnectionOutcome.DISPLACED if abort else ConnectionOutcome.ENDED
             self._report_end(connection, outcome, reason)
@@ -520,6 +545,7 @@ class OutstationServer:
                 # master expects.
                 self._session.connection_reset()
                 self._session.connection_peer = connection.remote
+                self._session.connection_local = connection.local
                 self._report(connection, ConnectionOutcome.ACCEPTED)
         except BaseException:
             # Admission runs before the serve loop, and therefore before the
@@ -537,6 +563,7 @@ class OutstationServer:
                 self._active_task = None
                 self._active_connection = None
                 self._session.connection_peer = None
+                self._session.connection_local = None
             self._report_end(connection, ConnectionOutcome.REFUSED, "admission failed")
             writer.close()
             with contextlib.suppress(Exception):
@@ -568,7 +595,11 @@ class OutstationServer:
                 self._active = None
                 self._active_task = None
                 self._active_connection = None
+                # The master that sent a held read has gone, so the read is
+                # reported unanswered now and not when another master connects.
+                self._session.connection_closed()
                 self._session.connection_peer = None
+                self._session.connection_local = None
             self._report_end(connection, ConnectionOutcome.ENDED, reason)
             writer.close()
             with contextlib.suppress(Exception):

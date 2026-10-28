@@ -366,7 +366,8 @@ running somewhere else.
 
 It runs the tests and nothing more. Ruff, mypy and the changelog check read the
 source and answer the same on any machine, so they stay in the `test` job, and
-this one installs the package, `pytest` and `pytest-asyncio`. Emulation makes it
+this one installs the package, `pytest`, `pytest-asyncio` and `jsonschema`, which
+the traffic tests need. Emulation makes it
 the slowest job in the workflow, at several minutes, which is why it runs one
 Python version: the question it asks is about the platform.
 
@@ -413,6 +414,28 @@ The master is tested the way the outstation is, and from the same argument.
   Chrome, Chromium or Edge skips these, and says so. CI has one, and there a
   skip is a failure. Point `PY1815_BROWSER` at a browser to name one.
 
+## Traffic records are held to test vectors and to the schema
+
+The bodies `py1815.traffic` builds are defined by the DNP3 traffic schema
+(D103), so they are checked two ways. `tests/traffic_vectors.json` pairs
+application fragments, in hex, with the body the schema's authors wrote for
+each from the IEEE 1815 object layouts: reads, direct operate and
+select-then-operate of a CROB and an analog output block with their echoes, a
+pattern control with its echo, writes of the internal indications, a deadband
+and the time, unsolicited responses and their confirmations, and rejected
+fragments.
+`tests/test_traffic.py` reads each fragment and compares the body to the
+vector as JSON text, so the key order counts. Then every body the tests
+build is validated against the copy of the schema in the package: the
+vectors, a response of each object variation the module reads, the traffic
+of a session put through polls, events, controls, freezes and an unsolicited
+response, and a master's exchange over the loopback interface. The schema
+checks need `jsonschema`, from the dev extra. Without it the file fails to
+import with a message that names the extra, so a stale environment cannot
+skip the checks and still report a green run. The rest
+of the file pins each way an object is read, and each reason a fragment is
+rejected, to literal octets.
+
 ## Running them
 
 ```bash
@@ -436,5 +459,5 @@ place it is the command the `test-arm32` job runs:
 
 ```bash
 docker run --rm --platform linux/arm/v7 -v "$PWD":/src:ro -w /src python:3.12-slim \
-  sh -ec 'pip install -q . pytest pytest-asyncio && pytest -q -x -p no:cacheprovider'
+  sh -ec 'pip install -q . pytest pytest-asyncio "jsonschema>=4.18" && pytest -q -x -p no:cacheprovider'
 ```

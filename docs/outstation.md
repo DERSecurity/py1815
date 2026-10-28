@@ -266,14 +266,20 @@ That ordering is the substance rather than a detail: an admitted connection
 displaces the active one, so a peer authorized too late would take the
 association down on its way to being refused. See [D8](DESIGN.md).
 
-## Reporting connections and anomalies
+## Reporting connections, requests and anomalies
 
 Give the listener a `connection_observer` to receive a record of each connection
 accepted, refused, displaced or ended, with its addresses, the certificate
-identity it was admitted as and the reason it ended. Give the session an
-`anomaly_observer` to receive a record of each frame or request it drops, with a
-stable code and a severity. [Connection and anomaly reports](observers.md) lists
-the records and what produces each.
+identity it was admitted as and the reason it ended. Give the listener a
+`request_observer` to receive a record of each request the session handles: the
+connection it arrived on, the link addresses, the function code, the request
+fragment and the response fragment sent back. Unsolicited responses are
+reported to it too. Give the session an `anomaly_observer` to receive a record
+of each frame or request it drops, with a stable code and a severity.
+[Connection, request and anomaly reports](observers.md) lists the records and
+what produces each. [DNP3 traffic records](traffic.md) turns the request
+records into a JSON body per fragment, defined by a versioned JSON Schema, in
+a message envelope.
 
 ## What it refuses
 

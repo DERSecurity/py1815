@@ -13,6 +13,20 @@ import logging
 import ssl
 
 import pytest
+from ied_harness import (
+    COLD_RESTART,
+    CONFIRM,
+    DIRECT_OPERATE,
+    DIRECT_OPERATE_NR,
+    OPERATE,
+    READ,
+    SELECT,
+    UNSOLICITED_RESPONSE,
+    Dut,
+    analog_output,
+    classes,
+    crob,
+)
 from test_master_tcp import _free_port
 from test_session_unsolicited_responses import TIMEOUT, _analog, _enabled, _said
 
@@ -29,6 +43,7 @@ from py1815.observers import (
     ConnectionTransport,
     Endpoint,
     ProtocolAnomaly,
+    RequestRecord,
 )
 from py1815.server import OutstationServer
 from py1815.session import Session
@@ -373,6 +388,234 @@ class TestEndpoint:
         assert str(Endpoint("192.0.2.1", 20000)) == "192.0.2.1:20000"
 
 
+# ------------------------------------------------------------------- requests
+
+#: The connection the harness's requests are said to arrive on.
+PEER = Endpoint("192.0.2.10", 49152)
+
+
+def _dut(**options) -> Dut:
+    """Return the harness outstation with binary inputs and outputs, past its restart."""
+    dut = Dut(analog_inputs=False, counters=False, **options)
+    dut.clear_restart()
+    dut.session.connection_peer = PEER
+    return dut
+
+
+def _unsolicited_dut() -> Dut:
+    """Return the harness outstation with unsolicited responses on, at its startup."""
+    dut = Dut(analog_inputs=False, counters=False, unsolicited=True)
+    dut.session.connection_peer = PEER
+    return dut
+
+
+def _records(session: Session) -> list[RequestRecord]:
+    seen: list[RequestRecord] = []
+    session.request_observer = seen.append
+    return seen
+
+
+class TestRequestRecords:
+    def test_an_integrity_read_is_reported_with_its_response(self):
+        dut = _dut()
+        seen = _records(dut.session)
+
+        dut.master.read(classes(1, 2, 3, 0))
+
+        (record,) = seen
+        assert (record.peer, record.source, record.destination) == (PEER, MASTER, OUTSTATION)
+        assert record.function == READ
+        # FIR FIN sequence 1, READ; group 60 variations 2, 3, 4 and 1, qualifier 0x06.
+        assert record.request == bytes.fromhex("C1 01 3C 02 06 3C 03 06 3C 04 06 3C 01 06")
+        # FIR FIN sequence 1, RESPONSE, no indications; group 1 variation 2,
+        # qualifier 0x00, start 0, stop 3; four inputs, each flagged online.
+        assert record.response == bytes.fromhex("C1 81 00 00 01 02 00 00 03 01 01 01 01")
+        assert not record.unsolicited
+
+    def test_a_direct_operate_of_an_analog_output_is_reported_with_its_echo(self):
+        dut = _dut()
+        seen = _records(dut.session)
+
+        dut.master.request(DIRECT_OPERATE, analog_output(1, 250))
+
+        (record,) = seen
+        assert (record.peer, record.source, record.destination) == (PEER, MASTER, OUTSTATION)
+        assert record.function == DIRECT_OPERATE
+        # Group 41 variation 2, qualifier 0x17, one object: index 1, value 250, status 0.
+        assert record.request == bytes.fromhex("C1 05 29 02 17 01 01 FA 00 00")
+        assert record.response == bytes.fromhex("C1 81 00 00 29 02 17 01 01 FA 00 00")
+        assert dut.operated == [("AO", 1, 250.0)]
+
+    def test_a_select_and_its_operate_of_a_binary_output_are_reported_in_turn(self):
+        dut = _dut()
+        seen = _records(dut.session)
+
+        dut.master.request(SELECT, crob(2))
+        dut.master.request(OPERATE, crob(2))
+
+        select, operate = seen
+        # Group 12 variation 1, qualifier 0x17, one object: index 2, latch on,
+        # count 1, on time 100 ms, off time 200 ms, status 0.
+        block = "0C 01 17 01 02 03 01 64 00 00 00 C8 00 00 00 00"
+        assert (select.function, operate.function) == (SELECT, OPERATE)
+        assert select.request == bytes.fromhex(f"C1 03 {block}")
+        assert select.response == bytes.fromhex(f"C1 81 00 00 {block}")
+        assert operate.request == bytes.fromhex(f"C2 04 {block}")
+        assert operate.response == bytes.fromhex(f"C2 81 00 00 {block}")
+        assert {(record.peer, record.source, record.destination) for record in seen} == {
+            (PEER, MASTER, OUTSTATION)
+        }
+        assert dut.operated == [("BO", 2, True)]
+
+    def test_a_cold_restart_is_reported_with_its_time_delay(self):
+        dut = _dut(restart_handler=lambda: 1500)
+        seen = _records(dut.session)
+
+        dut.master.request(COLD_RESTART)
+
+        (record,) = seen
+        assert (record.peer, record.source, record.destination) == (PEER, MASTER, OUTSTATION)
+        assert record.function == COLD_RESTART
+        assert record.request == bytes.fromhex("C1 0D")
+        # Group 52 variation 2, qualifier 0x07, count 1: 1500 ms.
+        assert record.response == bytes.fromhex("C1 81 00 00 34 02 07 01 DC 05")
+
+    def test_a_confirmation_is_reported_with_no_response(self):
+        dut = _dut()
+        dut.toggle(0)
+        seen = _records(dut.session)
+
+        read = dut.master.read(classes(1)).fragment
+        dut.master.confirm(read)
+
+        assert [(record.function, record.request[:2]) for record in seen] == [
+            (READ, bytes([0xC0 | read.sequence, READ])),
+            (CONFIRM, bytes([0xC0 | read.sequence, CONFIRM])),
+        ]
+        assert seen[0].response == read.octets
+        assert seen[1].response is None
+
+    def test_a_function_that_takes_no_response_is_reported_with_none(self):
+        dut = _dut()
+        seen = _records(dut.session)
+
+        assert dut.master.request(DIRECT_OPERATE_NR, crob(1)).silent
+
+        (record,) = seen
+        assert record.function == DIRECT_OPERATE_NR
+        # Group 12 variation 1, qualifier 0x17, one object: index 1, latch on.
+        assert record.request == bytes.fromhex("C1 06 0C 01 17 01 01 03 01 64000000 C8000000 00")
+        assert record.response is None
+        assert dut.operated == [("BO", 1, True)]
+
+    def test_a_broadcast_is_reported_with_its_address_and_no_response(self):
+        dut = _dut()
+        seen = _records(dut.session)
+        # FIR FIN sequence 3, WRITE; group 80 variation 1, qualifier 0x00,
+        # index 7 to 7, value 0: clear the restart indication.
+        fragment = bytes.fromhex("C3 02 50 01 00 07 07 00")
+
+        assert dut.master.raw(dut.master.frames(fragment, destination=BROADCAST)).silent
+
+        (record,) = seen
+        assert (record.source, record.destination) == (MASTER, BROADCAST)
+        assert (record.request, record.response) == (fragment, None)
+
+    def test_a_request_dropped_as_an_anomaly_is_not_reported(self):
+        dut = _dut()
+        seen = _records(dut.session)
+        anomalies = _observed(dut.session)
+
+        # A read whose object header stops after the group.
+        dut.master.raw(dut.master.frames(bytes.fromhex("C1 01 3C")))
+
+        assert [anomaly.code for anomaly in anomalies] == [AnomalyCode.MALFORMED_REQUEST]
+        assert seen == []
+
+    def test_an_unsolicited_response_is_reported_with_no_request(self):
+        dut = _unsolicited_dut()
+        seen = _records(dut.session)
+
+        dut.master.listen()
+
+        (record,) = seen
+        assert record.unsolicited
+        assert (record.peer, record.source, record.destination) == (PEER, OUTSTATION, MASTER)
+        assert record.function == UNSOLICITED_RESPONSE
+        assert record.request == b""
+        # FIR FIN CON UNS sequence 0, UNSOLICITED_RESPONSE, IIN1.7 device restart.
+        assert record.response == bytes.fromhex("F0 82 80 00")
+
+    def test_a_read_held_behind_an_unsolicited_response_is_reported_once_answered(self):
+        dut = _unsolicited_dut()
+        seen = _records(dut.session)
+        dut.master.listen()
+
+        assert dut.master.read(classes(0)).silent
+        assert [record.unsolicited for record in seen] == [True], "the held read is not reported"
+
+        answer = dut.master.confirm_unsolicited(0).fragment
+
+        confirmation, read = seen[1:]
+        assert (read.peer, read.source, read.destination) == (PEER, MASTER, OUTSTATION)
+        assert (confirmation.request, confirmation.response) == (bytes.fromhex("D0 00"), None)
+        assert read.request == bytes.fromhex("C0 01 3C 01 06")
+        assert read.response == answer.octets
+
+    def test_a_read_held_and_then_discarded_is_reported_with_no_response(self):
+        dut = _unsolicited_dut()
+        seen = _records(dut.session)
+        dut.master.listen()
+        dut.master.read(classes(0))
+
+        dut.session.connection_reset()
+
+        _, read = seen
+        assert (read.peer, read.source, read.destination) == (PEER, MASTER, OUTSTATION)
+        assert read.request == bytes.fromhex("C0 01 3C 01 06")
+        assert read.response is None
+
+    def test_an_observer_that_raises_does_not_stop_the_session(self, caplog):
+        def failing(record: RequestRecord) -> None:
+            raise RuntimeError("observer failed")
+
+        dut = _dut()
+        dut.session.request_observer = failing
+
+        with caplog.at_level(logging.DEBUG, logger="py1815.observers"):
+            first = dut.master.read(classes(0))
+            dut.master.request(DIRECT_OPERATE, analog_output(1, 250))
+            second = dut.master.read(classes(0))
+
+        assert first.fragment.objects and second.fragment.objects, "each read is answered"
+        assert dut.operated == [("AO", 1, 250.0)]
+        errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+        assert len(errors) == 1, "the first failure is logged and later ones are not"
+
+    def test_a_record_converts_to_plain_values(self):
+        record = RequestRecord(
+            peer=PEER,
+            source=MASTER,
+            destination=OUTSTATION,
+            function=READ,
+            request=CLASS_0_READ,
+            response=None,
+            timestamp=1.5,
+        )
+
+        assert dataclasses.asdict(record) == {
+            "peer": {"host": "192.0.2.10", "port": 49152},
+            "source": MASTER,
+            "destination": OUTSTATION,
+            "function": READ,
+            "request": CLASS_0_READ,
+            "response": None,
+            "unsolicited": False,
+            "timestamp": 1.5,
+            "local": None,
+        }
+
+
 # ------------------------------------------------------- the outstation's side
 
 
@@ -413,6 +656,29 @@ def _tls_listener(pki) -> _Listener:
         ssl_context=server_context(pki.authority, pki.outstation),
         authorized_peers=frozenset({"master.test"}),
     )
+
+
+async def _hold_a_read(
+    dut: Dut, listening: _Listener, seen: list[RequestRecord]
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Connect, and send a class 0 read while the startup null response is unconfirmed.
+
+    Return the connection once the outstation has handled the read and held it.
+    """
+    reader, writer = await asyncio.open_connection("127.0.0.1", listening.server.port)
+    # The null unsolicited response the outstation sends when the connection opens.
+    await _until(lambda: seen)
+    await asyncio.wait_for(reader.read(4096), timeout=5)
+    # The read, then a request for link status. The read is held and not
+    # answered, so the link status answer is all that comes back, and shows
+    # the read has been handled.
+    writer.write(dut.master.frames(CLASS_0_READ) + dut.master.frame(REQUEST_LINK_STATUS))
+    await writer.drain()
+    answer = await asyncio.wait_for(reader.read(4096), timeout=5)
+    (status,) = link.FrameReader().feed(answer)
+    assert status.control & 0x0F == link.SecondaryFunction.LINK_STATUS
+    assert [record.unsolicited for record in seen] == [True], "the held read is not reported"
+    return reader, writer
 
 
 @pytest.mark.asyncio
@@ -567,6 +833,105 @@ class TestOutstationConnections:
                     answer = await asyncio.wait_for(reader.read(4096), timeout=5)
                     assert answer, "the request is answered"
                     writer.close()
+
+        errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+        assert len(errors) == 1, "the first failure is logged and later ones are not"
+
+
+class TestOutstationRequests:
+    def test_the_listener_sets_the_sessions_request_observer(self):
+        seen: list[RequestRecord] = []
+        session = _session()
+
+        server = OutstationServer(session, bind="127.0.0.1:0", request_observer=seen.append)
+
+        assert session.request_observer == seen.append
+        server.request_observer = None
+        assert session.request_observer is None
+
+    def test_a_listener_given_no_request_observer_keeps_the_sessions(self):
+        seen: list[RequestRecord] = []
+        session = _session(request_observer=seen.append)
+
+        server = OutstationServer(session, bind="127.0.0.1:0")
+
+        assert server.request_observer == seen.append
+
+    @pytest.mark.asyncio
+    async def test_a_request_is_reported_with_the_connection_it_arrived_on(self):
+        dut = _dut()
+        seen: list[RequestRecord] = []
+        async with _Listener(session=dut.session, request_observer=seen.append) as listening:
+            port = listening.server.port
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            client = Endpoint.of(writer.get_extra_info("sockname"))
+            # FIR FIN sequence 2, DIRECT_OPERATE; group 41 variation 2,
+            # qualifier 0x17, one object: index 3, value -5, status 0.
+            request = bytes.fromhex("C2 05 29 02 17 01 03 FB FF 00")
+            writer.write(dut.master.frames(request))
+            await writer.drain()
+            await _until(lambda: seen)
+            answer = await asyncio.wait_for(reader.read(4096), timeout=5)
+            writer.close()
+
+        (record,) = seen
+        assert (record.peer, record.source, record.destination) == (client, MASTER, OUTSTATION)
+        assert record.local == Endpoint("127.0.0.1", port)
+        assert dut.session.connection_local is None, "cleared when the connection ends"
+        assert record.function == DIRECT_OPERATE
+        assert record.request == request
+        assert record.response == bytes.fromhex("C2 81 00 00 29 02 17 01 03 FB FF 00")
+        assert record.response in answer, "the response reported is the one sent"
+        assert dut.operated == [("AO", 3, -5.0)]
+
+    @pytest.mark.asyncio
+    async def test_a_held_read_is_reported_unanswered_when_the_master_disconnects(self):
+        dut = _unsolicited_dut()
+        seen: list[RequestRecord] = []
+        async with _Listener(session=dut.session, request_observer=seen.append) as listening:
+            _, writer = await _hold_a_read(dut, listening, seen)
+            client = Endpoint.of(writer.get_extra_info("sockname"))
+            port = listening.server.port
+
+            writer.close()
+            await _until(lambda: len(seen) == 2)
+
+        _, read = seen
+        assert (read.peer, read.source, read.destination) == (client, MASTER, OUTSTATION)
+        # Both ends are those of the connection the read arrived on, though
+        # the record is reported after that connection ended.
+        assert read.local == Endpoint("127.0.0.1", port)
+        assert read.request == bytes.fromhex("C0 01 3C 01 06")
+        assert read.response is None
+
+    @pytest.mark.asyncio
+    async def test_a_held_read_is_reported_unanswered_when_the_listener_stops(self):
+        dut = _unsolicited_dut()
+        seen: list[RequestRecord] = []
+        async with _Listener(session=dut.session, request_observer=seen.append) as listening:
+            _, writer = await _hold_a_read(dut, listening, seen)
+
+            await listening.server.stop()
+
+            _, read = seen
+            assert read.request == bytes.fromhex("C0 01 3C 01 06")
+            assert read.response is None
+            writer.close()
+
+    @pytest.mark.asyncio
+    async def test_a_request_observer_that_raises_does_not_break_the_connection(self, caplog):
+        def failing(record: RequestRecord) -> None:
+            raise RuntimeError("observer failed")
+
+        async with _Listener(request_observer=failing) as listening:
+            reader, writer = await asyncio.open_connection("127.0.0.1", listening.server.port)
+            with caplog.at_level(logging.DEBUG, logger="py1815.observers"):
+                for _ in range(2):
+                    writer.write(_request())
+                    await writer.drain()
+                    answer = await asyncio.wait_for(reader.read(4096), timeout=5)
+                    assert answer, "the request is answered"
+            writer.close()
 
         errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
         assert len(errors) == 1, "the first failure is logged and later ones are not"

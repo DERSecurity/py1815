@@ -127,8 +127,10 @@ jobs:
     #
     # What does not: ruff, mypy and the changelog check, which read the source
     # and answer the same on any machine. So the job installs the package,
-    # `pytest` and `pytest-asyncio`, and not the dev extra, whose tools may
-    # have no wheel for this platform. The tests that validate a Device
+    # `pytest`, `pytest-asyncio` and `jsonschema`, and not the dev extra, whose
+    # tools may have no wheel for this platform. `jsonschema` is installed
+    # because the traffic tests fail without it, and the traffic walk's object
+    # widths are what this job is for. The tests that validate a Device
     # Profile against the Users Group schema skip here as they do in `test`,
     # for want of the schema, and the master's TLS tests skip for want of
     # `cryptography`, which makes their certificates. One Python version, because emulation is slow
@@ -155,7 +157,7 @@ jobs:
             -v "$PWD":/src:ro -w /src \
             python:3.12-slim sh -ec '
               python -c "import platform, struct, sys; print(platform.machine(), sys.maxsize); assert struct.calcsize(\"P\") == 4 and sys.maxsize == 2**31 - 1, \"this is not a 32-bit interpreter\""
-              pip install --no-cache-dir --root-user-action=ignore -q . pytest pytest-asyncio
+              pip install --no-cache-dir --root-user-action=ignore -q . pytest pytest-asyncio "jsonschema>=4.18"
               pytest -q -x -p no:cacheprovider
               python scripts/measure_event_memory.py
             '

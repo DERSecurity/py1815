@@ -215,7 +215,9 @@ the time is up.
 `on_connection` is called with `True` when the connection is made and `False`
 when it is lost. For the endpoints and the reason as well, including each
 attempt that failed, give a `connection_observer`; see
-[Connection and anomaly reports](observers.md).
+[Connection, request and anomaly reports](observers.md). While connected,
+`lab.connection` is the report of the connection made, with this master's end
+in `local` and the outstation's in `remote`.
 
 ### Over TLS
 
@@ -546,7 +548,9 @@ connection ends, and starts again when the connection is made again.
 ## The traffic
 
 Each outstation keeps a `trace`: every frame sent and received, with its time,
-its octets and a reading of them one layer at a time.
+its octets and a reading of them one layer at a time. To publish each exchange
+as a JSON body per fragment, defined by a versioned JSON Schema, see
+[DNP3 traffic records](traffic.md).
 
 ```python
 for entry in lab.trace.since():

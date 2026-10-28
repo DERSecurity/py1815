@@ -1,0 +1,1186 @@
+{
+  "read/class 1, 2, 3 and 0 request": {
+    "apdu": "c0013c02063c03063c04063c0106",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 1,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 60,
+          "variation": 2,
+          "qualifier": 6
+        },
+        {
+          "group": 60,
+          "variation": 3,
+          "qualifier": 6
+        },
+        {
+          "group": 60,
+          "variation": 4,
+          "qualifier": 6
+        },
+        {
+          "group": 60,
+          "variation": 1,
+          "qualifier": 6
+        }
+      ],
+      "points": []
+    }
+  },
+  "read/static data response": {
+    "apdu": "c0810000010200000181010302000000810a020000018101140100000001d20400001e050000010100806643210000c07f280100000001f40100006e0400000054455354",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 1,
+          "variation": 2,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 1
+        },
+        {
+          "group": 3,
+          "variation": 2,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 0
+        },
+        {
+          "group": 10,
+          "variation": 2,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 1
+        },
+        {
+          "group": 20,
+          "variation": 1,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 0
+        },
+        {
+          "group": 30,
+          "variation": 5,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 1
+        },
+        {
+          "group": 40,
+          "variation": 1,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 0
+        },
+        {
+          "group": 110,
+          "variation": 4,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 0
+        }
+      ],
+      "points": [
+        {
+          "type": "binary",
+          "group": 1,
+          "variation": 2,
+          "index": 0,
+          "command": false,
+          "value": 1,
+          "flags": 129
+        },
+        {
+          "type": "binary",
+          "group": 1,
+          "variation": 2,
+          "index": 1,
+          "command": false,
+          "value": 0,
+          "flags": 1
+        },
+        {
+          "type": "double_bit_binary",
+          "group": 3,
+          "variation": 2,
+          "index": 0,
+          "command": false,
+          "value": 2,
+          "flags": 129
+        },
+        {
+          "type": "binary_output",
+          "group": 10,
+          "variation": 2,
+          "index": 0,
+          "command": false,
+          "value": 1,
+          "flags": 129
+        },
+        {
+          "type": "binary_output",
+          "group": 10,
+          "variation": 2,
+          "index": 1,
+          "command": false,
+          "value": 0,
+          "flags": 1
+        },
+        {
+          "type": "counter",
+          "group": 20,
+          "variation": 1,
+          "index": 0,
+          "command": false,
+          "value": 1234,
+          "flags": 1
+        },
+        {
+          "type": "analog",
+          "group": 30,
+          "variation": 5,
+          "index": 0,
+          "command": false,
+          "value": 230.5,
+          "flags": 1
+        },
+        {
+          "type": "analog",
+          "group": 30,
+          "variation": 5,
+          "index": 1,
+          "command": false,
+          "value": null,
+          "non_finite": "nan",
+          "flags": 33
+        },
+        {
+          "type": "analog_output",
+          "group": 40,
+          "variation": 1,
+          "index": 0,
+          "command": false,
+          "value": 500,
+          "flags": 1
+        },
+        {
+          "type": "octet_string",
+          "group": 110,
+          "variation": 4,
+          "index": 0,
+          "command": false,
+          "value": "54455354"
+        }
+      ]
+    }
+  },
+  "write/clear device restart request": {
+    "apdu": "c102500100070700",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 2,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 80,
+          "variation": 1,
+          "qualifier": 0,
+          "start": 7,
+          "stop": 7
+        }
+      ],
+      "points": [
+        {
+          "type": "internal_indication",
+          "group": 80,
+          "variation": 1,
+          "index": 7,
+          "command": false,
+          "value": 0
+        }
+      ]
+    }
+  },
+  "write/time and date request": {
+    "apdu": "cc02320107017bc02cc89901",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 2,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 50,
+          "variation": 1,
+          "qualifier": 7,
+          "count": 1,
+          "data": "7bc02cc89901"
+        }
+      ],
+      "points": []
+    }
+  },
+  "write/null response": {
+    "apdu": "c1810000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [],
+      "points": []
+    }
+  },
+  "write/analog deadband request": {
+    "apdu": "c20222010000000a00",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 2,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 34,
+          "variation": 1,
+          "qualifier": 0,
+          "start": 0,
+          "stop": 0
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_deadband",
+          "group": 34,
+          "variation": 1,
+          "index": 0,
+          "command": false,
+          "value": 10
+        }
+      ]
+    }
+  },
+  "direct operate/g12 request": {
+    "apdu": "c3050c0128010003000301000000000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 5,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 3,
+          "command": true,
+          "op_type": 3,
+          "trip_close": 0,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 0,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "direct operate/g12 response": {
+    "apdu": "c38100000c0128010003000301000000000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 3,
+          "command": true,
+          "op_type": 3,
+          "trip_close": 0,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 0,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "direct operate/g41 request": {
+    "apdu": "c405290328010002000000974200",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 5,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 41,
+          "variation": 3,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_output",
+          "group": 41,
+          "variation": 3,
+          "index": 2,
+          "command": true,
+          "value": 75.5,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "direct operate/g41 response": {
+    "apdu": "c4810000290328010002000000974200",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 41,
+          "variation": 3,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_output",
+          "group": 41,
+          "variation": 3,
+          "index": 2,
+          "command": true,
+          "value": 75.5,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g12 select request": {
+    "apdu": "c5030c011701004101e80300000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 3,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 0,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 1000,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g12 select response": {
+    "apdu": "c58100000c011701004101e80300000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 0,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 1000,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g12 operate request": {
+    "apdu": "c6040c011701004101e80300000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 4,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 0,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 1000,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g12 operate response": {
+    "apdu": "c68100000c011701004101e80300000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 0,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 1000,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g41 select request": {
+    "apdu": "c7032902170101640000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 3,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 41,
+          "variation": 2,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_output",
+          "group": 41,
+          "variation": 2,
+          "index": 1,
+          "command": true,
+          "value": 100,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g41 select response": {
+    "apdu": "c78100002902170101640000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 41,
+          "variation": 2,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_output",
+          "group": 41,
+          "variation": 2,
+          "index": 1,
+          "command": true,
+          "value": 100,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g41 operate request": {
+    "apdu": "c8042902170101640000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 4,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 41,
+          "variation": 2,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_output",
+          "group": 41,
+          "variation": 2,
+          "index": 1,
+          "command": true,
+          "value": 100,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "select and operate/g41 operate response": {
+    "apdu": "c88100002902170101640000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 41,
+          "variation": 2,
+          "qualifier": 23,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "analog_output",
+          "group": 41,
+          "variation": 2,
+          "index": 1,
+          "command": true,
+          "value": 100,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "pattern control/select request": {
+    "apdu": "c3030c0207014103f4010000d0070000000c0300050f2104",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 3,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 12,
+          "variation": 2,
+          "qualifier": 7,
+          "count": 1
+        },
+        {
+          "group": 12,
+          "variation": 3,
+          "qualifier": 0,
+          "start": 5,
+          "stop": 15
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 5,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 10,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 15,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "pattern control/select response": {
+    "apdu": "c38100000c0207014103f4010000d0070000000c0300050f2104",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 12,
+          "variation": 2,
+          "qualifier": 7,
+          "count": 1
+        },
+        {
+          "group": 12,
+          "variation": 3,
+          "qualifier": 0,
+          "start": 5,
+          "stop": 15
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 5,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 10,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 15,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "direct operate/g12 unsupported index request": {
+    "apdu": "c9050c0128010063000401000000000000000000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 5,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 99,
+          "command": true,
+          "op_type": 4,
+          "trip_close": 0,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 0,
+          "off_time": 0,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "direct operate/g12 unsupported index response": {
+    "apdu": "c98100000c0128010063000401000000000000000004",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 12,
+          "variation": 1,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 1,
+          "index": 99,
+          "command": true,
+          "op_type": 4,
+          "trip_close": 0,
+          "clear": false,
+          "queue": false,
+          "count": 1,
+          "on_time": 0,
+          "off_time": 0,
+          "status": 4
+        }
+      ]
+    }
+  },
+  "unsolicited/startup null response": {
+    "apdu": "f0829000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 130,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": true,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [
+        "need_time",
+        "device_restart"
+      ],
+      "objects": [],
+      "points": []
+    }
+  },
+  "unsolicited/confirm request": {
+    "apdu": "d000",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 0,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": true,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [],
+      "points": []
+    }
+  },
+  "unsolicited/event response": {
+    "apdu": "f182020002022801000000817bc02cc8990120072801000100010040674380c02cc899010b0228010003008182c02cc89901",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 130,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": true,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [
+        "class_1_events"
+      ],
+      "objects": [
+        {
+          "group": 2,
+          "variation": 2,
+          "qualifier": 40,
+          "count": 1
+        },
+        {
+          "group": 32,
+          "variation": 7,
+          "qualifier": 40,
+          "count": 1
+        },
+        {
+          "group": 11,
+          "variation": 2,
+          "qualifier": 40,
+          "count": 1
+        }
+      ],
+      "points": [
+        {
+          "type": "binary",
+          "group": 2,
+          "variation": 2,
+          "index": 0,
+          "command": false,
+          "value": 1,
+          "flags": 129,
+          "time": 1760000000123
+        },
+        {
+          "type": "analog",
+          "group": 32,
+          "variation": 7,
+          "index": 1,
+          "command": false,
+          "value": 231.25,
+          "flags": 1,
+          "time": 1760000000128
+        },
+        {
+          "type": "binary_output",
+          "group": 11,
+          "variation": 2,
+          "index": 3,
+          "command": false,
+          "value": 1,
+          "flags": 129,
+          "time": 1760000000130
+        }
+      ]
+    }
+  },
+  "unsolicited/event confirm request": {
+    "apdu": "d100",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 0,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": true,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [],
+      "points": []
+    }
+  },
+  "rejected/point count response": {
+    "apdu": "ca8100001e0100000401e803000001d0070000",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [],
+      "points": [],
+      "apdu_rejected": "point_count"
+    }
+  },
+  "rejected/malformed response": {
+    "apdu": "cb8100",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "objects": [],
+      "points": [],
+      "apdu_rejected": "malformed"
+    }
+  }
+}

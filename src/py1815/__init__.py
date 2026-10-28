@@ -48,6 +48,8 @@ from py1815.observers import (
     ConnectionTransport,
     Endpoint,
     ProtocolAnomaly,
+    RequestObserver,
+    RequestRecord,
 )
 from py1815.server import OutstationServer, PeerRefused
 from py1815.session import ReadProvider, Session, UnknownObject
@@ -82,6 +84,8 @@ __all__ = [
     "Reassembler",
     "Request",
     "RequestError",
+    "RequestObserver",
+    "RequestRecord",
     "SecondaryFunction",
     "Session",
     "TransportError",

@@ -1,10 +1,11 @@
-# Connection and anomaly reports
+# Connection, request and anomaly reports
 
 The outstation and the master log what happens to their connections, and the
 session logs each frame or request it drops. A log line is written for a
 person to read. A host application that keeps a record of every connection
-attempt, or passes protocol anomalies to its own security monitoring, can
-instead take the same facts as structured records, through two observers:
+attempt, logs or forwards the requests its outstation serves, or passes
+protocol anomalies to its own security monitoring, can instead take the same
+facts as structured records, through three observers:
 
 - A **connection observer** receives a `ConnectionEvent` each time a connection
   is accepted, refused, displaced or ended at the outstation, and each time the
@@ -12,8 +13,11 @@ instead take the same facts as structured records, through two observers:
 - An **anomaly observer** receives a `ProtocolAnomaly` each time the session
   drops a frame or a request it cannot accept, or gives up on an unsolicited
   response.
+- A **request observer** receives a `RequestRecord` for each request the
+  outstation handles, with the response it sent back and the connection the
+  request arrived on, and for each unsolicited response it sends.
 
-An observer is any callable that takes one record. Both kinds are optional and
+An observer is any callable that takes one record. Each kind is optional and
 off by default, and the log lines are written whether or not one is set. The
 records and their enumerations are importable from `py1815` and from
 `py1815.observers`, which also holds `SEVERITY`.
@@ -24,7 +28,7 @@ records and their enumerations are importable from `py1815` and from
 import dataclasses
 import json
 
-from py1815 import ConnectionEvent, OutstationServer, ProtocolAnomaly, Session
+from py1815 import ConnectionEvent, OutstationServer, ProtocolAnomaly, RequestRecord, Session
 
 
 def connection(event: ConnectionEvent) -> None:
@@ -35,17 +39,36 @@ def anomaly(found: ProtocolAnomaly) -> None:
     print(json.dumps(dataclasses.asdict(found)))
 
 
+def request(record: RequestRecord) -> None:
+    fields = dataclasses.asdict(record)
+    fields["request"] = record.request.hex()
+    fields["response"] = None if record.response is None else record.response.hex()
+    print(json.dumps(fields))
+
+
 session = Session(provider, outstation_address=1024, master_address=1, anomaly_observer=anomaly)
-server = OutstationServer(session, bind="0.0.0.0:20000", connection_observer=connection)
+server = OutstationServer(
+    session, bind="0.0.0.0:20000", connection_observer=connection, request_observer=request
+)
 await server.start()
 ```
 
-Both can also be set, changed or removed later, as attributes:
+Each can also be set, changed or removed later, as an attribute:
 
 ```python
 server.connection_observer = connection
+server.request_observer = request
 session.anomaly_observer = None
 ```
+
+The listener passes its `request_observer` to the session, so
+`server.request_observer` and `session.request_observer` are the same
+attribute. A session driven without a listener takes a `request_observer` of
+its own.
+
+To publish the requests as a JSON body per fragment, defined by a versioned
+JSON Schema, pass each record to `py1815.traffic`; see
+[DNP3 traffic records](traffic.md).
 
 A connection accepted and then closed by the master is reported as two events:
 
@@ -138,6 +161,48 @@ The severities mean:
 an indication, such as an unsupported function or a control it cannot carry out,
 are answers the protocol defines and are not reported as anomalies.
 
+## Requests
+
+Each request the session handles is reported once, after the response is
+built. `request` and `response` are the application fragments, from the
+application control octet to the last object, without the link and transport
+framing. `peer` is the master's end of the connection the request arrived on,
+or the sender of a broadcast datagram, and `local` is the outstation's end,
+when the session is served by `OutstationServer`. `local` is None for a
+broadcast datagram, and both are None for a session driven some other way.
+
+An integrity poll, with the octets written as hex:
+
+```json
+{"peer": {"host": "192.0.2.10", "port": 49152}, "source": 1, "destination": 1024,
+ "function": 1, "request": "c1013c02063c03063c04063c0106",
+ "response": "c1810000010200000301010101", "unsolicited": false, "timestamp": 1792310400.0,
+ "local": {"host": "198.51.100.5", "port": 20000}}
+```
+
+| What arrived or was sent | `function` | `response` |
+|---|---|---|
+| A request the session answered, including a refusal with an indication | the request's | the response |
+| A request repeated by a master that did not hear the answer | the request's | the response, sent again |
+| A confirmation | 0 | the next fragment of a response that spans several, otherwise None |
+| A function that takes no response, such as direct operate without response, whether or not it is carried out | the request's | None |
+| A request sent to a broadcast address; `destination` is that address | the request's | None |
+| A read held while an unsolicited response waits for its confirmation | the request's | the response, when the read is answered; None, when the read is discarded unanswered |
+| An unsolicited response; `unsolicited` is true, `request` is empty, `source` is the outstation and `destination` the master | 130 | the unsolicited response, each time it is sent |
+
+A response that spans several fragments is reported in parts: the first
+fragment with the request, and each later one with the confirmation that drew
+it out. A read held behind an unsolicited response is reported when it is
+answered or discarded, not when it arrives, so it may follow the record of a
+request that arrived after it. A held read is discarded when another request
+arrives, when the session restarts, and when the connection it arrived on ends,
+whether the master closes it, a new connection displaces it or the listener
+stops.
+
+A frame or fragment reported as a protocol anomaly is not reported as a
+request as well. That includes a request whose object headers could not be
+read, which is answered with an error indication.
+
 ## Writing an observer
 
 An observer is called on the event loop, or for a session driven without one, on
@@ -148,7 +213,9 @@ An observer that raises does not affect the connection or the session. The
 first exception from an observer is logged with its traceback at ERROR; later
 exceptions from the same observer are logged at DEBUG.
 
-Each record is a frozen dataclass of strings, numbers and nested `Endpoint`
-records, so `dataclasses.asdict` gives a dictionary that `json.dumps` accepts.
+Each record is a frozen dataclass of strings, numbers, booleans and nested
+`Endpoint` records, so `dataclasses.asdict` gives a dictionary that
+`json.dumps` accepts. The exception is the octets of a `RequestRecord`, which
+are `bytes`: convert them first, to hex as above or to base64.
 `timestamp` is seconds since the Unix epoch. A `reason` or a `message` holds no
 secret: no key, password or token is ever part of one.

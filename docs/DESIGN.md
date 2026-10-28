@@ -1698,6 +1698,56 @@ bit and the master still builds it, so a provider of its own can support it.
 *Trade-off:* a master that sets the clear bit out of habit, with an operation, gets a
 refusal where it used to get the operation.
 
+**D102 -- The outstation reports each request it handles once, with the response it sent,
+and reports each unsolicited response it sends.** An application that embeds the
+outstation and logs or forwards the traffic it serves needs each exchange as fields, with
+the connection it arrived on, as the master's `on_exchange` gives them at the other end.
+The session reports a request after it has built the response, so the record holds the
+octets that were sent. A confirmation is reported as a request with function code 0: the
+master sends it, and it draws out the next fragment of a response that spans several, which
+is reported with it. A read held behind an unsolicited response (D71) is reported when it
+is answered or discarded, so its record holds its answer or says it had none. The
+listener discards a held read when the connection it arrived on ends, the listener's
+own shutdown included, so the record is not left waiting for a connection that may
+never come. A fragment
+reported as a protocol anomaly is not reported as a request too, so a monitor that counts
+both counts it once. An unsolicited response is reported with `unsolicited` set and no
+request, so a log of the outstation's traffic holds the responses its confirmations name.
+*Trade-off:* the error response to a request whose object headers could not be read is in
+no record; a held read's record can follow the records of requests that arrived after it;
+and the observer runs on the session's path for every request, so a slow observer slows
+the outstation.
+
+**D103 -- Traffic records follow the versioned DNP3 traffic schema, version 1, of which
+the package keeps a public copy, and are built from this library's own reading of each
+fragment.** An application that forwards the traffic its outstation serves, or its master
+polls, wants consumers to handle it beside traffic captured from the network. A body defined
+by a dissector's output inherits its faults: it drops command and output-status values,
+misreads the internal indication bits of group 80, and renumbers indices when two groups of
+one point type share a fragment. A published, versioned schema (`$id`
+`https://dersec.com/schemas/dnp3-traffic/v1`) is instead the contract producers and
+consumers both check against: IEEE 1815 indices, every point in wire order, command objects
+and events and internal indication writes included, flags, times, the octets of every other
+object a request sets, bounds that a 2048-octet fragment never exceeds, and a rejected
+fragment that lists nothing. `traffic`
+reads fragments with its own walk of the object headers, written from IEEE 1815-2012's object
+layouts, not with any capture tool and not with `decode`'s walk, which reads only responses, for
+the values a master keeps. The walk takes the layout of every object `decode` also reads from
+`decode.LAYOUTS`, so the master and a body read those octets one way, and a test holds the two to
+the same size, flags, number and time. It adds the objects only a body reads, and reads the
+fields of the command objects that `decode` walks past by size. Those objects stay out of
+`decode.LAYOUTS`, whose `Layout` has no double-bit state, no status before a value and no
+control code, and whose results are the point types a master keeps; adding them would change
+what the master's decoder returns. The envelope is copied into `envelope` rather than imported, to
+keep D1. `RequestRecord` carries the outstation's own end of the connection, `local`, so
+that both addresses and ports in a body come from the connection and not from a guess. The
+contract test is the schema copy, which every body the tests build must validate against,
+and test vectors that pair fragments with the bodies the schema defines. *Trade-off:* a new
+schema version means updating the copy and the builder together, and the body's `schema`
+field tells consumers which version they hold; a fragment carrying object data the walk
+cannot size, such as device attributes, is rejected as `malformed`, because the next header
+cannot be found.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1737,6 +1787,10 @@ Each layer is testable without the ones above it, and the session does no I/O.
   few element names and no schema, and nothing of points, sessions or the wire.
 - `observers` defines the records the listener, the session and the master report to the
   host application, and knows nothing of sockets or frames.
+- `envelope` is a copy of a published message envelope, and knows nothing of DNP3 beyond
+  its name. `traffic` describes application fragments as the DNP3 traffic schema defines
+  them, reading them with its own walk of the object headers and the object layouts `decode`
+  shares, and takes the master's exchanges as values without importing the master.
 
 ## Testing
 
