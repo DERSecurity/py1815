@@ -737,6 +737,64 @@ class TestRejected:
         assert (body["objects"], body["points"]) == ([], [])
         _assert_valid([body])
 
+    @pytest.mark.parametrize(
+        "direction, fragment",
+        [
+            # Group 1 variation 2, qualifier 0x80: start-stop 0 to 0 with bit 7
+            # set, which Table 4-6 does not permit, then one binary input.
+            pytest.param("response", "C0 81 00 00  01 02 80 00 00 81", id="0x80"),
+            # A read of class 1 data, qualifier 0x86: all objects with bit 7 set.
+            pytest.param("request", "C0 01  3C 02 86", id="0x86"),
+            # Group 50 variation 1, qualifier 0x0B: range code B with no size prefix.
+            pytest.param("response", "C0 81 00 00  32 01 0B 01 01 02 03 04 05 06", id="0x0B"),
+            # Group 30 variation 1, qualifier 0x10: an index prefix with a start and stop.
+            pytest.param("response", "C0 81 00 00  1E 01 10 00 00 00 01 64 00 00 00", id="0x10"),
+            # Group 50 variation 1, qualifier 0x47: a size prefix with range code 7.
+            pytest.param("request", "C0 02  32 01 47 01 06 01 02 03 04 05 06", id="0x47"),
+            # Group 30 variation 1, qualifier 0x70: reserved prefix code 7.
+            pytest.param("response", "C0 81 00 00  1E 01 70 00 00", id="0x70"),
+        ],
+    )
+    def test_a_qualifier_table_4_6_does_not_permit_is_malformed(self, direction, fragment):
+        body = fragment_body(bytes.fromhex(fragment), direction=direction, source=1, destination=10)
+
+        assert body["apdu_rejected"] == "malformed"
+        assert (body["objects"], body["points"]) == ([], [])
+        _assert_valid([body])
+
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            # Group 50 variation 1, qualifier 0x5B, count 1: a size of 1 for a
+            # six-octet time.
+            pytest.param("C0 02  32 01 5B 01 01 00 01 02 03 04 05 06", id="smaller"),
+            # The same with a size of 7, followed by a seventh octet.
+            pytest.param("C0 02  32 01 5B 01 07 00 01 02 03 04 05 06 07", id="larger"),
+            # Two times under qualifier 0x4B: the first size is right and the
+            # second, 3, is not. A walk that skipped by the layout's size would
+            # read the octets after it as the next header.
+            pytest.param(
+                "C0 02  32 01 4B 02 06 01 02 03 04 05 06 03 01 02 03 04 05 06",
+                id="second of two",
+            ),
+        ],
+    )
+    def test_a_size_prefix_that_disagrees_with_a_known_object_is_malformed(self, fragment):
+        body = _request(fragment)
+
+        assert body["apdu_rejected"] == "malformed"
+        assert (body["objects"], body["points"]) == ([], [])
+        _assert_valid([body])
+
+    def test_a_size_prefix_that_matches_a_known_object_is_read(self):
+        # Group 50 variation 1, qualifier 0x5B, count 1, size 6, then the time.
+        body = _request("C0 02  32 01 5B 01 06 00 01 02 03 04 05 06")
+
+        assert "apdu_rejected" not in body
+        assert body["objects"] == [
+            {"group": 50, "variation": 1, "qualifier": 0x5B, "count": 1, "data": "0600010203040506"}
+        ]
+
     def test_a_rejected_response_keeps_its_internal_indications(self):
         body = _response("C0 81 80 00  1E 01")
         assert (body["iin"], body["apdu_rejected"]) == (["device_restart"], "malformed")

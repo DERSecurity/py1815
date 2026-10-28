@@ -407,6 +407,15 @@ _HEADER_ONLY_FUNCTIONS = frozenset({1, 7, 8, 9, 10, 20, 21, 22})
 _FREEZE_AT_TIME_FUNCTIONS = frozenset({11, 12})
 _GROUP_TIME = 50
 
+#: The qualifier codes IEEE 1815-2012 Table 4-6 permits. A qualifier octet is
+#: checked whole against these before it is split into its prefix and range
+#: specifier, so a reserved bit or combination is not read as a valid one.
+_VALID_QUALIFIERS = frozenset(
+    {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
+    | {0x17, 0x18, 0x19, 0x27, 0x28, 0x29, 0x37, 0x38, 0x39}
+    | {0x4B, 0x5B, 0x6B}
+)
+
 #: Octets of the start and stop for range specifier codes 0 to 5: indices for
 #: 0 to 2, virtual addresses for 3 to 5.
 _START_STOP_OCTETS = {0: 1, 1: 2, 2: 4, 3: 1, 4: 2, 5: 4}
@@ -415,10 +424,9 @@ _COUNT_OCTETS = {7: 1, 8: 2, 9: 4, 11: 1}
 #: Range specifier code 6: no range field, all objects.
 _ALL_OBJECTS = 6
 #: Octets of an index prefix (prefix codes 1 to 3) and of an object size
-#: prefix (codes 4 to 6). Code 0 is no prefix; code 7 is reserved.
+#: prefix (codes 4 to 6). Code 0 is no prefix.
 _INDEX_PREFIX_OCTETS = {1: 1, 2: 2, 3: 4}
 _SIZE_PREFIX_OCTETS = {4: 1, 5: 2, 6: 4}
-_RESERVED_PREFIX = 7
 
 #: The keys of a point, in the order a body lists them.
 _POINT_KEYS = (
@@ -536,6 +544,8 @@ class _Walk:
         if len(self.objects) >= MAX_OBJECTS:
             raise _Rejected(REJECTED_TOO_LARGE)
         group, variation, qualifier = self._take(3)
+        if qualifier not in _VALID_QUALIFIERS:
+            raise _Rejected(REJECTED_MALFORMED)
         prefix = (qualifier >> 4) & 0x07
         code = qualifier & 0x0F
         header: dict[str, Any] = {"group": group, "variation": variation, "qualifier": qualifier}
@@ -565,8 +575,6 @@ class _Walk:
             width = _INDEX_PREFIX_OCTETS[prefix]
             self._need(number * width, width)
             self.offset += number * width
-        elif prefix != 0:
-            raise _Rejected(REJECTED_MALFORMED)
         if group not in _POINT_GROUPS and self.offset > first:
             # A time write, a file command or a device attribute keeps what it
             # sets: the octets after the header, prefixes included.
@@ -588,8 +596,6 @@ class _Walk:
         self, group: int, variation: int, prefix: int, start: int | None, number: int
     ) -> None:
         """Read the objects under one header."""
-        if prefix == _RESERVED_PREFIX:
-            raise _Rejected(REJECTED_MALFORMED)
         known = (group, variation) in _LAYOUTS or group in _OCTET_GROUPS
         if prefix in _SIZE_PREFIX_OCTETS and not known:
             # An object this module does not read, such as a file or an
@@ -607,7 +613,15 @@ class _Walk:
         unit = index_octets + size_octets + size
         self._need(number * unit, unit)
         if layout.kind is None and group != _GROUP_COMMON_TIME:
-            self.offset += number * unit
+            # An object that is not a point is walked past. Each size prefix
+            # must state the layout's size, or the walk would lose its place.
+            if not size_octets:
+                self.offset += number * unit
+                return
+            for _ in range(number):
+                if self._uint(size_octets) != size:
+                    raise _Rejected(REJECTED_MALFORMED)
+                self.offset += size
             return
         for position in range(number):
             index: int | None = None

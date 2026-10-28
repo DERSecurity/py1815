@@ -219,7 +219,7 @@ header was complete, `iin` remain.
 |---|---|
 | `point_count` | The object data ends after a whole object, before the objects a header's range or count declares |
 | `too_large` | More than 1024 object headers or 16384 points, or a header whose `data` would be longer than 2048 octets. A 2048-octet fragment never exceeds these |
-| `malformed` | Anything else that stops the reading: a fragment cut short inside a header or an object, a reserved qualifier, a range whose start is above its stop, a point sent with no index, or an object this library cannot size |
+| `malformed` | Anything else that stops the reading: a fragment cut short inside a header or an object, a qualifier octet that IEEE 1815-2012 Table 4-6 does not list (a reserved bit, prefix or range code, or a prefix with a range code it does not combine with), a size prefix that does not match the size of an object this library reads, a range whose start is above its stop, a point sent with no index, or an object this library cannot size |
 
 This library reads every object group and variation in the tables above, the
 time and date (group 50 variations 1 to 4), the common time of occurrence

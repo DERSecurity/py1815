@@ -31,6 +31,7 @@ from py1815.application import (
     parse_request,
 )
 from py1815.session import _NO_RESPONSE_FUNCTIONS, _SUPPORTED_FUNCTIONS, Session
+from py1815.traffic import _VALID_QUALIFIERS
 
 TABLES = pathlib.Path(__file__).resolve().parent.parent / "conformance" / "ieee-1815-2012.json"
 
@@ -256,6 +257,18 @@ def test_every_accepted_qualifier_is_valid(tables: dict) -> None:
     invalid = sorted(member for member in QualifierCode if int(member) not in valid)
     assert not invalid, "qualifiers Table 4-6 does not permit: " + ", ".join(
         f"{member.name} = 0x{int(member):02X}" for member in invalid
+    )
+
+
+def test_traffic_records_read_exactly_the_qualifiers_table_4_6_permits(tables: dict) -> None:
+    """A traffic record describes any valid qualifier and rejects every other octet.
+
+    The walk checks the whole qualifier octet against this set before it reads
+    the prefix and the range specifier, so the set must be Table 4-6 exactly.
+    """
+    valid = set(tables["4-6"]["qualifiers"])
+    assert set(_VALID_QUALIFIERS) == valid, (
+        f"missing {sorted(valid - _VALID_QUALIFIERS)}, extra {sorted(_VALID_QUALIFIERS - valid)}"
     )
 
 
