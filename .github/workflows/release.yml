@@ -105,8 +105,12 @@ jobs:
         # version cannot be replaced, only yanked, and downstream packagers
         # build from the sdist and run this suite -- a broken one surfaces as
         # their bug report, after the only chance to fix it has gone.
+        #
+        # jsonschema is installed with the test runner because the traffic
+        # tests validate every record against the schema and fail without it.
+        # The other dev dependencies gate tests that skip when they are absent.
         run: |
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio "jsonschema>=4.18"
           work=$(mktemp -d)
           tar -xzf dist/*.tar.gz -C "$work"
           cd "$work"/py1815-*
