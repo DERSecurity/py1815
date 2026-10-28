@@ -366,7 +366,8 @@ running somewhere else.
 
 It runs the tests and nothing more. Ruff, mypy and the changelog check read the
 source and answer the same on any machine, so they stay in the `test` job, and
-this one installs the package, `pytest` and `pytest-asyncio`. Emulation makes it
+this one installs the package, `pytest`, `pytest-asyncio` and `jsonschema`, which
+the traffic tests need. Emulation makes it
 the slowest job in the workflow, at several minutes, which is why it runs one
 Python version: the question it asks is about the platform.
 
@@ -458,5 +459,5 @@ place it is the command the `test-arm32` job runs:
 
 ```bash
 docker run --rm --platform linux/arm/v7 -v "$PWD":/src:ro -w /src python:3.12-slim \
-  sh -ec 'pip install -q . pytest pytest-asyncio && pytest -q -x -p no:cacheprovider'
+  sh -ec 'pip install -q . pytest pytest-asyncio "jsonschema>=4.18" && pytest -q -x -p no:cacheprovider'
 ```
