@@ -16,7 +16,8 @@ fragment in IEEE 1815 terms:
   primary-message bit, which end sent the fragment, the application control's
   UNS bit, and a response's internal indications by name.
 - The IP address and port of each end of the connection, where known.
-- One entry per object header, with its qualifier and its range or count.
+- One entry per object header, with its qualifier, its range or count, and
+  the octets of objects that are not points, such as a time write.
 - Every point the fragment carries, in wire order, with its point type,
   object group and variation, the index on the wire, its value, flag octet and
   time, and the fields of a control object.
@@ -26,7 +27,7 @@ from the object layouts of IEEE 1815-2012. It reads requests and responses,
 every qualifier the standard defines, and the command objects a master sends
 and an outstation echoes. A fragment it cannot read to its end is described as
 rejected, with no objects and no points (:data:`REJECTED_MALFORMED`,
-:data:`REJECTED_POINT_COUNT`).
+:data:`REJECTED_POINT_COUNT`, :data:`REJECTED_TOO_LARGE`).
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -71,11 +72,18 @@ REJECTED_MALFORMED = "malformed"
 #: objects an object header's range or count declares.
 REJECTED_POINT_COUNT = "point_count"
 
+#: The ``apdu_rejected`` reason for a fragment with more object headers or
+#: points, or a longer header ``data``, than the schema allows.
+REJECTED_TOO_LARGE = "too_large"
+
 #: The most object headers a body lists. A fragment with more is rejected.
-MAX_OBJECTS = 4096
+MAX_OBJECTS = 1024
 
 #: The most points a body lists. A fragment with more is rejected.
-MAX_POINTS = 65536
+MAX_POINTS = 16384
+
+#: The most octets a header's ``data`` holds: a whole 2048-octet fragment.
+MAX_DATA_OCTETS = 2048
 
 #: The internal indication names, IIN1.0 to IIN2.7 in bit order.
 IIN_BITS = (
@@ -139,6 +147,7 @@ _ANALOG = "analog"
 _ANALOG_DEADBAND = "analog_deadband"
 _ANALOG_OUTPUT = "analog_output"
 _OCTET_STRING = "octet_string"
+_INTERNAL_INDICATION = "internal_indication"
 
 
 class _Field(Enum):
@@ -372,8 +381,8 @@ _LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
     g52={1: _Layout(None, opaque=2), 2: _Layout(None, opaque=2)},
     # Class data: a header with no objects.
     g60={1: _Layout(None), 2: _Layout(None), 3: _Layout(None), 4: _Layout(None)},
-    # The internal indications, one bit each.
-    g80={1: _Layout(None, packed_bits=1)},
+    # The internal indications, one bit each, indexed by bit (IEEE 1815-2012 A.28).
+    g80={1: _Layout(_INTERNAL_INDICATION, packed_bits=1)},
 )
 
 #: Groups whose variation is the length of each object in octets: octet
@@ -386,7 +395,13 @@ _OCTET_GROUPS = {
     113: _Layout(None, (_F.OCTETS,)),
 }
 
-_GROUP_CROB = 12
+#: Groups whose objects are points. A header of any other group carries the
+#: octets that follow it as ``data``.
+_POINT_GROUPS = frozenset(
+    {group for (group, _), layout in _LAYOUTS.items() if layout.kind is not None}
+    | {group for group, layout in _OCTET_GROUPS.items() if layout.kind is not None}
+)
+
 _GROUP_COMMON_TIME = 51
 _PATTERN_BLOCK = (12, 2)
 _PATTERN_MASK = (12, 3)
@@ -480,7 +495,7 @@ class _Walk:
         self.offset = 0
         self.direction = direction
         self.function = function
-        self.objects: list[dict[str, int]] = []
+        self.objects: list[dict[str, Any]] = []
         self.points: list[dict[str, Any]] = []
         #: The common time of occurrence that relative-time objects count from.
         self.common_time: int | None = None
@@ -530,18 +545,20 @@ class _Walk:
 
     def _header(self) -> None:
         if len(self.objects) >= MAX_OBJECTS:
-            raise _Rejected(REJECTED_MALFORMED)
+            raise _Rejected(REJECTED_TOO_LARGE)
         group, variation, qualifier = self._take(3)
         prefix = (qualifier >> 4) & 0x07
         code = qualifier & 0x0F
-        header = {"group": group, "variation": variation, "qualifier": qualifier}
+        header: dict[str, Any] = {"group": group, "variation": variation, "qualifier": qualifier}
         start: int | None = None
-        number: int | None
+        number: int
         if code in _START_STOP_OCTETS:
             width = _START_STOP_OCTETS[code]
             start, stop = self._uint(width), self._uint(width)
             header["start"], header["stop"] = start, stop
-            number = stop - start + 1 if stop >= start else None
+            if stop < start:
+                raise _Rejected(REJECTED_MALFORMED)
+            number = stop - start + 1
         elif code in _COUNT_OCTETS:
             number = self._uint(_COUNT_OCTETS[code])
             header["count"] = number
@@ -551,19 +568,22 @@ class _Walk:
             raise _Rejected(REJECTED_MALFORMED)
         self.objects.append(header)
 
+        first = self.offset
         if prefix in _SIZE_PREFIX_OCTETS or self._carries_objects(group):
-            if number is None:
-                raise _Rejected(REJECTED_MALFORMED)
             self._objects(group, variation, prefix, start, number)
         elif prefix in _INDEX_PREFIX_OCTETS:
             # A request that names points by index: the indices and no objects.
-            if number is None:
-                raise _Rejected(REJECTED_MALFORMED)
             width = _INDEX_PREFIX_OCTETS[prefix]
             self._need(number * width, width)
             self.offset += number * width
         elif prefix != 0:
             raise _Rejected(REJECTED_MALFORMED)
+        if group not in _POINT_GROUPS and self.offset > first:
+            # A time write, a file command or a device attribute keeps what it
+            # sets: the octets after the header, prefixes included.
+            if self.offset - first > MAX_DATA_OCTETS:
+                raise _Rejected(REJECTED_TOO_LARGE)
+            header["data"] = self.data[first : self.offset].hex()
 
     def _layout(self, group: int, variation: int) -> _Layout:
         if group in _OCTET_GROUPS:
@@ -736,7 +756,7 @@ class _Walk:
 
     def _add(self, point: dict[str, Any]) -> None:
         if len(self.points) >= MAX_POINTS:
-            raise _Rejected(REJECTED_MALFORMED)
+            raise _Rejected(REJECTED_TOO_LARGE)
         self.points.append({key: point[key] for key in _POINT_KEYS if key in point})
 
 
@@ -1094,10 +1114,12 @@ __all__ = [
     "CAPTURE_ORIGIN_LIVE",
     "CLIENT_ID_SOURCE_KEY",
     "IIN_BITS",
+    "MAX_DATA_OCTETS",
     "MAX_OBJECTS",
     "MAX_POINTS",
     "REJECTED_MALFORMED",
     "REJECTED_POINT_COUNT",
+    "REJECTED_TOO_LARGE",
     "SCHEMA_ID",
     "SCHEMA_VERSION",
     "Direction",

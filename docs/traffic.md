@@ -145,8 +145,18 @@ The internal indication names, IIN1.0 to IIN2.7, are `broadcast`,
 Each entry has `group`, `variation` and `qualifier`, the qualifier octet as
 sent. Range specifier codes 0 to 5 add `start` and `stop`, codes 7, 8, 9 and
 11 add `count`, and code 6 adds neither. Every header is listed, those that
-carry no points included: a class read, a time write, a write of the internal
-indications.
+carry no points included: a class read, a time write, a file command.
+
+A header of a group whose objects are not points, such as the time and date
+(group 50), the common time of occurrence (51) or a file object (70), adds
+`data` when octets follow it: those octets in lowercase hex, index and size
+prefixes included. A time write keeps the time it sets:
+
+```json
+{"group": 50, "variation": 1, "qualifier": 7, "count": 1, "data": "7bc02cc89901"}
+```
+
+A header of a point group never has `data`; its objects are in `points`.
 
 ### Points
 
@@ -167,30 +177,36 @@ in a request or echoed in a response.
 | `analog_deadband` | 34 | A number |
 | `analog_output` | 40, 41, 42, 43 | A number |
 | `octet_string` | 110, 111 | The octets in lowercase hex |
+| `internal_indication` | 80 | 0 or 1 |
 
 The other fields appear where the object carries them:
 
 - `flags`: the flag octet as sent. A binary object's state bits are part of
   it. A variation without flags has none.
-- `time`: milliseconds since 1970 on the outstation's clock. A relative-time
-  event is counted from the common time of occurrence before it in the same
-  fragment, and has no `time` when there is none.
+- `time`: milliseconds since 1970 on the outstation's clock, on the event and
+  frozen objects that carry one. A relative-time event is counted from the
+  common time of occurrence before it in the same fragment, and has no `time`
+  when there is none.
 - `status`: the control status octet of a CROB, an analog output block, and
   their command events (groups 13 and 43). A binary output command event
   carries its commanded state in bit 7, as `value`, and its status in bits 0
   to 6.
 - `op_type`, `trip_close`, `clear`, `queue`, `count`, `on_time` and
   `off_time`: a CROB's control code, split into its fields, and the rest of
-  the block. A pattern control (group 12 variations 2 and 3) gives one CROB
-  point, with variation 2, for each output its mask selects.
+  the block. A group 12 point is variation 1, a CROB, or variation 2: a
+  pattern control block followed by its pattern mask (variation 3) gives one
+  variation 2 point, with the block's fields, at the index of each output the
+  mask selects. A mask with no block before it gives no points.
 - `non_finite`: on a floating-point value that is not finite, `nan`, `inf` or
   `-inf`. `value` is then null, since JSON has no such numbers.
 
 An integer variation gives an integer `value`, and a floating-point variation
 the exact value sent: single precision `0.1` is `0.10000000149011612`.
 
-Points come only from those groups. Objects of other groups, such as the time,
-class data, files and the internal indications, appear in `objects` only.
+Points come only from those groups. A write of the internal indications
+(group 80), which a master sends to clear the restart bit at index 7, gives
+one `internal_indication` point per bit, with no flags or time. Objects of
+other groups appear in `objects`, with their octets in `data`.
 
 ### Rejected fragments
 
@@ -202,15 +218,16 @@ header was complete, `iin` remain.
 | `apdu_rejected` | When |
 |---|---|
 | `point_count` | The object data ends after a whole object, before the objects a header's range or count declares |
-| `malformed` | Anything else that stops the reading: a fragment cut short inside a header or an object, a reserved qualifier, an inverted range in object data, a point sent with no index, an object this library cannot size, or more than 65536 points or 4096 object headers |
+| `too_large` | More than 1024 object headers or 16384 points, or a header whose `data` would be longer than 2048 octets. A 2048-octet fragment never exceeds these |
+| `malformed` | Anything else that stops the reading: a fragment cut short inside a header or an object, a reserved qualifier, a range whose start is above its stop, a point sent with no index, or an object this library cannot size |
 
 This library reads every object group and variation in the tables above, the
 time and date (group 50 variations 1 to 4), the common time of occurrence
-(51), the time delay (52), class data (60), the internal indications (80),
-virtual terminal objects (112, 113), and any object sent with a size prefix,
-which it walks past. A fragment that carries object data of any other group
-or variation, such as device attributes (group 0) or the obsolete delta
-counters, is reported as `malformed`.
+(51), the time delay (52), class data (60), virtual terminal objects (112,
+113), and any object sent with a size prefix. A fragment that carries object
+data of any other group or variation, such as device attributes (group 0) or
+the obsolete delta counters, is reported as `malformed`: without the object's
+size, the next header cannot be found.
 
 ## Validating
 

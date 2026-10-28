@@ -1724,7 +1724,9 @@ misreads the internal indication bits of group 80, and renumbers indices when tw
 one point type share a fragment. A published, versioned schema (`$id`
 `https://dersec.com/schemas/dnp3-traffic/v1`) is instead the contract producers and
 consumers both check against: IEEE 1815 indices, every point in wire order, command objects
-and events included, flags, times, and a rejected fragment that lists nothing. `traffic`
+and events and internal indication writes included, flags, times, the octets of every other
+object a request sets, bounds that a 2048-octet fragment never exceeds, and a rejected
+fragment that lists nothing. `traffic`
 reads fragments with its own walk of the object headers, written from IEEE 1815-2012's object
 layouts, not with any capture tool and not with `decode`, which reads only responses, for
 the values a master keeps. The envelope is copied into `envelope` rather than imported, to
@@ -1733,8 +1735,9 @@ that both addresses and ports in a body come from the connection and not from a 
 contract test is the schema copy, which every body the tests build must validate against,
 and test vectors that pair fragments with the bodies the schema defines. *Trade-off:* a new
 schema version means updating the copy and the builder together, and the body's `schema`
-field tells consumers which version they hold; a fragment carrying an object the walk cannot
-size, or more points or headers than the schema allows, is rejected as `malformed`.
+field tells consumers which version they hold; a fragment carrying object data the walk
+cannot size, such as device attributes, is rejected as `malformed`, because the next header
+cannot be found.
 
 ## Layering
 

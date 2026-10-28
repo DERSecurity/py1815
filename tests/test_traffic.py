@@ -56,6 +56,7 @@ from py1815.master import Master, Tasks
 from py1815.observers import Endpoint, RequestRecord
 from py1815.traffic import (
     IIN_BITS,
+    MAX_DATA_OCTETS,
     MAX_OBJECTS,
     MAX_POINTS,
     SCHEMA_ID,
@@ -584,35 +585,65 @@ class TestObjects:
         ]
         assert body["points"] == []
 
-    def test_a_read_with_an_inverted_range_is_listed_as_sent(self):
+    def test_a_read_with_an_inverted_range_is_malformed(self):
+        # Group 30 variation 0, qualifier 0x00, start 5, stop 2: a range that
+        # runs backwards, in a request that carries no objects.
         body = _request("C0 01  1E 00 00 05 02")
-        assert body["objects"] == [
-            {"group": 30, "variation": 0, "qualifier": 0, "start": 5, "stop": 2}
-        ]
+        assert (body["apdu_rejected"], body["objects"]) == ("malformed", [])
 
     def test_a_freeze_at_time_reads_its_time_object_and_then_its_headers(self):
         # Group 50 variation 2, qualifier 0x07, count 1: time and interval.
         # Then group 20 variation 0, qualifier 0x06.
         body = _request("C0 0B  32 02 07 01 00 00 00 00 00 00 10 27 00 00  14 00 06")
 
-        assert [(o["group"], o["variation"]) for o in body["objects"]] == [(50, 2), (20, 0)]
-        assert "apdu_rejected" not in body
-
-    def test_a_write_of_the_internal_indications_gives_no_points(self):
-        # Group 80 variation 1, qualifier 0x00, 7 to 7, the bit clear.
-        body = _request("C0 02  50 01 00 07 07 00")
-
         assert body["objects"] == [
-            {"group": 80, "variation": 1, "qualifier": 0, "start": 7, "stop": 7}
+            {
+                "group": 50,
+                "variation": 2,
+                "qualifier": 7,
+                "count": 1,
+                "data": "000000000000" + "10270000",
+            },
+            {"group": 20, "variation": 0, "qualifier": 6},
         ]
         assert body["points"] == []
+
+    def test_a_write_of_the_internal_indications_gives_a_point_per_bit(self):
+        # Group 80 variation 1, qualifier 0x00, 4 to 7: 0b0101, bits 4 and 6 set.
+        body = _request("C0 02  50 01 00 04 07 05")
+
+        assert body["objects"] == [
+            {"group": 80, "variation": 1, "qualifier": 0, "start": 4, "stop": 7}
+        ]
+        assert [(p["type"], p["index"], p["value"]) for p in body["points"]] == [
+            ("internal_indication", 4, 1),
+            ("internal_indication", 5, 0),
+            ("internal_indication", 6, 1),
+            ("internal_indication", 7, 0),
+        ]
+        assert all(
+            set(p) == {"type", "group", "variation", "index", "command", "value"}
+            for p in body["points"]
+        )
+
+    def test_a_common_time_header_carries_its_octets_as_data(self):
+        body = _response("C0 81 00 00  33 01 07 01 40 42 0F 00 00 00  02 03 17 01 00 81 FA 00")
+        assert body["objects"][0]["data"] == "40420f000000"
+        assert "data" not in body["objects"][1]
+
+    def test_a_header_with_no_octets_after_it_has_no_data(self):
+        body = _request("C0 01  3C 01 06  32 01 07 01")
+        assert all("data" not in header for header in body["objects"])
 
     def test_an_object_with_a_size_prefix_is_walked_past(self):
         # Group 70 variation 3, qualifier 0x5B, count 1, size 3, three octets.
         # Then group 60 variation 1, qualifier 0x06.
         body = _request("C0 19  46 03 5B 01 03 00 AA BB CC  3C 01 06")
 
-        assert [(o["group"], o["qualifier"]) for o in body["objects"]] == [(70, 0x5B), (60, 6)]
+        assert body["objects"] == [
+            {"group": 70, "variation": 3, "qualifier": 0x5B, "count": 1, "data": "0300aabbcc"},
+            {"group": 60, "variation": 1, "qualifier": 6},
+        ]
         assert "apdu_rejected" not in body
 
 
@@ -658,9 +689,21 @@ class TestRejected:
         body = _response(_packed_binaries(MAX_POINTS).hex())
         assert len(body["points"]) == MAX_POINTS
 
-    def test_more_points_than_the_limit_are_rejected(self):
+    def test_more_points_than_the_limit_are_too_large(self):
         body = _response(_packed_binaries(MAX_POINTS + 1).hex())
-        assert (body["apdu_rejected"], body["points"]) == ("malformed", [])
+        assert (body["apdu_rejected"], body["points"]) == ("too_large", [])
+        _assert_valid([body])
+
+    def test_data_up_to_a_whole_fragment_is_kept_and_longer_is_too_large(self):
+        # Group 70 variation 3, qualifier 0x5B, count 1, then a two-octet size.
+        def file_write(size: int) -> str:
+            return ("C0 19  46 03 5B 01" + struct.pack("<H", size).hex() + "00" * size).replace(
+                " ", ""
+            )
+
+        (header,) = _request(file_write(MAX_DATA_OCTETS - 2))["objects"]
+        assert len(header["data"]) == 2 * MAX_DATA_OCTETS
+        assert _request(file_write(MAX_DATA_OCTETS - 1))["apdu_rejected"] == "too_large"
 
     def test_object_headers_up_to_the_limit_are_listed_and_more_are_rejected(self):
         # Group 60 variation 1, qualifier 0x06, repeated.
@@ -668,7 +711,7 @@ class TestRejected:
         over = at_limit + bytes.fromhex("3C 01 06")
 
         assert len(_request(at_limit.hex())["objects"]) == MAX_OBJECTS
-        assert _request(over.hex())["apdu_rejected"] == "malformed"
+        assert _request(over.hex())["apdu_rejected"] == "too_large"
 
 
 def _packed_binaries(count: int) -> bytes:

@@ -418,9 +418,11 @@ The master is tested the way the outstation is, and from the same argument.
 The bodies `py1815.traffic` builds are defined by the DNP3 traffic schema
 (D103), so they are checked two ways. `tests/traffic_vectors.json` pairs
 application fragments, in hex, with the body the schema's authors wrote for
-each from the IEEE 1815 object layouts: reads, writes, direct operate and
-select-then-operate of a CROB and an analog output block with their echoes,
-unsolicited responses and their confirmations, and rejected fragments.
+each from the IEEE 1815 object layouts: reads, direct operate and
+select-then-operate of a CROB and an analog output block with their echoes, a
+pattern control with its echo, writes of the internal indications, a deadband
+and the time, unsolicited responses and their confirmations, and rejected
+fragments.
 `tests/test_traffic.py` reads each fragment and compares the body to the
 vector as JSON text, so the key order counts. Then every body the tests
 build is validated against the copy of the schema in the package: the

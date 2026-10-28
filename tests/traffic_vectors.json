@@ -221,6 +221,41 @@
           "stop": 7
         }
       ],
+      "points": [
+        {
+          "type": "internal_indication",
+          "group": 80,
+          "variation": 1,
+          "index": 7,
+          "command": false,
+          "value": 0
+        }
+      ]
+    }
+  },
+  "write/time and date request": {
+    "apdu": "cc02320107017bc02cc89901",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 2,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 50,
+          "variation": 1,
+          "qualifier": 7,
+          "count": 1,
+          "data": "7bc02cc89901"
+        }
+      ],
       "points": []
     }
   },
@@ -735,6 +770,163 @@
           "index": 1,
           "command": true,
           "value": 100,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "pattern control/select request": {
+    "apdu": "c3030c0207014103f4010000d0070000000c0300050f2104",
+    "body": {
+      "schema": 1,
+      "source_address": 1,
+      "destination_address": 10,
+      "function_code": 3,
+      "prm": 1,
+      "direction": "request",
+      "unsolicited": false,
+      "source_ip": "192.0.2.10",
+      "source_port": 50123,
+      "destination_ip": "192.0.2.20",
+      "destination_port": 20000,
+      "objects": [
+        {
+          "group": 12,
+          "variation": 2,
+          "qualifier": 7,
+          "count": 1
+        },
+        {
+          "group": 12,
+          "variation": 3,
+          "qualifier": 0,
+          "start": 5,
+          "stop": 15
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 5,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 10,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 15,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        }
+      ]
+    }
+  },
+  "pattern control/select response": {
+    "apdu": "c38100000c0207014103f4010000d0070000000c0300050f2104",
+    "body": {
+      "schema": 1,
+      "source_address": 10,
+      "destination_address": 1,
+      "function_code": 129,
+      "prm": 1,
+      "direction": "response",
+      "unsolicited": false,
+      "source_ip": "192.0.2.20",
+      "source_port": 20000,
+      "destination_ip": "192.0.2.10",
+      "destination_port": 50123,
+      "iin": [],
+      "objects": [
+        {
+          "group": 12,
+          "variation": 2,
+          "qualifier": 7,
+          "count": 1
+        },
+        {
+          "group": 12,
+          "variation": 3,
+          "qualifier": 0,
+          "start": 5,
+          "stop": 15
+        }
+      ],
+      "points": [
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 5,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 10,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
+          "status": 0
+        },
+        {
+          "type": "binary_output",
+          "group": 12,
+          "variation": 2,
+          "index": 15,
+          "command": true,
+          "op_type": 1,
+          "trip_close": 1,
+          "clear": false,
+          "queue": false,
+          "count": 3,
+          "on_time": 500,
+          "off_time": 2000,
           "status": 0
         }
       ]
