@@ -1947,6 +1947,41 @@ comes from the event policy and is not read or written over DNP3. *Trade-off:* a
 writes deadbands writes them again after each restart, in return for an outstation that holds
 no state outside the process.
 
+**D115 -- At Level 4 an output reports an event when its status changes, in the class of
+its paired input, and class 0 carries the status of every output that reports.**
+Binary output events (g11) and analog output events (g42) are required of a Level 4
+outstation (TB2016-003b, Tables 12-13 and 12-41). `poll()` reads each output's status as a
+read of group 10 or 40 does and records a change of value or flags, whether a control, the
+device or a failing status reader caused it (IEEE 1815-2012, A.7.1.1). There is no
+deadband, and every change is kept, as for binary inputs. The tables give an output no
+event class, so it takes the class of the input paired with it, which reports the same
+change; an output whose paired input reports no events reports none, and an output with no
+paired input reports in class 3, as a frozen counter does where the tables are silent. The
+event policy does not name outputs. A class poll and a variation 0 read answer g11v2 and
+g42v3, with time, and a read by name takes any variation of Tables 12-13 and 12-41 except
+the double-precision ones. Floating-point variations carry engineering units, as an analog
+output command does. Table 12-49 note i has an outstation that leaves g10 and g40 out of
+class 0 leave their events out of classes 1 to 3, and A.7.1.1 allows an output event only
+for a point that class 0 reports. So at Level 4 class 0 carries g10v2 and g40v1 for each
+output that reports events, and no other output; Levels 2 and 3 and the default answer
+class 0 as before. The Device Profile lists the groups and each output's class.
+*Trade-off:* a mirrored status input reports the same change in the same class, so a
+master sees it twice, once as an input and once as an output. A class 0 read is larger. The
+absolute time of an event stamped before a master set the clock is sent as it is: g11 and
+g42 have no relative-time variation to say the clock was unset.
+
+**D116 -- Command events are not generated, and a read of g13 or g43 is answered with a
+null response.** Table 12-17 note a and Table 12-43 note a make generating g13 and g43
+optional, and note b has an outstation that reports them and has none return a null
+response. A command event reports that a control was attempted, by any master or by the
+device, with its status; it is a log entry, and an event is owed for every attempt,
+refused or not, once the control is complete (IEEE 1815-2012, A.9.1 and A.22.1). The
+outstation records no attempts, and recording them would put every refused control in a
+class a master polls. Reads at Level 4 are answered in each variation of the tables
+(g13v0 to v2, g43v0 to v5 and v7). The master decodes both groups.
+*Trade-off:* a master cannot learn from the outstation that another master commanded an
+output. It learns the result from the output event.
+
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in its
 value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter
 events optional, and has a device that supports them raise one whenever any of a counter's

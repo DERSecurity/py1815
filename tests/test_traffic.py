@@ -383,7 +383,14 @@ class TestSessionTraffic:
 
 
 def _flags(layout: Any) -> bool:
-    return bool(layout.fields) and layout.fields[0] in (_Field.FLAGS, _Field.FLAGS_STATE)
+    # The master reads the leading octet of a command event, which is a control
+    # status, as the flags; a body names it a status.
+    return bool(layout.fields) and layout.fields[0] in (
+        _Field.FLAGS,
+        _Field.FLAGS_STATE,
+        _Field.STATE_STATUS,
+        _Field.STATUS,
+    )
 
 
 def _time(layout: Any) -> _Time:

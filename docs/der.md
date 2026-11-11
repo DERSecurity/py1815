@@ -220,7 +220,7 @@ event and changes no output.
 | **Range** | An input outside the tables' range is reported with `OVER_RANGE`. A setpoint outside it is refused with `OUT_OF_RANGE`, not clamped. |
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
 | **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. Whether it is enabled is what its enable output stands at: your `status=` reader when you give one, the last accepted write when you do not. `disabled_offline=False` turns this off. |
-| **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
+| **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. At Level 4, the output status of each output that reports events is carried too ([Output events](#output-events-at-level-4)). |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The time is the one the `Reading` gives, when it gives one and its quality is `GOOD`, moved onto the clock a master has set; otherwise it is when `poll()` recorded the event. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone, and so does a control relay output block with the clear bit or the obsolete queue bit set. |
 | **Output status** | An output's status and the input that mirrors it report the same thing: your `status=` reader when you give one, the last accepted write when you do not. |
@@ -618,6 +618,35 @@ value changes is set by the event policy and is not read or written over DNP3;
 A written deadband is held in memory. It is lost when the outstation restarts, which
 then uses the configured deadbands again, and the Device Profile says that no
 settings are kept through a restart.
+
+### Output events at Level 4
+
+At Level 4, an output reports an event when its value or flags change: binary output
+events (group 11) and analog output events (group 42). `poll()` reads the output's status
+as a master would, which is your `status=` reader when you give one and the last accepted
+write when you do not, so a control a master sends, a change the device makes itself and
+a status that goes stale each produce an event. The first `poll()` only notes where each
+output stands.
+
+An output reports in the class the tables give it. The tables give none, so the class is
+that of the input paired with the output, which reports the same change: a master polling
+that class hears of both together. An output whose paired input reports no events reports
+none. An output with no paired input reports in class 3. The [event
+policy](#setting-the-event-policy) does not apply to outputs.
+
+Every change is kept, and a full class drops its oldest event and sets the overflow
+indication, as for the inputs. A class poll returns the events in the order they
+happened, binary and analog outputs among the inputs, with time. A master can also read
+them by group, as variation 0, or in variations 1 and 2 of group 11 and 1 to 5 and 7 of
+group 42. Floating-point values are in engineering units, as in an analog output command.
+
+The command event groups, 13 and 43, are read and answered with nothing: no outstation
+is required to generate them, and this one does not. A read of a variation these groups
+do not offer is answered as an unknown object.
+
+An output that reports events is also carried by a class 0 read, in group 10 and group 40,
+because a master learns the value an event changes from class 0. The other outputs are left
+out, as at the lower levels.
 
 ## Memory on a small controller
 

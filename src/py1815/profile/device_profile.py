@@ -102,6 +102,16 @@ _DEADBANDS = {
     3: "Analog Input Reporting Deadband - single-precision floating point",
 }
 
+#: The analog output event variations an outstation reports, by variation.
+_ANALOG_OUTPUT_EVENT_NAMES = {
+    1: "Analog Output Event - 32-bit without time",
+    2: "Analog Output Event - 16-bit without time",
+    3: "Analog Output Event - 32-bit with time",
+    4: "Analog Output Event - 16-bit with time",
+    5: "Analog Output Event - single-precision floating point without time",
+    7: "Analog Output Event - single-precision floating point with time",
+}
+
 #: A nested description of child elements: a bare name is an empty element, a
 #: pair is a name with either text or children of its own.
 Items = Sequence[Any]
@@ -237,7 +247,9 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         for variation, description in variations.items():
             rows.append(Row(group, variation, description, request=(READ, select)))
 
-    def events(group: int, name: str, variations: dict[int, str]) -> None:
+    def events(
+        group: int, name: str, variations: dict[int, str], *, generated: bool = True
+    ) -> None:
         if not facts.events:
             return
         if group == 23 and outstation.level2:
@@ -247,14 +259,10 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         variations = variations | _added(outstation, _LEVEL_4_EVENTS, group)
         rows.append(Row(group, 0, f"{name} - any variation", request=(READ, select)))
         for variation, description in variations.items():
+            # A group that is read and never generated lists no response.
+            response = (RESPONSE, tuple(_INDEXED)) if generated else None
             rows.append(
-                Row(
-                    group,
-                    variation,
-                    description,
-                    request=(READ, select),
-                    response=(RESPONSE, tuple(_INDEXED)),
-                )
+                Row(group, variation, description, request=(READ, select), response=response)
             )
 
     def controls(group: int, variations: dict[int, str]) -> None:
@@ -287,6 +295,24 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         )
     if served[Kind.BO]:
         static(10, "Binary Output", {2: "Binary Output - output status with flags"})
+        if 11 in facts.output_events:
+            events(
+                11,
+                "Binary Output Event",
+                {
+                    1: "Binary Output Event - status without time",
+                    2: "Binary Output Event - status with time",
+                },
+            )
+            events(
+                13,
+                "Binary Output Command Event",
+                {
+                    1: "Binary Output Command Event - command status without time",
+                    2: "Binary Output Command Event - command status with time",
+                },
+                generated=False,
+            )
         if facts.controls:
             controls(12, {1: "Binary Output Command - control relay output block"})
     if served[Kind.CTR]:
@@ -391,6 +417,17 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 2: "Analog Output Status - 16-bit with flag",
             },
         )
+        if 42 in facts.output_events:
+            events(42, "Analog Output Event", _ANALOG_OUTPUT_EVENT_NAMES)
+            events(
+                43,
+                "Analog Output Command Event",
+                {
+                    variation: description.replace("Event", "Command Event", 1)
+                    for variation, description in _ANALOG_OUTPUT_EVENT_NAMES.items()
+                },
+                generated=False,
+            )
         if facts.controls:
             controls(
                 41,
@@ -482,6 +519,10 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     response=unsolicited,
                 )
             )
+        if 11 in facts.output_events:
+            rows.append(Row(11, 2, "Binary Output Event - status with time", response=unsolicited))
+        if 42 in facts.output_events:
+            rows.append(Row(42, 3, _ANALOG_OUTPUT_EVENT_NAMES[3], response=unsolicited))
         if served[Kind.AI]:
             rows.append(
                 Row(
@@ -862,6 +903,16 @@ def _class_0(points: Sequence[Point]) -> list[str]:
     return ["basedOnPointIndex"]
 
 
+def _output_class_0(outstation: DerOutstation, points: Sequence[Point]) -> list[str]:
+    """How an output group answers class 0: the outputs that report events are in it."""
+    reporting = {bool(outstation.event_class(point.kind, point.index)) for point in points}
+    if reporting == {True}:
+        return ["always"]
+    if reporting == {False}:
+        return ["never"]
+    return ["basedOnPointIndex"]
+
+
 def _select_timeout(facts: SessionFacts) -> tuple[str, list[Any]]:
     return _setting(
         "maxTimeBetweenSelectAndOperate",
@@ -876,6 +927,11 @@ def _database(
     groups: list[Any] = []
     level2 = outstation.level2
     frozen = outstation.default_variation(21)
+    reports = {Kind.BO: 11 in facts.output_events, Kind.AO: 42 in facts.output_events}
+
+    def output_class_0(kind: Kind) -> list[str]:
+        return _output_class_0(outstation, served[kind]) if reports[kind] else ["never"]
+
     if served[Kind.BI]:
         groups.append(
             (
@@ -914,9 +970,17 @@ def _database(
                                 [("note", ignored), ("fixed", 65535)],
                                 [("fixed", 65535)],
                             ),
-                            _both("class0ResponseMode", ["never"]),
+                            _both("class0ResponseMode", output_class_0(Kind.BO)),
                             _both("outputCommandEventObjects", ["never"]),
                             _both("defaultStaticVariation", _variation(2)),
+                            *(
+                                [
+                                    _both("defaultEventVariation", _variation(2)),
+                                    _both("changeEventReportingMode", ["allEvents"]),
+                                ]
+                                if reports[Kind.BO]
+                                else []
+                            ),
                             _select_timeout(facts),
                         ],
                     )
@@ -1027,8 +1091,16 @@ def _database(
                                 "defaultStaticVariation",
                                 _variation(outstation.default_variation(40)),
                             ),
-                            _both("class0ResponseMode", ["never"]),
+                            _both("class0ResponseMode", output_class_0(Kind.AO)),
                             _both("outputCommandEventObjects", ["never"]),
+                            *(
+                                [
+                                    _both("defaultChangeEventVariation", _variation(3)),
+                                    _both("changeEventReportingMode", ["allEvents"]),
+                                ]
+                                if reports[Kind.AO]
+                                else []
+                            ),
                             _select_timeout(facts),
                         ],
                     )
@@ -1113,6 +1185,10 @@ def _points(
         # the tables' default for the point.
         return _CLASS_WORDS[outstation.event_class(point.kind, point.index)]
 
+    def output_class_0(point: Point) -> str:
+        # An output is in class 0 where it reports events (D115).
+        return "always" if outstation.event_class(point.kind, point.index) else "never"
+
     def binary_input(point: Point) -> list[Any]:
         return [
             *_names(point),
@@ -1139,9 +1215,9 @@ def _points(
         )
         return [
             *_names(point),
-            ("changeEventClass", "none"),
+            ("changeEventClass", event_class(point)),
             ("commandEventClass", "none"),
-            ("includedInClass0Response", "never"),
+            ("includedInClass0Response", output_class_0(point)),
             ("supportedControlOperations", operations),
             *_states(point),
         ]
@@ -1192,9 +1268,9 @@ def _points(
         )
         items: list[Any] = [
             *_names(point),
-            ("changeEventClass", "none"),
+            ("changeEventClass", event_class(point)),
             ("commandEventClass", "none"),
-            ("includedInClass0Response", "never"),
+            ("includedInClass0Response", output_class_0(point)),
             ("supportedControlOperations", operations),
         ]
         if point.minimum is not None:

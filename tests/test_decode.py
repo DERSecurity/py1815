@@ -241,6 +241,39 @@ class TestAnalogDeadbands:
         assert [(first.index, first.value), (second.index, second.value)] == [(1, 5), (9, 20)]
 
 
+class TestCommandEvents:
+    """Group 13 and 43 report a command that was attempted, not what an output stands at."""
+
+    def test_binary_command_event_has_the_commanded_state_and_the_status(self):
+        # Octet 0x81: commanded state 1 in bit 7, control status 1 (TIMEOUT) in bits 0 to 6.
+        decoded = _one("0D 01 17 01  02  81")
+        assert (decoded.index, decoded.value, decoded.flags) == (2, True, 0x01)
+        assert decoded.event and decoded.point is None
+
+    def test_binary_command_event_with_time(self):
+        decoded = _one(f"0D 02 17 01  02  00 {TIME_OCTETS}")
+        assert (decoded.value, decoded.flags, decoded.time_ms) == (False, 0x00, TIME)
+
+    @pytest.mark.parametrize(
+        ("octets", "value", "time"),
+        [
+            ("2B 01 17 01 03  04 A0 86 01 00", 100000, None),
+            ("2B 02 17 01 03  04 64 00", 100, None),
+            (f"2B 03 17 01 03  04 A0 86 01 00 {TIME_OCTETS}", 100000, TIME),
+            (f"2B 04 17 01 03  04 64 00 {TIME_OCTETS}", 100, TIME),
+            ("2B 05 17 01 03  04 00 00 C8 42", 100.0, None),
+            ("2B 06 17 01 03  04 00 00 00 00 00 00 59 40", 100.0, None),
+            (f"2B 07 17 01 03  04 00 00 C8 42 {TIME_OCTETS}", 100.0, TIME),
+            (f"2B 08 17 01 03  04 00 00 00 00 00 00 59 40 {TIME_OCTETS}", 100.0, TIME),
+        ],
+    )
+    def test_analog_command_event_in_each_variation(self, octets, value, time):
+        # Control status 4 (NOT_SUPPORTED), then the commanded value.
+        decoded = _one(octets)
+        assert (decoded.index, decoded.flags, decoded.value, decoded.time_ms) == (3, 4, value, time)
+        assert decoded.event and decoded.point is None
+
+
 class TestObjectsThatAreNotPoints:
     def test_the_time_and_date(self):
         decoded = _one(f"32 01 07 01 {TIME_OCTETS}")
@@ -373,6 +406,9 @@ class TestTheTable:
             ((34, 3), 4),
             ((32, 8), 15),
             ((42, 7), 11),
+            ((13, 2), 7),
+            ((43, 5), 5),
+            ((43, 8), 15),
             ((50, 1), 6),
             ((51, 2), 6),
             ((52, 1), 2),

@@ -88,14 +88,23 @@ from py1815.application import (
     parse_request,
 )
 from py1815.control import (
+    ANALOG_OUTPUT_EVENT_SIZES,
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT,
+    GROUP_ANALOG_OUTPUT_EVENT,
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT,
+    GROUP_BINARY_OUTPUT_EVENT,
     AnalogOutput,
     CommandStatus,
     ControlError,
     ControlRelayOutputBlock,
+    encode_analog_output_event,
+    encode_binary_output_event,
 )
 from py1815.events import (
     AnalogEvent,
+    AnalogOutputEvent,
     BinaryEvent,
+    BinaryOutputEvent,
     CounterEvent,
     Event,
     EventBuffers,
@@ -281,6 +290,15 @@ _EXTENDED_EVENT_VARIATIONS: dict[int, frozenset[int]] = {
     GROUP_FROZEN_COUNTER_EVENT: frozenset({6}),
 }
 
+#: The variations the output event groups may be read in by name. Variations 6
+#: and 8 of groups 42 and 43 are double precision, which is not offered.
+_OUTPUT_EVENT_VARIATIONS: dict[int, frozenset[int]] = {
+    GROUP_BINARY_OUTPUT_EVENT: frozenset({0, 1, 2}),
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT: frozenset({0, 1, 2}),
+    GROUP_ANALOG_OUTPUT_EVENT: frozenset({0, 1, 2, 3, 4, 5, 7}),
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT: frozenset({0, 1, 2, 3, 4, 5, 7}),
+}
+
 #: Requests whose repetition, octet for octet, is a retry and not a second
 #: instruction: the answer is sent again and the action is not taken again.
 _ACT_ONCE = frozenset(
@@ -351,6 +369,16 @@ _FLOAT_ANALOG_EVENTS = frozenset(
     {AnalogEventVariation.FLOAT32, AnalogEventVariation.FLOAT32_WITH_TIME}
 )
 
+#: The variations output events are reported in when a class or variation 0
+#: asks for the default: binary output status with time (g11v2) and a 32-bit
+#: analog output with time (g42v3), for the reason the input events are timed.
+_BINARY_OUTPUT_EVENT_VARIATION = 2
+_ANALOG_OUTPUT_EVENT_VARIATION = 3
+#: The analog output event variations that carry a time of occurrence, and the
+#: ones that carry a single-precision float instead of an integer.
+_TIMED_ANALOG_OUTPUT_EVENTS = frozenset({3, 4, 7})
+_FLOAT_ANALOG_OUTPUT_EVENTS = frozenset({5, 7})
+
 #: The event groups a master may read by name instead of by class, and the
 #: kind of event each one selects (D46). Group 22 is the counter change event.
 #: An outstation that records none answers a read of it with nothing, because
@@ -360,6 +388,16 @@ _EVENT_GROUPS: dict[int, type | None] = {
     GROUP_ANALOG_INPUT_EVENT: AnalogEvent,
     GROUP_FROZEN_COUNTER_EVENT: FrozenCounterEvent,
     GROUP_COUNTER_EVENT: CounterEvent,
+}
+
+#: The output event groups, added to the groups above for a session that reports
+#: output events (D115). Groups 13 and 43, the command events, are read and
+#: answered with nothing, because none is generated (D116).
+_OUTPUT_EVENT_GROUPS: dict[int, type | None] = {
+    GROUP_BINARY_OUTPUT_EVENT: BinaryOutputEvent,
+    GROUP_ANALOG_OUTPUT_EVENT: AnalogOutputEvent,
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT: None,
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT: None,
 }
 
 #: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
@@ -386,6 +424,12 @@ _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
     (GROUP_COUNTER_EVENT, 1): 5,
+    (GROUP_BINARY_OUTPUT_EVENT, 1): 1,
+    (GROUP_BINARY_OUTPUT_EVENT, 2): 1 + TIME_SIZE,
+    **{
+        (GROUP_ANALOG_OUTPUT_EVENT, variation): size
+        for variation, size in ANALOG_OUTPUT_EVENT_SIZES.items()
+    },
     **{
         (GROUP_ANALOG_INPUT_EVENT, int(variation)): size
         for variation, size in ANALOG_EVENT_SIZES.items()
@@ -588,6 +632,8 @@ class SessionFacts:
     time_read: bool = False
     #: Whether the internal indications can be read (group 80 variation 1).
     indications_read: bool = False
+    #: The output event groups (11, 13, 42, 43) read from the event buffers.
+    output_events: frozenset[int] = frozenset()
 
 
 class FreezeProvider(Protocol):
@@ -900,6 +946,7 @@ class Session:
         request_observer: RequestObserver | None = None,
         deadband_provider: DeadbandProvider | None = None,
         extended_events: bool = False,
+        output_events: Iterable[int] = (),
     ) -> None:
         """
         Args:
@@ -1059,6 +1106,11 @@ class Session:
                 built, and for each unsolicited response it sends. Settable
                 later through the attribute of the same name. See
                 :mod:`py1815.observers`.
+            output_events: The output event groups to read from the buffers:
+                any of 11, 13, 42 and 43. A group left out is answered as an
+                object this outstation does not have. Groups 13 and 43 are
+                answered with nothing, because command events are not
+                generated (D116). Needs ``events``.
         """
         #: Called with each protocol anomaly, or None.
         self.anomaly_observer = anomaly_observer
@@ -1082,6 +1134,18 @@ class Session:
         self._provider = provider
         self._controls = control_provider
         self._events = events
+        self._output_events = frozenset(output_events)
+        stray = sorted(self._output_events - _OUTPUT_EVENT_GROUPS.keys())
+        if stray:
+            raise ValueError(
+                f"output_events names group {stray[0]}; the output event groups are "
+                f"{', '.join(map(str, sorted(_OUTPUT_EVENT_GROUPS)))}"
+            )
+        #: The event groups a read may name, and the kind of event each selects.
+        self._event_groups = {
+            **_EVENT_GROUPS,
+            **{g: k for g, k in _OUTPUT_EVENT_GROUPS.items() if g in self._output_events},
+        }
         self._select_timeout = select_timeout
         self._clock = clock
         self._select: _ArmedSelect | None = None
@@ -1156,6 +1220,8 @@ class Session:
             raise ValueError(
                 "analog_event_variation is a floating-point variation and extended_events is off"
             )
+        for group in self._output_events:
+            self._event_variations[group] = _OUTPUT_EVENT_VARIATIONS[group]
         self._deadbands = deadband_provider
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
@@ -1331,6 +1397,7 @@ class Session:
             frozen_counter_event_16_bit=self._frozen_event_16_bit,
             time_read=self._time_source is not None,
             indications_read=self._indications_read,
+            output_events=self._output_events,
         )
 
     @property
@@ -3301,7 +3368,7 @@ class Session:
         assert self._events is not None
         if header.event_class is not None:
             return self._events.peek(EventClass(header.event_class), limit=limit)
-        kind = _EVENT_GROUPS[header.group]
+        kind = self._event_groups[header.group]
         return [] if kind is None else self._events.peek_kind(kind, limit=limit)
 
     def _event_body(
@@ -3523,6 +3590,8 @@ class Session:
                 group = GROUP_COUNTER_EVENT
                 variation = _answered_in(group, named) or 1
                 encoded = encode_counter(event.point)
+            elif isinstance(event, (BinaryOutputEvent, AnalogOutputEvent)):
+                group, variation, encoded = _encode_output_event(event, named)
             else:
                 group = GROUP_BINARY_INPUT_EVENT
                 variation = named or int(_BINARY_EVENT_VARIATION)
@@ -3684,6 +3753,37 @@ class Session:
             and header.start == RESTART_INDEX
             and header.stop == RESTART_INDEX
         )
+
+
+def _encode_output_event(
+    event: BinaryOutputEvent | AnalogOutputEvent, named: int
+) -> tuple[int, int, bytes]:
+    """Return the group, variation and octets of an output event.
+
+    ``named`` is the variation the read asked for, or 0 for the default.
+    """
+    if isinstance(event, BinaryOutputEvent):
+        variation = named or _BINARY_OUTPUT_EVENT_VARIATION
+        return (
+            GROUP_BINARY_OUTPUT_EVENT,
+            variation,
+            encode_binary_output_event(
+                state=event.point.state,
+                flags=event.point.flags,
+                timestamp_ms=event.timestamp_ms if variation == 2 else None,
+            ),
+        )
+    variation = named or _ANALOG_OUTPUT_EVENT_VARIATION
+    return (
+        GROUP_ANALOG_OUTPUT_EVENT,
+        variation,
+        encode_analog_output_event(
+            event.value if variation in _FLOAT_ANALOG_OUTPUT_EVENTS else event.point.value,
+            variation,
+            flags=event.point.flags,
+            timestamp_ms=event.timestamp_ms if variation in _TIMED_ANALOG_OUTPUT_EVENTS else None,
+        ),
+    )
 
 
 def _checked(statuses: Sequence[CommandStatus], controls: Sequence[Control]) -> list[CommandStatus]:

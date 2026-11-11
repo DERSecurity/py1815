@@ -35,7 +35,13 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
-from py1815.objects import AnalogQuality, BinaryQuality, normalize_for_wire
+from py1815.objects import (
+    TIME_SIZE,
+    AnalogQuality,
+    BinaryQuality,
+    encode_time,
+    normalize_for_wire,
+)
 
 #: Binary output status, read back rather than commanded.
 GROUP_BINARY_OUTPUT_STATUS = 10
@@ -45,6 +51,14 @@ GROUP_BINARY_OUTPUT_COMMAND = 12
 GROUP_ANALOG_OUTPUT_STATUS = 40
 #: Analog output command: the setpoint.
 GROUP_ANALOG_OUTPUT_COMMAND = 41
+#: Binary output event: a change of an output's state or flags.
+GROUP_BINARY_OUTPUT_EVENT = 11
+#: Binary output command event: a record that a command was attempted.
+GROUP_BINARY_OUTPUT_COMMAND_EVENT = 13
+#: Analog output event: a change of an output's value or flags.
+GROUP_ANALOG_OUTPUT_EVENT = 42
+#: Analog output command event: a record that a setpoint was attempted.
+GROUP_ANALOG_OUTPUT_COMMAND_EVENT = 43
 
 
 class ControlError(Exception):
@@ -386,6 +400,64 @@ def encode_analog_output_status(
         raw = value
 
     return bytes([flags & 0xFF]) + struct.pack(_ANALOG_FORMAT[variation], raw)
+
+
+#: The analog output status variation (group 40) whose value and flag octets
+#: each analog output event variation (group 42) repeats, and whether the event
+#: ends with a time of occurrence. Variations 6 and 8 are double precision,
+#: which this library does not send.
+_ANALOG_OUTPUT_EVENTS = {
+    1: (1, False),
+    2: (2, False),
+    3: (1, True),
+    4: (2, True),
+    5: (3, False),
+    7: (3, True),
+}
+
+#: Octets one analog output event occupies in each variation, without its index.
+ANALOG_OUTPUT_EVENT_SIZES = {
+    variation: 1 + _ANALOG_WIDTH[status] + (TIME_SIZE if timed else 0)
+    for variation, (status, timed) in _ANALOG_OUTPUT_EVENTS.items()
+}
+
+
+def encode_binary_output_event(
+    *, state: bool, flags: int = BinaryQuality.ONLINE, timestamp_ms: int | None = None
+) -> bytes:
+    """Group 11 variation 1, or variation 2 when a time is given.
+
+    The flag octet is the one group 10 variation 2 carries, with the state in
+    its top bit (IEEE 1815-2012, A.7.1.2). Variation 2 adds the time of occurrence.
+    """
+    return encode_binary_output_status(state=state, flags=flags) + (
+        b"" if timestamp_ms is None else encode_time(timestamp_ms)
+    )
+
+
+def encode_analog_output_event(
+    value: float,
+    variation: int,
+    *,
+    flags: int = AnalogQuality.ONLINE,
+    timestamp_ms: int | None = None,
+) -> bytes:
+    """One group 42 object in the variation named.
+
+    The value and flags are the ones group 40 carries, with the same saturation
+    and non-finite rules. The variation decides whether a time of occurrence
+    follows, and a mismatch with ``timestamp_ms`` is refused in both directions,
+    as it is for the analog input events.
+    """
+    if variation not in _ANALOG_OUTPUT_EVENTS:
+        raise ControlError(f"no analog output event variation {variation}")
+    status, timed = _ANALOG_OUTPUT_EVENTS[variation]
+    if timed and timestamp_ms is None:
+        raise ControlError(f"variation {variation} carries a timestamp and none was given")
+    if not timed and timestamp_ms is not None:
+        raise ControlError(f"variation {variation} carries no timestamp and one was given")
+    encoded = encode_analog_output_status(value, status, flags=flags)
+    return encoded if timestamp_ms is None else encoded + encode_time(timestamp_ms)
 
 
 def _pack_value(value: float, variation: int, group: int) -> bytes:

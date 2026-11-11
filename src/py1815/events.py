@@ -122,10 +122,43 @@ class CounterEvent:
     order: int = field(default=0, compare=False)
 
 
+@dataclass(frozen=True)
+class BinaryOutputEvent:
+    """One binary output change: its state or its flags."""
+
+    index: int
+    point: BinaryPoint
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+
+
+@dataclass(frozen=True)
+class AnalogOutputEvent:
+    """One analog output change: its value or its flags."""
+
+    index: int
+    #: The value as the integer variations carry it, with its flags.
+    point: AnalogPoint
+    #: The same value in engineering units, which the floating-point
+    #: variations carry unscaled.
+    value: float
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+
+
 #: Any kind of event. The buffers hold them together, because a class is a
 #: reporting priority rather than a data type -- a master asking for class 1
 #: wants everything assigned to class 1.
-Event = AnalogEvent | BinaryEvent | FrozenCounterEvent | CounterEvent
+Event = (
+    AnalogEvent
+    | BinaryEvent
+    | FrozenCounterEvent
+    | CounterEvent
+    | BinaryOutputEvent
+    | AnalogOutputEvent
+)
 
 #: The largest index an event block can prefix an object with, the wider of the
 #: two qualifiers this outstation accepts being sixteen bits.
@@ -197,6 +230,8 @@ class EventBuffers:
         self._last_counter: dict[int, CounterPoint] = {}
         #: The count in each counter's last event, or its first reading.
         self._counter_reported: dict[int, int] = {}
+        self._last_binary_output: dict[int, BinaryPoint] = {}
+        self._last_analog_output: dict[int, AnalogPoint] = {}
         self._overflow_generation = 0
         self._recorded = 0
         self._analog_latest_only = analog_latest_only
@@ -476,6 +511,71 @@ class EventBuffers:
             timestamp_ms if timestamp_ms is not None else now_ms(),
             order=self._next_order(),
         )
+        self._buffer(event_class, event)
+        return event
+
+    def prime_binary_output(self, index: int, point: BinaryPoint) -> None:
+        """Note where a binary output stands, without reporting it."""
+        self._last_binary_output[self._checked_index(index)] = point
+
+    def prime_analog_output(self, index: int, point: AnalogPoint) -> None:
+        """Note where an analog output stands, without reporting it."""
+        self._last_analog_output[self._checked_index(index)] = point
+
+    def record_binary_output(
+        self,
+        index: int,
+        point: BinaryPoint,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+    ) -> BinaryOutputEvent | None:
+        """Record a binary output's status, returning the event it generated, if any.
+
+        Any change of state or of a quality flag is an event, and a repeat of
+        what the master was last told is not (IEEE 1815-2012, A.7.1.1).
+        """
+        self._checked_index(index)
+        previous = self._last_binary_output.get(index)
+        if previous is not None and not self._binary_changed(previous, point):
+            return None
+        event = BinaryOutputEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
+        self._last_binary_output[index] = point
+        self._buffer(event_class, event)
+        return event
+
+    def record_analog_output(
+        self,
+        index: int,
+        point: AnalogPoint,
+        value: float,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+    ) -> AnalogOutputEvent | None:
+        """Record an analog output's status, returning the event it generated, if any.
+
+        Any change of the transmitted value or of a quality flag is an event.
+        Every one is kept: each is a setpoint taking effect, and a master
+        reading the sequence is owed all of them.
+        """
+        self._checked_index(index)
+        previous = self._last_analog_output.get(index)
+        if previous is not None and not self._analog_changed(previous, point, 0.0):
+            return None
+        event = AnalogOutputEvent(
+            index,
+            point,
+            value,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
+        self._last_analog_output[index] = point
         self._buffer(event_class, event)
         return event
 

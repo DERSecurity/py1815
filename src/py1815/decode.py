@@ -131,6 +131,11 @@ LAYOUTS: dict[tuple[int, int], Layout] = {
     (11, 2): _binary(_BO, event=True, time=_ABS),
     # A control relay output block, as an outstation echoes it. Walked past.
     (12, 1): Layout(None, opaque=11),
+    # Binary output command events. The commanded state is bit 7 of the first
+    # octet, as it is for a status, and the control status is the other seven
+    # bits, which this reads as the flags. Not a point's value, so no point.
+    (13, 1): Layout(None, event=True),
+    (13, 2): Layout(None, event=True, time=_ABS),
     # Counters: 32 and 16 bits, with a flag and without.
     (20, 1): _number(_CTR, "<I"),
     (20, 2): _number(_CTR, "<H"),
@@ -192,6 +197,17 @@ LAYOUTS: dict[tuple[int, int], Layout] = {
     (42, 6): _number(_AO, "<d", event=True),
     (42, 7): _number(_AO, "<f", event=True, time=_ABS),
     (42, 8): _number(_AO, "<d", event=True, time=_ABS),
+    # Analog output command events: the control status, which this reads as the
+    # flags, then the commanded value, then the time where there is one. Not a
+    # point's value, so no point.
+    (43, 1): Layout(None, event=True, number="<i"),
+    (43, 2): Layout(None, event=True, number="<h"),
+    (43, 3): Layout(None, event=True, number="<i", time=_ABS),
+    (43, 4): Layout(None, event=True, number="<h", time=_ABS),
+    (43, 5): Layout(None, event=True, number="<f"),
+    (43, 6): Layout(None, event=True, number="<d"),
+    (43, 7): Layout(None, event=True, number="<f", time=_ABS),
+    (43, 8): Layout(None, event=True, number="<d", time=_ABS),
     # The time and date, the common time of occurrence in its two forms, and
     # the time delay in seconds and in milliseconds.
     (50, 1): Layout(None, flags=False, time=_ABS),
@@ -298,7 +314,7 @@ def _one(
             time_ms = common.time_ms + relative
             synchronized = common.synchronized
 
-    if layout.point is None and layout.time is _Time.ABSOLUTE:
+    if layout.point is None and layout.time is _Time.ABSOLUTE and not layout.event:
         # A time object's value is the time.
         value = time_ms
         if group == GROUP_COMMON_TIME:

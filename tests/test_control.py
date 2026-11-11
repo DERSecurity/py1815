@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from py1815.control import (
+    ANALOG_OUTPUT_EVENT_SIZES,
     CROB_SIZE,
     AnalogOutput,
     CommandStatus,
@@ -21,7 +22,9 @@ from py1815.control import (
     decode_analog_output,
     decode_crob,
     encode_analog_output,
+    encode_analog_output_event,
     encode_analog_output_status,
+    encode_binary_output_event,
     encode_binary_output_status,
     encode_crob,
 )
@@ -211,6 +214,53 @@ class TestStatusObjects:
     )
     def test_every_variation(self, value, variation, expected):
         assert encode_analog_output_status(value, variation).hex() == expected
+
+
+#: 1 000 000 ms as the six octets of a DNP3 time.
+TIME_OCTETS = "40420f000000"
+
+
+class TestOutputEventObjects:
+    """Group 11 repeats the flag octet of group 10; group 42 repeats group 40."""
+
+    def test_binary_output_event_without_time_is_the_status_octet(self):
+        assert encode_binary_output_event(state=True).hex() == "81"
+
+    def test_binary_output_event_with_time_ends_in_the_time_of_occurrence(self):
+        encoded = encode_binary_output_event(state=False, timestamp_ms=1_000_000)
+        assert encoded.hex() == "01" + TIME_OCTETS
+
+    @pytest.mark.parametrize(
+        ("value", "variation", "timestamp", "expected"),
+        [
+            (50000, 1, None, "0150c30000"),
+            (-1000, 2, None, "0118fc"),
+            (50000, 3, 1_000_000, "0150c30000" + TIME_OCTETS),
+            (-1000, 4, 1_000_000, "0118fc" + TIME_OCTETS),
+            (1.5, 5, None, "010000c03f"),
+            (1.5, 7, 1_000_000, "010000c03f" + TIME_OCTETS),
+        ],
+    )
+    def test_analog_output_event_in_each_variation(self, value, variation, timestamp, expected):
+        assert (
+            encode_analog_output_event(value, variation, timestamp_ms=timestamp).hex() == expected
+        )
+
+    @pytest.mark.parametrize(("variation", "timestamp"), [(1, 5), (3, None), (7, None), (5, 5)])
+    def test_a_time_that_does_not_belong_to_the_variation_is_refused(self, variation, timestamp):
+        with pytest.raises(ControlError, match="timestamp"):
+            encode_analog_output_event(1, variation, timestamp_ms=timestamp)
+
+    @pytest.mark.parametrize("variation", [0, 6, 8, 9])
+    def test_double_precision_and_other_variations_are_not_encoded(self, variation):
+        with pytest.raises(ControlError, match="no analog output event variation"):
+            encode_analog_output_event(1, variation)
+
+    def test_the_sizes_are_the_octets_each_variation_occupies(self):
+        assert ANALOG_OUTPUT_EVENT_SIZES == {1: 5, 2: 3, 3: 11, 4: 9, 5: 5, 7: 11}
+
+    def test_an_out_of_range_value_is_clamped_and_flagged_as_a_status_is(self):
+        assert encode_analog_output_event(40000, 2).hex() == "21ff7f"
 
 
 class TestRawFidelityOnAnalogCommands:

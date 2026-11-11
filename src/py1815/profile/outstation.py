@@ -35,8 +35,12 @@ from py1815.application import CLASS_GROUP, RESPONSE_HEADER_SIZE, ObjectHeader, 
 from py1815.application import object_header as range_header
 from py1815.control import (
     GROUP_ANALOG_OUTPUT_COMMAND,
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT,
+    GROUP_ANALOG_OUTPUT_EVENT,
     GROUP_ANALOG_OUTPUT_STATUS,
     GROUP_BINARY_OUTPUT_COMMAND,
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT,
+    GROUP_BINARY_OUTPUT_EVENT,
     GROUP_BINARY_OUTPUT_STATUS,
     AnalogOutput,
     CommandStatus,
@@ -180,6 +184,28 @@ _ASSIGNABLE_GROUPS = {
 
 #: The groups a class 0 read is answered with, in the order they are sent.
 _CLASS_0_GROUPS = (GROUP_BINARY_INPUT, GROUP_COUNTER, GROUP_FROZEN_COUNTER, GROUP_ANALOG_INPUT)
+
+#: The same at Level 4, which adds the output status of the outputs that report
+#: events: a master learns an output's value from class 0 before the events that
+#: change it (IEEE 1815-2012, A.7.1.1; TB2016-003b, Table 12-49 note i).
+_CLASS_0_GROUPS_L4 = (
+    GROUP_BINARY_INPUT,
+    GROUP_BINARY_OUTPUT_STATUS,
+    GROUP_COUNTER,
+    GROUP_FROZEN_COUNTER,
+    GROUP_ANALOG_INPUT,
+    GROUP_ANALOG_OUTPUT_STATUS,
+)
+
+#: The class an output's events report in when neither the tables nor a paired
+#: input give one, as for a frozen counter.
+_DEFAULT_OUTPUT_CLASS = EventClass.CLASS_3
+
+#: The output event groups each kind of output is read in at Level 4.
+_OUTPUT_EVENT_GROUPS = {
+    Kind.BO: (GROUP_BINARY_OUTPUT_EVENT, GROUP_BINARY_OUTPUT_COMMAND_EVENT),
+    Kind.AO: (GROUP_ANALOG_OUTPUT_EVENT, GROUP_ANALOG_OUTPUT_COMMAND_EVENT),
+}
 
 _RANGES = (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
 
@@ -530,6 +556,29 @@ class DerOutstation:
                 self._deadbands[point.index] = self._binding.deadbands[point.index]
             elif default is not None and default.deadband is not None:
                 self._deadbands[point.index] = _transmitted(point, default.deadband)
+        if self.at_least(SubsetLevel.LEVEL_4):
+            self._apply_output_classes()
+
+    def _apply_output_classes(self) -> None:
+        """Settle the class each served output reports its events in (D115).
+
+        The class the tables give the output, if they give one. Otherwise the
+        class of the input paired with it, since that input reports the same
+        change and a master polling one class hears of both together; an output
+        whose paired input reports no events reports none. An output with
+        neither is given the class a frozen counter defaults to.
+        """
+        for kind in (Kind.BO, Kind.AO):
+            for point in self._served[kind]:
+                own = point.event_class
+                if own in (1, 2, 3):
+                    self._classes[point.address] = own
+                    continue
+                paired = None if point.associated is None else self._map.get(*point.associated)
+                if paired is None:
+                    self._classes[point.address] = int(_DEFAULT_OUTPUT_CLASS)
+                else:
+                    self._classes[point.address] = self._classes.get(paired.address, 0)
 
     def _settle_counter(
         self, point: Point, default: EventRule | None, own: EventRule | None, reported: int
@@ -859,8 +908,8 @@ class DerOutstation:
         blocks: list[bytes] = []
         for header in headers:
             if header.group == CLASS_GROUP and header.event_class == 0:
-                for group in _CLASS_0_GROUPS:
-                    points = [p for p in self._points(group) if p.in_class_0]
+                for group in self._class_0_groups:
+                    points = [p for p in self._points(group) if self._in_class_0(p)]
                     blocks += self._ranges(group, self._defaults[group], points)
                 continue
             variation = self._variation(header)
@@ -871,6 +920,20 @@ class DerOutstation:
             else:
                 blocks += self._ranges(header.group, variation, self._selected(header))
         return blocks
+
+    @property
+    def _class_0_groups(self) -> tuple[int, ...]:
+        return _CLASS_0_GROUPS_L4 if self.at_least(SubsetLevel.LEVEL_4) else _CLASS_0_GROUPS
+
+    def _in_class_0(self, point: Point) -> bool:
+        """Whether a class 0 read carries this point.
+
+        An output is carried only when it reports events, so an outstation that
+        does not report output events answers class 0 as it always has.
+        """
+        if point.kind.is_output:
+            return bool(self._classes.get(point.address))
+        return point.in_class_0
 
     def _variation(self, header: ObjectHeader) -> int:
         served = self._served_variations.get(header.group)
@@ -1140,6 +1203,8 @@ class DerOutstation:
                 buffered += 1
         if self.at_least(SubsetLevel.LEVEL_3):
             buffered += self._poll_counters(now)
+        if self.at_least(SubsetLevel.LEVEL_4):
+            buffered += self._poll_outputs(now)
         self._primed = True
         return buffered
 
@@ -1164,6 +1229,48 @@ class DerOutstation:
                 counter,
                 event_class=EventClass(reported),
                 value_deadband=self._counter_deadbands.get(point.index),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        return buffered
+
+    def _poll_outputs(self, now: int) -> int:
+        """Buffer the changes of the outputs that report events, from Level 4 up.
+
+        An output's value or flags change when a control is carried out, when
+        its status reader reports a change the device made, and when the
+        reader stops answering. The first pass only records where each stands,
+        as it does for the inputs.
+        """
+        buffered = 0
+        for point in self._served[Kind.BO]:
+            reported = self._classes.get(point.address, 0)
+            if not reported:
+                continue
+            reading = self._standing(point.address)
+            binary = self._binary_of(reading)
+            if not self._primed:
+                self.events.prime_binary_output(point.index, binary)
+            elif self.events.record_binary_output(
+                point.index,
+                binary,
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        for point in self._served[Kind.AO]:
+            reported = self._classes.get(point.address, 0)
+            if not reported:
+                continue
+            reading = self._standing(point.address)
+            analog = self._analog_of(point, reading)
+            if not self._primed:
+                self.events.prime_analog_output(point.index, analog)
+            elif self.events.record_analog_output(
+                point.index,
+                analog,
+                float(reading.value),
+                event_class=EventClass(reported),
                 timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
@@ -1400,6 +1507,14 @@ class DerOutstation:
             # floating-point and 16-bit frozen counter events (D112, D113).
             options["deadband_provider"] = self
             options["extended_events"] = True
+            # The output event groups of each kind of output served (D115,
+            # D116). The others are objects this device lacks.
+            options["output_events"] = [
+                group
+                for kind, groups in _OUTPUT_EVENT_GROUPS.items()
+                if self._served[kind]
+                for group in groups
+            ]
         return options
 
     def session(self, *, max_response: int = 2048, **options: Any) -> Session:

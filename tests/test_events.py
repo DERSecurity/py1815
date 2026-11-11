@@ -18,7 +18,9 @@ from py1815.events import (
     _BINARY_QUALITY_MASK,
     MAX_INDEX,
     AnalogEvent,
+    AnalogOutputEvent,
     BinaryEvent,
+    BinaryOutputEvent,
     EventBuffers,
     EventClass,
     now_ms,
@@ -511,3 +513,94 @@ class TestPeekTakesItsLimitFromTheFront:
         buffers.peek(EventClass.CLASS_1, limit=1)
 
         assert buffers.count(EventClass.CLASS_1) == 6
+
+
+class TestOutputEvents:
+    """An output's value or flags changing is an event; a repeat of what was told is not."""
+
+    @staticmethod
+    def _binary(buffers, index, state, flags=BinaryQuality.ONLINE, event_class=EventClass.CLASS_2):
+        return buffers.record_binary_output(
+            index,
+            BinaryPoint(state, flags),
+            event_class=event_class,
+            timestamp_ms=1_700_000_000_000,
+        )
+
+    @staticmethod
+    def _analog(buffers, index, value, flags=ONLINE, event_class=EventClass.CLASS_2):
+        return buffers.record_analog_output(
+            index,
+            AnalogPoint(value, flags),
+            float(value),
+            event_class=event_class,
+            timestamp_ms=1_700_000_000_000,
+        )
+
+    def test_the_first_reading_of_an_output_is_an_event_unless_it_was_primed(self):
+        buffers = _buffers()
+        assert isinstance(self._binary(buffers, 0, True), BinaryOutputEvent)
+        assert isinstance(self._analog(buffers, 0, 5), AnalogOutputEvent)
+        primed = _buffers()
+        primed.prime_binary_output(0, BinaryPoint(False))
+        primed.prime_analog_output(0, AnalogPoint(0))
+        assert self._binary(primed, 0, False) is None
+        assert self._analog(primed, 0, 0) is None
+
+    def test_a_change_of_state_is_an_event_and_a_repeat_is_not(self):
+        buffers = _buffers()
+        buffers.prime_binary_output(0, BinaryPoint(False))
+        assert self._binary(buffers, 0, True) is not None
+        assert self._binary(buffers, 0, True) is None
+        assert self._binary(buffers, 0, False) is not None
+
+    def test_a_change_of_flags_alone_is_an_event(self):
+        buffers = _buffers()
+        buffers.prime_binary_output(0, BinaryPoint(False))
+        assert self._binary(buffers, 0, False, BinaryQuality.COMM_LOST) is not None
+
+    def test_any_change_of_an_analog_output_value_is_an_event(self):
+        buffers = _buffers()
+        buffers.prime_analog_output(0, AnalogPoint(10))
+        assert self._analog(buffers, 0, 11) is not None, "there is no deadband on an output"
+        assert self._analog(buffers, 0, 11) is None
+
+    def test_a_change_of_analog_flags_alone_is_an_event(self):
+        buffers = _buffers()
+        buffers.prime_analog_output(0, AnalogPoint(10))
+        assert self._analog(buffers, 0, 10, COMM_LOST) is not None
+
+    def test_each_analog_output_change_is_kept_and_none_replaces_another(self):
+        buffers = _buffers()
+        buffers.prime_analog_output(0, AnalogPoint(0))
+        for value in (1, 2, 3):
+            self._analog(buffers, 0, value)
+        assert [event.value for event in buffers.peek(EventClass.CLASS_2)] == [1.0, 2.0, 3.0]
+
+    def test_an_output_event_is_held_in_the_class_it_was_given(self):
+        buffers = _buffers()
+        self._binary(buffers, 0, True, event_class=EventClass.CLASS_1)
+        assert buffers.count(EventClass.CLASS_1) == 1
+        assert buffers.count(EventClass.CLASS_2) == 0
+
+    def test_the_kinds_are_selected_apart_and_in_the_order_recorded(self):
+        buffers = _buffers()
+        self._binary(buffers, 0, True)
+        self._analog(buffers, 0, 5)
+        self._binary(buffers, 1, True)
+        assert [e.index for e in buffers.peek_kind(BinaryOutputEvent)] == [0, 1]
+        assert [e.index for e in buffers.peek_kind(AnalogOutputEvent)] == [0]
+        assert buffers.peek_kind(BinaryEvent) == []
+
+    def test_a_full_class_drops_the_oldest_output_event_and_counts_the_loss(self):
+        buffers = _buffers(capacity=2)
+        buffers.prime_analog_output(0, AnalogPoint(0))
+        for value in (1, 2, 3):
+            self._analog(buffers, 0, value)
+        assert [event.value for event in buffers.peek(EventClass.CLASS_2)] == [2.0, 3.0]
+        assert buffers.overflowed()
+        assert buffers.overflow_generation == 1
+
+    def test_an_index_an_event_block_cannot_carry_is_refused(self):
+        with pytest.raises(ValueError, match="outside"):
+            self._binary(_buffers(), MAX_INDEX + 1, True)
