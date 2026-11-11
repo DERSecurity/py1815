@@ -73,6 +73,11 @@ LOOPBACK = "127.0.0.1"
 #: The event class each binary input reports in.
 BINARY_INPUT_CLASSES = {**dict.fromkeys(range(8), 1), **dict.fromkeys(range(8, 12), 2)}
 
+#: Every counter's change of count raises an event from Level 3, beside the
+#: event a change of its flags raises. IED Certification Procedure 3.1 rev 1,
+#: 8.17 and 8.25.2.3, generate counter events by counting.
+EVENT_POLICY = {"defaults": {"CTR": {"value_changes": True}}}
+
 #: Analog inputs, all in one class. Sixty-four of them make a class 0 response
 #: longer than the 249 octets one link frame carries.
 ANALOG_INPUTS = tuple(range(64))
@@ -348,6 +353,7 @@ class Device:
             self._binding(settings),
             strict=False,
             level=self.level,
+            event_policy=EVENT_POLICY,
             clock_ms=self._clock_ms,
             time_written=self._time_written,
         )
@@ -500,8 +506,8 @@ class Device:
 
         Returns what was done: the input, its value, the time the change
         carries by the device's clock, and how many events the outstation
-        buffered for it. A counter change buffers none, and neither does an
-        analog change inside its deadband.
+        buffered for it. A counter change buffers one from Level 3 and none
+        below it, and an analog change inside its deadband buffers none.
         """
         which = _KINDS.get(kind)
         if which is None:

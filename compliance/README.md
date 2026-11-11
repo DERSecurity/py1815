@@ -8,9 +8,9 @@ the py1815 outstation.
 |---|---|
 | Tool | dnp3c 0.2.0 |
 | Procedures | DNP3 IED Certification Procedure, revision 3.1 rev 1 (13 September 2022) |
-| Subset level | 2 |
+| Subset level | 3 |
 | Connection | TCP |
-| Device | A Subset Level 2 configuration of this library, served by [`interop/conformance_outstation.py`](../interop/conformance_outstation.py) and configured by [`interop/dnp3c/device.ini`](../interop/dnp3c/device.ini) |
+| Device | A Subset Level 3 configuration of this library, served by [`interop/conformance_outstation.py`](../interop/conformance_outstation.py) and configured by [`interop/dnp3c/device.ini`](../interop/dnp3c/device.ini) |
 
 Every procedure that runs passes. None passes with a warning, and none is excluded. The
 rest are skipped because the outstation does not have the feature they test, because they
@@ -37,7 +37,7 @@ checks that its outcomes are the ones `interop/dnp3c/expected.json` has on recor
 that every log the report links to is here. To refresh it, run the procedures as
 [`interop/dnp3c/README.md`](../interop/dnp3c/README.md) describes, confirm the run is
 the one on record with `python interop/dnp3c/check_outcomes.py`, and copy the run's
-`results/3.1r1/L2/report.html`, `outcomes.json` and each `<procedure>/log.html` here.
+`results/3.1r1/L3/report.html`, `outcomes.json` and each `<procedure>/log.html` here.
 
 ## License
 

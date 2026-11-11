@@ -283,8 +283,17 @@ class TestInputs:
             assert (event.index, event.value) == (5, outside)
             await master.close()
 
-    async def test_a_counter_change_is_no_event_and_is_read_back(self):
+    async def test_a_counter_change_is_an_event_at_level_3(self):
         async with Bench(need_time=False) as bench:
+            answer = await bench.ask("set", changes=[["CTR", 2, 41]])
+            assert answer["changes"][0]["events"] == 1
+            master = await bench.master()
+            (event,) = (await master.request(READ, CLASS_3)).of(22)
+            assert (event.index, event.value) == (2, 41)
+            await master.close()
+
+    async def test_a_counter_change_is_no_event_at_level_2_and_is_read_back(self):
+        async with Bench(level=2, need_time=False) as bench:
             answer = await bench.ask("set", changes=[["CTR", 2, 41]])
             assert answer["changes"][0]["events"] == 0
             master = await bench.master()

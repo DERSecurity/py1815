@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8"/>
     <title>
-      8.17.2b Device does not support Binary Counter Events (revision 3.1r1, subset level 2) | Step Function I/O
+      8.17.2b Device does not support Binary Counter Events (revision 3.1r1, subset level 3) | Step Function I/O
     </title>
     <link rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Poppins:wght@300;600&display=swap"/>
     <link rel="stylesheet" type="text/css" href="../report.css"/>
@@ -12,10 +12,10 @@
     <header>
       <div class="heading">
         <h1>
-          8.17.2b Device does not support Binary Counter Events (revision 3.1r1, subset level 2)
+          8.17.2b Device does not support Binary Counter Events (revision 3.1r1, subset level 3)
         </h1>
         <p class="dut">
-          Device under test: <strong>py1815 Subset Level 2 outstation</strong>
+          Device under test: <strong>py1815 Subset Level 3 outstation</strong>
         </p>
         <div class="context">
           <a href="../report.html">
@@ -31,288 +31,13 @@
       <table class="log">
         <tr class="info">
           <td>
-            10:34:05.560
+            15:00:58.763
           </td>
           <td>
                  
           </td>
           <td>
-            Running procedure: 8.17.2b
-          </td>
-        </tr>
-        <tr class="plugin">
-          <td>
-            10:34:05.751
-          </td>
-          <td>
-            [PLG]
-          </td>
-          <td>
-            Started the outstation on port 20000
-          </td>
-        </tr>
-        <tr class="plugin">
-          <td>
-            10:34:05.751
-          </td>
-          <td>
-            [PLG]
-          </td>
-          <td>
-            Froze the device's counters: 4 frozen
-          </td>
-        </tr>
-        <tr class="note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            This procedure is enabled because the following options:
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-               - not (supports.counter == true and supports.counterChangeEvents == true) and (supports.counter == false or supports.counterEventReads == true)
-          </td>
-        </tr>
-        <tr class="note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            step: 1
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-               - Read(0x01) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x01
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-                  - g22v0, All Objects
-          </td>
-        </tr>
-        <tr class="transmit data-level-4">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-            --A-&gt;
-          </td>
-          <td>
-            Read(0x01) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x01
-          </td>
-        </tr>
-        <tr class="detail-level-0 transmit data-level-4">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            g22v0, All Objects
-          </td>
-        </tr>
-        <tr class="transmit data-level-3">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-            --T-&gt;
-          </td>
-          <td>
-            fir: 1 fin: 1 seq: 0
-          </td>
-        </tr>
-        <tr class="transmit data-level-2">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-            --L-&gt;
-          </td>
-          <td>
-            master: 1 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0xC4 length: 11 dest: 1024 src: 1
-          </td>
-        </tr>
-        <tr class="transmit data-level-1">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-            --P-&gt;
-          </td>
-          <td>
-            05 64 0B C4 00 04 01 00 CA 8A
-          </td>
-        </tr>
-        <tr class="detail-level-0 transmit data-level-1">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            C0 C1 01 16 00 06 8C C6
-          </td>
-        </tr>
-        <tr class="note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            step: 2
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-               - Not verified by this tool: a DUT with binary counters whose class 0 response spans several link frames must also report by exception.
-          </td>
-        </tr>
-        <tr class="note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            step: 3
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-               - Read a single fragment response w/ sequence(0x01)
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-               - Verify that the response is empty
-          </td>
-        </tr>
-        <tr class="detail-level-0 note">
-          <td>
-            10:34:05.752
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-               - Verify that the IIN field does not contain bits IIN(ParamError, ObjectUnknown, FuncNotSupported)
-          </td>
-        </tr>
-        <tr class="receive data-level-1">
-          <td>
-            10:34:05.753
-          </td>
-          <td>
-            &lt;-P--
-          </td>
-          <td>
-            05 64 0A 44 01 00 00 04 67 88
-          </td>
-        </tr>
-        <tr class="detail-level-0 receive data-level-1">
-          <td>
-            10:34:05.753
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            C0 C1 81 90 00 73 EE
-          </td>
-        </tr>
-        <tr class="receive data-level-2">
-          <td>
-            10:34:05.753
-          </td>
-          <td>
-            &lt;-L--
-          </td>
-          <td>
-            master: 0 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0x44 length: 10 dest: 1 src: 1024
-          </td>
-        </tr>
-        <tr class="receive data-level-3">
-          <td>
-            10:34:05.753
-          </td>
-          <td>
-            &lt;-T--
-          </td>
-          <td>
-            fir: 1 fin: 1 seq: 0
-          </td>
-        </tr>
-        <tr class="receive data-level-4">
-          <td>
-            10:34:05.753
-          </td>
-          <td>
-            &lt;-A--
-          </td>
-          <td>
-            Response(0x81) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x01 IIN(DeviceRestart, NeedTime)
-          </td>
-        </tr>
-        <tr class="info">
-          <td>
-            10:34:05.753
-          </td>
-          <td>
-                 
-          </td>
-          <td>
-            Passed procedure: 8.17.2b
+            Skipped procedure: 8.17.2b, disabled because it needs not (supports.counter == true and supports.counterChangeEvents == true)
           </td>
         </tr>
       </table>

@@ -24,8 +24,8 @@ library. It is what their tool reported when this project ran it.
 | | |
 |---|---|
 | Tool | dnp3c, version 0.2.0, as published on Maven Central |
-| Procedures | Revision 3.1 rev 1 (13 September 2022), at Subset Level 2 |
-| Device | A Subset Level 2 configuration of this library's outstation, served over TCP on a loopback address of its own by `interop/conformance_outstation.py` |
+| Procedures | Revision 3.1 rev 1 (13 September 2022), at Subset Level 3 |
+| Device | A Subset Level 3 configuration of this library's outstation, served over TCP on a loopback address of its own by `interop/conformance_outstation.py` |
 | Steps a master cannot perform | Done by a plugin through the device's control channel: cycling power, changing inputs and flags, setting up the network, and checking each response against what the device holds |
 | Where | The `dnp3c-conformance` job of the `interop` workflow, on every pull request that reaches the outstation: the library outside the master, the device script, the harness and its record, the workflow or the dependencies. The `interop` gate waits for it, so such a pull request does not merge while it fails |
 
@@ -42,6 +42,14 @@ Before each procedure the counters are frozen once, as an operator would before 
 so that a frozen counter holds a value. Flags are set abnormal through the point's source:
 the test bench marks an input's or an output's source as having lost communication, and
 a frozen counter carries its counter's flags from the freeze.
+
+The device's event policy has its counters raise an event when they count, beside the
+event a change of flags raises (D124), and the test bench generates counter events by
+making them count. Unsolicited responses, which Level 3 requires, are
+turned on by the procedures that test them, through a setting a power cycle applies.
+
+Level 2 is not run with dnp3c. The unit suite carries out the procedures at Level 2 and
+at Level 3, and one run of the harness, at the higher level, keeps the job's time down.
 
 ## How each section ends
 
@@ -65,7 +73,7 @@ brought up to date.
 | 8.3 | Analog Output Status | 8.3.2 |  |  |
 | 8.4 | Analog Outputs | 8.4.1.2.1 to 8.4.1.2.13, 8.4.2.2.1 to 8.4.2.2.3, 8.4.3.2.1 to 8.4.3.2.3, 8.4.4 |  |  |
 | 8.5 | Class Data | 8.5.1, 8.5.2.2.1 to 8.5.2.2.4, 8.5.3.2.1 to 8.5.3.2.4, 8.5.4.2.1 to 8.5.4.2.4, 8.5.5.2.1, 8.5.5.2.2, 8.5.6 |  |  |
-| 8.6 | Indications | 8.6.1 to 8.6.3, 8.6.5a, 8.6.5b, 8.6.6.2.1 | 8.6.4a, 8.6.4b, 8.6.6.2.2 to 8.6.6.2.4 |  |
+| 8.6 | Indications | 8.6.1 to 8.6.3, 8.6.5a, 8.6.5b, 8.6.6.2.1, 8.6.6.2.3 | 8.6.4a, 8.6.4b, 8.6.6.2.2, 8.6.6.2.4 |  |
 | 8.7 | Time | 8.7.1.1.2, 8.7.1.2.2, 8.7.2 |  |  |
 | 8.8 | Cold Restart | 8.8.2 |  |  |
 | 8.9 | Application Layer Fragmentation | 8.9.1, 8.9.2 |  |  |
@@ -76,7 +84,7 @@ brought up to date.
 | 8.14 | Binary Input Change Specific Requests | 8.14.2c to 8.14.2p | 8.14.2a, 8.14.2b |  |
 | 8.15 | Common Time of Occurrence | 8.15.2, 8.15.3 |  |  |
 | 8.16 | Binary Counters Specific Object Requests | 8.16.1.2.3, 8.16.1.2.4, 8.16.2.2.3 to 8.16.2.2.6 | 8.16.1.2.1, 8.16.1.2.2, 8.16.2.2.1, 8.16.2.2.2 |  |
-| 8.17 | Binary Counters, Event | 8.17.2b | 8.17.2a, 8.17.2c to 8.17.2f |  |
+| 8.17 | Binary Counters, Event | 8.17.2c to 8.17.2f | 8.17.2a, 8.17.2b |  |
 | 8.18 | Analog Input | 8.18.2c | 8.18.2a, 8.18.2b |  |
 | 8.19 | Analog Change Event | 8.19.2.4, 8.19.2b, 8.19.2c | 8.19.2a |  |
 | 8.20 | Multiple Read Requests | 8.20.2b | 8.20.2a |  |
@@ -116,6 +124,17 @@ None.
 
 Each of these ended differently in an earlier run, and was settled from the documents.
 
+- **Freeze-and-clear at Level 3** (8.16.2.2.4, 8.16.2.2.6). The outstation kept the IEEE
+  1815.2 rule that counters are never cleared at every level but Level 2. TB2016-003b Table
+  12-19 requires a freeze-and-clear from Level 2, so an outstation given any level now
+  clears, and only the default keeps its counters (D107).
+- **Counter events with normal flags** (8.17.2c to 8.17.2f, 8.25.2c). A counter raised an
+  event only when its flags changed, so the events these procedures generate could not all
+  report normal flags: going offline is an event with COMM_LOST set. 3.1 rev 1 asks for
+  normal flags in 8.25.2.3 step 6.2, and dnp3c checks them in 8.17 too. A counter can now
+  report changes of its count as well, where the event policy turns it on (D124), and the
+  conformance device does.
+
 - **A read while an unsolicited response is unconfirmed** (8.11.2a). The outstation holds
   the read until the confirmation arrives or its timeout expires, as 3.1 rev 1's 8.11.1
   and IEEE 1815-2012 rule 16 have it (D71). dnp3c used to wait only the response timeout.
@@ -150,18 +169,15 @@ tests. Each option that is off, and the reason:
 | `supports.analogInputEventsQueuedPerPoint` | An analog input keeps one event, its newest. | 8.6.6.2.2 |
 | `supports.analogOutputChangeEvents` | Analog output events are not offered. | 10.4.2, 10.4.3 |
 | `supports.analogOutputCommandEvents` | Analog output events are not offered. | 10.4.2, 10.4.4 |
-| `supports.assignNoClass` | Assign class is not implemented. A point's class is fixed when the outstation is built. | none |
+| `supports.assignNoClass` | Assign class moves points between classes 0 to 3. A request naming points before any class header, which would take them out of every class (TB2021-001), is refused. | 8.26.3 |
 | `supports.binaryOutputChangeEvents` | Binary output events are not offered. | 10.3.2, 10.3.3 |
 | `supports.binaryOutputCommandEvents` | Binary output events are not offered. | 10.3.2, 10.3.4 |
-| `supports.counterChangeEvents` | A counter reports no change events. | 8.6.6.2.3, 8.17.2c to 8.17.2f |
-| `supports.counterEventsQueuedPerPoint` | A counter reports no change events, so none are queued. | none |
 | `supports.dataLinkConfirmRequests` | The outstation never requests data link confirmation. | 6.4.2, 6.6.3a to 6.6.3d |
 | `supports.dataLinkRetries` | The outstation never requests data link confirmation, so it has nothing to send again. | none |
 | `supports.deviceAttributes` | Device attributes are not served. | none |
 | `supports.disable.doubleBitInput` | The outstation has no double-bit binary inputs to disable. | none |
 | `supports.doubleBitInput` | The outstation has no double-bit binary inputs. | 8.6.6.2.4, 8.21c, 8.21d, 8.22c to 8.22p |
 | `supports.doubleBitInputChangeEvents` | The outstation has no double-bit binary inputs, so none report events. | none |
-| `supports.frozenCounterChangeEvents` | Held to Subset Level 2, a freeze buffers no event. | none |
 | `supports.globalRemoteSupervisoryControl` | Outputs have no local state, so no switch puts them all in it. | 8.6.4a |
 | `supports.individualRemoteSupervisoryControl` | Outputs have no local state. | 8.6.4b |
 | `supports.multipleAddresses` | The outstation answers to one link address. | 6.6.2d |
@@ -178,6 +194,7 @@ it:
 | 8.14.2b | `it needs not (supports.binaryInput == true and supports.binaryInputChangeEvents == true)` |
 | 8.16.1.2.2 | `supports.counter != false` |
 | 8.16.2.2.2 | `supports.frozenCounter != false` |
+| 8.17.2b | `it needs not (supports.counter == true and supports.counterChangeEvents == true)` |
 | 8.18.2b | `supports.analogInput != false` |
 <!-- end -->
 
@@ -186,8 +203,7 @@ And it skips the procedures written for another subset level:
 <!-- record: levels -->
 | Procedure | Skipped because |
 |---|---|
-| 8.13.2a, 8.14.2a, 8.16.1.2.1, 8.16.2.2.1, 8.17.2a, 8.18.2a, 8.19.2a, 8.20.2a, 8.21a, 8.22a | it applies to subset level(s) 1, and the device is configured for level 2 |
-| 8.26.3 | it applies to subset level(s) 3, and the device is configured for level 2 |
+| 8.13.2a, 8.14.2a, 8.16.1.2.1, 8.16.2.2.1, 8.17.2a, 8.18.2a, 8.19.2a, 8.20.2a, 8.21a, 8.22a | it applies to subset level(s) 1, and the device is configured for level 3 |
 <!-- end -->
 
 ## Procedures dnp3c does not implement

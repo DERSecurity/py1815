@@ -324,18 +324,18 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       val s = state()
       generate(reporter, steps(s, unusedFirst(indices(s, "analog")).take(4)))
     case PointKind.Counter =>
-      // every counter counts up, which raises no counter event
+      // every counter counts up
       val s = state()
       val changes = indices(s, "counters").map { index =>
         ("CTR", index, ujson.Num(s("counters")(index.toString).num + 3 + index))
       }
-      val generated = apply(reporter, changes)
-      if (generated.nonEmpty) throw new Exception(s"The device buffered counter events: ${generated.mkString(", ")}")
       if (level >= 3) {
-        // From Level 3 a counter raises an event when its flags change, and only then. So each counter's source
-        // loses communication and gets it back, and the two events report the count it reached.
-        val lost = indices(s, "counters").flatMap(index => List(index -> "comm-lost", index -> "good"))
-        flagEvents(reporter, lost)
+        // From Level 3 the device's counters raise an event for each change of count, as its event policy has them.
+        generate(reporter, changes)
+      } else {
+        // Below Level 3 a counter raises no event, so this is no batch.
+        val generated = apply(reporter, changes)
+        if (generated.nonEmpty) throw new Exception(s"The device buffered counter events: ${generated.mkString(", ")}")
       }
     case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
   }
@@ -343,34 +343,6 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   // The device's counters whose events are reported in a class, by its own account.
   private def countersWithEvents(s: ujson.Obj): List[Int] =
     List(1, 2, 3).flatMap(inClass(s, "CTR", _)).sorted
-
-  // Set the quality of counters in the order given, as a new batch, requiring that each change is an event.
-  private def flagEvents(reporter: PluginReporter, changes: List[(Int, String)]): List[Generated] = {
-    val before = state()
-    val generated = changes.map { case (index, quality) =>
-      val done = device.ask("quality", "kind" -> "CTR", "index" -> index, "quality" -> quality)
-      if (done("events").num.toInt != 1) {
-        throw new Exception(s"The device buffered ${done("events").num.toInt} events for CTR$index going $quality")
-      }
-      val flags = if (quality == "good") 0x01 else 0x04
-      Generated(
-        "CTR",
-        index,
-        before("counters")(index.toString).num,
-        0,
-        before("event_classes")("CTR")(index.toString).num.toInt,
-        Some(flags))
-    }
-    reporter.log(s"Changed counter flags: ${generated.mkString("; ")}")
-    batches += generated
-    generated
-  }
-
-  // The flag changes that make a counter report n events: its quality alternates from what it is now.
-  private def flagToggles(s: ujson.Obj, index: Int, n: Int): List[(Int, String)] = {
-    val lostNow = s("quality")("CTR").obj.contains(index.toString)
-    (1 to n).toList.map(i => index -> (if (lostNow == (i % 2 == 1)) "good" else "comm-lost"))
-  }
 
   override def generateExactInputEvents(reporter: PluginReporter, kind: InputKind[?], numEvents: Int): Unit =
     kind match {
@@ -389,11 +361,12 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
         generate(reporter, steps(s, analog.take(numEvents)))
       case PointKind.Counter =>
         if (level < 3) throw new NotSupported("counter change events below Subset Level 3")
-        // a counter reports every change of its flags, so one counter changes its flags that many times
+        // a counter reports every change of its count and keeps each event, so one counter counts that many times
         val s = state()
         val index = countersWithEvents(s).headOption
           .getOrElse(throw new Exception("The device has no counter that reports events"))
-        flagEvents(reporter, flagToggles(s, index, numEvents))
+        val start = s("counters")(index.toString).num
+        generate(reporter, (1 to numEvents).toList.map(n => ("CTR", index, ujson.Num(start + n))))
       case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
     }
 

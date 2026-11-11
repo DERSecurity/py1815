@@ -2,7 +2,7 @@
   "tool": "dnp3c",
   "version": "0.2.0",
   "revision": "3.1r1",
-  "level": 2,
+  "level": 3,
   "options": {
     "network.tcp.multicast": "The outstation joins no multicast group.",
     "network.tcp.specificAddress": "The outstation accepts a connection from any master and keeps no list of masters.",
@@ -13,18 +13,15 @@
     "supports.analogInputEventsQueuedPerPoint": "An analog input keeps one event, its newest.",
     "supports.analogOutputChangeEvents": "Analog output events are not offered.",
     "supports.analogOutputCommandEvents": "Analog output events are not offered.",
-    "supports.assignNoClass": "Assign class is not implemented. A point's class is fixed when the outstation is built.",
+    "supports.assignNoClass": "Assign class moves points between classes 0 to 3. A request naming points before any class header, which would take them out of every class (TB2021-001), is refused.",
     "supports.binaryOutputChangeEvents": "Binary output events are not offered.",
     "supports.binaryOutputCommandEvents": "Binary output events are not offered.",
-    "supports.counterChangeEvents": "A counter reports no change events.",
-    "supports.counterEventsQueuedPerPoint": "A counter reports no change events, so none are queued.",
     "supports.dataLinkConfirmRequests": "The outstation never requests data link confirmation.",
     "supports.dataLinkRetries": "The outstation never requests data link confirmation, so it has nothing to send again.",
     "supports.deviceAttributes": "Device attributes are not served.",
     "supports.disable.doubleBitInput": "The outstation has no double-bit binary inputs to disable.",
     "supports.doubleBitInput": "The outstation has no double-bit binary inputs.",
     "supports.doubleBitInputChangeEvents": "The outstation has no double-bit binary inputs, so none report events.",
-    "supports.frozenCounterChangeEvents": "Held to Subset Level 2, a freeze buffers no event.",
     "supports.globalRemoteSupervisoryControl": "Outputs have no local state, so no switch puts them all in it.",
     "supports.individualRemoteSupervisoryControl": "Outputs have no local state.",
     "supports.multipleAddresses": "The outstation answers to one link address.",
@@ -306,8 +303,7 @@
       "because": "supports.analogInputEventsQueuedPerPoint != true"
     },
     "8.6.6.2.3": {
-      "outcome": "skipped",
-      "because": "supports.counterChangeEvents != true"
+      "outcome": "passed"
     },
     "8.6.6.2.4": {
       "outcome": "skipped",
@@ -359,7 +355,7 @@
     },
     "8.13.2a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.13.2b": {
       "outcome": "skipped",
@@ -373,7 +369,7 @@
     },
     "8.14.2a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.14.2b": {
       "outcome": "skipped",
@@ -429,7 +425,7 @@
     },
     "8.16.1.2.1": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.16.1.2.2": {
       "outcome": "skipped",
@@ -443,7 +439,7 @@
     },
     "8.16.2.2.1": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.16.2.2.2": {
       "outcome": "skipped",
@@ -463,30 +459,27 @@
     },
     "8.17.2a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.17.2b": {
-      "outcome": "passed"
+      "outcome": "skipped",
+      "because": "it needs not (supports.counter == true and supports.counterChangeEvents == true)"
     },
     "8.17.2c": {
-      "outcome": "skipped",
-      "because": "supports.counterChangeEvents != true"
+      "outcome": "passed"
     },
     "8.17.2d": {
-      "outcome": "skipped",
-      "because": "supports.counterChangeEvents != true"
+      "outcome": "passed"
     },
     "8.17.2e": {
-      "outcome": "skipped",
-      "because": "supports.counterChangeEvents != true"
+      "outcome": "passed"
     },
     "8.17.2f": {
-      "outcome": "skipped",
-      "because": "supports.counterChangeEvents != true"
+      "outcome": "passed"
     },
     "8.18.2a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.18.2b": {
       "outcome": "skipped",
@@ -500,7 +493,7 @@
     },
     "8.19.2a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.19.2b": {
       "outcome": "passed"
@@ -510,7 +503,7 @@
     },
     "8.20.2a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.20.2b": {
       "outcome": "passed"
@@ -520,7 +513,7 @@
     },
     "8.21a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.21b": {
       "outcome": "passed"
@@ -538,7 +531,7 @@
     },
     "8.22a": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2"
+      "because": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3"
     },
     "8.22b": {
       "outcome": "passed"
@@ -694,7 +687,7 @@
     },
     "8.26.3": {
       "outcome": "skipped",
-      "because": "not applicable: it applies to subset level(s) 3, and the device is configured for level 2"
+      "because": "supports.assignNoClass != true"
     },
     "9.5.1.1.2": {
       "outcome": "passed"

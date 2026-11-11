@@ -4,7 +4,7 @@
 by [Step Function I/O](https://stepfunc.io). It acts as a master, runs the outstation
 test procedures of the DNP3 IED Certification Procedure against a device, and writes an
 HTML report with a log of every step and frame. This directory runs revision 3.1 rev 1
-at Subset Level 2.
+at Subset Level 3.
 
 This directory runs it against this library's outstation in continuous integration. The
 unit suite carries out the same procedures in process (`tests/test_ied_*.py`), but that
@@ -20,7 +20,7 @@ Function I/O's. So is the `dnp3` crate that two other jobs in this repository us
 
 | File | What it is |
 |---|---|
-| `../conformance_outstation.py` | The device under test: a Subset Level 2 outstation of this library, and a control channel that changes its inputs, cycles its power and reports what it holds |
+| `../conformance_outstation.py` | The device under test: a Subset Level 3 outstation of this library, and a control channel that changes its inputs and their flags, freezes its counters, cycles its power and reports what it holds |
 | `src/main/scala/py1815conformance/` | The integration plugin. dnp3c calls it for each step it cannot perform over DNP3, and the plugin performs the step through the control channel |
 | `device.ini` | What dnp3c is told about the outstation |
 | `pom.xml` | The Maven project. Every version in it is pinned |
@@ -54,9 +54,12 @@ To stop using dnp3c, delete this directory and `../conformance_outstation.py`, a
 
 ## What the outstation is told to be
 
-The device is a Level 2 configuration of the library with its defaults. A few things a
-device built on the library decides for itself are decided the way the procedures expect
-of a device, and `../conformance_outstation.py` says why for each:
+The device is a Level 3 configuration of the library with its defaults. The plugin starts
+it at the level `outstation.subset.level` in `device.ini` sets. Level 2 is not run here:
+the unit suite carries out the procedures at Level 2 and at Level 3, and a second run of
+the harness would double the job's time. A few things a device built on the library
+decides for itself are decided the way the procedures expect of a device, and
+`../conformance_outstation.py` says why for each:
 
 - it carries out a cold restart request, and can be set not to without a restart;
 - it carries out a control sent to a broadcast address, and takes broadcasts sent as UDP
@@ -69,7 +72,12 @@ section 9 connect from `network.master.address`, 127.0.0.1, some of them from po
 
 Before each procedure the plugin freezes the counters once, as an operator would before
 testing. A frozen counter holds a value only after a freeze, and some procedures read
-frozen counters before freezing them.
+frozen counters before freezing them. At Level 3 that freeze buffers a frozen counter
+event for each counter, in class 3, as any freeze does.
+
+Unsolicited responses, which Level 3 requires (3.1 rev 1, 8.11), are a setting of the
+device that a power cycle applies, as 8.11.1 asks. The procedures of 8.11 have the plugin
+turn them on, and the others run with them off.
 
 `device.ini` states every option dnp3c has. An option is off only where the outstation
 does not have the feature:
@@ -77,14 +85,12 @@ does not have the feature:
 | Option turned off | Why |
 |---|---|
 | `supports.doubleBitInput`, `supports.disable.doubleBitInput`, `supports.doubleBitInputChangeEvents` | The outstation has no double-bit binary inputs |
-| `supports.counterChangeEvents`, `supports.counterEventsQueuedPerPoint` | A counter reports no change events |
-| `supports.frozenCounterChangeEvents` | Held to Level 2, a freeze buffers no event |
 | `supports.analogInputEventsQueuedPerPoint` | An analog input keeps one event, its newest |
 | `supports.binaryOutputChangeEvents`, `supports.binaryOutputCommandEvents`, `supports.analogOutputChangeEvents`, `supports.analogOutputCommandEvents` | Output events are not offered |
 | `supports.dataLinkConfirmRequests`, `supports.dataLinkRetries` | The outstation never requests data link confirmation, so it has nothing to retry |
 | `supports.selfAddress` | The outstation does not answer the self-address |
 | `supports.multipleAddresses` | The outstation answers to one link address |
-| `supports.assignNoClass` | Assign class is not implemented. A point's class is fixed when the outstation is built |
+| `supports.assignNoClass` | Assign class moves points between classes 0 to 3. A request naming points before any class header, which would take them out of every class (TB2021-001), is refused |
 | `supports.globalRemoteSupervisoryControl`, `supports.individualRemoteSupervisoryControl` | Outputs have no local state |
 | `supports.deviceAttributes` | Device attributes are not served |
 | `network.udp`, `network.udp.unsolicited` | The outstation answers requests and sends unsolicited responses over TCP only |
@@ -123,6 +129,11 @@ The plugin never answers a check from what dnp3c parsed alone. It asks the devic
 - **Events**: the plugin generates events by changing inputs, and the device answers
   each change with whether it buffered an event and the time it gave it. A response has
   to hold those events, in order, with those times.
+- **Counter events**: a counter raises an event when its flags change, and the device's
+  event policy has it raise one when it counts as well (`value_changes`, D124). The plugin
+  generates counter events by making counters count, and a response has to hold each event,
+  in order, with the count it reached. Frozen counter events are generated by freezing a
+  counter, and carry the count and flags it had.
 - **Time**: the event generated for the time check has to carry a time within 100 ms of
   when the plugin generated it, by the clock of the machine the run is on. The
   outstation's Device Profile states no accuracy, so that figure is this run's own. The
@@ -156,7 +167,7 @@ One procedure or section is run by adding its number:
 mvn --batch-mode scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-run|8.11.2a"
 ```
 
-The results are written to `results/3.1r1/L2/`, which Git ignores:
+The results are written to `results/3.1r1/L3/`, which Git ignores:
 
 | File | What it is |
 |---|---|
