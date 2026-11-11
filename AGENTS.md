@@ -31,7 +31,7 @@ how a release is cut, and is not repeated here.
 ### Commands
 
 ```bash
-pip install -e ".[dev]"                      # once; everything below needs it
+uv sync --extra dev                          # once; then activate .venv (or prefix uv run)
 
 pytest -q                                    # the whole unit suite
 pytest tests/test_link.py -q                 # one file

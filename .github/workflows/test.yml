@@ -18,10 +18,13 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Installs the versions uv.lock pins, so a new upstream release cannot
+      # change what CI tests until a Dependabot pull request updates the lock.
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
+          activate-environment: true
+      - run: uv sync --locked --extra dev
       - run: ruff check src tests interop scripts
       - run: ruff format --check src tests interop scripts
       - run: mypy src

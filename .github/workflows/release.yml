@@ -181,6 +181,7 @@ jobs:
             --release-tag "${GITHUB_REF_NAME}" \
             --product-license "Apache-2.0" \
             --download-location "https://pypi.org/project/py1815/" \
+            --library \
             --out-dir dist/sbom
 
       - uses: actions/upload-artifact@v4

@@ -287,8 +287,8 @@ and an API reference generated from the source:
 <https://dersecurity.github.io/py1815/>
 
 ```
-pip install -e ".[docs]"
-mkdocs serve                 # http://127.0.0.1:8000
+uv sync --extra docs
+uv run mkdocs serve          # http://127.0.0.1:8000
 ```
 
 ## Development

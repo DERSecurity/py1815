@@ -413,3 +413,47 @@ def test_vendored_assets_without_a_lockfile_are_direct(tmp_path):
     }
     model = gs.build_model(cdx, {}, extra=gs.load_vendored_assets(manifest))
     assert model["edges"]["root"] == ["npm:jquery@3.7.1"]
+
+
+# --------------------------------------------------------------------------
+# Resolution kind
+
+
+def _root_only_model():
+    cdx = {
+        "metadata": {"component": {"bom-ref": "root", "name": "demo", "version": "1.0.0"}},
+        "components": [],
+        "dependencies": [],
+    }
+    return cdx, gs.build_model(cdx, {})
+
+
+def test_tested_lock_says_the_versions_are_the_tested_ones():
+    """A library that keeps a uv.lock for its CI tests the pinned versions.
+    The documents must say so, and must not claim a consumer gets them."""
+    cdx, model = _root_only_model()
+    prov = {"resolution": "tested-lock"}
+    cyclonedx = gs.render_cyclonedx(model, cdx, "0" * 32, "2026-01-01T00:00:00Z", prov)
+    props = {p["name"]: p["value"] for p in cyclonedx["metadata"]["component"]["properties"]}
+    assert props["dersec:dependency-resolution"].startswith("tested-lock;")
+    assert "test suite runs against" in props["dersec:dependency-resolution"]
+
+    spdx = json.dumps(gs.render_spdx(model, "0" * 32, "2026-01-01T00:00:00Z", "https://x", prov))
+    assert "lockfile pins and its test suite runs against" in spdx
+    assert "not asserted to be the tested one" not in spdx
+    assert "locked runtime dependency closure" not in spdx
+
+
+def test_a_digest_is_taken_only_from_the_installed_version():
+    """A universal lock can pin one package at two versions for two Python
+    versions. The digest of the other version must not be recorded."""
+    cdx = {
+        "metadata": {"component": {"bom-ref": "root", "name": "demo", "version": "1.0.0"}},
+        "components": [{"bom-ref": "a", "name": "attrs", "version": "25.1.0"}],
+        "dependencies": [],
+    }
+    wheels = [{"hash": "sha256:" + "c" * 64}]
+    other = {"attrs": {"version": "24.0.0", "sdist": {}, "wheels": wheels, "index": ""}}
+    same = {"attrs": {"version": "25.1.0", "sdist": {}, "wheels": wheels, "index": ""}}
+    assert gs.build_model(cdx, other)["components"]["a"]["digest"] is None
+    assert gs.build_model(cdx, same)["components"]["a"]["digest"] is not None
