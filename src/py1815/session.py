@@ -2046,6 +2046,16 @@ class Session:
             )
         return bytes(out)
 
+    def _provided(self, function: FunctionCode | None) -> bool:
+        """Whether the session was given what a function outside the base set needs."""
+        return (
+            (function in _FREEZE_FUNCTIONS and self._freezer is not None)
+            or (function is FunctionCode.ASSIGN_CLASS and self._classifier is not None)
+            or (function is FunctionCode.COLD_RESTART and self._restart_handler is not None)
+            or (function is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
+            or (function in _UNSOLICITED_FUNCTIONS and self._unsolicited)
+        )
+
     def _indications(self, extra: IIN | None = None, reporting: Sequence[Event] = ()) -> IIN:
         first = int(IINBit.DEVICE_RESTART) if self._restart else 0
         if self._need_time:
@@ -2339,14 +2349,7 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
             )
 
-        if (
-            known not in _SUPPORTED_FUNCTIONS
-            and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
-            and not (known is FunctionCode.ASSIGN_CLASS and self._classifier is not None)
-            and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
-            and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
-            and not (known in _UNSOLICITED_FUNCTIONS and self._unsolicited)
-        ):
+        if known not in _SUPPORTED_FUNCTIONS and not self._provided(known):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
             # does not implement, and an unrecognized code is one the standard

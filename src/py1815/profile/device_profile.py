@@ -129,6 +129,26 @@ class Implementation:
     function_codes: tuple[int, ...] = field(default=())
 
 
+def _assign_class_rows(outstation: DerOutstation) -> list[Row]:
+    """Return the rows of an ASSIGN_CLASS request: the class headers and the groups they move."""
+    # A class header with variation 1 turns events off. The groups named
+    # after it are the points whose events move (IEEE 1815-2012 Table 4-12).
+    rows = [
+        Row(
+            60,
+            variation,
+            f"Class Objects - class {variation - 1} data",
+            request=(ASSIGN_CLASS, tuple(_ALL)),
+        )
+        for variation in (1, 2, 3, 4)
+    ]
+    select = tuple(_ALL + _RANGE + _INDEXED)
+    for group in outstation.assignable_groups():
+        name = _ASSIGNABLE_NAMES[group]
+        rows.append(Row(group, 0, f"{name} - any variation", request=(ASSIGN_CLASS, select)))
+    return rows
+
+
 def _served(outstation: DerOutstation) -> dict[Kind, list[Point]]:
     return {kind: outstation.served(kind) for kind in Kind}
 
@@ -442,21 +462,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
             )
         )
     if facts.assign_class:
-        # A class header with variation 1 turns events off. The groups named
-        # after it are the points whose events move (IEEE 1815-2012 Table 4-12).
-        for variation in (1, 2, 3, 4):
-            rows.append(
-                Row(
-                    60,
-                    variation,
-                    f"Class Objects - class {variation - 1} data",
-                    request=(ASSIGN_CLASS, tuple(_ALL)),
-                )
-            )
-        select = tuple(_ALL + _RANGE + _INDEXED)
-        for group in outstation.assignable_groups():
-            name = _ASSIGNABLE_NAMES[group]
-            rows.append(Row(group, 0, f"{name} - any variation", request=(ASSIGN_CLASS, select)))
+        rows += _assign_class_rows(outstation)
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, delay measurement, and the
     # two that depend on how the session was built. Enable and disable
