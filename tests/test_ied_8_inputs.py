@@ -491,8 +491,10 @@ class TestFrozenCounters:
             pytest.param(FREEZE_CLEAR_NR, False, id="8_16_2_2_6_freeze_and_clear_no_acknowledge"),
         ],
     )
-    def test_8_16_2_2_4_and_6_freeze_and_clear(self, function, answered):
-        dut = Dut()
+    @LEVELS
+    def test_8_16_2_2_4_and_6_freeze_and_clear(self, function, answered, level):
+        """A device claiming a subset level clears on a freeze-and-clear (D107)."""
+        dut = Dut(level=level)
         dut.count(6)
 
         def freeze() -> None:

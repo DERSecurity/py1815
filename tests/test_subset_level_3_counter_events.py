@@ -139,6 +139,54 @@ class TestReadingGroup22:
         assert dut.master.read(header(22, 5)).fragment.is_error
 
 
+#: Every counter's value changes raise events (the event policy turns them on).
+VALUE_CHANGES = {"defaults": {"CTR": {"value_changes": True}}}
+
+
+class TestAValueChangeWhereThePolicyTurnsItOn:
+    @ABOVE_LEVEL_2
+    def test_every_change_of_count_is_an_event(self, level):
+        dut = Dut(level=level, event_policy=VALUE_CHANGES)
+        dut.count(3)
+        assert dut.outstation.poll() == 3
+        # Counters 0, 1 and 2, each ONLINE with a count of 8.
+        assert _hex(dut.master.read(header(22, 0)).fragment.body) == (
+            "16 01 17 03 00 01 08 00 00 00 01 01 08 00 00 00 02 01 08 00 00 00"
+        )
+
+    @ABOVE_LEVEL_2
+    def test_a_change_within_the_deadband_is_not_an_event(self, level):
+        policy = {"points": {"CTR0": {"value_changes": True, "deadband": 5}}}
+        dut = Dut(level=level, event_policy=policy)
+        dut.count(3)
+        assert dut.outstation.poll() == 0, "3 counts from the first reading: inside 5"
+        dut.count(3)
+        assert dut.outstation.poll() == 1, "6 counts: past 5"
+        dut.count(3)
+        assert dut.outstation.poll() == 0, "measured from the count of the last event, 11"
+        assert _hex(dut.master.read(header(22, 0)).fragment.body) == "16 01 17 01 00 01 0B 00 00 00"
+
+    @ABOVE_LEVEL_2
+    def test_a_flag_change_is_still_an_event(self, level):
+        dut = Dut(level=level, event_policy=VALUE_CHANGES)
+        assert _set_quality(dut, 0, Quality.COMM_LOST) == 1
+        assert _hex(dut.master.read(header(22, 0)).fragment.body) == LOST
+
+    @ABOVE_LEVEL_2
+    def test_only_the_counters_the_policy_names_report_value_changes(self, level):
+        dut = Dut(level=level, event_policy={"points": {"CTR1": {"value_changes": True}}})
+        dut.count(3)
+        assert dut.outstation.poll() == 1
+        assert [dut.outstation.counter_deadband(i) for i in range(3)] == [None, 0.0, None]
+
+    @BELOW_LEVEL_3
+    def test_below_level_3_a_value_change_raises_no_event(self, level):
+        dut = Dut(level=level, event_policy=VALUE_CHANGES)
+        dut.count(3)
+        assert dut.outstation.poll() == 0
+        assert dut.master.read(header(22, 0)).fragment.is_null
+
+
 class TestBelowLevel3:
     @BELOW_LEVEL_3
     def test_a_flag_change_raises_no_counter_event(self, level):
@@ -175,7 +223,9 @@ class TestDeviceProfile:
             (2, "none", []),
         ],
     )
-    def test_states_flag_changes_and_not_value_changes(self, level, event_class, settings):
+    def test_states_flag_changes_and_no_value_changes_by_default(
+        self, level, event_class, settings
+    ):
         dut = Dut(level=level)
         root = device_profile.build(dut.outstation, dut.session)
         ns = {"d": device_profile.NAMESPACE}
@@ -193,3 +243,34 @@ class TestDeviceProfile:
             "d:referenceDevice/d:dataPointsList/d:counterPoints/d:dataPoints/d:counter", ns
         )
         assert point.find("d:counterEventClass", ns).text == event_class
+
+    @pytest.mark.parametrize(
+        ("policy", "current", "per_point"),
+        [
+            (VALUE_CHANGES, "yes", ["yes", "yes", "yes"]),
+            (
+                {"points": {"CTR1": {"value_changes": True}}},
+                "basedOnPointIndex",
+                ["no", "yes", "no"],
+            ),
+            (None, "no", ["no", "no", "no"]),
+        ],
+    )
+    def test_states_value_changes_where_the_policy_turns_them_on(self, policy, current, per_point):
+        dut = Dut(level=3, event_policy=policy)
+        root = device_profile.build(dut.outstation, dut.session)
+        ns = {"d": device_profile.NAMESPACE}
+        group = root.find("d:referenceDevice/d:database/d:counterGroup/d:configuration", ns)
+        setting = group.find("d:reportValueChangeCounterEvents", ns)
+        assert setting.find(f"d:currentValue/d:{current}", ns) is not None
+        offered = [child.tag.split("}")[1] for child in setting.find("d:capabilities", ns)]
+        assert offered == ["no", "yes", "basedOnPointIndex"]
+        points = root.findall(
+            "d:referenceDevice/d:dataPointsList/d:counterPoints/d:dataPoints/d:counter", ns
+        )
+        reported = [
+            child.tag.split("}")[1]
+            for point in points
+            for child in point.find("d:reportCounterValueChangeEvents", ns)
+        ]
+        assert reported == per_point

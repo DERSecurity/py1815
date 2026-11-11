@@ -15,7 +15,8 @@ What the profile fixes, and this module therefore does not ask about:
   out of class 0.
 - A "supports" input is static only. It never produces an event.
 - A binary output behaves as latched whatever operation commanded it.
-- A freeze does not clear the counters it freezes.
+- A freeze does not clear the counters it freezes, unless a subset level is
+  claimed: the subset tables then have a freeze-and-clear clear them.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -232,9 +233,11 @@ class DerOutstation:
                 event, and freeze-and-clear clears. A master may still name
                 the fuller variations outright. Levels 3 and 4 serve the
                 profile's additions, as the default does, accept ASSIGN_CLASS
-                (D110), and the Device Profile claims the level. None, the default, claims Level 2
-                and serves the profile's additions, which is what the DER
-                profile asks for when no level is chosen.
+                (D110), and the Device Profile claims the level. At any level
+                given, freeze-and-clear clears. None, the default, claims
+                Level 2 and serves the profile's additions, which is what the
+                DER profile asks for when no level is chosen, and its
+                counters are never cleared.
             level2: Deprecated; use ``level=2``. True means ``level=2`` and
                 warns. False changes nothing. True with a ``level`` other
                 than 2 raises ``ValueError``.
@@ -292,6 +295,9 @@ class DerOutstation:
         #: Held to Level 2 and nothing more, as opposed to answering with the
         #: profile's additions.
         self._level2 = level is not None and self._level == SubsetLevel.LEVEL_2
+        #: A level was given, so the subset tables apply where the profile
+        #: departs from them: a freeze-and-clear clears (D107).
+        self._tabled = level is not None
         self._defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
         #: What each counter read when it was last cleared, so that a
         #: counter bound to a running total can be cleared without the
@@ -341,6 +347,10 @@ class DerOutstation:
         #: Each event-reporting analog input's deadband, in transmitted units.
         #: One absent from here reports every change of its transmitted value.
         self._deadbands: dict[int, float] = {}
+        #: Each counter whose value changes raise events, with how far its
+        #: count has to move, in transmitted counts. One absent from here
+        #: raises events on flag changes only (D124).
+        self._counter_deadbands: dict[int, float] = {}
         self._event_policy = event_policy
         self._apply_policy(event_policy)
         #: The class each point had at startup, which a restart or a reset
@@ -457,6 +467,8 @@ class DerOutstation:
             own = policy.points.get(point.address)
             reported = _class_in_force(point, default, own)
             self._classes[point.address] = reported
+            if point.kind is Kind.CTR:
+                self._settle_counter(point, default, own, reported)
             if point.kind is not Kind.AI:
                 continue
             if not reported:
@@ -472,6 +484,35 @@ class DerOutstation:
                 self._deadbands[point.index] = self._binding.deadbands[point.index]
             elif default is not None and default.deadband is not None:
                 self._deadbands[point.index] = _transmitted(point, default.deadband)
+
+    def _settle_counter(
+        self, point: Point, default: EventRule | None, own: EventRule | None, reported: int
+    ) -> None:
+        """Note whether a counter's value changes raise events, and past what deadband.
+
+        The point's rule outranks the rule for its kind. A deadband is how far
+        the count has to move from the count in the counter's last event,
+        which IEEE 1815-2012 11.9.5.2 gives as one way to decide that a count
+        is significant; none reports every change.
+        """
+        chosen = own.value_changes if own is not None else None
+        if chosen is None and default is not None:
+            chosen = default.value_changes
+        deadband = own.deadband if own is not None else None
+        if deadband is None and default is not None:
+            deadband = default.deadband
+        if chosen and reported:
+            self._counter_deadbands[point.index] = _transmitted(point, deadband or 0.0)
+        elif own is not None and own.value_changes:
+            raise MapError(
+                f"the event policy has {_name(point.address)} report value changes, "
+                "and the counter reports no events"
+            )
+        elif own is not None and own.deadband is not None:
+            raise MapError(
+                f"the event policy gives {_name(point.address)} a deadband, "
+                "and its value changes raise no events"
+            )
 
     def _mirror(self, output: Address) -> Reader:
         # The input paired with an output says what the output stands at,
@@ -575,6 +616,14 @@ class DerOutstation:
         and from Level 3 the class of its counter events as well.
         """
         return self._classes.get(self._map.point(kind, index).address, 0)
+
+    def counter_deadband(self, index: int) -> float | None:
+        """How far a counter's count has to move to raise an event, in counts.
+
+        None for a counter whose value changes raise no event, which is every
+        counter an event policy does not turn them on for.
+        """
+        return self._counter_deadbands.get(self._map.point(Kind.CTR, index).index)
 
     def deadband(self, index: int) -> float:
         """An analog input's event deadband in force, in transmitted units.
@@ -1015,7 +1064,8 @@ class DerOutstation:
         """Buffer a counter event for each counter whose flags changed (D124).
 
         A counter reports in the class its frozen counter events use. A
-        change in value alone raises no event.
+        change in value raises an event only for a counter whose event policy
+        turns value changes on, once it moves past the deadband.
         """
         buffered = 0
         for point in self._served[Kind.CTR]:
@@ -1030,6 +1080,7 @@ class DerOutstation:
                 point.index,
                 counter,
                 event_class=EventClass(reported),
+                value_deadband=self._counter_deadbands.get(point.index),
                 timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
@@ -1134,15 +1185,16 @@ class DerOutstation:
         Under the DER profile the counters are not cleared, whichever freeze
         was asked for: the profile has a controlling station compute an
         interval's energy by subtracting two frozen values, which a counter
-        that restarted from zero would break. Held to Subset Level 2, a
-        freeze-and-clear clears, as the base standard has it.
+        that restarted from zero would break. Held to a subset level, 2, 3 or
+        4, a freeze-and-clear clears, as TB2016-003b Table 12-19 and IEEE
+        1815-2012 11.9.5.2 have it (D107).
         """
         named: list[Point] = []
         for header in headers:
             if header.group != GROUP_COUNTER:
                 raise UnknownObject(f"group {header.group} cannot be frozen")
             named += self._selected(header)
-        if clear and self._level2:
+        if clear and self._tabled:
             self._freeze(named, clear=True)
             return
         if clear:

@@ -560,6 +560,7 @@ class Dut:
         capacity: int = 50,
         extra_analogs: int = 0,
         block_octets: int = 1024,
+        event_policy: Any = None,
         **session_options: Any,
     ) -> None:
         self.clock = Clock()
@@ -598,6 +599,7 @@ class Dut:
             block_octets=block_octets,
             clock_ms=self.clock.ms,
             level=level,
+            event_policy=event_policy,
         )
         session_options.setdefault("need_time", False)
         session_options.setdefault("clock", self.clock)

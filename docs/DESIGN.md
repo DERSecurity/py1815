@@ -759,9 +759,9 @@ answers a variation 0 read with the variations a Level 2 master is required to p
 reports no frozen counter events, clears counters on a freeze-and-clear, and substitutes
 the flagged variation for an unflagged one whenever a point's quality is not normal, so a
 master never reads a healthy-looking number from a point that is offline. IEEE 1815.2 asks
-for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared),
-so this is a mode for testing against the subset and for masters that implement only that,
-and not the default (D106, D107). A cold restart is supported when the session is given a
+for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared;
+any level given clears on a freeze-and-clear, D107), so this is a mode for testing against
+the subset and for masters that implement only that, and not the default (D106, D107). A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
 process it does not own. The property of the same name sets or removes the handler later,
 which turns the function on or off from the next request with no restart: a device whose
@@ -1797,6 +1797,12 @@ default, `level=None`, claims Level 2 and keeps the additions; only an explicit
 yet serve. `level2=True` (and the `level2` file key and `--level2`) means `level=2`; the
 keyword warns with `DeprecationWarning`, and combining it with another level is an
 error. `level2=False` changes nothing. The alias goes after one release.
+One of the profile's rules gives way to any level given, 2, 3 or 4: counters are never
+cleared under IEEE 1815.2 (D55), but TB2016-003b Table 12-19 requires freeze-and-clear
+(function codes 9 and 10) from Level 2, and IEEE 1815-2012 11.9.5.2 has it zero the counter
+after the copy. An outstation that claims a level clears; only the default, which claims
+the DER profile, keeps its counters. IED Certification Procedure 3.1 rev 1, 8.16.2.2.4 and
+8.16.2.2.6, check it.
 
 **D108 -- Level 3 and 4 add reads, each answered in a variation this outstation keeps.**
 At `at_least(3)` the outstation answers a read of group 1 variation 1 (in variation 2, which
@@ -1882,7 +1888,7 @@ the answer is a null response whose `IIN2` says why a refusal happened.
 - Where sets overlap, the later one wins.
 
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in
-its value does not.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a
+its value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a
 device that supports them raise one whenever any of a counter's flags change; reporting a
 change in value is left to the device. TB2016-003b Table 12-49 footnote o says the same of
 class polls, and Table 12-23 lists reads of group 22 variations 1 and 2 (qualifiers 0x06,
@@ -1897,11 +1903,26 @@ variation 1, 32 bits with flag: the counters have 32 bits, and IED Certification
 device. The variations with time (5 and 6) are optional and stay refused. This replaces,
 from Level 3, the sentence of D46 that has counter change events never buffered. Level 2
 and the default buffer none, as before; whether footnote o already binds Level 2 was
-settled by the maintainer in favor of leaving Level 2 unchanged. The Device Profile
-gives each counter's event class, a default counter event variation of 1, all events
-reported, and `reportValueChangeCounterEvents` of `no`.
+settled by the maintainer in favor of leaving Level 2 unchanged.
+
+A change in value is an event, from Level 3, only for a counter whose event policy rule sets
+`value_changes` (a rule for the point outranks the rule for `CTR`). It is off by default,
+because a DER's energy counters change all the time and would fill the buffers with events
+a master did not ask for. Section 3.4 of the IED procedure defines a significant change of a
+numeric point as one greater than the point's threshold, and lets a running counter define
+none and report flag changes only; 11.9.5.2 gives a count moved past an amount since the
+last event as one example. So a counter that reports value changes takes the rule's
+`deadband`, in engineering units converted with the point's multiplier, as that amount:
+a count further than it from the count in the counter's last event (or its first reading) is
+an event, and with no deadband every change is. The decision uses that point's values only
+(3.4.1, rule 2). The Device Profile gives each counter's event class, a default counter event
+variation of 1 and all events reported. Its `reportValueChangeCounterEvents` offers `no`,
+`yes` and `basedOnPointIndex` and states which is in force, and each counter's
+`reportCounterValueChangeEvents` says `yes` or `no`. The schema has no place for a counter's
+deadband; this decision states the algorithm, as rule 3 of 3.4.1 asks.
 *Trade-off:* IED procedures 8.17 and 8.25.2.3 are written for counters whose events follow
-their value, so a tester generates these events by changing a counter's quality.
+their value; a device whose counters report flag changes only cannot raise the events with
+normal flags they ask for, so the conformance device turns value changes on.
 
 ## Layering
 

@@ -190,6 +190,8 @@ class EventBuffers:
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
         self._last_counter: dict[int, CounterPoint] = {}
+        #: The count in each counter's last event, or its first reading.
+        self._counter_reported: dict[int, int] = {}
         self._overflow_generation = 0
         self._recorded = 0
         self._analog_latest_only = analog_latest_only
@@ -423,8 +425,9 @@ class EventBuffers:
         self._last_binary[self._checked_index(index)] = point
 
     def prime_counter(self, index: int, point: CounterPoint) -> None:
-        """Note a counter's flags, without reporting them."""
+        """Note a counter's flags and count, without reporting them."""
         self._last_counter[self._checked_index(index)] = point
+        self._counter_reported[index] = point.value
 
     def record_counter(
         self,
@@ -432,21 +435,30 @@ class EventBuffers:
         point: CounterPoint,
         *,
         event_class: EventClass,
+        value_deadband: float | None = None,
         timestamp_ms: int | None = None,
     ) -> CounterEvent | None:
         """Record a counter reading, returning the event it generated, if any.
 
-        Only a change in the flags is an event. IEEE 1815-2012 11.9.5.2 has a
-        device that supports counter events generate one whenever a flag
-        changes, and leaves events for a change in value optional; this
-        library reports none for a value change. Each change is kept, as
-        binary changes are, because the sequence of flags is the information.
+        A change in the flags is always an event: IEEE 1815-2012 11.9.5.2 has
+        a device that supports counter events generate one whenever a flag
+        changes. A change in value is optional there, and is an event only
+        when *value_deadband* is given and the count has moved further than
+        it from the count in the counter's last event (or its first reading).
+        Each event is kept, as binary changes are, because the sequence is
+        the information.
         """
         self._checked_index(index)
         previous = self._last_counter.get(index)
         self._last_counter[index] = point
-        if previous is None or previous.flags == point.flags:
+        if previous is None:
+            self._counter_reported[index] = point.value
             return None
+        reported = self._counter_reported.get(index, previous.value)
+        moved = value_deadband is not None and abs(point.value - reported) > value_deadband
+        if previous.flags == point.flags and not moved:
+            return None
+        self._counter_reported[index] = point.value
         event = CounterEvent(
             index,
             point,

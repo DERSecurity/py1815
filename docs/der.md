@@ -224,7 +224,7 @@ event and changes no output.
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The time is the one the `Reading` gives, when it gives one and its quality is `GOOD`, moved onto the clock a master has set; otherwise it is when `poll()` recorded the event. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone, and so does a control relay output block with the clear bit or the obsolete queue bit set. |
 | **Output status** | An output's status and the input that mirrors it report the same thing: your `status=` reader when you give one, the last accepted write when you do not. |
-| **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear. Call `freeze_all()` on the period the master sets. |
+| **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear, unless the outstation is given a subset level; then freeze-and-clear clears them, as the subset tables require. Call `freeze_all()` on the period the master sets. |
 | **Time** | The session asks for the time until a master writes it, and event and freeze times follow what was written. |
 | **Unsolicited responses** | Off unless the session is built with `outstation.session(unsolicited=True)`. Then the events `poll()` buffers are reported to a master that has enabled their class, without waiting to be polled; call `server.notify()` after `poll()` to send them at once. Nothing in the map or the binding changes. See [Serving an outstation](outstation.md#unsolicited-responses). |
 
@@ -316,13 +316,14 @@ outstation = DerOutstation(point_map, binding, event_policy=policy)
 ```
 
 `defaults` holds a rule for a kind of point (`BI`, `AI` or `CTR`) and `points` a
-rule for one point, named by kind and index. A rule may carry any of three keys:
+rule for one point, named by kind and index. A rule may carry any of four keys:
 
 | Key | Meaning |
 |---|---|
 | `class` | The class the point's events are reported in: 1, 2 or 3. |
 | `events` | `false` turns events off. The point is still read and still answers class 0. `true` turns them back on for one point of a kind whose rule turned them off. |
-| `deadband` | Analog inputs only. How far the value moves before the change is an event, in engineering units; the point's multiplier converts it. |
+| `deadband` | Analog inputs, and counters that report value changes. How far the value moves before the change is an event, in engineering units; the point's multiplier converts it. A counter measures from the count in its last event. |
+| `value_changes` | Counters only, from Level 3. `true` has a change in the count raise a counter event, beside the event every change of the counter's flags raises. Off unless a rule turns it on, since energy counters change all the time. |
 
 What is in force for a point is settled in this order:
 
@@ -535,9 +536,9 @@ What each level answers, beyond what the level before it does:
 
 | Level | Answers |
 |---|---|
-| 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
+| 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears, as it does at Levels 3 and 4. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
 | none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
-| 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises none. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
+| 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises one only where the event policy turns `value_changes` on. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
 | 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. |
 
 Every level reads each static group by range as well as for all points, and each event

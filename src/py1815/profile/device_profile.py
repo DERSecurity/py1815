@@ -149,6 +149,17 @@ def _assign_class_rows(outstation: DerOutstation) -> list[Row]:
     return rows
 
 
+def _value_change_reporting(
+    outstation: DerOutstation, counters: list[Point]
+) -> tuple[str, list[Any]]:
+    """Return whether counters report value changes: none, all, or the ones the list names."""
+    if not outstation.at_least(SubsetLevel.LEVEL_3):
+        return _both("reportValueChangeCounterEvents", ["no"])
+    reporting = [outstation.counter_deadband(point.index) is not None for point in counters]
+    current = "yes" if all(reporting) else "basedOnPointIndex" if any(reporting) else "no"
+    return _setting("reportValueChangeCounterEvents", ["no", "yes", "basedOnPointIndex"], [current])
+
+
 def _served(outstation: DerOutstation) -> dict[Kind, list[Point]]:
     return {kind: outstation.served(kind) for kind in Kind}
 
@@ -864,8 +875,9 @@ def _database(
             )
         )
     if served[Kind.CTR]:
-        # A flag change raises a counter event and a value change does not
-        # (D124), so value-change reporting stays "no".
+        # A flag change raises a counter event from Level 3, and a value change
+        # does only for a counter whose event policy turns it on (D124).
+        value_events = _value_change_reporting(outstation, served[Kind.CTR])
         counter_events = (
             [
                 _both("defaultCounterEventVariation", _variation(1)),
@@ -911,7 +923,7 @@ def _database(
                                 ],
                                 ["localFreezeWithoutTimeOfDay"],
                             ),
-                            _both("reportValueChangeCounterEvents", ["no"]),
+                            value_events,
                         ],
                     )
                 ],
@@ -1091,6 +1103,9 @@ def _points(
                 ("frozenCountersIncludedInClass0", _included(point)),
                 ("frozenCounterEventClass", event_class(point)),
             ]
+        if outstation.at_least(SubsetLevel.LEVEL_3):
+            reports = outstation.counter_deadband(point.index) is not None
+            items.append(("reportCounterValueChangeEvents", ["yes" if reports else "no"]))
         return items
 
     def analog_input(point: Point) -> list[Any]:
