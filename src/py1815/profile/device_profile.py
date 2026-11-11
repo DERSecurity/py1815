@@ -293,6 +293,45 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 3: "Binary Input Event - with relative time",
             },
         )
+    if served[Kind.DBI]:
+        # The packed variation has a range form only, and the variation with
+        # flags is also read and answered by index.
+        rows.append(
+            Row(
+                3,
+                0,
+                "Double-bit Binary Input - any variation",
+                request=(READ, tuple(_RANGE + _ALL + _INDEXED)),
+            )
+        )
+        rows.append(
+            Row(
+                3,
+                1,
+                "Double-bit Binary Input - packed format",
+                request=(READ, tuple(_RANGE + _ALL)),
+                response=(RESPONSE, tuple(_RANGE)),
+            )
+        )
+        rows.append(
+            Row(
+                3,
+                2,
+                "Double-bit Binary Input - with flags",
+                request=(READ, tuple(_RANGE + _ALL + _INDEXED)),
+                response=(RESPONSE, tuple(_RANGE + _INDEXED)),
+            )
+        )
+        if facts.double_bit_events:
+            events(
+                4,
+                "Double-bit Binary Input Event",
+                {
+                    1: "Double-bit Binary Input Event - without time",
+                    2: "Double-bit Binary Input Event - with absolute time",
+                    3: "Double-bit Binary Input Event - with relative time",
+                },
+            )
     if served[Kind.BO]:
         static(10, "Binary Output", {2: "Binary Output - output status with flags"})
         if 11 in facts.output_events:
@@ -458,7 +497,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 request=(WRITE, (0x07,)),
             )
         )
-    if facts.events and served[Kind.BI]:
+    if facts.events and (served[Kind.BI] or served[Kind.DBI]):
         # What a binary event with relative time counts from, and whether the
         # clock that gave it had been set.
         rows.append(
@@ -507,6 +546,10 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                         response=(UNSOLICITED_RESPONSE, (0x07,)),
                     )
                 )
+        if served[Kind.DBI]:
+            for variation, kind in ((2, "absolute"), (3, "relative")):
+                description = f"Double-bit Binary Input Event - with {kind} time"
+                rows.append(Row(4, variation, description, response=unsolicited))
         if served[Kind.CTR] and outstation.at_least(SubsetLevel.LEVEL_3):
             rows.append(Row(22, 1, "Counter Event - 32-bit with flag", response=unsolicited))
         if served[Kind.CTR] and not outstation.level2:
@@ -951,6 +994,25 @@ def _database(
                 ],
             )
         )
+    if served[Kind.DBI]:
+        groups.append(
+            (
+                "doubleBitInputGroup",
+                [
+                    (
+                        "configuration",
+                        [
+                            _both("defaultStaticVariation", _variation(2)),
+                            _both(
+                                "defaultEventVariation", _variation(facts.binary_event_variation)
+                            ),
+                            _both("eventReportingMode", ["allEvents"]),
+                            _both("class0ResponseMode", _class_0(served[Kind.DBI])),
+                        ],
+                    )
+                ],
+            )
+        )
     if served[Kind.BO]:
         ignored = "Pulse times are accepted and ignored: every output behaves as latched"
         groups.append(
@@ -1197,6 +1259,13 @@ def _points(
             *_states(point),
         ]
 
+    def double_bit_input(point: Point) -> list[Any]:
+        return [
+            *_names(point),
+            ("changeEventClass", event_class(point)),
+            ("includedInClass0Response", _included(point)),
+        ]
+
     def binary_output(point: Point) -> list[Any]:
         operations = (
             [
@@ -1280,6 +1349,7 @@ def _points(
         return items + _scaling(point)
 
     section("binaryInputPoints", "binaryInput", Kind.BI, binary_input)
+    section("doubleBitInputPoints", "doubleBitInput", Kind.DBI, double_bit_input)
     section("binaryOutputPoints", "binaryOutput", Kind.BO, binary_output)
     section("counterPoints", "counter", Kind.CTR, counter)
     section("analogInputPoints", "analogInput", Kind.AI, analog_input)

@@ -68,6 +68,8 @@ def test_no_two_variations_share_a_name_within_a_group() -> None:
 GROUP_CONSTANTS = {
     (objects, "GROUP_BINARY_INPUT"): (1, "binary inputs"),
     (objects, "GROUP_BINARY_INPUT_EVENT"): (2, "binary input events"),
+    (objects, "GROUP_DOUBLE_BIT_INPUT"): (3, "double-bit binary inputs"),
+    (objects, "GROUP_DOUBLE_BIT_INPUT_EVENT"): (4, "double-bit binary input events"),
     (objects, "GROUP_COUNTER"): (20, "counters"),
     (objects, "GROUP_FROZEN_COUNTER"): (21, "frozen counters"),
     (objects, "GROUP_COUNTER_EVENT"): (22, "counter events"),
@@ -131,6 +133,8 @@ VARIATION_ENUMS: list[tuple[type[IntEnum], int]] = [
     (objects.AnalogEventVariation, 32),
     (objects.BinaryEventVariation, 2),
     (objects.FrozenCounterVariation, 21),
+    (objects.DoubleBitVariation, 3),
+    (objects.DoubleBitEventVariation, 4),
 ]
 
 
@@ -198,7 +202,9 @@ def test_every_object_layout_the_master_reads_has_the_catalog_size() -> None:
         item = catalog.find(group, variation)
         assert item is not None, (group, variation)
         if layout.packed:
-            assert item.size == catalog.packed(1), (group, variation)
+            # Two bits a point for a double-bit input (IEEE 1815-2012 A.4.1).
+            bits = 2 if layout.double_bit else 1
+            assert item.size == catalog.packed(bits), (group, variation)
         else:
             assert item.size.octets == layout.size, (group, variation)
 

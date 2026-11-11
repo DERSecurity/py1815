@@ -53,6 +53,7 @@ Plan = Generator[Step, Any, T]
 #: The point type a master reads each kind of profile point as.
 POINT_TYPES: dict[Kind, PointType] = {
     Kind.BI: PointType.BINARY_INPUT,
+    Kind.DBI: PointType.DOUBLE_BIT_INPUT,
     Kind.BO: PointType.BINARY_OUTPUT,
     Kind.AI: PointType.ANALOG_INPUT,
     Kind.AO: PointType.ANALOG_OUTPUT,
@@ -62,6 +63,7 @@ POINT_TYPES: dict[Kind, PointType] = {
 #: The argument of ``read`` that names each kind's indices.
 _READ_ARGUMENTS: dict[PointType, str] = {
     PointType.BINARY_INPUT: "binary_inputs",
+    PointType.DOUBLE_BIT_INPUT: "double_bit_inputs",
     PointType.BINARY_OUTPUT: "binary_outputs",
     PointType.COUNTER: "counters",
     PointType.FROZEN_COUNTER: "frozen_counters",
@@ -70,7 +72,7 @@ _READ_ARGUMENTS: dict[PointType, str] = {
 }
 
 #: Kinds in the order a group's points are listed.
-_KIND_ORDER = {Kind.BO: 0, Kind.BI: 1, Kind.AO: 2, Kind.AI: 3, Kind.CTR: 4}
+_KIND_ORDER = {Kind.BO: 0, Kind.BI: 1, Kind.AO: 2, Kind.AI: 3, Kind.CTR: 4, Kind.DBI: 5}
 
 #: The analog output that selects which curve the curve block shows, and the
 #: binary input that says whether a function names the selected curve. IEEE
@@ -82,7 +84,7 @@ CURVE_REFERENCED = 107
 
 _INT32 = (-(1 << 31), (1 << 31) - 1)
 
-_ADDRESS = re.compile(r"^\s*(BI|BO|AI|AO|CTR)\s*(\d+)\s*$", re.IGNORECASE)
+_ADDRESS = re.compile(r"^\s*(BI|BO|AI|AO|CTR|DBI)\s*(\d+)\s*$", re.IGNORECASE)
 
 #: A class number as the Device Profile schema spells it.
 _CLASS_WORDS = {"none": 0, "one": 1, "two": 2, "three": 3}

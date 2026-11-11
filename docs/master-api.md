@@ -371,10 +371,10 @@ An object out of a response, in `objects` and in `events`:
 
 | Field | Holds |
 |---|---|
-| `type` | `bi`, `bo`, `counter`, `frozen`, `ai` or `ao`, or null for an object that is not a point's value |
+| `type` | `bi`, `dbi`, `bo`, `counter`, `frozen`, `ai` or `ao`, or null for an object that is not a point's value |
 | `group`, `variation`, `index` | Where the object sits in DNP3's terms |
 | `name` | The point's name, when the outstation has a profile |
-| `value` | A boolean, a count, or an analog value as transmitted |
+| `value` | A boolean, a count, an analog value as transmitted, or the state, 0 to 3, of a double-bit input |
 | `flags` | The flag bits set, by name, or null for a variation that carries none |
 | `time_ms` | The outstation's time for the value, in milliseconds since the epoch, when it gave one |
 | `event` | Whether it reports a change, and not the present value |

@@ -184,6 +184,7 @@ Every value is identified by a **group** and a **variation**, and addressed by a
 | Group | Contents |
 |---|---|
 | 1, 2 | Binary input, static and event |
+| 3, 4 | Double-bit binary input, static and event |
 | 12 | Control relay output block |
 | 20, 22 | Counter, static and event |
 | 30, 32 | Analog input, static and event |
@@ -276,6 +277,11 @@ decide whether a value can be trusted without knowing what kind of point it
 came from. Above them the two diverge, and on a binary input the top bit is
 the value itself, so a binary input whose flags octet is zero reads as an
 offline false rather than as a missing reading.
+
+A double-bit input has four states, so its state takes two bits. With flags, the six
+flag bits are `0x01` to `0x20` as above and the state is in bits 6 and 7. Packed, two
+bits to a point, the first point in the lowest two bits of the first octet, with
+no flags at all.
 
 ## Function codes
 

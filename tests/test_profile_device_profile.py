@@ -557,13 +557,15 @@ class TestConfigurationIsReadFromTheSession:
 class TestThePointLists:
     PATHS: ClassVar[dict[Kind, str]] = {
         Kind.BI: "d:binaryInputPoints/d:dataPoints/d:binaryInput",
+        Kind.DBI: "d:doubleBitInputPoints/d:dataPoints/d:doubleBitInput",
         Kind.BO: "d:binaryOutputPoints/d:dataPoints/d:binaryOutput",
         Kind.CTR: "d:counterPoints/d:dataPoints/d:counter",
         Kind.AI: "d:analogInputPoints/d:dataPoints/d:analogInput",
         Kind.AO: "d:analogOutputPoints/d:dataPoints/d:analogOutput",
     }
 
-    @pytest.mark.parametrize("kind", list(Kind))
+    # The simulated DER has no double-bit inputs, which the profile does not define.
+    @pytest.mark.parametrize("kind", [kind for kind in Kind if kind is not Kind.DBI])
     def test_every_served_point_is_listed_and_no_other(self, simulation, kind):
         root = _document(simulation)
         listed = [

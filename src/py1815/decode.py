@@ -28,6 +28,10 @@ from py1815.application import QualifierCode
 STATE_MASK = 0x80
 #: The flag bits of a binary object, which are every bit but the state.
 BINARY_FLAG_MASK = 0x7F
+#: The state of a double-bit binary point: bits 6 and 7 of its flag octet.
+DOUBLE_BIT_STATE_SHIFT = 6
+#: The flag bits of a double-bit object, which are every bit but the state.
+DOUBLE_BIT_FLAG_MASK = 0x3F
 
 TIME_SIZE = 6
 
@@ -44,6 +48,7 @@ class PointType(Enum):
     """The kinds of point a master keeps values for."""
 
     BINARY_INPUT = "bi"
+    DOUBLE_BIT_INPUT = "dbi"
     BINARY_OUTPUT = "bo"
     COUNTER = "counter"
     FROZEN_COUNTER = "frozen"
@@ -73,8 +78,12 @@ class Layout:
     #: binary object, whose state is a bit of the flag octet.
     number: str | None = None
     time: _Time = _Time.NONE
-    #: One bit per object and no flags: the packed binary variations.
+    #: One bit per object, or two for a double-bit point, and no flags: the
+    #: packed variations.
     packed: bool = False
+    #: Whether the point has four states, in the two bits above the flags,
+    #: where a single-bit point has two.
+    double_bit: bool = False
     #: For an object this module walks past and does not interpret.
     opaque: int = 0
 
@@ -95,6 +104,10 @@ class Layout:
 
 def _binary(point: PointType, *, event: bool = False, time: _Time = _Time.NONE) -> Layout:
     return Layout(point, event=event, time=time)
+
+
+def _double_bit(*, event: bool = False, time: _Time = _Time.NONE) -> Layout:
+    return Layout(PointType.DOUBLE_BIT_INPUT, event=event, time=time, double_bit=True)
 
 
 def _number(
@@ -124,6 +137,13 @@ LAYOUTS: dict[tuple[int, int], Layout] = {
     (2, 1): _binary(_BI, event=True),
     (2, 2): _binary(_BI, event=True, time=_ABS),
     (2, 3): _binary(_BI, event=True, time=_REL),
+    # Double-bit binary inputs: packed two bits to the point, and with flags,
+    # and their events without time, with absolute time and with relative time.
+    (3, 1): Layout(PointType.DOUBLE_BIT_INPUT, flags=False, packed=True, double_bit=True),
+    (3, 2): _double_bit(),
+    (4, 1): _double_bit(event=True),
+    (4, 2): _double_bit(event=True, time=_ABS),
+    (4, 3): _double_bit(event=True, time=_REL),
     # Binary output status, and its events.
     (10, 1): Layout(_BO, flags=False, packed=True),
     (10, 2): _binary(_BO),
@@ -299,6 +319,10 @@ def _one(
     if layout.number is not None:
         (value,) = struct.unpack_from(layout.number, data, offset)
         offset += struct.calcsize(layout.number)
+    elif layout.double_bit:
+        # A double-bit object: the two-bit state shares the octet with the flags.
+        value = data[0] >> DOUBLE_BIT_STATE_SHIFT
+        flags = data[0] & DOUBLE_BIT_FLAG_MASK
     elif layout.flags:
         # A binary object: the state shares the octet with the flags.
         value = bool(data[0] & STATE_MASK)
@@ -336,19 +360,29 @@ def _one(
 def _packed(
     group: int, variation: int, layout: Layout, start: int, count: int, data: bytes
 ) -> list[DecodedObject]:
-    """Single-bit objects, eight to the octet, the lowest index in the lowest bit."""
+    """Packed objects, the lowest index in the lowest bits.
+
+    A single-bit object takes one bit, eight to the octet. A double-bit object
+    takes two, four to the octet, and its value is the state, 0 to 3.
+    """
+    width = 2 if layout.double_bit else 1
+    per_octet = 8 // width
     return [
         DecodedObject(
             group,
             variation,
             start + position,
-            bool(data[position // 8] >> (position % 8) & 1),
+            (
+                data[position // per_octet] >> (position % per_octet * width) & (1 << width) - 1
+                if layout.double_bit
+                else bool(data[position // per_octet] >> (position % per_octet) & 1)
+            ),
             None,
             None,
             None,
             layout.point,
             layout.event,
-            data[position // 8 : position // 8 + 1],
+            data[position // per_octet : position // per_octet + 1],
         )
         for position in range(count)
     ]
@@ -378,7 +412,7 @@ def _block(body: bytes, offset: int, common: _CommonTime) -> tuple[list[DecodedO
             raise _Stop(f"the range {start}..{stop} ends before it begins")
         count = stop - start + 1
         if layout.packed:
-            octets = (count + 7) // 8
+            octets = (count * (2 if layout.double_bit else 1) + 7) // 8
             _need(body, offset, octets, f"group {group} variation {variation}")
             objects = _packed(
                 group, variation, layout, start, count, body[offset : offset + octets]

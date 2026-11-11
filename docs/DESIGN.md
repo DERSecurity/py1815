@@ -2011,6 +2011,34 @@ class a master polls. Reads at Level 4 are answered in each variation of the tab
 *Trade-off:* a master cannot learn from the outstation that another master commanded an
 output. It learns the result from the output event.
 
+**D117 -- A double-bit binary input is the point kind `DBI`, served from Level 4.** The
+IEEE 1815.2 tables define no double-bit points, so a tables document lists them under the key
+`DBI`, in the same row format as the other kinds, and the loader reads them beside the rest. A
+binding returns the point's state as 0, 1, 2 or 3 (INTERMEDIATE, DETERMINED_OFF,
+DETERMINED_ON, INDETERMINATE; IEEE 1815-2012 Table 11-14), alone or in a `Reading` with a
+quality. A value that is not a whole number from 0 to 3 is reported as INDETERMINATE with COMM_LOST
+and is logged, so a master is told the value cannot be trusted. Groups 3 and 4 are Level 4
+objects (TB2016-003b Tables 12-7 and 12-9): below Level 4 the outstation serves no `DBI` point, a
+read of either group is an unknown object, and the points are in no class 0 or class 1 to 3
+response and buffer no event. The class of a point's events comes from its row and the event policy
+like any other input's (`DBI` is a kind a policy `defaults` rule may name). *Trade-off:* a map
+holding `DBI` points at Level 3 or below carries points that nothing serves.
+
+**D118 -- Group 3 is answered with flags unless a point is online and the read names
+variation 1; group 4 follows the binary event rules.** Variation 0 is answered with flags,
+as it is for binary inputs. Variation 1 is packed, two bits a point with the first point in bits
+0 and 1 of the first octet and unused bits zero (IEEE 1815-2012 A.4.1), and it has no flags,
+so a point whose quality is anything but plain ONLINE is sent in variation 2 and splits the run
+(TB2016-003b Table 12-7, note a). The packed variation has only the range form
+(Table 12-8): a read of it by index is an unknown object. An event is generated when the state or
+any quality flag changes; one event covers both bits changing together (IEEE 1815-2012 11.9.6).
+Events are answered in variation 2 by default and in variation 3 behind group 51 when the clock
+had not been set, as binary events are, with the same rules for a run of relative times.
+A group 4 read by name is answered only when double-bit inputs are served, and with a null
+response when none is buffered (Table 12-9, note a). Packed ranges are split into blocks as if
+each point took one octet, which keeps a block inside its budget. *Trade-off:* a range of packed
+points near the block size is split earlier than the octets require.
+
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in its
 value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter
 events optional, and has a device that supports them raise one whenever any of a counter's

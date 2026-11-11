@@ -96,6 +96,10 @@ class Store:
     def binary_input(self, index: int) -> PointValue | None:
         return self.get(PointType.BINARY_INPUT, index)
 
+    def double_bit_input(self, index: int) -> PointValue | None:
+        """One double-bit input's last value. The value is its state, 0 to 3."""
+        return self.get(PointType.DOUBLE_BIT_INPUT, index)
+
     def binary_output(self, index: int) -> PointValue | None:
         return self.get(PointType.BINARY_OUTPUT, index)
 

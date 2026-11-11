@@ -42,7 +42,7 @@ DOCUMENT = pathlib.Path(__file__).parent / "console" / "openapi.json"
 
 API_VERSION = "1"
 
-_POINT_TYPES = ["bi", "bo", "counter", "frozen", "ai", "ao"]
+_POINT_TYPES = ["bi", "dbi", "bo", "counter", "frozen", "ai", "ao"]
 _OUTCOMES = ["complete", "timeout", "sent", "abandoned"]
 
 Schema = dict[str, Any]
@@ -90,8 +90,8 @@ SCHEMAS: dict[str, Schema] = {
     "PointType": {
         "type": "string",
         "enum": _POINT_TYPES,
-        "description": "Binary input, binary output status, counter, frozen counter, analog "
-        "input, analog output status.",
+        "description": "Binary input, double-bit binary input, binary output status, counter, "
+        "frozen counter, analog input, analog output status.",
     },
     "Tasks": _object(
         {

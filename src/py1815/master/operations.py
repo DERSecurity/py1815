@@ -241,6 +241,7 @@ class Operations(Generic[ResultT, OperatedT, SyncedT]):
         frozen_counters: Indices = None,
         analog_inputs: Indices = None,
         analog_outputs: Indices = None,
+        double_bit_inputs: Indices = None,
     ) -> ResultT:
         """Read named points, in one request.
 
@@ -255,6 +256,7 @@ class Operations(Generic[ResultT, OperatedT, SyncedT]):
             PointType.FROZEN_COUNTER: frozen_counters,
             PointType.ANALOG_INPUT: analog_inputs,
             PointType.ANALOG_OUTPUT: analog_outputs,
+            PointType.DOUBLE_BIT_INPUT: double_bit_inputs,
         }
         wanted: dict[PointType, Sequence[int] | None] = {}
         for point, indices in named.items():

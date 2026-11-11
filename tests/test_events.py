@@ -21,6 +21,7 @@ from py1815.events import (
     AnalogOutputEvent,
     BinaryEvent,
     BinaryOutputEvent,
+    DoubleBitEvent,
     EventBuffers,
     EventClass,
     now_ms,
@@ -30,6 +31,7 @@ from py1815.objects import (
     AnalogQuality,
     BinaryPoint,
     BinaryQuality,
+    DoubleBitPoint,
     analog_flags,
     binary_flags,
 )
@@ -604,3 +606,62 @@ class TestOutputEvents:
     def test_an_index_an_event_block_cannot_carry_is_refused(self):
         with pytest.raises(ValueError, match="outside"):
             self._binary(_buffers(), MAX_INDEX + 1, True)
+
+
+class TestDoubleBitEvents:
+    def _record(self, buffers, index, state, flags=BinaryQuality.ONLINE):
+        return buffers.record_double_bit(
+            index,
+            DoubleBitPoint(state, flags),
+            event_class=EventClass.CLASS_2,
+            timestamp_ms=1_700_000_000_000,
+        )
+
+    def test_the_first_reading_is_an_event(self):
+        assert self._record(_buffers(), 0, 2) is not None
+
+    def test_a_primed_point_reports_only_a_change(self):
+        buffers = _buffers()
+        buffers.prime_double_bit(0, DoubleBitPoint(2))
+        assert self._record(buffers, 0, 2) is None
+        assert self._record(buffers, 0, 3) is not None
+
+    def test_every_change_of_state_is_an_event_including_to_and_from_intermediate(self):
+        buffers = _buffers()
+        buffers.prime_double_bit(0, DoubleBitPoint(1))
+        states = [0, 2, 3, 1]
+        assert all(self._record(buffers, 0, state) is not None for state in states)
+        assert [e.point.state for e in buffers.peek(EventClass.CLASS_2)] == states
+
+    def test_a_change_of_any_quality_flag_is_an_event_with_the_state_unchanged(self):
+        buffers = _buffers()
+        buffers.prime_double_bit(0, DoubleBitPoint(2))
+        assert self._record(buffers, 0, 2, BinaryQuality.COMM_LOST) is not None
+        assert self._record(buffers, 0, 2, BinaryQuality.COMM_LOST) is None
+
+    def test_points_are_compared_each_with_its_own_last_reading(self):
+        buffers = _buffers()
+        buffers.prime_double_bit(0, DoubleBitPoint(1))
+        buffers.prime_double_bit(1, DoubleBitPoint(2))
+        assert self._record(buffers, 0, 2) is not None
+        assert self._record(buffers, 1, 2) is None
+
+    def test_an_index_a_block_cannot_carry_is_refused(self):
+        with pytest.raises(ValueError, match="index"):
+            self._record(_buffers(), MAX_INDEX + 1, 1)
+
+    def test_an_event_from_an_unset_clock_is_counted_as_unsynchronized(self):
+        buffers = _buffers()
+        buffers.synchronized = False
+        event = self._record(buffers, 0, 2)
+        assert not event.synchronized and buffers.holds_unsynchronized
+        buffers.drop([event])
+        assert not buffers.holds_unsynchronized
+
+    def test_the_events_of_one_type_can_be_read_apart_from_the_rest(self):
+        buffers = _buffers()
+        buffers.record_binary(
+            0, BinaryPoint(True), event_class=EventClass.CLASS_1, timestamp_ms=1_700_000_000_000
+        )
+        self._record(buffers, 0, 2)
+        assert [type(e) for e in buffers.peek_kind(DoubleBitEvent)] == [DoubleBitEvent]

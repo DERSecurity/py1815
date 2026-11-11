@@ -106,6 +106,7 @@ from py1815.events import (
     BinaryEvent,
     BinaryOutputEvent,
     CounterEvent,
+    DoubleBitEvent,
     Event,
     EventBuffers,
     EventClass,
@@ -119,6 +120,7 @@ from py1815.objects import (
     GROUP_ANALOG_INPUT_EVENT,
     GROUP_BINARY_INPUT_EVENT,
     GROUP_COUNTER_EVENT,
+    GROUP_DOUBLE_BIT_INPUT_EVENT,
     GROUP_FROZEN_COUNTER_EVENT,
     MAX_RELATIVE_MS,
     TIME_SIZE,
@@ -131,6 +133,8 @@ from py1815.objects import (
     encode_binary_event,
     encode_binary_event_relative,
     encode_counter,
+    encode_double_bit_event,
+    encode_double_bit_event_relative,
     encode_frozen_counter_event,
 )
 
@@ -264,6 +268,7 @@ DEFAULT_CONFIRM_TIMEOUT = 10.0
 #: only when the outstation records them (D124).
 _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
     GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2, 3}),
+    GROUP_DOUBLE_BIT_INPUT_EVENT: frozenset({0, 1, 2, 3}),
     GROUP_ANALOG_INPUT_EVENT: frozenset({0, 1, 2, 3, 4}),
     GROUP_FROZEN_COUNTER_EVENT: frozenset({0, 1, 5}),
     GROUP_COUNTER_EVENT: frozenset({0, 1, 2}),
@@ -385,6 +390,7 @@ _FLOAT_ANALOG_OUTPUT_EVENTS = frozenset({5, 7})
 #: an empty answer is what a group with no events in it holds.
 _EVENT_GROUPS: dict[int, type | None] = {
     GROUP_BINARY_INPUT_EVENT: BinaryEvent,
+    GROUP_DOUBLE_BIT_INPUT_EVENT: DoubleBitEvent,
     GROUP_ANALOG_INPUT_EVENT: AnalogEvent,
     GROUP_FROZEN_COUNTER_EVENT: FrozenCounterEvent,
     GROUP_COUNTER_EVENT: CounterEvent,
@@ -421,6 +427,9 @@ _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_BINARY_INPUT_EVENT, 1): 1,
     (GROUP_BINARY_INPUT_EVENT, 2): 1 + TIME_SIZE,
     (GROUP_BINARY_INPUT_EVENT, 3): 3,
+    (GROUP_DOUBLE_BIT_INPUT_EVENT, 1): 1,
+    (GROUP_DOUBLE_BIT_INPUT_EVENT, 2): 1 + TIME_SIZE,
+    (GROUP_DOUBLE_BIT_INPUT_EVENT, 3): 3,
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
     (GROUP_COUNTER_EVENT, 1): 5,
@@ -601,6 +610,8 @@ class SessionFacts:
     analog_latest_only: bool
     binary_event_variation: int
     analog_event_variation: int
+    #: Whether group 4, double-bit binary input events, is read by name.
+    double_bit_events: bool = False
     #: Seconds a fragment waits to be confirmed, or None for no limit.
     confirm_timeout: float | None = None
     cold_restart: bool = False
@@ -947,6 +958,7 @@ class Session:
         deadband_provider: DeadbandProvider | None = None,
         extended_events: bool = False,
         output_events: Iterable[int] = (),
+        double_bit_events: bool = False,
     ) -> None:
         """
         Args:
@@ -1111,7 +1123,12 @@ class Session:
                 object this outstation does not have. Groups 13 and 43 are
                 answered with nothing, because command events are not
                 generated (D116). Needs ``events``.
+            double_bit_events: Whether group 4, double-bit binary input events,
+                is read by name. Off, a read of group 4 is answered as an unknown
+                object. Events already in the buffers are reported in any case.
         """
+        #: Whether a read may name group 4.
+        self._double_bit_events = double_bit_events
         #: Called with each protocol anomaly, or None.
         self.anomaly_observer = anomaly_observer
         #: The connection the session is serving, set by the listener that
@@ -1384,6 +1401,7 @@ class Session:
             analog_latest_only=events is not None and events.analog_latest_only,
             binary_event_variation=int(_BINARY_EVENT_VARIATION),
             analog_event_variation=int(self._analog_event_variation),
+            double_bit_events=self._double_bit_events,
             confirm_timeout=self._confirm_timeout,
             cold_restart=self._restart_handler is not None,
             assign_class=self._classifier is not None,
@@ -3361,6 +3379,8 @@ class Session:
             return True
         if header.event_class is not None:
             return False
+        if header.group == GROUP_DOUBLE_BIT_INPUT_EVENT and not self._double_bit_events:
+            return False
         return header.variation in self._event_variations.get(header.group, ())
 
     def _held(self, header: ObjectHeader, limit: int) -> list[Event]:
@@ -3587,7 +3607,11 @@ class Session:
             elif isinstance(event, (CounterEvent, BinaryOutputEvent, AnalogOutputEvent)):
                 group, variation, encoded = _encode_change_event(event, named)
             else:
-                group = GROUP_BINARY_INPUT_EVENT
+                group = (
+                    GROUP_DOUBLE_BIT_INPUT_EVENT
+                    if isinstance(event, DoubleBitEvent)
+                    else GROUP_BINARY_INPUT_EVENT
+                )
                 variation = named or int(_BINARY_EVENT_VARIATION)
                 synchronized = event.synchronized
                 if variation == BinaryEventVariation.WITH_TIME and not synchronized:
@@ -3606,14 +3630,22 @@ class Session:
                     else:
                         base = event.timestamp_ms
                         prefix = common_time(base, synchronized=synchronized)
-                    encoded = encode_binary_event_relative(event.point, event.timestamp_ms - base)
+                    relative = event.timestamp_ms - base
+                    if isinstance(event, DoubleBitEvent):
+                        encoded = encode_double_bit_event_relative(event.point, relative)
+                    else:
+                        encoded = encode_binary_event_relative(event.point, relative)
                 else:
                     timed = variation == BinaryEventVariation.WITH_TIME
-                    encoded = encode_binary_event(
-                        event.point,
-                        with_time=timed,
-                        timestamp_ms=event.timestamp_ms if timed else None,
-                    )
+                    stamp = event.timestamp_ms if timed else None
+                    if isinstance(event, DoubleBitEvent):
+                        encoded = encode_double_bit_event(
+                            event.point, with_time=timed, timestamp_ms=stamp
+                        )
+                    else:
+                        encoded = encode_binary_event(
+                            event.point, with_time=timed, timestamp_ms=stamp
+                        )
             last = blocks[-1] if blocks else None
             if (
                 last is not None

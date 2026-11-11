@@ -33,9 +33,9 @@ TABLES_NAME = "ieee-1815-2-2025.json"
 #: The highest index a DNP3 point can have.
 MAX_INDEX = 0xFFFF
 
-_ABSOLUTE = re.compile(r"^(?P<kind>AI|AO|BI|BO|CTR)(?P<index>\d+)$")
+_ABSOLUTE = re.compile(r"^(?P<kind>AI|AO|BI|BO|CTR|DBI)(?P<index>\d+)$")
 _RELATIVE = re.compile(
-    r"^(?P<block>[A-Za-z][A-Za-z0-9_]*?)_(?P<kind>AI|AO|BI|BO|CTR)\+(?P<offset>\d+)$"
+    r"^(?P<block>[A-Za-z][A-Za-z0-9_]*?)_(?P<kind>AI|AO|BI|BO|CTR|DBI)\+(?P<offset>\d+)$"
 )
 
 #: An advertisement point names the block and kind whose start it carries in

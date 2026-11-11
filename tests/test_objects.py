@@ -30,6 +30,7 @@ from py1815.objects import (
     BinaryPoint,
     BinaryQuality,
     BinaryVariation,
+    DoubleBitPoint,
     analog_flags,
     analog_range,
     binary_flags,
@@ -40,6 +41,10 @@ from py1815.objects import (
     encode_binary,
     encode_binary_event,
     encode_deadband,
+    encode_double_bit,
+    encode_double_bit_event,
+    encode_double_bit_event_relative,
+    encode_double_bit_packed,
     encode_time,
     event_block,
 )
@@ -488,3 +493,61 @@ class TestDeadbandEncoding:
     def test_decoding_refuses_the_wrong_width(self):
         with pytest.raises(ValueError, match="octets"):
             decode_deadband(bytes.fromhex("00 00"), 2)
+
+
+class TestDoubleBitInputs:
+    """Groups 3 and 4, IEEE 1815-2012 Annex A.4 and A.5: the state takes bits 6 and 7."""
+
+    @pytest.mark.parametrize(("state", "octet"), [(0, 0x01), (1, 0x41), (2, 0x81), (3, 0xC1)])
+    def test_each_state_travels_above_the_online_flag(self, state, octet):
+        assert encode_double_bit(DoubleBitPoint(state)) == bytes([octet])
+
+    def test_quality_flags_are_kept_beside_the_state(self):
+        # COMM_LOST (0x04) and CHATTER_FILTER (0x20), state 2.
+        assert encode_double_bit(DoubleBitPoint(2, 0x24)) == bytes([0xA4])
+
+    @pytest.mark.parametrize("state", [-1, 4, 1.0, True, None])
+    def test_a_state_outside_0_to_3_is_refused(self, state):
+        with pytest.raises(ValueError, match="state"):
+            DoubleBitPoint(state)
+
+    def test_a_flag_in_the_state_bits_is_refused(self):
+        with pytest.raises(ValueError, match="flags"):
+            DoubleBitPoint(1, 0x40)
+
+    def test_packed_states_fill_each_octet_from_the_low_bits(self):
+        assert encode_double_bit_packed([0, 1, 2, 3]) == bytes([0xE4])
+        assert encode_double_bit_packed([3, 2, 1, 0, 2, 3]) == bytes([0x1B, 0x0E])
+
+    def test_unused_bits_of_the_last_octet_are_zero(self):
+        assert encode_double_bit_packed([3]) == bytes([0x03])
+        assert encode_double_bit_packed([3, 3, 3, 3, 3]) == bytes([0xFF, 0x03])
+
+    @pytest.mark.parametrize("states", [[], [4], [-1]])
+    def test_packing_refuses_nothing_to_pack_and_states_out_of_range(self, states):
+        with pytest.raises(ValueError):
+            encode_double_bit_packed(states)
+
+    def test_an_event_without_time_is_the_flag_octet(self):
+        assert encode_double_bit_event(DoubleBitPoint(1), with_time=False) == bytes([0x41])
+
+    def test_an_event_with_absolute_time_adds_six_octets(self):
+        # 1001000 ms is 0x0F4628.
+        assert encode_double_bit_event(DoubleBitPoint(2), timestamp_ms=1_001_000) == bytes.fromhex(
+            "81 28 46 0F 00 00 00"
+        )
+
+    def test_an_event_with_relative_time_adds_sixteen_bits(self):
+        assert encode_double_bit_event_relative(DoubleBitPoint(3), 1000) == bytes.fromhex(
+            "C1 E8 03"
+        )
+
+    def test_the_time_and_the_variation_must_agree(self):
+        with pytest.raises(ValueError, match="carries a timestamp"):
+            encode_double_bit_event(DoubleBitPoint(1), timestamp_ms=None)
+        with pytest.raises(ValueError, match="no timestamp"):
+            encode_double_bit_event(DoubleBitPoint(1), with_time=False, timestamp_ms=5)
+
+    def test_a_relative_time_beyond_sixteen_bits_is_refused(self):
+        with pytest.raises(ValueError, match="relative time"):
+            encode_double_bit_event_relative(DoubleBitPoint(1), 65536)

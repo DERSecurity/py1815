@@ -87,6 +87,7 @@ _MAX_HEADER = 16 << 10
 
 _FLAGS: dict[PointType, type[BinaryQuality] | type[AnalogQuality] | type[CounterQuality]] = {
     PointType.BINARY_INPUT: BinaryQuality,
+    PointType.DOUBLE_BIT_INPUT: BinaryQuality,
     PointType.BINARY_OUTPUT: BinaryQuality,
     PointType.COUNTER: CounterQuality,
     PointType.FROZEN_COUNTER: CounterQuality,
@@ -99,6 +100,7 @@ _POINT_TYPES = {point.value: point for point in PointType}
 #: The point types each kind of profile point is read as.
 _KIND_TYPES: dict[Kind, tuple[PointType, ...]] = {
     Kind.BI: (PointType.BINARY_INPUT,),
+    Kind.DBI: (PointType.DOUBLE_BIT_INPUT,),
     Kind.BO: (PointType.BINARY_OUTPUT,),
     Kind.AI: (PointType.ANALOG_INPUT,),
     Kind.AO: (PointType.ANALOG_OUTPUT,),
@@ -1046,6 +1048,7 @@ class Service:
             raise BadRequest("a read names points, by type")
         arguments = {
             "bi": "binary_inputs",
+            "dbi": "double_bit_inputs",
             "bo": "binary_outputs",
             "counter": "counters",
             "frozen": "frozen_counters",

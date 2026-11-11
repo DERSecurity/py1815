@@ -315,7 +315,7 @@ policy = {
 outstation = DerOutstation(point_map, binding, event_policy=policy)
 ```
 
-`defaults` holds a rule for a kind of point (`BI`, `AI` or `CTR`) and `points` a
+`defaults` holds a rule for a kind of point (`BI`, `DBI`, `AI` or `CTR`) and `points` a
 rule for one point, named by kind and index. A rule may carry any of four keys:
 
 | Key | Meaning |
@@ -539,7 +539,7 @@ What each level answers, beyond what the level before it does:
 | 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears, as it does at Levels 3 and 4. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
 | none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
 | 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises one only where the event policy turns `value_changes` on. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
-| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Binary and analog output events, and reads of the command event groups, answered with nothing; see [Output events at Level 4](#output-events-at-level-4). Below Level 4 a request that names one of these is refused as an unknown object. |
+| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Binary and analog output events, and reads of the command event groups, answered with nothing; see [Output events at Level 4](#output-events-at-level-4). Double-bit inputs; see [Double-bit inputs](#double-bit-inputs). Below Level 4 a request that names one of these is refused as an unknown object. |
 
 Every level reads each static group by range as well as for all points, and each event
 group by count as well as for all events.
@@ -665,6 +665,40 @@ That includes an output a master assigned to class 0, which reports no events. A
 with no class, one whose paired input reports no events and that no master has assigned,
 is left out, as at the lower levels; a restart returns each output to how it started.
 `outstation.in_class_0(Kind.BO, index)` says whether a class 0 read carries a point.
+
+## Double-bit inputs
+
+A double-bit binary input is one point with four states, for a device that has two
+contacts to report, such as a switch that can be open, closed, moving or faulted. The
+profile defines none, so a double-bit point is one a tables document lists under the key
+`DBI`, in the rows the other kinds use, and it is served only by an outstation at Level 4.
+
+```python
+binding.read(Kind.DBI, 3, lambda: switch.state())   # 0, 1, 2 or 3
+```
+
+The reader returns the state as a whole number from 0 to 3, or a `Reading` that carries the
+state and its quality:
+
+| State | Name | Meaning |
+|---|---|---|
+| 0 | INTERMEDIATE | Moving between its end conditions |
+| 1 | DETERMINED_OFF | The end condition that a single-bit input would report as 0 |
+| 2 | DETERMINED_ON | The end condition that a single-bit input would report as 1 |
+| 3 | INDETERMINATE | Abnormal, or a condition the device defines |
+
+Which physical condition is OFF and which is ON is the device's to say; the standard leaves
+it to the vendor to document. A value that is not one of the four is sent as INDETERMINATE
+with the point marked as not reachable.
+
+At Level 4 a master reads the points as group 3, in the packed variation (two bits a point)
+or with flags. A point in an exception condition, such as one that is not online, is always
+sent with flags. The points answer class 0 and report events as group 4, which a master reads
+by class or by naming the group, in the variations without time, with absolute time and with
+relative time. A change of state, or of any quality flag, is an event. Below Level 4, groups 3
+and 4 are unknown objects, no event is buffered, and the Device Profile lists none of the points.
+An event policy's `defaults` may name the kind `DBI`, and a point's class is set in the same
+way as for a binary input.
 
 ## Memory on a small controller
 

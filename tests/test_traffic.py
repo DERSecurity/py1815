@@ -388,6 +388,7 @@ def _flags(layout: Any) -> bool:
     return bool(layout.fields) and layout.fields[0] in (
         _Field.FLAGS,
         _Field.FLAGS_STATE,
+        _Field.FLAGS_DOUBLE,
         _Field.STATE_STATUS,
         _Field.STATUS,
     )
@@ -413,7 +414,7 @@ class TestLayouts:
 
         assert bool(ours.packed_bits) == decoded.packed
         if decoded.packed:
-            assert ours.packed_bits == 1
+            assert ours.packed_bits == (2 if decoded.double_bit else 1)
             return
         assert ours.size(variation) == decoded.size
         if decoded.opaque:

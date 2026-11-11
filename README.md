@@ -216,7 +216,7 @@ certification body:
 
 | IEEE 1815.2 | Status |
 |---|---|
-| Implementation table (clause 5.4): binary inputs and events, output status, control relay output blocks, counters, frozen counters and their events, analog inputs and events, analog output status and commands, time write, delay measurement, class 0 to 3 reads, restart indication | Implemented |
+| Implementation table (clause 5.4): binary inputs and events, double-bit binary inputs and events (Subset Level 4), output status, control relay output blocks, counters, frozen counters and their events, analog inputs and events, analog output status and commands, time write, delay measurement, class 0 to 3 reads, restart indication | Implemented |
 | Point numbering and indexing (5.2), including equipment blocks resolved for a stated number of meters, DER units, inverters and batteries, and the block starting indices advertised from AI65000 | Implemented |
 | Event classes, class 0 membership and reporting modes (5.3, 5.6) | Implemented as the profile selects them |
 | Counter freezing (5.6.3): periodic from startup, period set by the master, never cleared, logged as timestamped events | Implemented. An outstation given a subset level clears on freeze-and-clear, as the subset tables require |
@@ -256,7 +256,7 @@ variations are served and named in the device profile.
 | Data link | `link` | FT3 framing, control byte, addresses, stream reader |
 | Transport | `transport` | Segmentation and reassembly |
 | Application | `application` | Control octet, function codes, internal indications, object headers |
-| Objects | `objects` | Binary inputs, analog inputs and counters, static and event, with quality flags |
+| Objects | `objects` | Binary inputs, double-bit binary inputs, analog inputs and counters, static and event, with quality flags |
 | Controls | `control` | Output commands and status, and the command status vocabulary |
 | Events | `events` | Class 1 to 3 buffers, deadbands and confirmation |
 | Session | `session` | One master association: octets in, octets out |

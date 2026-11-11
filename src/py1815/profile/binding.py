@@ -102,7 +102,11 @@ class Binding:
     def read(
         self, kind: Kind, index: int, reader: Reader, *, deadband: float | None = None
     ) -> None:
-        """Bind an input (binary, analog or counter) to where its value comes from."""
+        """Bind an input to where its value comes from.
+
+        A binary input returns a bool, an analog input or counter a number, and a
+        double-bit input its state as 0 to 3 (:class:`~py1815.objects.DoubleBitState`).
+        """
         if kind.is_output:
             raise ValueError(f"{kind.value}{index} is an output; bind it with output()")
         self._claim((kind, index), self.readers)

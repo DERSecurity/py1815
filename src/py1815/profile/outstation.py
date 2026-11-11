@@ -58,20 +58,27 @@ from py1815.objects import (
     GROUP_ANALOG_INPUT,
     GROUP_BINARY_INPUT,
     GROUP_COUNTER,
+    GROUP_DOUBLE_BIT_INPUT,
     GROUP_FROZEN_COUNTER,
     AnalogEventVariation,
     AnalogPoint,
     AnalogQuality,
     AnalogVariation,
     BinaryPoint,
+    BinaryQuality,
     BinaryVariation,
     CounterPoint,
     CounterQuality,
+    DoubleBitPoint,
+    DoubleBitState,
+    DoubleBitVariation,
     FrozenCounterVariation,
     encode_analog,
     encode_binary,
     encode_counter,
     encode_deadband,
+    encode_double_bit,
+    encode_double_bit_packed,
     encode_frozen_counter,
     indexed_block,
 )
@@ -132,9 +139,11 @@ _WIDENED_VARIATIONS = {
 #: footnote a allows (D5).
 _LEVEL_3_WIDENED = {GROUP_BINARY_INPUT: {1: int(BinaryVariation.WITH_FLAGS)}}
 
-#: What a Level 4 outstation serves in addition: the floating-point static
-#: variations (D112) and the analog input deadbands (D114).
+#: What a Level 4 outstation serves in addition: the double-bit inputs
+#: (TB2016-003b Table 12-7), the floating-point static variations (D112) and the
+#: analog input deadbands (D114).
 _LEVEL_4_VARIATIONS = {
+    GROUP_DOUBLE_BIT_INPUT: {int(DoubleBitVariation.PACKED), int(DoubleBitVariation.WITH_FLAGS)},
     GROUP_ANALOG_INPUT: {int(AnalogVariation.FLOAT32_WITH_FLAG)},
     GROUP_ANALOG_OUTPUT_STATUS: {3},
     GROUP_ANALOG_DEADBAND: {1, 2, 3},
@@ -146,9 +155,13 @@ _LEVEL_4_WIDENED = {
     GROUP_FROZEN_COUNTER: {6: int(FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME)},
 }
 
-#: The variation a read of group 34 variation 0 is answered in. The 32-bit
-#: deadband holds the most.
-_DEADBAND_DEFAULT = 2
+#: The variation a read of variation 0 or a class is answered in, for the groups
+#: only a Level 4 outstation serves. A double-bit input is reported with its
+#: flags, as a binary input is. The 32-bit deadband holds the most.
+_LEVEL_4_DEFAULTS = {
+    GROUP_DOUBLE_BIT_INPUT: int(DoubleBitVariation.WITH_FLAGS),
+    GROUP_ANALOG_DEADBAND: 2,
+}
 
 #: The analog input variation that carries the same value with its flags.
 _FLAGGED_ANALOG = {
@@ -158,6 +171,7 @@ _FLAGGED_ANALOG = {
 
 _GROUP_KINDS = {
     GROUP_BINARY_INPUT: Kind.BI,
+    GROUP_DOUBLE_BIT_INPUT: Kind.DBI,
     GROUP_BINARY_OUTPUT_STATUS: Kind.BO,
     GROUP_COUNTER: Kind.CTR,
     GROUP_FROZEN_COUNTER: Kind.CTR,
@@ -191,12 +205,13 @@ _COMMAND_EVENT_ASSIGNMENTS = frozenset({GROUP_BINARY_OUTPUT_COMMAND, GROUP_ANALO
 #: The groups a class 0 read is answered with, in the order they are sent.
 _CLASS_0_GROUPS = (GROUP_BINARY_INPUT, GROUP_COUNTER, GROUP_FROZEN_COUNTER, GROUP_ANALOG_INPUT)
 
-#: The same at Level 4, which adds the output status of the outputs that have a
-#: class, class 0 included: a master learns an output's value from class 0 before
-#: the events that change it (IEEE 1815-2012, A.7.1.1; TB2016-003b, Table 12-49
-#: notes b and i).
+#: The same at Level 4, which adds the double-bit inputs (D117) and the output
+#: status of the outputs that have a class, class 0 included: a master learns an
+#: output's value from class 0 before the events that change it (IEEE 1815-2012,
+#: A.7.1.1; TB2016-003b, Table 12-49 notes b and i).
 _CLASS_0_GROUPS_L4 = (
     GROUP_BINARY_INPUT,
+    GROUP_DOUBLE_BIT_INPUT,
     GROUP_BINARY_OUTPUT_STATUS,
     GROUP_COUNTER,
     GROUP_FROZEN_COUNTER,
@@ -384,6 +399,11 @@ class DerOutstation:
         self._served: dict[Kind, list[Point]] = {
             kind: [p for p in point_map.of(kind) if self._is_served(p)] for kind in Kind
         }
+        if not self.at_least(SubsetLevel.LEVEL_4):
+            # Double-bit inputs are a Level 4 object (TB2016-003b Table 12-7):
+            # below it a read of group 3 or 4 names an unknown object, and the
+            # points are in no class 0 or class poll response.
+            self._served[Kind.DBI] = []
         self._by_index: dict[Kind, dict[int, Point]] = {
             kind: {p.index: p for p in points} for kind, points in self._served.items()
         }
@@ -436,8 +456,8 @@ class DerOutstation:
         Three tables: the variation a read of variation 0 is answered in, the
         variations a master may name, and those answered in another one. Level
         3 answers a packed binary input read with flags (D5). Level 4
-        adds the floating-point variations, the deadbands and the time-stamped
-        16-bit frozen counter (D112, D113, D114).
+        adds the double-bit inputs (D117), the floating-point variations, the
+        deadbands and the time-stamped 16-bit frozen counter (D112, D113, D114).
         """
         defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
         served = {group: set(each) for group, each in _SERVED_VARIATIONS.items()}
@@ -450,7 +470,7 @@ class DerOutstation:
                 served.setdefault(group, set()).update(extra)
             for group, extra_widened in _LEVEL_4_WIDENED.items():
                 widened.setdefault(group, {}).update(extra_widened)
-            defaults[GROUP_ANALOG_DEADBAND] = _DEADBAND_DEFAULT
+            defaults.update(_LEVEL_4_DEFAULTS)
         return defaults, served, widened
 
     def _resolve_sources(self) -> dict[Address, Reader]:
@@ -900,6 +920,30 @@ class DerOutstation:
                 flags |= AnalogQuality.OVER_RANGE
         return AnalogPoint(raw, flags)
 
+    def _double_bit(self, point: Point) -> DoubleBitPoint:
+        return self._double_bit_of(point, self._reading(point))
+
+    @staticmethod
+    def _double_bit_of(point: Point, reading: Reading) -> DoubleBitPoint:
+        """Return a reading as a double-bit point.
+
+        A value that is not a whole number from 0 to 3 is not a state. It is
+        reported as INDETERMINATE with the source marked as not reachable, so a
+        master is told the value cannot be trusted.
+        """
+        state = reading.value
+        if isinstance(state, bool) or not 0 <= state <= 3 or state != int(state):
+            logger.error(
+                "profile: %s%d has the value %r, which is not a double-bit state",
+                point.kind.value,
+                point.index,
+                state,
+            )
+            return DoubleBitPoint(
+                int(DoubleBitState.INDETERMINATE), _QUALITY_FLAGS[Quality.COMM_LOST]
+            )
+        return DoubleBitPoint(int(state), _QUALITY_FLAGS[reading.quality])
+
     def _counter(self, point: Point) -> CounterPoint:
         return self._counter_of(point, self._reading(point))
 
@@ -930,6 +974,15 @@ class DerOutstation:
                 continue
             variation = self._variation(header)
             if header.qualifier in _INDEXED:
+                if (
+                    header.group == GROUP_DOUBLE_BIT_INPUT
+                    and variation == DoubleBitVariation.PACKED
+                ):
+                    # The packed variation has only a range form (TB2016-003b Table 12-8).
+                    raise UnknownObject(
+                        f"qualifier 0x{int(header.qualifier):02X} does not select "
+                        f"group {header.group} variation {variation}"
+                    )
                 blocks += self._indexed(
                     header.group, variation, self._named(header), header.qualifier
                 )
@@ -1037,6 +1090,16 @@ class DerOutstation:
             return variation, encode_binary(self._binary(point))
         if group == GROUP_ANALOG_DEADBAND:
             return variation, encode_deadband(self._deadband_in(point, variation), variation)
+        if group == GROUP_DOUBLE_BIT_INPUT:
+            double_bit = self._double_bit(point)
+            if double_bit.flags != BinaryQuality.ONLINE:
+                # The packed variation has no flags. A point in an exception
+                # condition is reported with them (TB2016-003b Table 12-7, note a).
+                variation = int(DoubleBitVariation.WITH_FLAGS)
+            if variation == DoubleBitVariation.PACKED:
+                # One state, packed with its neighbors by the range that holds it.
+                return variation, bytes([double_bit.state])
+            return variation, encode_double_bit(double_bit)
         if group == GROUP_ANALOG_INPUT:
             reading = self._reading(point)
             analog = self._analog_of(point, reading)
@@ -1149,7 +1212,10 @@ class DerOutstation:
             nonlocal objects, size
             if objects:
                 header = range_header(group, current, start=start, stop=previous)
-                blocks.append(header + b"".join(objects))
+                if group == GROUP_DOUBLE_BIT_INPUT and current == DoubleBitVariation.PACKED:
+                    blocks.append(header + encode_double_bit_packed([o[0] for o in objects]))
+                else:
+                    blocks.append(header + b"".join(objects))
             objects, size = [], 0
 
         for point in points:
@@ -1203,6 +1269,21 @@ class DerOutstation:
             elif self.events.record_binary(
                 point.index,
                 binary,
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        for point in self._served[Kind.DBI]:
+            reported = self._classes[point.address]
+            if not reported:
+                continue
+            reading = self._reading(point)
+            double_bit = self._double_bit_of(point, reading)
+            if not self._primed:
+                self.events.prime_double_bit(point.index, double_bit)
+            elif self.events.record_double_bit(
+                point.index,
+                double_bit,
                 event_class=EventClass(reported),
                 timestamp_ms=self._event_time(reading, now),
             ):
@@ -1577,6 +1658,9 @@ class DerOutstation:
                 f"{max_response}-octet response"
             )
         options.setdefault("need_time", True)
+        # Group 4 is read by name only where double-bit inputs are served, which
+        # is Level 4.
+        options.setdefault("double_bit_events", bool(self._served[Kind.DBI]))
         options.setdefault("analog_event_variation", AnalogEventVariation.INT32)
         for name, value in self._level_options().items():
             options.setdefault(name, value)

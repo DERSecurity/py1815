@@ -30,6 +30,8 @@ from py1815.application import QualifierCode, object_header
 
 GROUP_BINARY_INPUT = 1
 GROUP_BINARY_INPUT_EVENT = 2
+GROUP_DOUBLE_BIT_INPUT = 3
+GROUP_DOUBLE_BIT_INPUT_EVENT = 4
 GROUP_COUNTER = 20
 GROUP_FROZEN_COUNTER = 21
 GROUP_COUNTER_EVENT = 22
@@ -49,6 +51,11 @@ class BinaryQuality(IntEnum):
     LOCAL_FORCED = 0x10
     CHATTER_FILTER = 0x20
     STATE = 0x80
+
+
+#: The quality bits of a double-bit input: every bit of the flag octet but the
+#: two that carry the state.
+DOUBLE_BIT_FLAG_MASK = 0x3F
 
 
 class AnalogQuality(IntEnum):
@@ -100,6 +107,32 @@ class AnalogEventVariation(IntEnum):
 
 
 class BinaryEventVariation(IntEnum):
+    WITHOUT_TIME = 1
+    WITH_TIME = 2
+    #: Milliseconds after the common time of occurrence that precedes it.
+    RELATIVE_TIME = 3
+
+
+class DoubleBitState(IntEnum):
+    """The four states of a double-bit binary input (IEEE 1815-2012 Table 11-14)."""
+
+    INTERMEDIATE = 0
+    DETERMINED_OFF = 1
+    DETERMINED_ON = 2
+    INDETERMINATE = 3
+
+
+class DoubleBitVariation(IntEnum):
+    """Double-bit binary input variations (group 3)."""
+
+    #: Two bits per point and no flags, which stands for a point that is online.
+    PACKED = 1
+    WITH_FLAGS = 2
+
+
+class DoubleBitEventVariation(IntEnum):
+    """Double-bit binary input event variations (group 4)."""
+
     WITHOUT_TIME = 1
     WITH_TIME = 2
     #: Milliseconds after the common time of occurrence that precedes it.
@@ -179,6 +212,28 @@ class BinaryPoint:
 
     state: bool
     flags: int = BinaryQuality.ONLINE
+
+
+@dataclass(frozen=True)
+class DoubleBitPoint:
+    """One double-bit binary input: its state, 0 to 3, and its quality flags.
+
+    The state travels in bits 6 and 7 of the flag octet, and the quality
+    flags in bits 0 to 5 (IEEE 1815-2012, Annex A, groups 3 and 4).
+    """
+
+    state: int
+    flags: int = BinaryQuality.ONLINE
+
+    def __post_init__(self) -> None:
+        if isinstance(self.state, bool) or not isinstance(self.state, int):
+            raise ValueError(
+                f"a double-bit state is a whole number from 0 to 3, not {self.state!r}"
+            )
+        if not 0 <= self.state <= 3:
+            raise ValueError(f"double-bit state {self.state} is outside 0..3")
+        if self.flags & ~DOUBLE_BIT_FLAG_MASK:
+            raise ValueError(f"flags 0x{self.flags:02X} use bits a double-bit input does not have")
 
 
 def analog_flags(
@@ -296,6 +351,26 @@ def encode_binary(point: BinaryPoint) -> bytes:
     return bytes([flags & 0xFF])
 
 
+def encode_double_bit(point: DoubleBitPoint) -> bytes:
+    """One double-bit binary input with flags: quality in bits 0 to 5, state in bits 6 and 7."""
+    return bytes([point.flags | point.state << 6])
+
+
+def encode_double_bit_packed(states: Sequence[int]) -> bytes:
+    """Double-bit states packed two bits each, the first state in bits 0 and 1 of the first octet.
+
+    Unused bits of the last octet are zero (IEEE 1815-2012, Annex A.4.1).
+    """
+    if not states:
+        raise ValueError("a packed range carries at least one state")
+    packed = bytearray((len(states) * 2 + 7) // 8)
+    for position, state in enumerate(states):
+        if not 0 <= state <= 3:
+            raise ValueError(f"double-bit state {state} is outside 0..3")
+        packed[position // 4] |= state << (position % 4 * 2)
+    return bytes(packed)
+
+
 def analog_range(
     start: int,
     points: list[AnalogPoint],
@@ -376,6 +451,36 @@ def encode_binary_event_relative(point: BinaryPoint, relative_ms: int) -> bytes:
             "an event further off needs a common time of its own"
         )
     return encode_binary(point) + struct.pack("<H", relative_ms)
+
+
+def encode_double_bit_event(
+    point: DoubleBitPoint,
+    *,
+    with_time: bool = True,
+    timestamp_ms: int | None = None,
+) -> bytes:
+    """One double-bit binary input event object, with or without an absolute time.
+
+    ``with_time`` and ``timestamp_ms`` must agree, as they do for a binary event.
+    """
+    encoded = encode_double_bit(point)
+    if not with_time:
+        if timestamp_ms is not None:
+            raise ValueError("an untimed double-bit event carries no timestamp and one was given")
+        return encoded
+    if timestamp_ms is None:
+        raise ValueError("a timed double-bit event carries a timestamp and none was given")
+    return encoded + encode_time(timestamp_ms)
+
+
+def encode_double_bit_event_relative(point: DoubleBitPoint, relative_ms: int) -> bytes:
+    """One double-bit binary input event with its time as an offset from a common time."""
+    if not 0 <= relative_ms <= MAX_RELATIVE_MS:
+        raise ValueError(
+            f"relative time is {relative_ms} ms, outside 0..{MAX_RELATIVE_MS}; "
+            "an event further off needs a common time of its own"
+        )
+    return encode_double_bit(point) + struct.pack("<H", relative_ms)
 
 
 def common_time(timestamp_ms: int, *, synchronized: bool) -> bytes:

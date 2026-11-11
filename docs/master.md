@@ -56,7 +56,7 @@ returns an `Outstation`, which is where the requests are:
 |---|---|
 | `integrity_poll()` | Classes 1, 2 and 3, then class 0: every event, then every static value |
 | `scan(kind)` | `"integrity"`, `"events"`, one class: `"class0"` to `"class3"`, or `"outputs"` |
-| `read(...)` | Named points, by type and index, or `ALL` of a type, in one request |
+| `read(...)` | Named points, by type and index, or `ALL` of a type, in one request. Double-bit inputs are `double_bit_inputs=` |
 | `operate(...)` | Outputs commanded, by type and index. See [Commanding outputs](#commanding-outputs) |
 | `write_time(ms)` | The outstation's clock, in milliseconds since the epoch, or now |
 | `synchronize_time(procedure)` | The outstation's clock, by the `"lan"` or `"non_lan"` procedure. See [Setting the clock](#setting-the-clock) |
@@ -250,6 +250,7 @@ whichever request or unsolicited response brought it.
 
 ```python
 lab.store.analog_input(4)          # one point, or None if never reported
+lab.store.double_bit_input(2)      # its value is the state: 0, 1, 2 or 3
 lab.store.points(PointType.BINARY_INPUT)   # every binary input, by index
 lab.store.events                   # the events received, oldest first
 ```

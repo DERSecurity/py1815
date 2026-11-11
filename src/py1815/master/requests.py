@@ -23,6 +23,7 @@ from py1815.decode import PointType
 #: The group that holds each point type's present value.
 STATIC_GROUPS: dict[PointType, int] = {
     PointType.BINARY_INPUT: 1,
+    PointType.DOUBLE_BIT_INPUT: 3,
     PointType.BINARY_OUTPUT: 10,
     PointType.COUNTER: 20,
     PointType.FROZEN_COUNTER: 21,

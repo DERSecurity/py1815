@@ -416,3 +416,77 @@ class TestTheTable:
     )
     def test_sizes_the_standard_gives(self, key, size):
         assert LAYOUTS[key].size == size
+
+
+class TestDoubleBitInputs:
+    """Groups 3 and 4. The state is 0 INTERMEDIATE, 1 DETERMINED_OFF, 2 DETERMINED_ON or
+    3 INDETERMINATE, and with flags it sits in bits 6 and 7 above the six flag bits."""
+
+    def test_the_four_states_with_flags(self):
+        objects = _read("03 02 00 00 03  01 41 81 C1")
+        assert [(each.index, each.value, each.flags) for each in objects] == [
+            (0, 0, 0x01),
+            (1, 1, 0x01),
+            (2, 2, 0x01),
+            (3, 3, 0x01),
+        ]
+        assert all(each.point is PointType.DOUBLE_BIT_INPUT and not each.event for each in objects)
+        assert objects[2].raw == bytes([0x81])
+
+    def test_the_flags_are_kept_apart_from_the_state(self):
+        # COMM_LOST and CHATTER_FILTER set, state 3.
+        decoded = _one("03 02 00 05 05  E4")
+        assert (decoded.value, decoded.flags) == (3, 0x24)
+
+    def test_packed_two_bits_a_point_from_the_low_bits_up(self):
+        # 0xE4 is 0b11_10_01_00: points 4 to 7 are 0, 1, 2, 3.
+        objects = _read("03 01 00 04 07  E4")
+        assert [(each.index, each.value, each.flags) for each in objects] == [
+            (4, 0, None),
+            (5, 1, None),
+            (6, 2, None),
+            (7, 3, None),
+        ]
+        assert objects[3].raw == bytes([0xE4])
+
+    def test_packed_across_two_octets_ignores_the_padding(self):
+        # Six points: 0x1B is 3, 2, 1, 0 and 0x0E is 2, 3, then two unused pairs.
+        objects = _read("03 01 00 00 05  1B 0E")
+        assert [each.value for each in objects] == [3, 2, 1, 0, 2, 3]
+
+    def test_packed_in_a_16_bit_range(self):
+        objects = _read("03 01 01 E8 03 E9 03  09")
+        assert [(each.index, each.value) for each in objects] == [(1000, 1), (1001, 2)]
+
+    def test_a_packed_range_that_ends_inside_its_octets_is_reported(self):
+        decoded = decode_objects(bytes.fromhex("03 01 00 00 05  1B"))
+        assert not decoded.complete and not decoded.objects
+
+    def test_a_packed_object_cannot_come_with_an_index_each(self):
+        decoded = decode_objects(bytes.fromhex("03 01 17 01 02  01"))
+        assert not decoded.complete and "index" in decoded.problem
+
+    def test_events_without_time(self):
+        first, second = _read("04 01 17 02  09 41  0A 84")
+        assert (first.index, first.value, first.flags, first.time_ms) == (9, 1, 0x01, None)
+        assert (second.index, second.value, second.flags) == (10, 2, 0x04)
+        assert first.event and first.point is PointType.DOUBLE_BIT_INPUT
+
+    def test_events_with_absolute_time(self):
+        decoded = _one(f"04 02 17 01  03 C1  {TIME_OCTETS}")
+        assert (decoded.index, decoded.value, decoded.flags, decoded.time_ms) == (3, 3, 0x01, TIME)
+
+    def test_events_with_relative_time_count_from_the_common_time(self):
+        first, second = _read(f"33 01 07 01  {TIME_OCTETS}  04 03 17 02  00 41 00 00  01 81 E8 03")[
+            1:
+        ]
+        assert (first.value, first.time_ms, first.synchronized) == (1, TIME, True)
+        assert (second.value, second.time_ms) == (2, TIME + 1000)
+
+    def test_events_with_relative_time_after_an_unsynchronized_common_time_say_so(self):
+        decoded = _read(f"33 02 07 01  {TIME_OCTETS}  04 03 17 01  00 81 10 00")[1]
+        assert (decoded.time_ms, decoded.synchronized) == (TIME + 16, False)
+
+    @pytest.mark.parametrize(("key", "size"), [((3, 2), 1), ((4, 1), 1), ((4, 2), 7), ((4, 3), 3)])
+    def test_sizes_the_standard_gives(self, key, size):
+        assert LAYOUTS[key].size == size

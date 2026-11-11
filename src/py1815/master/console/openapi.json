@@ -1184,6 +1184,12 @@
                                         "$ref": "#/components/schemas/ProfilePoint"
                                       }
                                     },
+                                    "dbi": {
+                                      "type": "array",
+                                      "items": {
+                                        "$ref": "#/components/schemas/ProfilePoint"
+                                      }
+                                    },
                                     "bo": {
                                       "type": "array",
                                       "items": {
@@ -1407,6 +1413,22 @@
                     "type": "object",
                     "properties": {
                       "bi": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "dbi": {
                         "oneOf": [
                           {
                             "type": "array",
@@ -1655,6 +1677,12 @@
                               "type": "object",
                               "properties": {
                                 "bi": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/PointValue"
+                                  }
+                                },
+                                "dbi": {
                                   "type": "array",
                                   "items": {
                                     "$ref": "#/components/schemas/PointValue"
@@ -5713,13 +5741,14 @@
         "type": "string",
         "enum": [
           "bi",
+          "dbi",
           "bo",
           "counter",
           "frozen",
           "ai",
           "ao"
         ],
-        "description": "Binary input, binary output status, counter, frozen counter, analog input, analog output status."
+        "description": "Binary input, double-bit binary input, binary output status, counter, frozen counter, analog input, analog output status."
       },
       "Tasks": {
         "type": "object",
@@ -5905,6 +5934,9 @@
               "bi": {
                 "type": "integer"
               },
+              "dbi": {
+                "type": "integer"
+              },
               "bo": {
                 "type": "integer"
               },
@@ -5967,6 +5999,9 @@
                 "type": "object",
                 "properties": {
                   "bi": {
+                    "type": "integer"
+                  },
+                  "dbi": {
                     "type": "integer"
                   },
                   "bo": {
