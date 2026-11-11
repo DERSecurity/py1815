@@ -211,11 +211,7 @@ jobs:
 
   parsers:
     name: independent dissectors read the sweep and the master
-    # Pinned: on the ubuntu-26.04 image that ubuntu-latest now selects, the
-    # tshark and Suricata install below hung past this job's timeout, where it
-    # takes under a minute on 24.04. Move to ubuntu-latest once the 26.04
-    # install is confirmed to work.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # The sweep walks the function code space and writes the exchange to a
     # capture. Then this library's master reads a second outstation and writes
