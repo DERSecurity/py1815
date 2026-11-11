@@ -194,6 +194,9 @@ LAYOUTS: dict[tuple[int, int], Layout] = {
     (51, 2): Layout(None, flags=False, time=_ABS),
     (52, 1): Layout(None, flags=False, number="<H"),
     (52, 2): Layout(None, flags=False, number="<H"),
+    # The internal indications, one bit each: index n is bit n of the two
+    # indication octets (A.28.1).
+    (80, 1): Layout(None, flags=False, packed=True),
 }
 
 

@@ -227,6 +227,27 @@ class TestObjectsThatAreNotPoints:
     def test_a_time_delay_in_milliseconds(self):
         assert _one("34 02 07 01  F4 01").value == 500
 
+    def test_the_internal_indications_are_one_bit_each_from_the_lowest_index(self):
+        # Indexes 0 to 15, with IIN1.7 (restart, index 7) and IIN2.1 (object unknown, index 9).
+        states = _read("50 01 00 00 0F  80 02")
+        assert [state.index for state in states] == list(range(16))
+        assert [state.index for state in states if state.value] == [7, 9]
+        assert all(state.point is None and state.flags is None for state in states)
+
+    def test_internal_indications_in_a_16_bit_range_that_ends_inside_an_octet(self):
+        # Indexes 6 to 8, the last octet padded with zeros: IIN1.7 is the second.
+        states = _read("50 01 01 06 00 08 00  02")
+        assert [(state.index, state.value) for state in states] == [
+            (6, False),
+            (7, True),
+            (8, False),
+        ]
+        assert states[1].raw == b""
+
+    def test_internal_indications_cannot_arrive_with_an_index_each(self):
+        decoded = decode_objects(bytes.fromhex("50 01 17 01 07 01"))
+        assert not decoded.complete and not decoded.objects
+
     def test_an_echoed_command_is_walked_past_and_what_follows_is_read(self):
         relay, analog = _read(
             "0C 01 17 01  05  03 01 64 00 00 00 00 00 00 00 00   1E 02 00 00 00  01 2C 01"

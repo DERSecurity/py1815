@@ -143,6 +143,8 @@ logger = logging.getLogger(__name__)
 RESTART_GROUP = 80
 RESTART_VARIATION = 1
 RESTART_INDEX = 7
+#: The last of the sixteen standard internal indications, IIN2.7 (A.28.1).
+_LAST_INDICATION = 15
 
 #: Group 50 variation 1: the absolute time a master writes to set the clock.
 TIME_GROUP = 50
@@ -338,6 +340,8 @@ _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_BINARY_INPUT_EVENT, 2): 1 + TIME_SIZE,
     (GROUP_BINARY_INPUT_EVENT, 3): 3,
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
+    # Answered in variation 1 when a master reads variation 2 (D108).
+    (GROUP_FROZEN_COUNTER_EVENT, 2): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
     **{
         (GROUP_ANALOG_INPUT_EVENT, int(variation)): size
@@ -524,6 +528,16 @@ class SessionFacts:
     #: Seconds after the retries are spent before reporting starts again
     #: unprompted, or None for never.
     unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME
+    #: The variation frozen counter events are reported in when a master reads
+    #: by class, or by group with variation 0.
+    frozen_counter_event_variation: int = FROZEN_COUNTER_EVENT_VARIATION
+    #: Whether a read of frozen counter events in variation 2 is answered, in
+    #: variation 1.
+    frozen_counter_event_16_bit: bool = False
+    #: Whether the current time can be read (group 50 variation 1).
+    time_read: bool = False
+    #: Whether the internal indications can be read (group 80 variation 1).
+    indications_read: bool = False
 
 
 class FreezeProvider(Protocol):
@@ -767,6 +781,10 @@ class Session:
         time_sink: Callable[[int], None] | None = None,
         need_time: bool = False,
         analog_event_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
+        frozen_counter_event_variation: int = FROZEN_COUNTER_EVENT_VARIATION,
+        frozen_counter_event_16_bit: bool = False,
+        time_source: Callable[[], int] | None = None,
+        indications_read: bool = False,
         confirm_timeout: float | None = DEFAULT_CONFIRM_TIMEOUT,
         restart_handler: Callable[[], int] | None = None,
         broadcast_controls: bool = False,
@@ -848,6 +866,19 @@ class Session:
                 of what a master reads events for; a profile that fixes
                 another -- IEEE 1815.2 selects the 32-bit variation without
                 time -- names it here.
+            frozen_counter_event_variation: The variation frozen counter
+                events are reported in when a master reads by class, or by
+                group with variation 0: 5 (with time) or 1 (without).
+            frozen_counter_event_16_bit: Whether a read naming the 16-bit
+                frozen counter event variation (2) is answered. Counters are
+                32 bits wide, so the answer is variation 1, as for a read of
+                the 16-bit counter variations (D108).
+            time_source: Returns the current time in milliseconds since the
+                epoch. Given, a master may read the time (group 50 variation 1);
+                without it that read is refused as an unknown object.
+            indications_read: Whether a master may read the internal
+                indications as object group 80 variation 1. Without it the
+                read is refused as an unknown object.
             confirm_timeout: Seconds a fragment that asked for confirmation
                 waits for it, or None to wait indefinitely. A confirmation
                 arriving later retires nothing and continues nothing.
@@ -986,6 +1017,18 @@ class Session:
             raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = need_time
         self._analog_event_variation = AnalogEventVariation(analog_event_variation)
+        if frozen_counter_event_variation not in (1, FROZEN_COUNTER_EVENT_VARIATION):
+            raise ValueError(
+                f"frozen_counter_event_variation is {frozen_counter_event_variation}; it is 1 or 5"
+            )
+        self._frozen_event_variation = frozen_counter_event_variation
+        self._frozen_event_16_bit = frozen_counter_event_16_bit
+        self._time_source = time_source
+        self._indications_read = indications_read
+        #: The variations an event group may be read in by name.
+        self._event_variations = dict(_EVENT_VARIATIONS)
+        if frozen_counter_event_16_bit:
+            self._event_variations[GROUP_FROZEN_COUNTER_EVENT] = frozenset({0, 1, 2, 5})
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
         self._broadcast_controls = broadcast_controls
@@ -1151,6 +1194,10 @@ class Session:
             unsolicited_confirm_timeout=self._unsolicited_timeout,
             unsolicited_retries=self._unsolicited_retries,
             unsolicited_resume=self._unsolicited_resume,
+            frozen_counter_event_variation=self._frozen_event_variation,
+            frozen_counter_event_16_bit=self._frozen_event_16_bit,
+            time_read=self._time_source is not None,
+            indications_read=self._indications_read,
         )
 
     @property
@@ -2816,11 +2863,90 @@ class Session:
         implements ``read_blocks``, which is how a point map too large for one
         fragment reaches a master at all (D35).
         """
+        blocks: list[bytes] = []
+        waiting: list[ObjectHeader] = []
+        for header in headers:
+            own = self._own_object(header)
+            if own is None:
+                waiting.append(header)
+                continue
+            if waiting:
+                blocks += self._provider_blocks(waiting)
+                waiting = []
+            blocks.append(own)
+        if waiting or not headers:
+            blocks += self._provider_blocks(waiting)
+        return blocks
+
+    def _provider_blocks(self, headers: Sequence[ObjectHeader]) -> list[bytes]:
+        """What the provider answers the given headers with."""
         provider = self._provider
         if isinstance(provider, BlockReadProvider):
             return [bytes(block) for block in provider.read_blocks(headers) if block]
         body = provider.read(headers)
         return [body] if body else []
+
+    def _own_object(self, header: ObjectHeader) -> bytes | None:
+        """The answer to a read of the time or of the internal indications.
+
+        These objects belong to the session, not the provider: the time is the
+        clock the session was given and the indications are its own state.
+        Returns None for any other read, and for these when the session was
+        not given what they need, so the provider refuses them as it refuses
+        any object it does not serve.
+
+        Raises:
+            UnknownObject: The qualifier selects nothing of this object.
+            ParameterError: The count or the range names more than the object holds.
+        """
+        if header.event_class is not None or header.variation != 1:
+            return None
+        if header.group == TIME_GROUP and self._time_source is not None:
+            # Table 12-45: a read of the time takes qualifier 0x07 and a count of 1.
+            if header.qualifier is not QualifierCode.UINT8_COUNT:
+                raise UnknownObject(
+                    f"qualifier 0x{int(header.qualifier):02X} does not select the current time"
+                )
+            if header.count != 1:
+                raise ParameterError(f"the current time is one object, not {header.count}")
+            moment = self._time_source()
+            return bytes([TIME_GROUP, TIME_VARIATION, int(header.qualifier), 1]) + (
+                moment.to_bytes(TIME_SIZE, "little")
+            )
+        if header.group == RESTART_GROUP and self._indications_read:
+            return self._indications_object(header)
+        return None
+
+    def _indications_object(self, header: ObjectHeader) -> bytes:
+        """Group 80 variation 1 for the indexes a read names (Table 12-52).
+
+        Index n is bit n of the two indication octets, first octet first (A.28.1).
+        The answer is packed with the first index in bit 0 of the first octet
+        and the rest of the last octet zero.
+        """
+        if (
+            header.qualifier
+            not in (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
+            or header.start is None
+            or header.stop is None
+        ):
+            raise UnknownObject(
+                f"qualifier 0x{int(header.qualifier):02X} does not select internal indications"
+            )
+        if header.stop > _LAST_INDICATION:
+            raise ParameterError(
+                f"there are internal indications 0..{_LAST_INDICATION}, not {header.stop}"
+            )
+        iin = self._indications()
+        states = iin.first | iin.second << 8
+        count = header.stop - header.start + 1
+        packed = (states >> header.start) & ((1 << count) - 1)
+        prefix = bytes([RESTART_GROUP, RESTART_VARIATION, int(QualifierCode.UINT8_START_STOP)])
+        return (
+            prefix
+            + bytes([header.start, header.stop])
+            + packed.to_bytes((count + 7) // 8, "little")
+        )
 
     def _abandon(self) -> None:
         """Forget the response in flight, because the master has moved on.
@@ -2983,7 +3109,7 @@ class Session:
             return True
         if header.event_class is not None:
             return False
-        return header.variation in _EVENT_VARIATIONS.get(header.group, ())
+        return header.variation in self._event_variations.get(header.group, ())
 
     def _held(self, header: ObjectHeader, limit: int) -> list[Event]:
         """The oldest events a header selects, without removing them."""
@@ -3129,6 +3255,9 @@ class Session:
             _MIN_EVENT_OCTETS,
             1 + _EVENT_SIZES[(GROUP_ANALOG_INPUT_EVENT, int(self._analog_event_variation))],
         )
+        defaults = min(
+            defaults, 1 + _EVENT_SIZES[(GROUP_FROZEN_COUNTER_EVENT, self._frozen_event_variation)]
+        )
         if self._events is not None and self._events.holds_unsynchronized:
             # Those travel with relative time, which is smaller than the default.
             defaults = min(defaults, 1 + _EVENT_SIZES[(GROUP_BINARY_INPUT_EVENT, 3)])
@@ -3181,7 +3310,8 @@ class Session:
                 )
             elif isinstance(event, FrozenCounterEvent):
                 group = GROUP_FROZEN_COUNTER_EVENT
-                variation = named or FROZEN_COUNTER_EVENT_VARIATION
+                # Variation 2 is answered in variation 1: the counter has 32 bits.
+                variation = (1 if named == 2 else named) or self._frozen_event_variation
                 encoded = (
                     encode_frozen_counter_event(event.point, timestamp_ms=event.timestamp_ms)
                     if variation == FROZEN_COUNTER_EVENT_VARIATION

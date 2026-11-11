@@ -1918,6 +1918,34 @@ yet serve. `level2=True` (and the `level2` file key and `--level2`) means `level
 keyword warns with `DeprecationWarning`, and combining it with another level is an
 error. `level2=False` changes nothing. The alias goes after one release.
 
+**D108 -- Level 3 and 4 add reads, each answered in a variation this outstation keeps.**
+At `at_least(3)` the outstation answers a read of group 1 variation 1 (in variation 2, which
+Table 12-3 footnote a allows, so D5 stands and no packed binary output is added), a read of
+group 23 variation 2 (in variation 1, for the reason D100 widens 16-bit counters: the counter
+has 32 bits), a read of the current time (group 50 variation 1, qualifier 0x07, a count of
+1; Table 12-45) and a read of the internal indications (group 80 variation 1, qualifiers 0x00
+and 0x01; Table 12-52). Level 2 and the default refuse all four as unknown objects, as they
+did. The time and the indications belong to the session, not to the point map, so `Session`
+takes `time_source` and `indications_read` and `DerOutstation.session` sets them from the
+level; a session built by hand serves neither unless asked. Index *n* of group 80 is bit *n* of
+the two indication octets (A.28.1); an index past 15 is a parameter error, since the standard
+names no private indications here. The answer is sent with qualifier 0x00 for either request
+qualifier. Reads of each static group by range with variation 0, and of each variation
+Table 12-3 to Table 12-37 list, were already answered at every level and are unchanged.
+*Trade-off:* a master that reads group 80 learns the indications of the moment before the
+response, not the ones the response itself carries, which differ only by the class bits of
+the events that response delivers.
+
+**D109 -- Level 3 reports frozen counters and their events without time.** Table 12-21
+and Table 12-25 list frozen counters and frozen counter events in the variations without time
+at Level 3 (the variations with time are Level 4), and procedure 8.16.2.2.3 of the IED
+Certification Procedure reads a Level 3 freeze back as variations 1, 2, 9 or 10. An outstation
+at exactly Level 3 therefore reports a frozen counter in variation 1 when a read names no
+variation, and a frozen counter event in variation 1 in class polls and unsolicited responses
+(`Session(frozen_counter_event_variation=1)`). Level 4 and the default keep the profile's
+variations with time. A freeze already buffered a frozen counter event at every level but an
+explicit Level 2 (D55), so Level 3 needed no new event generation.
+
 ## Open
 
 - Contribution terms: whether to require a DCO, a CLA, or neither.

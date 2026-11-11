@@ -528,13 +528,23 @@ outstation = DerOutstation(profile, binding, level=2)
 ```
 
 Without a level, the outstation claims Level 2 and serves the profile's additions.
-Levels 3 and 4 serve them too. Any other value is refused with an error.
-`level2=True` still works as `level=2`, with a deprecation warning.
+Any other value is refused with an error. `level2=True` still works as `level=2`, with
+a deprecation warning.
 
-At Level 2, a read that names no variation is answered in the variations Level 2 requires a
-master to parse, frozen counter events are not reported, and a freeze-and-clear
-clears. An unflagged variation is replaced by its flagged one for any point whose
-quality is not normal, so an offline point is never read as a plain number. This is
+What each level answers, beyond what the level before it does:
+
+| Level | Answers |
+|---|---|
+| 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. |
+| none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
+| 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. |
+| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. |
+
+Every level reads each static group by range as well as for all points, and each event
+group by count as well as for all events.
+
+An unflagged variation is replaced by its flagged one for any point whose
+quality is not normal, so an offline point is never read as a plain number. Level 2 is
 the configuration the conformance tests run against; see
 [Testing](testing.md#the-certification-procedures-are-carried-out-section-by-section).
 

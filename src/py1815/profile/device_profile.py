@@ -40,6 +40,7 @@ from py1815.control import CommandStatus
 from py1815.profile.model import Kind, Point
 from py1815.profile.outstation import DerOutstation
 from py1815.session import Session, SessionFacts
+from py1815.subset import SubsetLevel
 
 #: The schema edition this module writes, and the names its files ship under.
 SCHEMA_VERSION = "2.12.00"
@@ -191,6 +192,9 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
 
     if served[Kind.BI]:
         static(1, "Binary Input", {2: "Binary Input - with flags"})
+        if outstation.at_least(SubsetLevel.LEVEL_3):
+            # Read in the packed variation and answered with flags.
+            widened(1, {1: "Binary Input - packed format"})
         events(
             2,
             "Binary Input Event",
@@ -254,6 +258,16 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 5: "Frozen Counter Event - 32-bit with flag and time",
             },
         )
+        if facts.events and facts.frozen_counter_event_16_bit:
+            # Read, and answered in the 32-bit variation.
+            rows.append(
+                Row(
+                    23,
+                    2,
+                    "Frozen Counter Event - 16-bit with flag",
+                    request=(READ, tuple(_ALL + _COUNT)),
+                )
+            )
     if served[Kind.AI]:
         static(
             30,
@@ -294,6 +308,16 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     4: "Analog Output - double-precision floating point",
                 },
             )
+    if facts.time_read:
+        rows.append(
+            Row(
+                50,
+                1,
+                "Time and Date - absolute time",
+                request=(READ, (0x07,)),
+                response=(RESPONSE, (0x07,)),
+            )
+        )
     if facts.time_write:
         rows.append(Row(50, 1, "Time and Date - absolute time", request=(WRITE, (0x07,))))
         rows.append(
@@ -355,7 +379,13 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 )
         if served[Kind.CTR] and not outstation.level2:
             rows.append(
-                Row(23, 5, "Frozen Counter Event - 32-bit with flag and time", response=unsolicited)
+                Row(
+                    23,
+                    facts.frozen_counter_event_variation,
+                    "Frozen Counter Event - 32-bit with flag"
+                    + (" and time" if facts.frozen_counter_event_variation == 5 else ""),
+                    response=unsolicited,
+                )
             )
         if served[Kind.AI]:
             rows.append(
@@ -380,6 +410,16 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                         request=(function, tuple(_ALL)),
                     )
                 )
+    if facts.indications_read:
+        rows.append(
+            Row(
+                80,
+                1,
+                "Internal Indications - packed format",
+                request=(READ, tuple(_RANGE)),
+                response=(RESPONSE, (0x00,)),
+            )
+        )
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, delay measurement, and the
     # two that depend on how the session was built. Enable and disable
@@ -794,7 +834,12 @@ def _database(
                             *(
                                 []
                                 if level2
-                                else [_both("defaultFrozenCounterEventVariation", _variation(5))]
+                                else [
+                                    _both(
+                                        "defaultFrozenCounterEventVariation",
+                                        _variation(facts.frozen_counter_event_variation),
+                                    )
+                                ]
                             ),
                             _both("frozenCounterClass0ResponseMode", ["always"]),
                             *(

@@ -120,6 +120,11 @@ _WIDENED_VARIATIONS = {
     },
 }
 
+#: Reads a Level 3 outstation answers in another variation. A binary input
+#: read in the packed variation is answered with flags, which Table 12-3
+#: footnote a allows (D5).
+_LEVEL_3_WIDENED = {GROUP_BINARY_INPUT: {1: int(BinaryVariation.WITH_FLAGS)}}
+
 #: The analog input variation that carries the same value with its flags.
 _FLAGGED_ANALOG = {
     int(AnalogVariation.INT32): int(AnalogVariation.INT32_WITH_FLAG),
@@ -270,9 +275,7 @@ class DerOutstation:
         #: Held to Level 2 and nothing more, as opposed to answering with the
         #: profile's additions.
         self._level2 = level is not None and self._level == SubsetLevel.LEVEL_2
-        self._defaults = dict(_DEFAULT_VARIATIONS)
-        if self._level2:
-            self._defaults.update(_LEVEL_2_VARIATIONS)
+        self._defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
         #: What each counter read when it was last cleared, so that a
         #: counter bound to a running total can be cleared without the
         #: source being asked to forget.
@@ -729,6 +732,8 @@ class DerOutstation:
         if header.variation == 0:
             return self._defaults[header.group]
         widened = _WIDENED_VARIATIONS.get(header.group, {}).get(header.variation)
+        if widened is None and self.at_least(SubsetLevel.LEVEL_3):
+            widened = _LEVEL_3_WIDENED.get(header.group, {}).get(header.variation)
         if widened is not None:
             return widened
         if header.variation not in served:
@@ -1091,6 +1096,29 @@ class DerOutstation:
 
     # -------------------------------------------------------------- session
 
+    def _level_variations(self) -> dict[int, int]:
+        """Return the variations the claimed level reports instead of the profile's own."""
+        if self._level2:
+            return _LEVEL_2_VARIATIONS
+        if self._level == SubsetLevel.LEVEL_3:
+            # Level 3 lists frozen counters in the Level 2 variations only
+            # (Table 12-21); the variation with time is Level 4.
+            return {GROUP_FROZEN_COUNTER: _LEVEL_2_VARIATIONS[GROUP_FROZEN_COUNTER]}
+        return {}
+
+    def _level_options(self) -> dict[str, Any]:
+        """Return the session options the claimed level sets."""
+        options: dict[str, Any] = {}
+        if self.at_least(SubsetLevel.LEVEL_3):
+            # Reads that Level 3 adds (Tables 12-25, 12-45 and 12-52).
+            options["frozen_counter_event_16_bit"] = True
+            options["time_source"] = self.now_ms
+            options["indications_read"] = True
+        if self._level == SubsetLevel.LEVEL_3:
+            # Class polls carry frozen counter events without time (Table 12-49).
+            options["frozen_counter_event_variation"] = 1
+        return options
+
     def session(self, *, max_response: int = 2048, **options: Any) -> Session:
         """A session wired to this outstation, with the profile's options set.
 
@@ -1114,6 +1142,8 @@ class DerOutstation:
             )
         options.setdefault("need_time", True)
         options.setdefault("analog_event_variation", AnalogEventVariation.INT32)
+        for name, value in self._level_options().items():
+            options.setdefault(name, value)
         session = Session(
             self,
             control_provider=self if self._binding.outputs else None,
