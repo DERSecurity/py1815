@@ -158,6 +158,11 @@ LAST_RECORDED_TIME_VARIATION = 3
 TIME_DELAY_GROUP = 52
 TIME_DELAY_FINE_VARIATION = 2
 
+#: The objects a session answers a read of itself, rather than its provider,
+#: when it is given what they need: the current time and the internal
+#: indications (D108).
+_OWN_OBJECTS = frozenset({(TIME_GROUP, TIME_VARIATION), (RESTART_GROUP, RESTART_VARIATION)})
+
 #: Controls that carry objects and are answered.
 #:
 #: ``DIRECT_OPERATE_NR`` is absent on purpose. It executes like the rest and
@@ -241,13 +246,24 @@ DEFAULT_CONFIRM_TIMEOUT = 10.0
 
 #: The variations an event group may be read in by name (D46). Zero asks for
 #: this session's default. Group 22, counter change events, holds events
-#: only when the outstation records them (D124); variation 2 is answered in
-#: variation 1.
+#: only when the outstation records them (D124).
 _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
     GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2, 3}),
     GROUP_ANALOG_INPUT_EVENT: frozenset({0, 1, 2, 3, 4}),
     GROUP_FROZEN_COUNTER_EVENT: frozenset({0, 1, 5}),
     GROUP_COUNTER_EVENT: frozenset({0, 1, 2}),
+}
+
+#: Event reads a master may name that are answered in another variation, by
+#: group: the variation named, and the variation sent. Counters are kept in 32
+#: bits, so a read of a 16-bit counter or frozen counter event is answered in
+#: the 32-bit variation, which IED Certification Procedure 3.1 rev 1 sections
+#: 8.25.2.3 and 8.25.2.4, step 9, accept from such a device (D108, D124). A
+#: frozen counter event read in variation 2 is accepted only when the session
+#: is built with ``frozen_counter_event_16_bit``.
+_WIDENED_EVENT_VARIATIONS: dict[int, dict[int, int]] = {
+    GROUP_FROZEN_COUNTER_EVENT: {2: 1},
+    GROUP_COUNTER_EVENT: {2: 1},
 }
 
 #: Requests whose repetition, octet for octet, is a retry and not a second
@@ -336,18 +352,16 @@ _EVENT_GROUPS: dict[int, type | None] = {
 #: and a bound that can be taken before anything is encoded.
 _MIN_EVENT_OCTETS = 8
 
-#: Octets one event occupies without its index, by group and variation.
+#: Octets one event occupies without its index, by group and the variation
+#: sent. A variation that is read but answered in another is in
+#: ``_WIDENED_EVENT_VARIATIONS`` and not here.
 _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_BINARY_INPUT_EVENT, 1): 1,
     (GROUP_BINARY_INPUT_EVENT, 2): 1 + TIME_SIZE,
     (GROUP_BINARY_INPUT_EVENT, 3): 3,
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
-    # Answered in variation 1 when a master reads variation 2 (D108).
-    (GROUP_FROZEN_COUNTER_EVENT, 2): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
-    # Counter events travel in variation 1 whichever is read (D124).
     (GROUP_COUNTER_EVENT, 1): 5,
-    (GROUP_COUNTER_EVENT, 2): 5,
     **{
         (GROUP_ANALOG_INPUT_EVENT, int(variation)): size
         for variation, size in ANALOG_EVENT_SIZES.items()
@@ -415,6 +429,11 @@ def _well_formed(fragment: bytes) -> bool:
     if control & (FIR_MASK | FIN_MASK) != FIR_MASK | FIN_MASK:
         return False
     return not (control & UNS_MASK and function != FunctionCode.CONFIRM)
+
+
+def _answered_in(group: int, variation: int) -> int:
+    """Return the variation sent for a read of an event group in ``variation``."""
+    return _WIDENED_EVENT_VARIATIONS.get(group, {}).get(variation, variation)
 
 
 class ParameterError(Exception):
@@ -1033,7 +1052,9 @@ class Session:
         #: The variations an event group may be read in by name.
         self._event_variations = dict(_EVENT_VARIATIONS)
         if frozen_counter_event_16_bit:
-            self._event_variations[GROUP_FROZEN_COUNTER_EVENT] = frozenset({0, 1, 2, 5})
+            self._event_variations[GROUP_FROZEN_COUNTER_EVENT] |= frozenset(
+                _WIDENED_EVENT_VARIATIONS[GROUP_FROZEN_COUNTER_EVENT]
+            )
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
         self._broadcast_controls = broadcast_controls
@@ -2904,7 +2925,7 @@ class Session:
             UnknownObject: The qualifier selects nothing of this object.
             ParameterError: The count or the range names more than the object holds.
         """
-        if header.event_class is not None or header.variation != 1:
+        if header.event_class is not None or (header.group, header.variation) not in _OWN_OBJECTS:
             return None
         if header.group == TIME_GROUP and self._time_source is not None:
             # Table 12-45: a read of the time takes qualifier 0x07 and a count of 1.
@@ -3271,7 +3292,9 @@ class Session:
         smallest = defaults
         for header in headers:
             if header.event_class is None and header.variation:
-                named = _EVENT_SIZES.get((header.group, header.variation))
+                named = _EVENT_SIZES.get(
+                    (header.group, _answered_in(header.group, header.variation))
+                )
                 if named is not None:
                     smallest = min(smallest, 1 + named)
         return smallest
@@ -3317,19 +3340,17 @@ class Session:
                 )
             elif isinstance(event, FrozenCounterEvent):
                 group = GROUP_FROZEN_COUNTER_EVENT
-                # Variation 2 is answered in variation 1: the counter has 32 bits.
-                variation = (1 if named == 2 else named) or self._frozen_event_variation
+                variation = _answered_in(group, named) or self._frozen_event_variation
                 encoded = (
                     encode_frozen_counter_event(event.point, timestamp_ms=event.timestamp_ms)
                     if variation == FROZEN_COUNTER_EVENT_VARIATION
                     else encode_counter(event.point)
                 )
             elif isinstance(event, CounterEvent):
-                # Variation 1 for a class read and for variations 0, 1 and 2:
-                # the counter has 32 bits, as IED procedure 8.25.2.3 step 9
-                # allows for a read of variation 2 (D124).
+                # A class read and variation 0 are answered in variation 1,
+                # 32 bits with flag (D124).
                 group = GROUP_COUNTER_EVENT
-                variation = 1
+                variation = _answered_in(group, named) or 1
                 encoded = encode_counter(event.point)
             else:
                 group = GROUP_BINARY_INPUT_EVENT

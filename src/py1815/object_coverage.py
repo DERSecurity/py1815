@@ -16,6 +16,12 @@ variation tables, the session's event tables, the master's object layouts and
 the control parser. A variation that no table mentions is reported as
 supported by none.
 
+The marks cover every subset level and setting the tables hold: an object that
+only a Level 3 outstation serves or accepts is marked as served or requested, so
+a mark says the library can do it, not that every configuration does. A read
+that is answered in another variation marks the variation read as requested and
+the variation sent as served.
+
 The subset level at which a variation is required comes from the DNP Users
 Group's subset tables, which this repository does not carry. Name a copy with
 ``--subset-tables`` or ``PY1815_SUBSET_TABLES`` and the report adds the column,
@@ -89,9 +95,13 @@ def served() -> set[Key]:
     found.update(outstation._LEVEL_2_VARIATIONS.items())
     for group, variations in outstation._SERVED_VARIATIONS.items():
         found.update((group, variation) for variation in variations)
-    for group, answers in outstation._WIDENED_VARIATIONS.items():
-        found.update((group, variation) for variation in answers.values())
+    for widened in (outstation._WIDENED_VARIATIONS, outstation._LEVEL_3_WIDENED):
+        for group, answers in widened.items():
+            found.update((group, variation) for variation in answers.values())
     found.update(session._EVENT_SIZES)
+    for group, answers in session._WIDENED_EVENT_VARIATIONS.items():
+        found.update((group, variation) for variation in answers.values())
+    found.update(session._OWN_OBJECTS)
     found.add((session.TIME_DELAY_GROUP, session.TIME_DELAY_FINE_VARIATION))
     found.update(
         (GROUP_COMMON_TIME, variation)
@@ -107,10 +117,14 @@ def requested() -> set[Key]:
     found.update(outstation._LEVEL_2_VARIATIONS.items())
     for group, variations in outstation._SERVED_VARIATIONS.items():
         found.update((group, variation) for variation in variations)
-    for group, answers in outstation._WIDENED_VARIATIONS.items():
-        found.update((group, variation) for variation in answers)
+    for widened in (outstation._WIDENED_VARIATIONS, outstation._LEVEL_3_WIDENED):
+        for group, answers in widened.items():
+            found.update((group, variation) for variation in answers)
     for group, named in session._EVENT_VARIATIONS.items():
         found.update((group, variation) for variation in named if variation)
+    for group, answers in session._WIDENED_EVENT_VARIATIONS.items():
+        found.update((group, variation) for variation in answers)
+    found.update(session._OWN_OBJECTS)
     found.update((CLASS_GROUP, variation) for variation in CLASS_VARIATIONS)
     # The writes a session honors: the clock, and the restart indication.
     found.add((session.TIME_GROUP, session.TIME_VARIATION))

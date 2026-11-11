@@ -162,6 +162,17 @@ def test_the_event_sizes_the_encoders_use_are_the_catalog_sizes() -> None:
         assert item is not None and item.size.octets == size, (group, variation)
 
 
+def test_a_widened_event_read_is_sized_by_the_variation_sent() -> None:
+    """The event sizes are keyed by the variation sent, never by the one read."""
+    widened = session._WIDENED_EVENT_VARIATIONS  # pylint: disable=protected-access
+    sizes = session._EVENT_SIZES  # pylint: disable=protected-access
+    assert widened == {22: {2: 1}, 23: {2: 1}}
+    for group, answers in widened.items():
+        for read, sent in answers.items():
+            assert (group, sent) in sizes
+            assert (group, read) not in sizes
+
+
 def test_the_control_object_widths_are_the_catalog_sizes() -> None:
     crob = catalog.find(12, 1)
     assert crob is not None and crob.size.octets == control.CROB_SIZE
@@ -227,6 +238,29 @@ def test_a_variation_the_outstation_widens_is_accepted_and_not_served() -> None:
     assert (row.served, row.requested) == (False, True)
 
 
+def test_a_widened_event_variation_is_accepted_and_not_served() -> None:
+    # Reads of the 16-bit counter and frozen counter events are answered in 32 bits.
+    for group in (22, 23):
+        assert (_row(group, 2).served, _row(group, 2).requested) == (False, True)
+        assert (_row(group, 1).served, _row(group, 1).requested) == (True, True)
+
+
+def test_a_read_only_level_3_accepts_is_reported() -> None:
+    # Level 3 answers a packed binary input read with flags.
+    assert (_row(1, 1).served, _row(1, 1).requested) == (False, True)
+
+
+def test_the_time_and_the_indications_the_session_answers_are_served() -> None:
+    for group in (50, 80):
+        assert (_row(group, 1).served, _row(group, 1).requested) == (True, True)
+
+
+def test_the_report_follows_the_session_event_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _row(23, 2).requested
+    monkeypatch.setattr(session, "_WIDENED_EVENT_VARIATIONS", {22: {2: 1}})
+    assert not _row(23, 2).requested
+
+
 def test_a_class_object_is_accepted_in_a_request_and_never_served() -> None:
     row = _row(60, 2)
     assert (row.served, row.requested, row.parsed) == (False, True, False)
@@ -268,7 +302,7 @@ def test_the_text_report_names_every_group_and_marks_each_column() -> None:
     for group in catalog.GROUPS.values():
         assert f"Group {group.number}: {group.name} (" in text
     assert "     2  yes  yes  yes  Binary input - with flags" in text
-    assert "     1  -    -    yes  Binary input - packed format" in text
+    assert "     1  -    yes  yes  Binary input - packed format" in text
 
 
 # ---------------------------------------------------------- the subset-level column

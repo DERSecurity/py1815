@@ -645,6 +645,7 @@ change events are never buffered, and reading that group is answered with nothin
 buffers nothing changes: the header reaches the provider as it always did.
 *Trade-off:* a read crossing classes has no order to offer but the classes' own;
 **D52** later gave events an order of their own and uses it.
+From Level 3, counter change events are buffered and read by group as well (**D124**).
 
 **D47 -- The analog event variation and reporting mode are the caller's to choose.** The
 default stays timed, and stays every change, for the reasons **D17** gives. IEEE 1815.2
@@ -756,7 +757,7 @@ the flagged variation for an unflagged one whenever a point's quality is not nor
 master never reads a healthy-looking number from a point that is offline. IEEE 1815.2 asks
 for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared),
 so this is a mode for testing against the subset and for masters that implement only that,
-and not the default (D106). A cold restart is supported when the session is given a
+and not the default (D106, D107). A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
 process it does not own. The property of the same name sets or removes the handler later,
 which turns the function on or off from the next request with no restart: a device whose
@@ -1772,6 +1773,77 @@ is given a copy, as `--subset-tables` or that variable, and holds the lowest lev
 tables list the object. *Trade-off:* the report reads private tables of the session and the
 outstation, so renaming one fails a test until the report follows.
 
+**D106 -- The outstation is held to a subset level of 2, 3 or 4, set by `level`.**
+`DerOutstation(level=...)`, the configuration's `level` and `--level` take a
+`SubsetLevel` or the integers 2, 3 and 4, and nothing else: other values, booleans
+and strings are refused with an error naming the setting. IEEE 1815-2012 clause 14.7
+requires an outstation to be restrictable to the level it claims. `level` is a property
+and `at_least(n)` answers whether a feature of level `n` applies, so each level-dependent
+feature asks one question. Level 2 behaves as D55 describes. Levels 3 and 4 serve what
+the default serves, with the additions and changes D108, D109 and D124 make. The Device
+Profile writes `level2`, `level3` or `level4` for the level claimed.
+*Trade-off:* a claim of Level 3 or 4 covers every object that level lists, and the library
+does not yet serve all of them; `python -m py1815.object_coverage` lists what it serves at
+any level.
+
+**D107 -- No level means Level 2 with the profile's additions, and `level2=True` is a
+deprecated alias.** The DER profile is built on Level 2 and adds to it (D55), so the
+default, `level=None`, claims Level 2 and keeps the additions; only an explicit
+`level=2` removes them. Making the default 4 would claim objects the library does not
+yet serve. `level2=True` (and the `level2` file key and `--level2`) means `level=2`; the
+keyword warns with `DeprecationWarning`, and combining it with another level is an
+error. `level2=False` changes nothing. The alias goes after one release.
+
+**D108 -- Level 3 and 4 add reads, each answered in a variation this outstation keeps.**
+At `at_least(3)` the outstation answers a read of group 1 variation 1 (in variation 2, which
+Table 12-3 footnote a allows, so D5 stands and no packed binary output is added), a read of
+group 23 variation 2 (in variation 1, for the reason D100 widens 16-bit counters: the counter
+has 32 bits), a read of the current time (group 50 variation 1, qualifier 0x07, a count of
+1; Table 12-45) and a read of the internal indications (group 80 variation 1, qualifiers 0x00
+and 0x01; Table 12-52). Level 2 and the default refuse all four as unknown objects, as they
+did. The time and the indications belong to the session, not to the point map, so `Session`
+takes `time_source` and `indications_read` and `DerOutstation.session` sets them from the
+level; a session built by hand serves neither unless asked. Index *n* of group 80 is bit *n* of
+the two indication octets (A.28.1); an index past 15 is a parameter error, since the standard
+names no private indications here. The answer is sent with qualifier 0x00 for either request
+qualifier. Reads of each static group by range with variation 0, and of each variation
+Table 12-3 to Table 12-37 list, were already answered at every level and are unchanged.
+*Trade-off:* a master that reads group 80 learns the indications of the moment before the
+response, not the ones the response itself carries, which differ only by the class bits of
+the events that response delivers.
+
+**D109 -- Level 3 reports frozen counters and their events without time.** Table 12-21
+and Table 12-25 list frozen counters and frozen counter events in the variations without time
+at Level 3 (the variations with time are Level 4), and procedure 8.16.2.2.3 of the IED
+Certification Procedure reads a Level 3 freeze back as variations 1, 2, 9 or 10. An outstation
+at exactly Level 3 therefore reports a frozen counter in variation 1 when a read names no
+variation, and a frozen counter event in variation 1 in class polls and unsolicited responses
+(`Session(frozen_counter_event_variation=1)`). Level 4 and the default keep the profile's
+variations with time. A freeze already buffered a frozen counter event at every level but an
+explicit Level 2 (D55), so Level 3 needed no new event generation.
+
+**D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in
+its value does not.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a
+device that supports them raise one whenever any of a counter's flags change; reporting a
+change in value is left to the device. TB2016-003b Table 12-49 footnote o says the same of
+class polls, and Table 12-23 lists reads of group 22 variations 1 and 2 (qualifiers 0x06,
+0x07, 0x08) from Level 3. At `at_least(3)` each poll of the inputs compares a counter's
+flags with the last reading and buffers a group 22 event holding the current count and the
+new flags, in the class the counter's frozen counter events use (the IEEE 1815.2 tables give a counter
+no class of its own, and an event policy sets both). A counter with no class raises none.
+Every flag change is kept, as binary changes are, since the sequence is the information.
+Class polls, unsolicited responses and reads of group 22 variation 0, 1 or 2 report it in
+variation 1, 32 bits with flag: the counters have 32 bits, and IED Certification Procedure
+3.1 rev 1 section 8.25.2.3 step 9 takes variation 1 for a variation 2 read from such a
+device. The variations with time (5 and 6) are optional and stay refused. This replaces,
+from Level 3, the sentence of D46 that has counter change events never buffered. Level 2
+and the default buffer none, as before; whether footnote o already binds Level 2 was
+settled by the maintainer in favor of leaving Level 2 unchanged. The Device Profile
+gives each counter's event class, a default counter event variation of 1, all events
+reported, and `reportValueChangeCounterEvents` of `no`.
+*Trade-off:* IED procedures 8.17 and 8.25.2.3 are written for counters whose events follow
+their value, so a tester generates these events by changing a counter's quality.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1897,76 +1969,6 @@ asking nothing of this outstation, with the reason.
   [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md): curves and schedules as objects, the
   fleet layout, floating-point variations, and a published table for the predecessor profile.
 - Conformance testing.
-
-**D106 -- The outstation is held to a subset level of 2, 3 or 4, set by `level`.**
-`DerOutstation(level=...)`, the configuration's `level` and `--level` take a
-`SubsetLevel` or the integers 2, 3 and 4, and nothing else: other values, booleans
-and strings are refused with an error naming the setting. IEEE 1815-2012 clause 14.7
-requires an outstation to be restrictable to the level it claims. `level` is a property
-and `at_least(n)` answers whether a feature of level `n` applies, so each level-dependent
-feature asks one question. Level 2 behaves as D55 describes. Levels 3 and 4 serve what
-the default serves until their own objects exist. The Device Profile writes
-`level2`, `level3` or `level4` for the level claimed.
-*Trade-off:* until the Level 3 and 4 objects exist, a claim of those levels is a
-configuration choice that changes only the Device Profile.
-
-**D107 -- No level means Level 2 with the profile's additions, and `level2=True` is a
-deprecated alias.** The DER profile is built on Level 2 and adds to it (D55), so the
-default, `level=None`, claims Level 2 and keeps the additions; only an explicit
-`level=2` removes them. Making the default 4 would claim objects the library does not
-yet serve. `level2=True` (and the `level2` file key and `--level2`) means `level=2`; the
-keyword warns with `DeprecationWarning`, and combining it with another level is an
-error. `level2=False` changes nothing. The alias goes after one release.
-
-**D108 -- Level 3 and 4 add reads, each answered in a variation this outstation keeps.**
-At `at_least(3)` the outstation answers a read of group 1 variation 1 (in variation 2, which
-Table 12-3 footnote a allows, so D5 stands and no packed binary output is added), a read of
-group 23 variation 2 (in variation 1, for the reason D100 widens 16-bit counters: the counter
-has 32 bits), a read of the current time (group 50 variation 1, qualifier 0x07, a count of
-1; Table 12-45) and a read of the internal indications (group 80 variation 1, qualifiers 0x00
-and 0x01; Table 12-52). Level 2 and the default refuse all four as unknown objects, as they
-did. The time and the indications belong to the session, not to the point map, so `Session`
-takes `time_source` and `indications_read` and `DerOutstation.session` sets them from the
-level; a session built by hand serves neither unless asked. Index *n* of group 80 is bit *n* of
-the two indication octets (A.28.1); an index past 15 is a parameter error, since the standard
-names no private indications here. The answer is sent with qualifier 0x00 for either request
-qualifier. Reads of each static group by range with variation 0, and of each variation
-Table 12-3 to Table 12-37 list, were already answered at every level and are unchanged.
-*Trade-off:* a master that reads group 80 learns the indications of the moment before the
-response, not the ones the response itself carries, which differ only by the class bits of
-the events that response delivers.
-
-**D109 -- Level 3 reports frozen counters and their events without time.** Table 12-21
-and Table 12-25 list frozen counters and frozen counter events in the variations without time
-at Level 3 (the variations with time are Level 4), and procedure 8.16.2.2.3 of the IED
-Certification Procedure reads a Level 3 freeze back as variations 1, 2, 9 or 10. An outstation
-at exactly Level 3 therefore reports a frozen counter in variation 1 when a read names no
-variation, and a frozen counter event in variation 1 in class polls and unsolicited responses
-(`Session(frozen_counter_event_variation=1)`). Level 4 and the default keep the profile's
-variations with time. A freeze already buffered a frozen counter event at every level but an
-explicit Level 2 (D55), so Level 3 needed no new event generation.
-
-**D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in
-its value does not.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a
-device that supports them raise one whenever any of a counter's flags change; reporting a
-change in value is left to the device. TB2016-003b Table 12-49 footnote o says the same of
-class polls, and Table 12-23 lists reads of group 22 variations 1 and 2 (qualifiers 0x06,
-0x07, 0x08) from Level 3. At `at_least(3)` each poll of the inputs compares a counter's
-flags with the last reading and buffers a group 22 event holding the current count and the
-new flags, in the class the counter's frozen counter events use (the IEEE 1815.2 tables give a counter
-no class of its own, and an event policy sets both). A counter with no class raises none.
-Every flag change is kept, as binary changes are, since the sequence is the information.
-Class polls, unsolicited responses and reads of group 22 variation 0, 1 or 2 report it in
-variation 1, 32 bits with flag: the counters have 32 bits, and IED Certification Procedure
-3.1 rev 1 section 8.25.2.3 step 9 takes variation 1 for a variation 2 read from such a
-device. The variations with time (5 and 6) are optional and stay refused. This replaces,
-from Level 3, the sentence of D46 that has counter change events never buffered. Level 2
-and the default buffer none, as before; whether footnote o already binds Level 2 was
-settled by the maintainer in favor of leaving Level 2 unchanged. The Device Profile
-gives each counter's event class, a default counter event variation of 1, all events
-reported, and `reportValueChangeCounterEvents` of `no`.
-*Trade-off:* IED procedures 8.17 and 8.25.2.3 are written for counters whose events follow
-their value, so a tester generates these events by changing a counter's quality.
 
 ## Open
 

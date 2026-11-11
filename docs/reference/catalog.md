@@ -16,7 +16,10 @@ object in a response. *Requested*: the outstation accepts the object in a reques
 as the header of a read, the body of a write or a control, or a class object.
 *Parsed*: the master reads the object out of a response. The marks are read from
 the tables the library uses, not counted by hand, so the report changes when the
-code does.
+code does. The marks cover every subset level: an object that only a Level 3
+outstation serves or accepts is marked all the same. A read answered in another
+variation, such as a 16-bit counter answered in 32 bits, marks the variation read
+as requested and the variation sent as served.
 
 The subset level at which an object is required is not kept in this repository.
 Give the command your copy of the DNP Users Group subset tables, with
