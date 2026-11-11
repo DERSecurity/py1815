@@ -23,7 +23,7 @@ DEFAULTS = {
     "master_address": 1,
     "unsolicited": False,
     "read_only": False,
-    "level2": False,
+    "level": None,
     "disabled_offline": True,
     "event_capacity": 2000,
     "max_response": 2048,
@@ -171,7 +171,8 @@ class TestCommandLine:
                 "3",
                 "--unsolicited",
                 "--read-only",
-                "--level2",
+                "--level",
+                "3",
                 "--event-capacity",
                 "500",
                 "--max-response",
@@ -196,7 +197,7 @@ class TestCommandLine:
             "master_address": 3,
             "unsolicited": True,
             "read_only": True,
-            "level2": True,
+            "level": 3,
             "event_capacity": 500,
             "max_response": 4096,
             "select_timeout": 5.0,
@@ -318,21 +319,41 @@ class TestAppliedToTheOutstation:
         events = master.scan("events")
         assert not any(decoded.point.value == "ai" for decoded in events.objects)
 
-    @pytest.mark.parametrize("level2, variation", [(False, 1), (True, 2)])
-    def test_level2_reaches_the_outstation(self, level2, variation):
+    @pytest.mark.parametrize("level, variation", [(None, 1), (2, 2), (3, 1), (4, 1)])
+    def test_level_reaches_the_outstation(self, level, variation):
         """Level 2 sends analog output status in 16 bits (group 40 variation 2)."""
-        config, simulation = self._simulation({"level2": level2})
+        config, simulation = self._simulation({"level": level})
         outstation = simulation.outstation
-        assert outstation.level2 is level2
+        assert outstation.level == (level or 2)
         master = Loopback(outstation.session(**config.session_options()))
         outputs = master.scan("outputs")
         analog = [o for o in outputs.objects if o.point is PointType.ANALOG_OUTPUT]
         assert analog and {o.variation for o in analog} == {variation}
 
-    def test_level2_flag_reaches_the_outstation_through_the_command_line(self, tables):
-        config = cli.configuration(_args("run", "--level2"))
+    @pytest.mark.parametrize("flags, level", [(("--level", "4"), 4), (("--level2",), 2), ((), 2)])
+    def test_level_flag_reaches_the_outstation_through_the_command_line(self, tables, flags, level):
+        config = cli.configuration(_args("run", *flags))
         simulation = cli._build(config, cli._load_map(config))
-        assert simulation.outstation.level2 is True
+        assert simulation.outstation.level == level
+        assert simulation.outstation.level2 is (flags == ("--level2",))
+
+    @pytest.mark.parametrize("value", [1, 5, 0, "2", 2.0, True, [2]])
+    def test_level_outside_2_3_4_is_refused(self, value):
+        with pytest.raises(ConfigError, match="level must be 2, 3 or 4"):
+            DerConfig.from_mapping({"level": value})
+
+    def test_command_line_refuses_a_level_outside_2_3_4(self, capsys):
+        with pytest.raises(SystemExit):
+            _args("run", "--level", "5")
+        assert "invalid choice" in capsys.readouterr().err
+
+    def test_level2_true_in_a_file_means_level_2(self):
+        assert DerConfig.from_mapping({"level2": True}).level == 2
+        assert DerConfig.from_mapping({"level2": False}).level is None
+
+    def test_level2_true_with_another_level_is_refused(self):
+        with pytest.raises(ConfigError, match="level2 conflicts with level"):
+            DerConfig.from_mapping({"level2": True, "level": 3})
 
     def test_tables_and_composition_reach_the_map_loader(self, monkeypatch):
         seen = []

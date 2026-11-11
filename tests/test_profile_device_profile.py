@@ -451,7 +451,7 @@ class TestTheTableFollowsTheConfiguration:
         """Frozen counters without time, analog output status in 16 bits, no frozen events."""
         point_map = load.resolve(for_reference_der(), Composition())
         device = der.ReferenceDer()
-        outstation = DerOutstation(point_map, device.bind(point_map), level2=True)
+        outstation = DerOutstation(point_map, device.bind(point_map), level=2)
         outstation.freeze_all()
         session = outstation.session()
         table = device_profile.implementation(outstation, session.facts)
@@ -803,13 +803,19 @@ class TestWhatIsNotClaimed:
         assert not any("nsolicited" in text for text in additions())
         assert any("nsolicited" in text for text in additions(unsolicited=True))
 
-    def test_the_level_claimed_is_two(self, simulation):
-        level = _document(simulation).find(
-            "d:referenceDevice/d:configuration/d:deviceConfig/d:dnpLevelSupported/"
-            "d:currentValue/d:outStation",
-            NS,
-        )
-        assert [child.tag.split("}")[1] for child in level] == ["level2"]
+    @pytest.mark.parametrize(
+        "level, claimed", [(None, "level2"), (2, "level2"), (3, "level3"), (4, "level4")]
+    )
+    def test_the_level_claimed_is_the_configured_level(self, level, claimed):
+        point_map = load.resolve(for_reference_der(), Composition())
+        built = der.build(point_map, level=level)
+        for part in ("currentValue", "capabilities"):
+            found = _document(built).find(
+                "d:referenceDevice/d:configuration/d:deviceConfig/d:dnpLevelSupported/"
+                f"d:{part}/d:outStation",
+                NS,
+            )
+            assert [child.tag.split("}")[1] for child in found] == [claimed]
 
 
 class TestTheDocumentItself:

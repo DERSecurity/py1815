@@ -516,17 +516,22 @@ A profile generated from the IEEE 1815.2 tables carries that standard's point
 names. Publishing one for your own device is what the document is for;
 the tables themselves stay where they were.
 
-## Answering as Subset Level 2 only
+## Choosing a subset level
 
 IEEE 1815.2 asks for more than DNP3 Subset Level 2 in places: 32-bit setpoints,
-frozen counter events, counters that a freeze never clears. A master that implements
-the subset and no more can be served by building the outstation with `level2=True`:
+frozen counter events, counters that a freeze never clears. The outstation's `level`
+is 2, 3 or 4, and the Device Profile claims the level chosen. A master that implements
+the subset and no more is served with `level=2`:
 
 ```python
-outstation = DerOutstation(profile, binding, level2=True)
+outstation = DerOutstation(profile, binding, level=2)
 ```
 
-A read that names no variation is then answered in the variations Level 2 requires a
+Without a level, the outstation claims Level 2 and serves the profile's additions.
+Levels 3 and 4 serve them too. Any other value is refused with an error.
+`level2=True` still works as `level=2`, with a deprecation warning.
+
+At Level 2, a read that names no variation is answered in the variations Level 2 requires a
 master to parse, frozen counter events are not reported, and a freeze-and-clear
 clears. An unflagged variation is replaced by its flagged one for any point whose
 quality is not normal, so an offline point is never read as a plain number. This is

@@ -32,6 +32,7 @@ from py1815.profile.policy import EventPolicy
 from py1815.server import DEFAULT_PORT, IDLE_TIMEOUT
 from py1815.session import DEFAULT_CONFIRM_TIMEOUT, DEFAULT_SELECT_TIMEOUT
 from py1815.settings import ConfigError
+from py1815.subset import SubsetLevel
 
 _COMPOSITION = ("meters", "der_units", "inverters", "batteries")
 _SIMULATION = ("seed", "tick")
@@ -53,6 +54,14 @@ class Identity:
 _IDENTITY = tuple(each.name for each in fields(Identity))
 
 
+def _level(value: Any, where: str) -> int:
+    """Return a subset level as an integer, or raise ConfigError."""
+    try:
+        return int(SubsetLevel.parse(value, where))
+    except ValueError as error:
+        raise ConfigError(str(error)) from None
+
+
 @dataclass(frozen=True)
 class DerConfig:
     """The DER outstation's whole configuration."""
@@ -70,9 +79,9 @@ class DerConfig:
     unsolicited: bool = False
     #: Refuse every control, so a master can read and cannot command.
     read_only: bool = False
-    #: Answer as a DNP3 Subset Level 2 outstation, without the profile's
-    #: additions.
-    level2: bool = False
+    #: The DNP3 subset level to claim and answer at: 2, 3 or 4. None claims
+    #: Level 2 and serves the profile's additions.
+    level: int | None = None
     #: Clear the ONLINE flag on the inputs of a disabled function
     #: (IEEE 1815.2 clause 6.1.1).
     disabled_offline: bool = True
@@ -107,7 +116,8 @@ class DerConfig:
         a value of the wrong type.
         """
         top_level = [each.name for each in fields(cls) if each.name not in ("seed", "tick")] + [
-            "simulation"
+            "simulation",
+            "level2",
         ]
         settings.section(given, "configuration", top_level)
         values: dict[str, Any] = {}
@@ -122,8 +132,16 @@ class DerConfig:
                 values[key] = (
                     None if value is None else settings.integer(value, key, 0, settings.MAX_ADDRESS)
                 )
-            elif key in ("unsolicited", "read_only", "level2", "disabled_offline"):
+            elif key in ("unsolicited", "read_only", "disabled_offline"):
                 values[key] = settings.boolean(value, key)
+            elif key == "level":
+                values[key] = None if value is None else _level(value, key)
+            elif key == "level2":
+                # The earlier spelling of "level": 2.
+                if settings.boolean(value, key) and given.get("level") in (None, 2):
+                    values["level"] = 2
+                elif value and given.get("level") is not None:
+                    raise ConfigError("level2 conflicts with level")
             elif key == "event_capacity":
                 values[key] = settings.integer(value, key, 1, 1_000_000)
             elif key == "max_response":
@@ -189,7 +207,7 @@ class DerConfig:
         """Return the keyword arguments for :class:`~py1815.profile.outstation.DerOutstation`."""
         return {
             "event_capacity": self.event_capacity,
-            "level2": self.level2,
+            "level": self.level,
             "disabled_offline": self.disabled_offline,
             "read_only": self.read_only,
             "event_policy": self.event_policy,

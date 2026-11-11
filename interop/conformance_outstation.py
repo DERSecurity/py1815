@@ -342,7 +342,7 @@ class Device:
             point_map(frozen_counters=settings.frozen_counters),
             self._binding(settings),
             strict=False,
-            level2=True,
+            level=2,
             clock_ms=self._clock_ms,
             time_written=self._time_written,
         )

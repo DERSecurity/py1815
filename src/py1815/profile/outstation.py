@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
+import warnings
 import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
@@ -71,6 +72,7 @@ from py1815.profile.coverage import Coverage, Entry, Source
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
 from py1815.profile.policy import EventPolicy, EventRule
 from py1815.session import Control, ParameterError, Session, UnknownObject
+from py1815.subset import SubsetLevel
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +179,8 @@ class DerOutstation:
         event_capacity: int = 2000,
         block_octets: int = 1024,
         clock_ms: Callable[[], int] = wall_clock_ms,
-        level2: bool = False,
+        level: SubsetLevel | int | None = None,
+        level2: bool | None = None,
         disabled_offline: bool = True,
         event_policy: EventPolicy | Mapping[str, Any] | None = None,
         read_only: bool = False,
@@ -196,13 +199,23 @@ class DerOutstation:
                 fragment a master can receive.
             clock_ms: Wall-clock milliseconds, UTC. Event and freeze times are
                 taken from it, corrected by whatever time a master has written.
-            level2: Answer as a DNP3 Subset Level 2 outstation and nothing
-                more. The DER profile is built on Level 2 and adds to it;
-                IEEE 1815.2 has every such addition be one an outstation can
-                turn off, and this turns them off. Frozen counters are
-                reported without their time, analog output status in 16
-                bits, a freeze buffers no event, and freeze-and-clear clears.
-                A master may still name the fuller variations outright.
+            level: The DNP3 subset level to claim and answer at: 2, 3 or 4,
+                as a :class:`~py1815.subset.SubsetLevel` or its integer.
+                Anything else raises ``ValueError``. Level 2 answers as a
+                Level 2 outstation and nothing more. The DER profile is
+                built on Level 2 and adds to it; IEEE 1815.2 has every such
+                addition be one an outstation can turn off, and Level 2
+                turns them off. Frozen counters are reported without their
+                time, analog output status in 16 bits, a freeze buffers no
+                event, and freeze-and-clear clears. A master may still name
+                the fuller variations outright. Levels 3 and 4 serve the
+                profile's additions, as the default does, and the Device
+                Profile claims the level. None, the default, claims Level 2
+                and serves the profile's additions, which is what the DER
+                profile asks for when no level is chosen.
+            level2: Deprecated; use ``level=2``. True means ``level=2`` and
+                warns. False changes nothing. True with a ``level`` other
+                than 2 raises ``ValueError``.
             disabled_offline: Report the inputs of a function that is
                 disabled with the ONLINE flag clear, as IEEE 1815.2
                 clause 6.1.1 requires: the value is still sent, marked
@@ -242,9 +255,23 @@ class DerOutstation:
         self._sessions: weakref.WeakSet[Session] = weakref.WeakSet()
         self._block_octets = block_octets
         self._clock_ms = clock_ms
-        self._level2 = level2
-        self._defaults = dict(_DEFAULT_VARIATIONS)
         if level2:
+            warnings.warn(
+                "level2=True is deprecated; use level=2",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if level is not None and SubsetLevel.parse(level) != SubsetLevel.LEVEL_2:
+                raise ValueError(f"level2=True conflicts with level={level!r}")
+            level = SubsetLevel.LEVEL_2
+        #: The level claimed. An outstation given no level claims Level 2 and
+        #: keeps the profile's additions.
+        self._level = SubsetLevel.LEVEL_2 if level is None else SubsetLevel.parse(level)
+        #: Held to Level 2 and nothing more, as opposed to answering with the
+        #: profile's additions.
+        self._level2 = level is not None and self._level == SubsetLevel.LEVEL_2
+        self._defaults = dict(_DEFAULT_VARIATIONS)
+        if self._level2:
             self._defaults.update(_LEVEL_2_VARIATIONS)
         #: What each counter read when it was last cleared, so that a
         #: counter bound to a running total can be cleared without the
@@ -491,8 +518,20 @@ class DerOutstation:
         return self._map
 
     @property
+    def level(self) -> SubsetLevel:
+        """The subset level this outstation claims."""
+        return self._level
+
+    def at_least(self, level: SubsetLevel | int) -> bool:
+        """Return whether the claimed level is ``level`` or higher.
+
+        A feature that Level 3 introduces asks ``at_least(SubsetLevel.LEVEL_3)``.
+        """
+        return self._level >= SubsetLevel.parse(level)
+
+    @property
     def level2(self) -> bool:
-        """Whether this outstation is held to Subset Level 2."""
+        """Whether this outstation is held to Subset Level 2 and nothing more."""
         return self._level2
 
     def default_variation(self, group: int) -> int:

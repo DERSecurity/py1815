@@ -447,7 +447,7 @@ def _value(name: str, value: Any) -> tuple[str, list[Any]]:
     return _setting(name, current=[("value", value)])
 
 
-def _device(identity: Identity, facts: SessionFacts) -> Items:
+def _device(identity: Identity, facts: SessionFacts, level: int) -> Items:
     additions = [
         "Analog output commands in 32-bit (g41v1) and floating point (g41v3, g41v4)",
         "Frozen counters with time (g21v5) and frozen counter events (g23v5)",
@@ -465,7 +465,7 @@ def _device(identity: Identity, facts: SessionFacts) -> Items:
         _value("hardwareVersion", identity.hardware_version),
         _value("softwareVersion", identity.software()),
         _value("documentVersionNumber", identity.document_version),
-        _both("dnpLevelSupported", [("outStation", ["level2"])]),
+        _both("dnpLevelSupported", [("outStation", [f"level{level}"])]),
         # No function block beyond the level is implemented; the element is
         # one the schema requires, so it is present and empty.
         _both("supportedFunctionBlocks", []),
@@ -1118,7 +1118,7 @@ def build(
             (
                 "configuration",
                 [
-                    ("deviceConfig", _device(identity, facts)),
+                    ("deviceConfig", _device(identity, facts, int(outstation.level))),
                     ("networkConfig", _network(identity, facts)),
                     ("linkConfig", _link(facts)),
                     ("applConfig", _application(facts, codes)),

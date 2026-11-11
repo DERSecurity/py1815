@@ -550,7 +550,7 @@ class Dut:
     def __init__(
         self,
         *,
-        level2: bool = True,
+        level: int | None = 2,
         binary_outputs: bool = True,
         analog_outputs: bool = True,
         counters: bool = True,
@@ -597,7 +597,7 @@ class Dut:
             event_capacity=capacity,
             block_octets=block_octets,
             clock_ms=self.clock.ms,
-            level2=level2,
+            level=level,
         )
         session_options.setdefault("need_time", False)
         session_options.setdefault("clock", self.clock)

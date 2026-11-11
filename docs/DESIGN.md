@@ -749,14 +749,14 @@ function is not answered. Before this the link layer acknowledged anything well 
 which a master retrying over a poor link could turn into a duplicated request.
 *Trade-off:* state per association in a layer that had none.
 
-**D55 -- A DER outstation can be held to Subset Level 2 exactly.** `DerOutstation(level2=True)`
+**D55 -- A DER outstation can be held to Subset Level 2 exactly.** `DerOutstation(level=2)`
 answers a variation 0 read with the variations a Level 2 master is required to parse,
 reports no frozen counter events, clears counters on a freeze-and-clear, and substitutes
 the flagged variation for an unflagged one whenever a point's quality is not normal, so a
 master never reads a healthy-looking number from a point that is offline. IEEE 1815.2 asks
 for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared),
 so this is a mode for testing against the subset and for masters that implement only that,
-and not the default. A cold restart is supported when the session is given a
+and not the default (D106). A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
 process it does not own. The property of the same name sets or removes the handler later,
 which turns the function on or off from the next request with no restart: a device whose
@@ -1897,6 +1897,26 @@ asking nothing of this outstation, with the reason.
   [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md): curves and schedules as objects, the
   fleet layout, floating-point variations, and a published table for the predecessor profile.
 - Conformance testing.
+
+**D106 -- The outstation is held to a subset level of 2, 3 or 4, set by `level`.**
+`DerOutstation(level=...)`, the configuration's `level` and `--level` take a
+`SubsetLevel` or the integers 2, 3 and 4, and nothing else: other values, booleans
+and strings are refused with an error naming the setting. IEEE 1815-2012 clause 14.7
+requires an outstation to be restrictable to the level it claims. `level` is a property
+and `at_least(n)` answers whether a feature of level `n` applies, so each level-dependent
+feature asks one question. Level 2 behaves as D55 describes. Levels 3 and 4 serve what
+the default serves until their own objects exist. The Device Profile writes
+`level2`, `level3` or `level4` for the level claimed.
+*Trade-off:* until the Level 3 and 4 objects exist, a claim of those levels is a
+configuration choice that changes only the Device Profile.
+
+**D107 -- No level means Level 2 with the profile's additions, and `level2=True` is a
+deprecated alias.** The DER profile is built on Level 2 and adds to it (D55), so the
+default, `level=None`, claims Level 2 and keeps the additions; only an explicit
+`level=2` removes them. Making the default 4 would claim objects the library does not
+yet serve. `level2=True` (and the `level2` file key and `--level2`) means `level=2`; the
+keyword warns with `DeprecationWarning`, and combining it with another level is an
+error. `level2=False` changes nothing. The alias goes after one release.
 
 ## Open
 

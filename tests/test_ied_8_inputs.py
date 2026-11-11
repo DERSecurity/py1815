@@ -505,7 +505,7 @@ class TestFrozenCounters:
 
     def test_8_16_2_2_3_with_frozen_counter_events_enabled(self):
         """The branch for a device that supports frozen counter events, as the DER profile does."""
-        dut = Dut(level2=False)
+        dut = Dut(level=None)
         dut.master.empty_events()
         assert dut.master.request(FREEZE, header(20, 0)).fragment.is_null
         fragment = dut.master.read(header(23, 0), header(21, 0)).fragment
@@ -782,7 +782,7 @@ class TestSpecificEventVariations:
         assert not fragment.body and not fragment.iin2 & IIN2_BAD_FUNCTION
 
     def test_8_25_2_4_frozen_counter_events_where_they_are_enabled(self):
-        dut = Dut(level2=False)
+        dut = Dut(level=None)
         dut.master.empty_events()
         dut.master.request(FREEZE, header(20, 0))
         fragment = dut.master.read(header(23, 1)).fragment

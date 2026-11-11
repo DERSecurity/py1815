@@ -130,7 +130,7 @@ _TOP_LEVEL_FLAGS = (
     "master_address",
     "unsolicited",
     "read_only",
-    "level2",
+    "level",
     "event_capacity",
     "max_response",
     "select_timeout",
@@ -527,10 +527,19 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         help="refuse every control, so a master can read and cannot command",
     )
     parser.add_argument(
-        "--level2",
-        action="store_true",
+        "--level",
+        type=int,
         default=None,
-        help="answer as a DNP3 Subset Level 2 outstation, without the profile's additions",
+        choices=(2, 3, 4),
+        help="claim and answer at this DNP3 subset level (default: Level 2 with the "
+        "profile's additions)",
+    )
+    parser.add_argument(
+        "--level2",
+        action="store_const",
+        const=2,
+        dest="level",
+        help="same as --level 2",
     )
     parser.add_argument(
         "--event-capacity",
