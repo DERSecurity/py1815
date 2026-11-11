@@ -160,10 +160,10 @@ class Master:
 class Bench:
     """The device, its control channel, and a connection to that channel."""
 
-    def __init__(self, **settings: Any) -> None:
+    def __init__(self, *, level: int = 3, **settings: Any) -> None:
         self.clock = Clock()
         self.device = fixture.Device(
-            port=0, settings=fixture.Settings(**settings), wall_ms=self.clock
+            port=0, level=level, settings=fixture.Settings(**settings), wall_ms=self.clock
         )
         self.channel = fixture.ControlChannel(self.device)
         self._reader: asyncio.StreamReader | None = None
@@ -623,6 +623,31 @@ class TestTheTestBench:
             frozen = (await master.request(READ, FROZEN_COUNTERS)).of(21)
             assert [(o.index, o.value) for o in frozen][:2] == [(0, 7), (1, 9)]
             await master.close()
+
+    async def test_freeze_of_named_counters_buffers_a_frozen_counter_event_each(self):
+        async with Bench() as bench:
+            answer = await bench.ask("freeze", indices=[1, 1])
+            assert (answer["frozen"], answer["events"]) == (2, 2)
+            assert (await bench.ask("state"))["events_held"]["3"] == 2
+
+    async def test_freeze_of_a_counter_the_device_lacks_is_refused(self):
+        async with Bench() as bench:
+            answer = await bench.send(b'{"op": "freeze", "indices": [9]}')
+            assert answer == {"ok": False, "error": "the device has no CTR9"}
+
+    async def test_a_counter_losing_communication_is_a_counter_event_at_level_3(self):
+        async with Bench() as bench:
+            assert bench.device.level == 3
+            state = await bench.ask("state")
+            assert (state["level"], state["event_classes"]["CTR"]["0"]) == (3, 3)
+            answer = await bench.ask("quality", kind="CTR", index=0, quality="comm-lost")
+            assert answer["events"] == 1
+
+    async def test_a_level_2_device_raises_no_counter_or_frozen_counter_events(self):
+        async with Bench(level=2) as bench:
+            answer = await bench.ask("quality", kind="CTR", index=0, quality="comm-lost")
+            assert answer["events"] == 0
+            assert (await bench.ask("freeze"))["events"] == 0
 
     async def test_the_clock_is_unsynchronized_some_time_after_the_time_is_written(self):
         async with Bench(time_sync_interval=None, time_valid_for=0.05) as bench:

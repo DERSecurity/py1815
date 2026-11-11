@@ -335,7 +335,8 @@ class DerOutstation:
         elif not isinstance(event_policy, EventPolicy):
             event_policy = EventPolicy.from_mapping(event_policy)
         #: The event class each input reports in, and 0 for one that reports
-        #: none. For a counter it is the class its freezes are logged in.
+        #: none. For a counter it is the class its freezes are logged in, and
+        #: from Level 3 the class of its counter events as well.
         self._classes: dict[Address, int] = {}
         #: Each event-reporting analog input's deadband, in transmitted units.
         #: One absent from here reports every change of its transmitted value.
@@ -570,7 +571,8 @@ class DerOutstation:
         """The class a point's events are reported in: 1, 2 or 3, or 0 for none.
 
         What is in force, after the event policy and the tables have both had
-        their say. For a counter it is the class its freezes are logged in.
+        their say. For a counter it is the class its freezes are logged in,
+        and from Level 3 the class of its counter events as well.
         """
         return self._classes.get(self._map.point(kind, index).address, 0)
 

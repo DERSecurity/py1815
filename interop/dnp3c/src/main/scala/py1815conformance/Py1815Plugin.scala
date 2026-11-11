@@ -26,7 +26,7 @@ final case class PluginSettings(command: FixtureCommand, timeToleranceMs: Long =
 /** A step the outstation cannot perform, because it does not have the feature the step is for. */
 final class NotSupported(feature: String)
     extends Exception(
-      s"The py1815 Level 2 outstation has no $feature. A procedure that needs it is turned off with its supports.* " +
+      s"The py1815 outstation has no $feature. A procedure that needs it is turned off with its supports.* " +
         "option in device.ini, with the reason in README.md.")
 
 /**
@@ -40,10 +40,20 @@ final class NotSupported(feature: String)
  */
 final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
-  // One input change the device answered with an event for.
-  private final case class Generated(kind: String, index: Int, value: Double, timeMs: Long, eventClass: Int) {
+  // One change the device answered with an event for. kind is BI, AI, CTR (a counter event) or FCTR (a frozen counter
+  // event). A counter event and a frozen counter event carry no time, and their flags are checked instead.
+  private final case class Generated(
+      kind: String,
+      index: Int,
+      value: Double,
+      timeMs: Long,
+      eventClass: Int,
+      flags: Option[Int] = None) {
     var checked = false
-    override def toString: String = s"$kind$index = ${show(kind, value)} at $timeMs (class $eventClass)"
+    override def toString: String = {
+      val when = if (flags.isEmpty) s" at $timeMs" else f" with flags 0x${flags.get}%02X"
+      s"$kind$index = ${show(kind, value)}$when (class $eventClass)"
+    }
   }
 
   // One write that reached an output, as the device recorded it.
@@ -55,11 +65,18 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   private var fixture: Option[Fixture] = None
   // The events generated since the device last powered on, a batch for each generation.
   private val batches = mutable.ListBuffer[List[Generated]]()
+  // The events the device buffered for a step that sets up a state rather than generating events: the freeze before
+  // each procedure, and the flags set normal or abnormal. A response may hold them while they are unconfirmed, and no
+  // check expects them.
+  private val background = mutable.ListBuffer[Generated]()
   private var lastOperation = 0L
   private val unchecked = mutable.ListBuffer[Operation]()
   private var recordedCounters: Option[Map[Int, Long]] = None
   private var timeEvent: Option[TimeEvent] = None
   private var patterns = 0
+  // The subset level the device is held to, as it reports it. From Level 3 a counter raises an event when its flags
+  // change, and a freeze buffers a frozen counter event.
+  private var level = 2
 
   Runtime.getRuntime.addShutdownHook(new Thread(() => fixture.foreach(_.kill())))
 
@@ -69,13 +86,15 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   override def startProcedure(reporter: PluginReporter): Unit = {
     batches.clear()
+    background.clear()
     unchecked.clear()
     lastOperation = 0
     recordedCounters = None
     timeEvent = None
     patterns = 0
     fixture = Some(new Fixture(settings.command))
-    reporter.log(s"Started the outstation on port ${settings.command.port}")
+    level = state()("level").num.toInt
+    reporter.log(s"Started the Subset Level $level outstation on port ${settings.command.port}")
     // Bring-up, before the procedure's first step: a frozen counter holds a value only after a freeze, so the
     // counters are frozen once, as an operator would before testing.
     freeze(reporter)
@@ -110,6 +129,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   private def powerCycle(reporter: PluginReporter, what: String, changes: (String, ujson.Value)*): Unit = {
     val state = device.ask("power_cycle", "settings" -> ujson.Obj.from(changes))
     batches.clear()
+    background.clear()
     reporter.log(s"$what. The device is listening again; its settings are ${ujson.write(state("settings"))}")
   }
 
@@ -304,14 +324,52 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       val s = state()
       generate(reporter, steps(s, unusedFirst(indices(s, "analog")).take(4)))
     case PointKind.Counter =>
-      // every counter counts up; the outstation reports no counter events, so this is no batch
+      // every counter counts up, which raises no counter event
       val s = state()
       val changes = indices(s, "counters").map { index =>
         ("CTR", index, ujson.Num(s("counters")(index.toString).num + 3 + index))
       }
       val generated = apply(reporter, changes)
       if (generated.nonEmpty) throw new Exception(s"The device buffered counter events: ${generated.mkString(", ")}")
+      if (level >= 3) {
+        // From Level 3 a counter raises an event when its flags change, and only then. So each counter's source
+        // loses communication and gets it back, and the two events report the count it reached.
+        val lost = indices(s, "counters").flatMap(index => List(index -> "comm-lost", index -> "good"))
+        flagEvents(reporter, lost)
+      }
     case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
+  }
+
+  // The device's counters whose events are reported in a class, by its own account.
+  private def countersWithEvents(s: ujson.Obj): List[Int] =
+    List(1, 2, 3).flatMap(inClass(s, "CTR", _)).sorted
+
+  // Set the quality of counters in the order given, as a new batch, requiring that each change is an event.
+  private def flagEvents(reporter: PluginReporter, changes: List[(Int, String)]): List[Generated] = {
+    val before = state()
+    val generated = changes.map { case (index, quality) =>
+      val done = device.ask("quality", "kind" -> "CTR", "index" -> index, "quality" -> quality)
+      if (done("events").num.toInt != 1) {
+        throw new Exception(s"The device buffered ${done("events").num.toInt} events for CTR$index going $quality")
+      }
+      val flags = if (quality == "good") 0x01 else 0x04
+      Generated(
+        "CTR",
+        index,
+        before("counters")(index.toString).num,
+        0,
+        before("event_classes")("CTR")(index.toString).num.toInt,
+        Some(flags))
+    }
+    reporter.log(s"Changed counter flags: ${generated.mkString("; ")}")
+    batches += generated
+    generated
+  }
+
+  // The flag changes that make a counter report n events: its quality alternates from what it is now.
+  private def flagToggles(s: ujson.Obj, index: Int, n: Int): List[(Int, String)] = {
+    val lostNow = s("quality")("CTR").obj.contains(index.toString)
+    (1 to n).toList.map(i => index -> (if (lostNow == (i % 2 == 1)) "good" else "comm-lost"))
   }
 
   override def generateExactInputEvents(reporter: PluginReporter, kind: InputKind[?], numEvents: Int): Unit =
@@ -329,9 +387,33 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
           throw new Exception(s"The device has ${analog.size} analog inputs, too few for $numEvents events")
         }
         generate(reporter, steps(s, analog.take(numEvents)))
-      case PointKind.Counter => throw new NotSupported("counter change events")
+      case PointKind.Counter =>
+        if (level < 3) throw new NotSupported("counter change events below Subset Level 3")
+        // a counter reports every change of its flags, so one counter changes its flags that many times
+        val s = state()
+        val index = countersWithEvents(s).headOption
+          .getOrElse(throw new Exception("The device has no counter that reports events"))
+        flagEvents(reporter, flagToggles(s, index, numEvents))
       case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
     }
+
+  // Exactly numEvents frozen counter events, one counter frozen that many times.
+  override def generateExactFrozenCounterEvents(reporter: PluginReporter, numEvents: Int): Unit = {
+    if (level < 3) throw new NotSupported("frozen counter events below Subset Level 3")
+    val s = state()
+    val index = countersWithEvents(s).headOption
+      .getOrElse(throw new Exception("The device has no frozen counter that reports events"))
+    val done = device.ask("freeze", "indices" -> ujson.Arr.from(List.fill(numEvents)(ujson.Num(index))))
+    if (done("events").num.toInt != numEvents) {
+      throw new Exception(s"The device buffered ${done("events").num.toInt} events for $numEvents freezes of CTR$index")
+    }
+    val flags = if (s("quality")("CTR").obj.contains(index.toString)) 0x04 else 0x01
+    val value = s("counters")(index.toString).num
+    val eventClass = s("event_classes")("CTR")(index.toString).num.toInt
+    val generated = List.fill(numEvents)(Generated("FCTR", index, value, 0, eventClass, Some(flags)))
+    batches += generated
+    reporter.log(s"Froze CTR$index $numEvents times; the device buffered ${generated.mkString("; ")}")
+  }
 
   // Analog input events whose values fit 16 bits, each from an input of its own.
   override def generateExactSmallAnalogInputEvents(reporter: PluginReporter, numEvents: Int): Unit = {
@@ -418,8 +500,19 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     case _ => None
   }
 
+  // From Level 3 a counter's change of flags is a counter event, which is kept as background.
   private def setQuality(reporter: PluginReporter, kind: String, index: Int, quality: String): Unit = {
+    val before = state()
     val done = device.ask("quality", "kind" -> kind, "index" -> index, "quality" -> quality)
+    if (kind == "CTR" && done("events").num.toInt > 0) {
+      background += Generated(
+        "CTR",
+        index,
+        before("counters")(index.toString).num,
+        0,
+        before("event_classes")("CTR")(index.toString).num.toInt,
+        Some(if (quality == "good") 0x01 else 0x04))
+    }
     reporter.log(s"Set the quality of $kind$index to $quality: ${ujson.write(done)}")
   }
 
@@ -438,9 +531,23 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   }
 
   // Freeze every counter at the device, as an operator would.
+  // From Level 3 the freeze buffers a frozen counter event for each counter, which is kept as background.
   private def freeze(reporter: PluginReporter): Unit = {
-    val frozen = device.ask("freeze")("frozen").num.toInt
-    reporter.log(s"Froze the device's counters: $frozen frozen")
+    val before = state()
+    val done = device.ask("freeze")
+    if (done("events").num.toInt > 0) {
+      indices(before, "counters").foreach { index =>
+        val flags = if (before("quality")("CTR").obj.contains(index.toString)) 0x04 else 0x01
+        background += Generated(
+          "FCTR",
+          index,
+          before("counters")(index.toString).num,
+          0,
+          before("event_classes")("CTR")(index.toString).num.toInt,
+          Some(flags))
+      }
+    }
+    reporter.log(s"Froze the device's counters: ${done("frozen").num.toInt} frozen, ${done("events").num.toInt} event(s)")
   }
 
   // The source of the first point named loses communication: the device reports COMM_LOST with ONLINE clear.
@@ -487,6 +594,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     val fields = List("udp_broadcast" -> ujson.Bool(true)) ++ port.map(p => "port" -> ujson.Num(p))
     val answer = device.ask("network", fields*)
     batches.clear()
+    background.clear()
     reporter.log(s"Set up the device to $what. It listens on port ${answer("port").num.toInt}")
   }
 
@@ -722,11 +830,21 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   private def describe(p: GenIndexedPoint[MeasurementPoint]): String = {
     val time = p.point.timestamp.fold("no time")(t => s"time ${t.value}")
+    def flags = p.point.flags.fold("no flags")(f => f"flags 0x${f & 0xFF}%02X")
     p.point match {
       case b: BinaryPoint => s"BI${p.idx} = ${b.value}, $time"
       case a: AnalogPoint => s"AI${p.idx} = ${a.value}, $time"
+      case c: CounterPoint => s"${if (c.isFrozen) "FCTR" else "CTR"}${p.idx} = ${c.value}, $flags, $time"
       case other => s"index ${p.idx}: $other"
     }
+  }
+
+  // which kind of generated event a reported event is, if it is one the device generates
+  private def eventKind(p: GenIndexedPoint[MeasurementPoint]): Option[String] = p.point match {
+    case _: BinaryPoint => Some("BI")
+    case a: AnalogPoint if !a.isFrozen => Some("AI")
+    case c: CounterPoint => Some(if (c.isFrozen) "FCTR" else "CTR")
+    case _ => None
   }
 
   // Why a reported event is not the generated one, or None if it is. An event that carries a time must carry the
@@ -737,6 +855,9 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       case b: BinaryPoint => expected.kind == "BI" && expected.index == p.idx && bit(b.value) == expected.value
       case a: AnalogPoint =>
         !a.isFrozen && expected.kind == "AI" && expected.index == p.idx && a.value == expected.value
+      case c: CounterPoint =>
+        eventKind(p).contains(expected.kind) && expected.index == p.idx && c.value.toDouble == expected.value &&
+          expected.flags.forall(f => c.flags.exists(reported => (reported & 0xFF) == f))
       case _ => false
     }
     if (!same) Some(s"expected $expected, and the response has ${describe(p)}")
@@ -752,8 +873,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   private def isBinary(p: GenIndexedPoint[MeasurementPoint]): Boolean = p.point.isInstanceOf[BinaryPoint]
 
-  // The response holds exactly the expected events: the binary input events in the order they occurred, and each
-  // analog input's events in the order they occurred.
+  // The response holds exactly the expected events: the binary input events in the order they occurred, and each other
+  // point's events in the order they occurred.
   private def expectEvents(expected: List[Generated], points: Seq[GenIndexedPoint[MeasurementPoint]]): Unit = {
     def inOrder(what: String, want: List[Generated], got: List[GenIndexedPoint[MeasurementPoint]]): Unit = {
       if (want.size != got.size) {
@@ -763,16 +884,18 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       }
       want.zip(got).foreach { case (w, g) => difference(w, g).foreach(reason => throw new Exception(reason)) }
     }
-    val stray = points.filterNot(p => p.point.isInstanceOf[BinaryPoint] || p.point.isInstanceOf[AnalogPoint])
+    val stray = points.filter(eventKind(_).isEmpty)
     if (stray.nonEmpty) {
       throw new Exception(
         s"The response holds events of a kind that was not generated: ${stray.map(describe).mkString("; ")}")
     }
     inOrder("binary input", expected.filter(_.kind == "BI"), points.filter(isBinary).toList)
-    val analog = points.filterNot(isBinary).toList
-    (expected.filter(_.kind == "AI").map(_.index) ++ analog.map(_.idx)).distinct.foreach { index =>
-      val generated = expected.filter(e => e.kind == "AI" && e.index == index)
-      inOrder(s"analog input $index", generated, analog.filter(_.idx == index))
+    val others = points.filterNot(isBinary).toList
+    val pointsOf = (expected.filter(_.kind != "BI").map(e => (e.kind, e.index)) ++
+      others.map(p => (eventKind(p).get, p.idx))).distinct
+    pointsOf.foreach { case (kind, index) =>
+      val generated = expected.filter(e => e.kind == kind && e.index == index)
+      inOrder(s"$kind$index", generated, others.filter(p => eventKind(p).contains(kind) && p.idx == index))
     }
   }
 
@@ -801,7 +924,7 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
 
   // each returned event is one the device generated; there may be none
   private def expectOnlyGenerated(points: Seq[GenIndexedPoint[MeasurementPoint]]): Unit = {
-    val all = batches.toList.flatten
+    val all = batches.toList.flatten ++ background
     points.foreach { p =>
       if (!all.exists(difference(_, p).isEmpty)) {
         throw new Exception(s"The response holds an event the device did not generate: ${describe(p)}")
@@ -840,11 +963,8 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
     None
   }
 
-  private def samePoint(event: Generated, p: GenIndexedPoint[MeasurementPoint]): Boolean = p.point match {
-    case _: BinaryPoint => event.kind == "BI" && event.index == p.idx
-    case a: AnalogPoint => !a.isFrozen && event.kind == "AI" && event.index == p.idx
-    case _ => false
-  }
+  private def samePoint(event: Generated, p: GenIndexedPoint[MeasurementPoint]): Boolean =
+    eventKind(p).contains(event.kind) && event.index == p.idx
 
   private def verifyFirst(
       reporter: CheckReporter,
@@ -862,7 +982,9 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
   private def kindName(kind: InputKind[?]): String = kind match {
     case PointKind.BinaryInput => "BI"
     case PointKind.AnalogInput => "AI"
-    case PointKind.Counter => throw new NotSupported("counter change events")
+    case PointKind.Counter =>
+      if (level < 3) throw new NotSupported("counter change events below Subset Level 3")
+      "CTR"
     case PointKind.DoubleBitInput => throw new NotSupported("double-bit binary inputs")
   }
 
@@ -905,6 +1027,28 @@ final class Py1815Plugin(settings: PluginSettings) extends IntegrationPlugin {
       eventClass: EventClass,
       point: GenIndexedPoint[MeasurementPoint]): Option[DeferredCheck] =
     verifyFirst(reporter, eventClass.toString, inClasses(eventClass), point)
+
+  // The frozen counter events of the latest batch end the response, in order. A frozen counter event of an earlier
+  // freeze may come before them while it is unconfirmed, since the device reports an event until it is confirmed.
+  override def verifyFrozenCounterEvents(
+      reporter: CheckReporter,
+      points: Seq[GenIndexedPoint[CounterPoint]]): Option[DeferredCheck] = {
+    val reported = points.map(widen).toList
+    val generated = latest.filter(_.kind == "FCTR")
+    if (generated.isEmpty) throw new Exception("The latest batch generated no frozen counter event")
+    if (reported.size < generated.size) {
+      throw new Exception(
+        s"The device generated ${generated.size} frozen counter event(s) and the response holds ${reported.size}: " +
+          reported.map(describe).mkString("; "))
+    }
+    val (earlier, last) = reported.splitAt(reported.size - generated.size)
+    generated.zip(last).foreach { case (g, p) => difference(g, p).foreach(reason => throw new Exception(reason)) }
+    expectOnlyGenerated(earlier)
+    reporter.log(
+      s"The response ends with the ${generated.size} frozen counter event(s) generated, in order, after " +
+        s"${earlier.size} unconfirmed event(s) of earlier freezes")
+    None
+  }
 
   // ---------------------------------------------------------- analog outputs
 

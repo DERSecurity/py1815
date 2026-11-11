@@ -2,8 +2,8 @@
 
 IEEE 1815-2012 4.4.14 defines the request, and TB2016-003b Table 12-49 and the
 group tables say which levels take it. The IED Certification Procedure 3.1
-rev 1, section 8.26.2, carries it out; ``test_8_26_2_procedure_as_written``
-follows its steps in order. Requests are written as literal octets. Each class
+rev 1, section 8.26.2, carries it out, and ``tests/test_ied_8_inputs.py`` follows
+its steps in order. Requests are written as literal octets. Each class
 header is group 60 with qualifier 0x06, and variation 1 to 4 means class 0 to 3
 (``3C 01 06`` turns events off, ``3C 02 06`` is class 1). The headers after it
 name the points, as a read does.
@@ -79,83 +79,6 @@ class TestRefusedBelowLevel3:
 
 
 class TestLevel3:
-    def test_8_26_2_procedure_as_written(self):
-        """IED Certification Procedure 3.1 rev 1, 8.26.2, steps 1 to 58."""
-        dut = Dut(level=3)
-        # Steps 1 to 5: a poll of every class.
-        dut.master.empty_events()
-        # Steps 6 to 17: one event in class 1 and one in class 2.
-        dut.toggle(0)
-        dut.toggle(2)
-        three = dut.master.read(classes(3)).fragment
-        assert not three.body
-        assert waiting(three) == IIN1_CLASS_1 | IIN1_CLASS_2
-        one = dut.master.read(classes(1)).fragment
-        assert indices(one, 2) == [0] and one.con
-        assert waiting(one) == IIN1_CLASS_2
-        dut.master.confirm(one)
-        two = dut.master.read(classes(2)).fragment
-        assert indices(two, 2) == [2] and two.con
-        assert waiting(two) == 0
-        dut.master.confirm(two)
-        # Step 18: the class 2 point (binary input 2) to class 3, the class 1
-        # points (binary inputs 0 and 1) to class 2.
-        assigned(dut, "3C 04 06 01 00 00 02 02  3C 03 06 01 00 00 00 01")
-        # Steps 20 and 21.
-        everything = dut.master.read(classes(1, 2, 3)).fragment
-        assert not everything.body and waiting(everything) == 0
-        # Steps 22 to 25: an event for a point now in class 2.
-        dut.toggle(0)
-        one = dut.master.read(classes(1)).fragment
-        assert not one.body
-        assert waiting(one) == IIN1_CLASS_2
-        # Steps 26 to 30: an event for a point now in class 3.
-        dut.toggle(2)
-        two = dut.master.read(classes(2)).fragment
-        assert indices(two, 2) == [0] and two.con
-        assert waiting(two) == IIN1_CLASS_3
-        dut.master.confirm(two)
-        # Steps 31 to 34: the class 2 points to class 0.
-        assigned(dut, "3C 01 06 01 00 00 00 01")
-        one = dut.master.read(classes(1)).fragment
-        assert not one.body
-        assert waiting(one) == IIN1_CLASS_3
-        # Steps 35 to 39: another class 3 point, and a change to a point in class 0.
-        dut.toggle(3)
-        dut.toggle(0)
-        one = dut.master.read(classes(1)).fragment
-        assert not one.body
-        assert waiting(one) == IIN1_CLASS_3
-        # Steps 40 to 43: the two class 3 events and nothing else.
-        three = dut.master.read(classes(1, 2, 3)).fragment
-        assert indices(three, 2) == [2, 3] and three.con
-        assert waiting(three) == 0
-        dut.master.confirm(three)
-        # Steps 44 and 45.
-        again = dut.master.read(classes(1, 2, 3)).fragment
-        assert not again.body and waiting(again) == 0
-        # Steps 46 to 48: back to the startup assignment. The change made
-        # while binary input 0 was in class 0 is not reported now.
-        assigned(
-            dut,
-            "3C 02 06 01 00 00 00 01  3C 03 06 01 00 00 02 02  3C 04 06 01 00 00 03 03",
-        )
-        again = dut.master.read(classes(1, 2, 3)).fragment
-        assert not again.body and waiting(again) == 0
-        # Steps 49 to 52.
-        dut.toggle(0)
-        dut.toggle(2)
-        three = dut.master.read(classes(3)).fragment
-        assert not three.body
-        assert waiting(three) == IIN1_CLASS_1 | IIN1_CLASS_2
-        # Steps 53 to 58.
-        both = dut.master.read(classes(1, 2, 3)).fragment
-        assert indices(both, 2) == [0, 2] and both.con
-        assert waiting(both) == 0
-        dut.master.confirm(both)
-        last = dut.master.read(classes(1, 2, 3)).fragment
-        assert not last.body and waiting(last) == 0
-
     def test_a_point_assigned_to_class_0_raises_no_events(self):
         dut = Dut(level=3)
         dut.master.empty_events()

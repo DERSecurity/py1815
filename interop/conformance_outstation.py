@@ -1,4 +1,4 @@
-"""A Subset Level 2 outstation that a conformance test harness can drive.
+"""A Subset Level 3 outstation that a conformance test harness can drive.
 
 Run by the conformance job, not by the test suite. A certification procedure
 has steps a master cannot perform over DNP3: cycle power to the device, change
@@ -7,9 +7,10 @@ Here a second connection does them, so the procedures run with nobody present.
 
 The process serves two listeners:
 
-- the outstation, a Level 2 configuration of this library, over TCP, with
-  broadcasts also taken as UDP datagrams on the same port. It listens on
-  127.0.0.1 unless ``--host`` names another address;
+- the outstation, a Subset Level 3 configuration of this library unless
+  ``--level`` names Level 2, over TCP, with broadcasts also taken as UDP
+  datagrams on the same port. It listens on 127.0.0.1 unless ``--host`` names
+  another address;
 - a control channel, on 127.0.0.1 only, which stands for the test bench: it changes the inputs,
   cycles power, changes the settings a power cycle applies, and reports what
   the device holds and which outputs it operated.
@@ -57,6 +58,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
+from py1815.application import ObjectHeader, QualifierCode
 from py1815.events import EventClass
 from py1815.profile.binding import Binding, Quality, Reading
 from py1815.profile.model import Kind, Point, PointMap
@@ -212,10 +214,13 @@ class Device:
         host: str = LOOPBACK,
         port: int = 20000,
         outstation_address: int = 1024,
+        level: int = 3,
         settings: Settings | None = None,
         wall_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
     ) -> None:
         self._host = host
+        #: The subset level the outstation is held to.
+        self.level = level
         self._requested_port = port
         #: The port the outstation listens on when its network is set up as usual.
         self.usual_port = port
@@ -342,7 +347,7 @@ class Device:
             point_map(frozen_counters=settings.frozen_counters),
             self._binding(settings),
             strict=False,
-            level=2,
+            level=self.level,
             clock_ms=self._clock_ms,
             time_written=self._time_written,
         )
@@ -563,6 +568,26 @@ class Device:
         buffered = self.outstation.poll()
         return {"kind": kind, "index": index, "quality": wanted.value, "events": buffered}
 
+    def freeze(self, indices: list[int] | None = None) -> dict[str, Any]:
+        """Freeze the counters named, or every counter, and say what the freeze buffered."""
+        outstation = self.outstation
+        held = outstation.events.total
+        if indices is None:
+            frozen = outstation.freeze_all()
+        else:
+            missing = [index for index in indices if index not in self.counters]
+            if missing:
+                raise ValueError(f"the device has no CTR{missing[0]}")
+            # One freeze for each index named, in order, as a master's request
+            # naming that counter would make it.
+            for index in indices:
+                outstation.freeze(
+                    [ObjectHeader(20, 0, QualifierCode.UINT8_START_STOP, start=index, stop=index)],
+                    clear=False,
+                )
+            frozen = len(indices)
+        return {"frozen": frozen, "events": outstation.events.total - held}
+
     def set_cold_restart(self, enabled: bool) -> None:
         """Turn cold restart support on or off without a power cycle.
 
@@ -606,13 +631,16 @@ class Device:
             "analog_outputs": {
                 str(index): outstation.value(Kind.AO, index) for index in installed["AO"]
             },
+            # A counter's class is the one its counter events and frozen
+            # counter events are reported in.
             "event_classes": {
                 kind.value: {
                     str(point.index): outstation.event_class(kind, point.index)
                     for point in outstation.served(kind)
                 }
-                for kind in (Kind.BI, Kind.AI)
+                for kind in (Kind.BI, Kind.AI, Kind.CTR)
             },
+            "level": self.level,
             "events_held": {
                 str(int(event_class)): outstation.events.count(event_class)
                 for event_class in EventClass
@@ -812,10 +840,22 @@ class ControlChannel:
         return {"port": self._device.port, "settings": asdict(self._device.settings)}
 
     async def op_freeze(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        """Freeze every counter now, as an operator at the device would."""
-        del request
+        """Freeze counters now, as an operator at the device would.
+
+        ``indices`` names the counters to freeze; every counter is frozen when
+        it is absent. Answers how many froze and how many events the freeze
+        buffered.
+        """
+        indices = request.get("indices")
+        if indices is not None and (
+            not isinstance(indices, list)
+            or any(isinstance(i, bool) or not isinstance(i, int) for i in indices)
+        ):
+            raise ValueError(f"indices is {indices!r}; it is a list of counter indices")
         await self._device.settled()
-        return {"frozen": self._device.outstation.freeze_all()}
+        done = self._device.freeze(indices)
+        self._device.notify()
+        return done
 
     async def op_stop(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """End the process."""
@@ -839,6 +879,13 @@ async def main() -> None:
     )
     parser.add_argument("--outstation-address", type=int, default=1024)
     parser.add_argument("--master-address", type=int, default=1)
+    parser.add_argument(
+        "--level",
+        type=int,
+        choices=(2, 3),
+        default=3,
+        help="the subset level the outstation is held to",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s outstation: %(message)s")
@@ -847,6 +894,7 @@ async def main() -> None:
         host=args.host,
         port=args.port,
         outstation_address=args.outstation_address,
+        level=args.level,
         settings=Settings(master_address=args.master_address),
     )
     channel = ControlChannel(device, port=args.control_port)
