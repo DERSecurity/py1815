@@ -1748,6 +1748,30 @@ field tells consumers which version they hold; a fragment carrying object data t
 cannot size, such as device attributes, is rejected as `malformed`, because the next header
 cannot be found.
 
+**D104 -- One catalog names every object group and variation, and the library is checked
+against it rather than built from it.** `py1815.catalog` lists every group and
+variation of IEEE 1815-2012 Annex A with name, object type and size, in code, because the
+library must not read `conformance/ieee-1815-2012.json` at run time (D1 keeps the runtime
+free of data files it cannot ship). `scripts/extract_conformance.py` reads Annex A from the
+standard, and `tests/test_conformance.py` diffs the catalog against the result. The existing
+`GROUP_*` constants, variation enums, `decode.LAYOUTS`, the event sizes and the control
+widths stay where they are and a test holds each to the catalog, so work that adds a group
+starts from the standard's numbers and cannot disagree with them unnoticed. Four places where
+a subclause contradicts itself are corrected by name in the extractor (see
+`conformance/README.md`), each with a check that fails when the text is fixed. Annex A
+defines no group 114 or 115, and no bulletin is read into the catalog. *Trade-off:* the table
+is written twice, in the JSON and in the module, and the test is what keeps them one.
+
+**D105 -- Coverage is read from the tables the code uses, and the subset level is read from
+the user's own copy of the subset tables.** `python -m py1815.object_coverage` marks each
+variation served, requested and parsed from the outstation's variation tables, the session's
+event tables, `decode.LAYOUTS` and the control parser, so it cannot drift from the code.
+The DNP Users Group's subset tables may not be committed (the subset test reads them from
+`PY1815_SUBSET_TABLES` for that reason), so the level column is present only when the command
+is given a copy, as `--subset-tables` or that variable, and holds the lowest level whose
+tables list the object. *Trade-off:* the report reads private tables of the session and the
+outstation, so renaming one fails a test until the report follows.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1785,6 +1809,9 @@ Each layer is testable without the ones above it, and the session does no I/O.
   from that outstation and its session. `profile.device_profile_view` reads the XML of any
   Device Profile into facts, sections and tables, and writes them as a page. It knows a
   few element names and no schema, and nothing of points, sessions or the wire.
+- `catalog` names every object group and variation and knows nothing else. `object_coverage`
+  reports what the outstation, session and master do with each, and imports them to read
+  their tables.
 - `observers` defines the records the listener, the session and the master report to the
   host application, and knows nothing of sockets or frames.
 - `envelope` is a copy of a published message envelope, and knows nothing of DNP3 beyond
