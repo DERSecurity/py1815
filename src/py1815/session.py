@@ -87,8 +87,20 @@ from py1815.application import (
     parse_object_blocks,
     parse_request,
 )
+from py1815.attributes import (
+    GROUP_DEVICE_ATTRIBUTES,
+    Attribute,
+    BadParameter,
+    DataType,
+    DeviceAttributes,
+    UnknownVariation,
+    Variation,
+    parse_writes,
+    read_blocks,
+)
 from py1815.control import (
     ANALOG_OUTPUT_EVENT_SIZES,
+    CROB_SIZE,
     GROUP_ANALOG_OUTPUT_COMMAND_EVENT,
     GROUP_ANALOG_OUTPUT_EVENT,
     GROUP_BINARY_OUTPUT_COMMAND_EVENT,
@@ -657,6 +669,8 @@ class SessionFacts:
     indications_read: bool = False
     #: The output event groups (11, 13, 42, 43) read from the event buffers.
     output_events: frozenset[int] = frozenset()
+    #: Whether group 0, device attributes, is answered.
+    attributes: bool = False
 
 
 class FreezeProvider(Protocol):
@@ -971,6 +985,7 @@ class Session:
         extended_events: bool = False,
         output_events: Iterable[int] = (),
         double_bit_events: bool = False,
+        attributes: DeviceAttributes | None = None,
     ) -> None:
         """
         Args:
@@ -1138,6 +1153,16 @@ class Session:
             double_bit_events: Whether group 4, double-bit binary input events,
                 is read by name. Off, a read of group 4 is answered as an unknown
                 object. Events already in the buffers are reported in any case.
+            attributes: The device attributes this session answers reads of
+                group 0 from, and takes writes of. The session adds the three
+                that are its own: the largest fragment it sends and the
+                largest it receives, and how many binary outputs a control
+                request may carry. A master may write the first of these, to
+                any size from ``attributes.min_fragment`` up to the
+                ``max_response`` this session was built with, and the session
+                fragments its responses to the size written. Without a store,
+                group 0 is answered as an object this outstation does not
+                have.
         """
         #: Whether a read may name group 4.
         self._double_bit_events = double_bit_events
@@ -1218,6 +1243,10 @@ class Session:
                 f"{RESPONSE_HEADER_SIZE} octets"
             )
         self._max_response = max_response
+        #: The ceiling a write of the transmit fragment size is held to, and the
+        #: size this session returns to when it restarts.
+        self._configured_response = max_response
+        self._attributes = attributes
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
@@ -1380,6 +1409,10 @@ class Session:
             self._classifier.reset_classes()
         if self._need_time and self._events is not None:
             self._events.synchronized = False
+        # A written attribute is not kept across a restart (IEEE 1815-2012 5.5.8).
+        self._max_response = self._configured_response
+        if self._attributes is not None:
+            self._attributes.reset()
 
     def abandon_select(self) -> None:
         """Forget an armed select, so the operate it was granted for finds none.
@@ -1428,6 +1461,7 @@ class Session:
             time_read=self._time_source is not None,
             indications_read=self._indications_read,
             output_events=self._output_events,
+            attributes=self._attributes is not None,
         )
 
     @property
@@ -3148,14 +3182,14 @@ class Session:
         blocks: list[bytes] = []
         waiting: list[ObjectHeader] = []
         for header in headers:
-            own = self._own_object(header)
+            own = self._own_blocks(header)
             if own is None:
                 waiting.append(header)
                 continue
             if waiting:
                 blocks += self._provider_blocks(waiting)
                 waiting = []
-            blocks.append(own)
+            blocks += own
         if waiting or not headers:
             blocks += self._provider_blocks(waiting)
         return blocks
@@ -3167,6 +3201,25 @@ class Session:
             return [bytes(block) for block in provider.read_blocks(headers) if block]
         body = provider.read(headers)
         return [body] if body else []
+
+    def _own_blocks(self, header: ObjectHeader) -> list[bytes] | None:
+        """The session's own answer to a read, or None for the provider to answer.
+
+        Device attributes, the time and the internal indications belong to the
+        session. Raises as :meth:`_own_object` does, and as an attribute read the
+        store refuses.
+        """
+        store = self._attributes
+        if store is not None and header.group == GROUP_DEVICE_ATTRIBUTES:
+            view, writable = self._attribute_view(store)
+            try:
+                return read_blocks([header], view, writable)
+            except UnknownVariation as exc:
+                raise UnknownObject(str(exc)) from None
+            except BadParameter as exc:
+                raise ParameterError(str(exc)) from None
+        own = self._own_object(header)
+        return None if own is None else [own]
 
     def _own_object(self, header: ObjectHeader) -> bytes | None:
         """The answer to a read of the time or of the internal indications.
@@ -3229,6 +3282,34 @@ class Session:
             + bytes([header.start, header.stop])
             + packed.to_bytes((count + 7) // 8, "little")
         )
+
+    def _attribute_view(self, store: DeviceAttributes) -> tuple[dict[int, Attribute], set[int]]:
+        """Every attribute of set 0 now, and the variations a master may write.
+
+        The store's, and the three that belong to this session.
+        """
+        view = store.snapshot()
+        view[Variation.MAXIMUM_BINARY_OUTPUT_OBJECTS] = Attribute.unsigned(self._max_controls())
+        view[Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE] = Attribute.unsigned(self._max_response)
+        view[Variation.MAXIMUM_RECEIVE_FRAGMENT_SIZE] = Attribute.unsigned(self._max_fragment)
+        return view, {*store.writable, Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE}
+
+    def _max_controls(self) -> int:
+        """How many binary outputs one control request may carry; zero without controls.
+
+        The most that both the request and the echo that answers it fit in a
+        fragment, counted with the widest index and count a request may use, so
+        that a master sending this many is never refused for size.
+        """
+        if self._controls is None:
+            return 0
+        # Per object an index of two octets and the block; per request the
+        # widest header (group, variation, qualifier, a two-octet count).
+        per_object = 2 + CROB_SIZE
+        header = 3 + 2
+        request = (self._max_fragment - REQUEST_HEADER_SIZE - header) // per_object
+        echo = (self._max_response - RESPONSE_HEADER_SIZE - header) // per_object
+        return max(0, min(request, echo))
 
     def _abandon(self) -> None:
         """Forget the response in flight, because the master has moved on.
@@ -3711,6 +3792,13 @@ class Session:
         ):
             return self._write_deadbands(request, self._deadbands)
 
+        if (
+            self._attributes is not None
+            and request.headers
+            and request.headers[0].group == GROUP_DEVICE_ATTRIBUTES
+        ):
+            return self._write_attributes(request, self._attributes)
+
         # A write naming nothing is malformed; one naming an object this
         # outstation does not take a write of is an unknown object.
         bit = IIN2Bit.OBJECT_UNKNOWN if request.headers else IIN2Bit.PARAM_ERROR
@@ -3746,6 +3834,58 @@ class Session:
             )
         logger.info("dnp3: %d deadband(s) written by master", len(written))
         return null_response(sequence=sequence, iin=self._indications())
+
+    def _write_attributes(self, request: Request, store: DeviceAttributes) -> bytes:
+        """Take a write of device attributes, all of it or none of it.
+
+        The values are checked before any is stored: IEEE 1815-2012 5.5.8 has an
+        unacceptable value leave the attribute as it was and set IIN2.2, and a
+        fragment that stored half of what it carried would leave a master
+        unsure which half.
+        """
+        sequence = request.control.sequence
+        size: int | None = None
+        try:
+            writes = parse_writes(request.headers[0], request.body)
+            for variation, attribute in writes:
+                if variation == Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE:
+                    size = self._checked_fragment_size(store, attribute)
+                else:
+                    store.check(variation, attribute)
+        except UnknownVariation as exc:
+            logger.info("dnp3: attribute write refused: %s", exc)
+            return null_response(
+                sequence=sequence,
+                iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
+            )
+        except (BadParameter, RequestError) as exc:
+            logger.info("dnp3: attribute write refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        if size is not None:
+            self._max_response = size
+            logger.info("dnp3: maximum transmit fragment size set to %d", size)
+        store.write([(v, a) for v, a in writes if v != Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE])
+        return null_response(sequence=sequence, iin=self._indications())
+
+    def _checked_fragment_size(self, store: DeviceAttributes, attribute: Attribute) -> int:
+        """Return the maximum transmit fragment size an attribute states, or raise.
+
+        It may be lowered to what the outstation's largest response block needs
+        and raised back to the size the outstation was configured with, and no
+        higher: the configured size is the most this device was set up to send,
+        which is the limit IEEE 1815-2012 4.3 rule 1 has an operator able to set.
+        """
+        if attribute.code != DataType.UINT or not attribute.data:
+            raise BadParameter("the maximum transmit fragment size is an unsigned integer")
+        size = int.from_bytes(attribute.data, "little")
+        if not store.min_fragment <= size <= self._configured_response:
+            raise BadParameter(
+                f"the maximum transmit fragment size is {store.min_fragment} to "
+                f"{self._configured_response} octets, not {size}"
+            )
+        return size
 
     def _time_was_set(self) -> None:
         """A master has written the time: stop asking, and trust the clock from here."""

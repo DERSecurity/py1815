@@ -539,7 +539,7 @@ What each level answers, beyond what the level before it does:
 | 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears, as it does at Levels 3 and 4. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
 | none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
 | 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises one only where the event policy turns `value_changes` on. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
-| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Binary and analog output events, and reads of the command event groups, answered with nothing; see [Output events at Level 4](#output-events-at-level-4). Double-bit inputs; see [Double-bit inputs](#double-bit-inputs). Below Level 4 a request that names one of these is refused as an unknown object. |
+| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Binary and analog output events, and reads of the command event groups, answered with nothing; see [Output events at Level 4](#output-events-at-level-4). Double-bit inputs; see [Double-bit inputs](#double-bit-inputs). Device attributes (group 0); see [Device attributes](#device-attributes). Below Level 4 a request that names one of these is refused as an unknown object. |
 
 Every level reads each static group by range as well as for all points, and each event
 group by count as well as for all events.
@@ -702,6 +702,53 @@ An event policy's `defaults` may name the kind `DBI`, and a point's class is set
 way as for a binary input. A master moves a point to another class, or turns its events off,
 with an assign-class request that names group 3; a point assigned to class 0 stays in a class
 0 read.
+
+## Device attributes
+
+At Level 4 the outstation answers reads of object group 0, the attributes a master can
+discover about it, and takes writes of four of them. Below Level 4 group 0 is an object
+the outstation does not have.
+
+A master reads one attribute at a time (group 0 with the variation, qualifier 0x00,
+range 0 to 0), reads variation 254 with qualifier 0x06 for every attribute in one response, and
+reads variation 255 for the list of variations and which of them it may write. Each
+attribute is answered with its data type, its length and its value. Only attribute set 0, the
+one the standard defines, exists.
+
+| Variation | What it reports | Where the value comes from |
+|---|---|---|
+| 209 to 215 | Secure Authentication version, security statistics, data sets | Zero: none of them is implemented. Variation 211 reports no user-specific attribute sets |
+| 216 | Most binary outputs in a control request | The response and request sizes |
+| 217, 218 | Timing accuracy, and how long it holds | `timing_accuracy_us`, and zero |
+| 219 to 239 | For each kind of point, whether it reports events, its highest index and its count | The points served and the event class each reports in |
+| 240, 241 | Largest fragment sent, and received | The session: `max_response`, and the request size it accepts |
+| 242, 243, 248, 250, 252 | Software and hardware versions, serial number, product, manufacturer | The `identity` settings of the [configuration](der-config.md#identity) |
+| 245, 246, 247 | Location name, ID, device name | The `identity` settings, and a master may rewrite them |
+| 249 | The subset level claimed | The level, as `4:` |
+
+A group the outstation does not serve reports no points and a highest index of zero.
+"Supports events" is true for binary inputs and analog inputs that report in a class, and for
+frozen counters that do, and false for the other kinds. The optional attributes 196 to 208
+and 244 are not offered.
+
+A master may write variations 245, 246 and 247 with text of at most 128 visible ASCII
+characters, and variation 240, the largest fragment the outstation sends. A write of 240
+changes how the session fragments its responses from the next one: it may be any size from
+the largest block of points plus a response header (1028 octets with the default) up to the
+`max_response` the session was given. A request that holds one unacceptable value changes
+nothing and is answered with the parameter error indication. A written value lasts until
+the outstation restarts; it is not stored.
+
+In Python, the attributes belong to the outstation and its sessions:
+
+```python
+from py1815.attributes import DeviceInformation
+
+information = DeviceInformation(manufacturer="Example", product="Controller 9", serial_number="1234")
+outstation = DerOutstation(profile, binding, level=4, information=information)
+session = outstation.session()   # answers group 0
+outstation.attributes.snapshot() # every attribute now, by variation
+```
 
 ## Memory on a small controller
 

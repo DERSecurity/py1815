@@ -33,6 +33,7 @@ file shows everything that can be changed. `run`, `points`, `profile` and
   "disabled_offline": true,
   "event_capacity": 2000,
   "max_response": 2048,
+  "timing_accuracy_us": 1000000,
   "select_timeout": 10.0,
   "confirm_timeout": 10.0,
   "idle_timeout": 300.0,
@@ -52,7 +53,11 @@ file shows everything that can be changed. `run`, `points`, `profile` and
     "device": "py1815 simulated DER outstation",
     "hardware_version": "Not applicable (software)",
     "software_version": "",
-    "author": "py1815"
+    "author": "py1815",
+    "serial_number": "",
+    "location_name": "",
+    "device_id": "",
+    "device_name": ""
   }
 }
 ```
@@ -74,6 +79,7 @@ keep their defaults.
 | `disabled_offline` | `true` | | Clear the `ONLINE` flag on the inputs of a function that is disabled, as IEEE 1815.2 clause 6.1.1 requires |
 | `event_capacity` | `2000` | `--event-capacity` | Events each class holds before the oldest is dropped |
 | `max_response` | `2048` | `--max-response` | Largest response fragment to send, in octets |
+| `timing_accuracy_us` | `1000000` | `--timing-accuracy-us` | At Level 4, the worst-case error in microseconds of the time the outstation gives its events, which the device attributes report as the local timing accuracy. The default is one second. Set the figure that holds for the host clock |
 | `select_timeout` | `10` | `--select-timeout` | Seconds a select stays valid |
 | `confirm_timeout` | `10` | | Seconds to wait for a master to confirm a response. `null` waits without limit, and is not allowed when `unsolicited` is true |
 | `idle_timeout` | `300` | `--idle-timeout` | Seconds of silence before a connection is closed |
@@ -100,15 +106,22 @@ blocks are served once per unit.
 
 ### `identity`
 
-Used by `py1815-der profile` to fill in the DNP3 Device Profile document.
+Used by `py1815-der profile` to fill in the DNP3 Device Profile document, and,
+at Level 4, as the device attributes a master reads (see
+[Device attributes](der.md#device-attributes)). At Level 4 each text is at most
+128 visible ASCII characters.
 
-| Setting | Default | Flag |
-|---|---|---|
-| `vendor` | `"Not stated"` | `--vendor` |
-| `device` | `"py1815 simulated DER outstation"` | `--device` |
-| `hardware_version` | `"Not applicable (software)"` | `--hardware-version` |
-| `software_version` | `""`, meaning this library's version | `--software-version` |
-| `author` | `"py1815"` | `--author` |
+| Setting | Default | Flag | Device attribute |
+|---|---|---|---|
+| `vendor` | `"Not stated"` | `--vendor` | Manufacturer's name |
+| `device` | `"py1815 simulated DER outstation"` | `--device` | Product name and model |
+| `hardware_version` | `"Not applicable (software)"` | `--hardware-version` | Hardware version |
+| `software_version` | `""`, meaning this library's version | `--software-version` | Software version |
+| `author` | `"py1815"` | `--author` | None. Names the author in the Device Profile |
+| `serial_number` | `""` | `--serial-number` | Serial number |
+| `location_name` | `""` | `--location-name` | User-assigned location name. A master may rewrite it |
+| `device_id` | `""` | `--device-id` | User-assigned ID code or number. A master may rewrite it |
+| `device_name` | `""` | `--device-name` | User-assigned device name. A master may rewrite it |
 
 ## An example
 

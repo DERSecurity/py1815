@@ -33,6 +33,12 @@ from typing import Any
 
 from py1815.application import CLASS_GROUP, RESPONSE_HEADER_SIZE, ObjectHeader, QualifierCode
 from py1815.application import object_header as range_header
+from py1815.attributes import (
+    Attribute,
+    DeviceAttributes,
+    DeviceInformation,
+    Variation,
+)
 from py1815.control import (
     GROUP_ANALOG_OUTPUT_COMMAND,
     GROUP_ANALOG_OUTPUT_COMMAND_EVENT,
@@ -232,6 +238,46 @@ _OUTPUT_EVENT_GROUPS = {
 
 _RANGES = (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
 
+#: The point groups whose highest index and number of points a device attribute
+#: reports: the variation of each, then the group.
+_POINT_ATTRIBUTES = (
+    (Variation.MAXIMUM_BINARY_INPUT_INDEX, Variation.BINARY_INPUT_COUNT, GROUP_BINARY_INPUT),
+    (Variation.MAXIMUM_DOUBLE_BIT_INPUT_INDEX, Variation.DOUBLE_BIT_INPUT_COUNT, 3),
+    (Variation.MAXIMUM_ANALOG_INPUT_INDEX, Variation.ANALOG_INPUT_COUNT, GROUP_ANALOG_INPUT),
+    (Variation.MAXIMUM_COUNTER_INDEX, Variation.COUNTER_COUNT, GROUP_COUNTER),
+    (
+        Variation.MAXIMUM_BINARY_OUTPUT_INDEX,
+        Variation.BINARY_OUTPUT_COUNT,
+        GROUP_BINARY_OUTPUT_STATUS,
+    ),
+    (
+        Variation.MAXIMUM_ANALOG_OUTPUT_INDEX,
+        Variation.ANALOG_OUTPUT_COUNT,
+        GROUP_ANALOG_OUTPUT_STATUS,
+    ),
+)
+
+#: The kinds of point whose changes :meth:`DerOutstation.poll` records as
+#: events. The "support for events" device attribute of a kind is true only
+#: for a kind listed here that has a point reporting in a class.
+_EVENT_KINDS = frozenset({Kind.BI, Kind.AI})
+
+#: The "support for events" variation of each kind of point that has one.
+_EVENT_SUPPORT = (
+    (Variation.BINARY_INPUT_EVENTS, Kind.BI),
+    (Variation.ANALOG_INPUT_EVENTS, Kind.AI),
+    (Variation.BINARY_OUTPUT_EVENTS, Kind.BO),
+    (Variation.ANALOG_OUTPUT_EVENTS, Kind.AO),
+)
+
+#: The attributes a master may write, besides the maximum transmit fragment size
+#: that the session owns.
+_WRITABLE_ATTRIBUTES = (
+    Variation.LOCATION_NAME,
+    Variation.DEVICE_ID,
+    Variation.DEVICE_NAME,
+)
+
 #: The qualifiers that name points one at a time, and the octets each spends
 #: on a count and on an index.
 _INDEXED = {
@@ -277,6 +323,7 @@ class DerOutstation:
         event_policy: EventPolicy | Mapping[str, Any] | None = None,
         read_only: bool = False,
         read_only_status: CommandStatus = CommandStatus.NOT_AUTHORIZED,
+        information: DeviceInformation | None = None,
     ) -> None:
         """
         Args:
@@ -339,6 +386,11 @@ class DerOutstation:
                 default says this master may not command here. A caller that
                 knows another master holds the point may prefer
                 ``BLOCKED_OTHER_MASTER``.
+            information: What the device attributes say about the device, at
+                Level 4: the manufacturer, product, versions and serial number,
+                and the initial location name, ID and name a master may
+                rewrite. None uses the defaults of
+                :class:`~py1815.attributes.DeviceInformation`.
         """
         if block_octets < 32:
             raise ValueError(f"block_octets is {block_octets}; too small to hold an object range")
@@ -449,6 +501,12 @@ class DerOutstation:
                     f"{len(missing)} point(s) the profile makes mandatory are not bound: "
                     f"{listed}{more}"
                 )
+        #: The device attributes served at Level 4, or None below it (D119).
+        self._attributes = (
+            self._device_attributes(information or DeviceInformation())
+            if self.at_least(SubsetLevel.LEVEL_4)
+            else None
+        )
 
     # ------------------------------------------------------------ assembly
 
@@ -476,6 +534,69 @@ class DerOutstation:
                 widened.setdefault(group, {}).update(extra_widened)
             defaults.update(_LEVEL_4_DEFAULTS)
         return defaults, served, widened
+
+    def _device_attributes(self, information: DeviceInformation) -> DeviceAttributes:
+        """Build the device attributes from what this outstation serves and does (D119).
+
+        Counts, highest indices and event support come from the served points and
+        the classes they report in. An attribute for a group this outstation does
+        not serve reports no points and a highest index of zero.
+        """
+        frozen = self._points(GROUP_FROZEN_COUNTER)
+        values: dict[int, Attribute] = {
+            Variation.SECURE_AUTHENTICATION_VERSION: Attribute.unsigned(0),
+            Variation.SECURITY_STATISTICS_PER_ASSOCIATION: Attribute.unsigned(0),
+            # No attribute sets beyond the standard one: text of no characters
+            # (TB2014-001, which corrects the data type of IEEE 1815-2012 A.1.3.2.3).
+            Variation.USER_SPECIFIC_ATTRIBUTE_SETS: Attribute.text(""),
+            Variation.MASTER_DATA_SET_PROTOTYPES: Attribute.unsigned(0),
+            Variation.OUTSTATION_DATA_SET_PROTOTYPES: Attribute.unsigned(0),
+            Variation.MASTER_DATA_SETS: Attribute.unsigned(0),
+            Variation.OUTSTATION_DATA_SETS: Attribute.unsigned(0),
+            Variation.LOCAL_TIMING_ACCURACY: Attribute.unsigned(information.timing_accuracy_us),
+            # Time comes from this host's clock, and nothing depends on a master
+            # sending it again (IEEE 1815-2012 A.1.10.2).
+            Variation.DURATION_OF_TIMING_ACCURACY: Attribute.unsigned(0),
+            Variation.SOFTWARE_VERSION: Attribute.text(information.software()),
+            Variation.HARDWARE_VERSION: Attribute.text(information.hardware_version),
+            Variation.LOCATION_NAME: Attribute.text(information.location_name),
+            Variation.DEVICE_ID: Attribute.text(information.device_id),
+            Variation.DEVICE_NAME: Attribute.text(information.device_name),
+            Variation.SERIAL_NUMBER: Attribute.text(information.serial_number),
+            # The level, a colon, and no test procedure year: not certified.
+            Variation.SUBSET_AND_CONFORMANCE: Attribute.text(f"{int(self._level)}:"),
+            Variation.PRODUCT_NAME_AND_MODEL: Attribute.text(information.product),
+            Variation.MANUFACTURER_NAME: Attribute.text(information.manufacturer),
+            Variation.FROZEN_COUNTERS: Attribute.flag(bool(frozen)),
+            Variation.FROZEN_COUNTER_EVENTS: Attribute.flag(
+                not self._level2 and any(self._classes.get(p.address) for p in frozen)
+            ),
+            # Counter change events (group 22) are never buffered, and frozen
+            # analog inputs (group 31) are not served.
+            Variation.COUNTER_EVENTS: Attribute.flag(False),
+            Variation.FROZEN_ANALOG_INPUTS: Attribute.flag(bool(_SERVED_VARIATIONS.get(31))),
+            Variation.DOUBLE_BIT_INPUT_EVENTS: Attribute.flag(False),
+        }
+        values.update(self._point_attributes())
+        return DeviceAttributes(
+            values,
+            writable=_WRITABLE_ATTRIBUTES,
+            min_fragment=self._block_octets + RESPONSE_HEADER_SIZE,
+        )
+
+    def _point_attributes(self) -> dict[int, Attribute]:
+        """Return the attributes that count the points served and say which report events."""
+        values: dict[int, Attribute] = {}
+        for variation, kind in _EVENT_SUPPORT:
+            reports = kind in _EVENT_KINDS and any(
+                self._classes.get(p.address) for p in self._served[kind]
+            )
+            values[variation] = Attribute.flag(reports)
+        for highest, count, group in _POINT_ATTRIBUTES:
+            points = self._points(group) if group in _GROUP_KINDS else []
+            values[highest] = Attribute.unsigned(max((p.index for p in points), default=0))
+            values[count] = Attribute.unsigned(len(points))
+        return values
 
     def _resolve_sources(self) -> dict[Address, Reader]:
         """Where each input's value comes from, the caller's word first.
@@ -728,6 +849,11 @@ class DerOutstation:
         A feature that Level 3 introduces asks ``at_least(SubsetLevel.LEVEL_3)``.
         """
         return self._level >= SubsetLevel.parse(level)
+
+    @property
+    def attributes(self) -> DeviceAttributes | None:
+        """The device attributes this outstation serves, or None below Level 4."""
+        return self._attributes
 
     @property
     def level2(self) -> bool:
@@ -1654,6 +1780,8 @@ class DerOutstation:
                 if self._served[kind]
                 for group in groups
             ]
+            # Reads and writes of device attributes (D119, D120).
+            options["attributes"] = self._attributes
         return options
 
     def session(self, *, max_response: int = 2048, **options: Any) -> Session:

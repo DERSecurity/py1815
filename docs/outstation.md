@@ -315,6 +315,11 @@ frozen counter events with time by group, and lets `analog_event_variation` be a
 floating-point variation. `DerOutstation.session()` sets both at Level 4; see
 [Level 4](der.md#level-4-floating-point-and-deadbands).
 
+A session built with a `DeviceAttributes` store, as a Level 4 `DerOutstation` builds one, also
+answers reads of group 0 and takes writes of the attributes the store marks writable and of
+the maximum transmit fragment size. Without a store, group 0 is an unknown object. See
+[Device attributes](der.md#device-attributes).
+
 ### Reading the time and the internal indications
 
 A session built with `time_source` answers a read of the current time: group 50

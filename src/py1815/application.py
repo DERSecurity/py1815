@@ -378,6 +378,17 @@ def parse_request(fragment: bytes) -> Request:
     )
 
 
+def parse_header(data: bytes, offset: int) -> tuple[ObjectHeader, int]:
+    """Read the object header at ``offset`` of object data, and return it with the next offset.
+
+    For a caller that walks a request body whose objects have widths only it
+    knows, such as the variable-length objects of group 0. Raises
+    :class:`RequestError` when the header is cut short or is not one this
+    outstation accepts.
+    """
+    return _parse_header(data, offset, indices_follow=False)
+
+
 def parse_header_list(data: bytes) -> tuple[ObjectHeader, ...]:
     """Object headers that follow one another with no object data between them.
 

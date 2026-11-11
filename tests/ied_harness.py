@@ -562,6 +562,7 @@ class Dut:
         block_octets: int = 1024,
         event_policy: Any = None,
         output_status: bool = False,
+        information: Any = None,
         **session_options: Any,
     ) -> None:
         """
@@ -617,6 +618,7 @@ class Dut:
             clock_ms=self.clock.ms,
             level=level,
             event_policy=event_policy,
+            information=information,
         )
         session_options.setdefault("need_time", False)
         session_options.setdefault("clock", self.clock)

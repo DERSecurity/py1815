@@ -36,6 +36,8 @@ from typing import Any
 from xml.etree import ElementTree
 
 from py1815 import link
+from py1815.attributes import SESSION_VARIATIONS, DeviceAttributes, Variation
+from py1815.attributes import describe as describe_attribute
 from py1815.control import CommandStatus
 from py1815.profile.model import Kind, Point
 from py1815.profile.outstation import DerOutstation
@@ -205,6 +207,37 @@ def _added(
     return table.get(group, {}) if outstation.at_least(SubsetLevel.LEVEL_4) else {}
 
 
+def _attribute_rows(store: DeviceAttributes) -> list[Row]:
+    """Return the rows for group 0: each attribute read, and each writable one written."""
+    writable = {*store.writable, Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE}
+    rows: list[Row] = []
+    for variation in sorted({*store.snapshot(), *SESSION_VARIATIONS}):
+        description = f"Device attribute - {describe_attribute(variation).lower()}"
+        rows.append(
+            Row(0, variation, description, request=(READ, tuple(_RANGE)), response=(RESPONSE, (0,)))
+        )
+        if variation in writable:
+            rows.append(Row(0, variation, description, request=(WRITE, tuple(_RANGE))))
+    rows.append(
+        Row(
+            0,
+            Variation.ALL_ATTRIBUTES,
+            "Device attribute - non-specific all attributes request",
+            request=(READ, tuple(_RANGE + _ALL)),
+        )
+    )
+    rows.append(
+        Row(
+            0,
+            Variation.LIST_OF_VARIATIONS,
+            "Device attribute - list of attribute variations",
+            request=(READ, tuple(_RANGE + _ALL)),
+            response=(RESPONSE, (0x17,)),
+        )
+    )
+    return rows
+
+
 def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementation:
     """The implementation table for an outstation as it is configured.
 
@@ -218,6 +251,8 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         # may usefully send: it is left off the list of what is supported.
         facts = replace(facts, controls=False)
     rows: list[Row] = []
+    if facts.attributes and outstation.attributes is not None:
+        rows += _attribute_rows(outstation.attributes)
 
     def static(group: int, default: str, variations: dict[int, str]) -> None:
         # A read by index is answered by index, and every other read by range.

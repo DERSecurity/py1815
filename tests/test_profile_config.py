@@ -27,6 +27,7 @@ DEFAULTS = {
     "disabled_offline": True,
     "event_capacity": 2000,
     "max_response": 2048,
+    "timing_accuracy_us": 1000000,
     "select_timeout": 10.0,
     "confirm_timeout": 10.0,
     "idle_timeout": 300.0,
@@ -39,6 +40,10 @@ DEFAULTS = {
         "hardware_version": "Not applicable (software)",
         "software_version": "",
         "author": "py1815",
+        "serial_number": "",
+        "location_name": "",
+        "device_id": "",
+        "device_name": "",
     },
 }
 
@@ -158,6 +163,59 @@ class TestErrors:
             DerConfig.load(tmp_path / "none.json")
 
 
+class TestDeviceAttributes:
+    def test_level_4_reports_the_identity_and_accuracy_as_device_attributes(self):
+        config = DerConfig.from_mapping(
+            {
+                "level": 4,
+                "timing_accuracy_us": 2000,
+                "identity": {
+                    "vendor": "Acme",
+                    "device": "Widget 9",
+                    "software_version": "1.2.3",
+                    "hardware_version": "Rev D",
+                    "serial_number": "SN-1",
+                    "location_name": "Plant 4",
+                },
+            }
+        )
+        point_map = load.resolve(for_reference_der(), config.composition)
+        built = der.build(point_map, **config.outstation_options())
+        view = built.outstation.attributes.snapshot()
+        values = {number: attribute.value for number, attribute in view.items()}
+        assert {
+            number: values[number] for number in (252, 250, 242, 243, 248, 245, 246, 217, 249)
+        } == {
+            252: "Acme",
+            250: "Widget 9",
+            242: "1.2.3",
+            243: "Rev D",
+            248: "SN-1",
+            245: "Plant 4",
+            246: "",
+            217: 2000,
+            249: "4:",
+        }
+
+    def test_below_level_4_the_identity_is_not_held_to_ascii(self):
+        config = DerConfig.from_mapping({"level": 3, "identity": {"vendor": "Müller"}})
+        assert config.outstation_options()["information"] is None
+        simulation = der.build(
+            load.resolve(for_reference_der(), config.composition), **config.outstation_options()
+        )
+        assert simulation.outstation.attributes is None
+
+    @pytest.mark.parametrize("name", ["vendor", "device", "serial_number", "device_name"])
+    def test_at_level_4_a_text_that_is_not_visible_ascii_names_its_setting(self, name):
+        with pytest.raises(ConfigError, match=rf"identity\.{name}: text of at most 128"):
+            DerConfig.from_mapping({"level": 4, "identity": {name: "café"}})
+
+    @pytest.mark.parametrize("value", [-1, 2**32, 1.5, "1", True])
+    def test_the_timing_accuracy_is_an_unsigned_32_bit_whole_number(self, value):
+        with pytest.raises(ConfigError, match="timing_accuracy_us must be a whole number from 0"):
+            DerConfig.from_mapping({"timing_accuracy_us": value})
+
+
 class TestCommandLine:
     def test_flags_alone_build_the_configuration(self):
         config = cli.configuration(
@@ -205,6 +263,35 @@ class TestCommandLine:
             "composition": DEFAULTS["composition"] | {"meters": 1, "inverters": 2},
             "simulation": {"seed": 9, "tick": 0.5},
         }
+
+    def test_the_device_attribute_flags_set_the_identity_and_the_timing_accuracy(self):
+        config = cli.configuration(
+            _args(
+                "run",
+                "--level",
+                "4",
+                "--vendor",
+                "Acme",
+                "--serial-number",
+                "SN-1",
+                "--location-name",
+                "Plant 4",
+                "--device-id",
+                "ID-7",
+                "--device-name",
+                "Unit A",
+                "--timing-accuracy-us",
+                "2000",
+            )
+        )
+        assert config.identity == Identity(
+            vendor="Acme",
+            serial_number="SN-1",
+            location_name="Plant 4",
+            device_id="ID-7",
+            device_name="Unit A",
+        )
+        assert config.timing_accuracy_us == 2000
 
     def test_any_master_clears_the_master_address(self):
         assert cli.configuration(_args("run", "--any-master")).master_address is None

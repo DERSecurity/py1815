@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any
 
 from py1815 import settings
+from py1815.attributes import Attribute, DeviceInformation
 from py1815.profile.model import Composition
 from py1815.profile.policy import EventPolicy
 from py1815.server import DEFAULT_PORT, IDLE_TIMEOUT
@@ -40,7 +41,7 @@ _MAX_COUNT = 1000
 
 
 @dataclass(frozen=True)
-class Identity:
+class Identity:  # pylint: disable=too-many-instance-attributes
     """What the DNP3 Device Profile document says about the device."""
 
     vendor: str = "Not stated"
@@ -49,9 +50,27 @@ class Identity:
     #: Empty means this library's version.
     software_version: str = ""
     author: str = "py1815"
+    #: At Level 4, the serial number, and the initial location name, ID and
+    #: name that a master may rewrite.
+    serial_number: str = ""
+    location_name: str = ""
+    device_id: str = ""
+    device_name: str = ""
 
 
 _IDENTITY = tuple(each.name for each in fields(Identity))
+
+#: The identity settings that device attributes carry as text.
+_ATTRIBUTE_TEXT = (
+    "vendor",
+    "device",
+    "hardware_version",
+    "software_version",
+    "serial_number",
+    "location_name",
+    "device_id",
+    "device_name",
+)
 
 
 def _level(value: Any, where: str) -> int:
@@ -89,6 +108,9 @@ class DerConfig:
     event_capacity: int = 2000
     #: Largest response fragment to send, in octets.
     max_response: int = 2048
+    #: At Level 4, the worst-case error in microseconds of the time given to
+    #: events, which the device attributes report.
+    timing_accuracy_us: int = 1_000_000
     #: Seconds a select stays valid.
     select_timeout: float = DEFAULT_SELECT_TIMEOUT
     #: Seconds to wait for a master to confirm a response, or None to wait
@@ -146,6 +168,8 @@ class DerConfig:
                 values[key] = settings.integer(value, key, 1, 1_000_000)
             elif key == "max_response":
                 values[key] = settings.integer(value, key, 249, 65535)
+            elif key == "timing_accuracy_us":
+                values[key] = settings.integer(value, key, 0, 0xFFFFFFFF)
             elif key in ("select_timeout", "idle_timeout"):
                 values[key] = settings.seconds(value, key)
             elif key == "confirm_timeout":
@@ -175,6 +199,13 @@ class DerConfig:
                         raise ConfigError(f"{key}.{name} must be a string")
                 values[key] = Identity(**identity)
         config = cls(**values)
+        if config.level == SubsetLevel.LEVEL_4:
+            # The device attributes carry these as visible ASCII.
+            for name, entry in zip(_ATTRIBUTE_TEXT, config.device_information_texts(), strict=True):
+                try:
+                    Attribute.text(entry)
+                except ValueError as error:
+                    raise ConfigError(f"identity.{name}: {error}") from None
         if config.master_address == config.outstation_address:
             raise ConfigError("outstation_address and master_address must be different")
         if config.unsolicited and config.confirm_timeout is None:
@@ -203,6 +234,25 @@ class DerConfig:
         """Read a configuration from a JSON file."""
         return cls.from_mapping(settings.read(path))
 
+    def device_information_texts(self) -> tuple[str, ...]:
+        """Return the identity settings that device attributes carry as text."""
+        return tuple(getattr(self.identity, name) for name in _ATTRIBUTE_TEXT)
+
+    def device_information(self) -> DeviceInformation:
+        """Return what the device attributes say about the device."""
+        identity = self.identity
+        return DeviceInformation(
+            manufacturer=identity.vendor,
+            product=identity.device,
+            software_version=identity.software_version,
+            hardware_version=identity.hardware_version,
+            serial_number=identity.serial_number,
+            location_name=identity.location_name,
+            device_id=identity.device_id,
+            device_name=identity.device_name,
+            timing_accuracy_us=self.timing_accuracy_us,
+        )
+
     def outstation_options(self) -> dict[str, Any]:
         """Return the keyword arguments for :class:`~py1815.profile.outstation.DerOutstation`."""
         return {
@@ -211,6 +261,9 @@ class DerConfig:
             "disabled_offline": self.disabled_offline,
             "read_only": self.read_only,
             "event_policy": self.event_policy,
+            # Only Level 4 serves device attributes, and only it holds the
+            # identity to visible ASCII.
+            "information": self.device_information() if self.level == 4 else None,
         }
 
     def session_options(self) -> dict[str, Any]:

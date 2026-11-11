@@ -378,6 +378,20 @@ class TestSessionTraffic:
         kinds = {(p["type"], p["group"]) for body in bodies for p in body["points"]}
         assert {("binary_output", 12), ("analog_output", 41), ("counter", 21)} <= kinds
 
+    def test_the_device_attributes_a_level_4_session_sends_and_takes_are_not_rejected(self):
+        dut = Dut(level=4)
+        records: list[RequestRecord] = []
+        dut.session.request_observer = records.append
+        dut.master.read(header(0, 254, Q_ALL))
+        dut.master.read(header(0, 255, Q_ALL))
+        dut.master.request(2, bytes.fromhex("00 F5 00 00 00 01 02 41 42"))
+        bodies = [body for record in records for body in record_bodies(record)]
+
+        assert len(bodies) == 6
+        assert [body for body in bodies if "apdu_rejected" in body] == []
+        assert [h["variation"] for h in bodies[1]["objects"]][:3] == [209, 210, 211]
+        _assert_valid(bodies)
+
 
 # --------------------------------------------------------------- reading
 
@@ -715,6 +729,76 @@ class TestObjects:
             {"group": 60, "variation": 1, "qualifier": 6},
         ]
         assert "apdu_rejected" not in body
+
+    def test_a_response_of_device_attributes_keeps_each_header_with_its_octets(self):
+        # The maximum receive fragment size of IEEE 1815-2012 5.5.5, then a list
+        # of variations under qualifier 0x17 (5.5.6.2): its octets begin with the set.
+        body = _response(
+            "C0 81 00 00  00 F1 00 00 00 02 02 DC 05  00 FF 17 01 00 FE 04 F0 01 F1 00"
+        )
+
+        assert body["objects"] == [
+            {
+                "group": 0,
+                "variation": 241,
+                "qualifier": 0,
+                "start": 0,
+                "stop": 0,
+                "data": "0202dc05",
+            },
+            {
+                "group": 0,
+                "variation": 255,
+                "qualifier": 0x17,
+                "count": 1,
+                "data": "00fe04f001f100",
+            },
+        ]
+        assert body["points"] == [] and "apdu_rejected" not in body
+        _assert_valid([body])
+
+    def test_an_extended_list_of_attributes_is_walked_by_its_true_length(self):
+        body = _response(
+            "C0 81 00 00  00 FF 17 01 00 FF 00" + " 01 00" * 128 + "  00 D1 00 00 00 02 01 00"
+        )
+
+        assert [header["variation"] for header in body["objects"]] == [255, 209]
+        assert "apdu_rejected" not in body
+
+    def test_a_write_of_two_attributes_reads_both_headers(self):
+        body = _request("C0 02  00 F5 00 00 00 01 02 41 42  00 F6 00 00 00 01 01 43")
+
+        assert [(h["variation"], h["data"]) for h in body["objects"]] == [
+            (245, "01024142"),
+            (246, "010143"),
+        ]
+        assert "apdu_rejected" not in body
+        _assert_valid([body])
+
+    def test_a_read_of_all_attributes_has_a_header_and_no_data(self):
+        body = _request("C0 01  00 FE 06  00 FF 00 00 00")
+
+        assert body["objects"] == [
+            {"group": 0, "variation": 254, "qualifier": 6},
+            {"group": 0, "variation": 255, "qualifier": 0, "start": 0, "stop": 0},
+        ]
+        assert "apdu_rejected" not in body
+
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            pytest.param("C0 81 00 00  00 FA 00 00 00 01 05 41", id="text cut short"),
+            pytest.param("C0 81 00 00  00 FA 00 00 00 01", id="no length"),
+            pytest.param("C0 81 00 00  00 FA 00 00 01 01 01 41", id="second set missing"),
+            pytest.param("C0 81 00 00  00 FF 17 01", id="index missing"),
+        ],
+    )
+    def test_an_attribute_cut_short_is_malformed(self, fragment):
+        body = _response(fragment)
+
+        assert body["apdu_rejected"] == "malformed"
+        assert (body["objects"], body["points"]) == ([], [])
+        _assert_valid([body])
 
 
 class TestRejected:

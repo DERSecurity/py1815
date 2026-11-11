@@ -384,6 +384,9 @@ _POINT_GROUPS = frozenset(
 )
 
 _GROUP_COMMON_TIME = 51
+_GROUP_DEVICE_ATTRIBUTES = 0
+#: The data type code whose length octet states 256 less than its length.
+_EXTENDED_LIST = 255
 _PATTERN_BLOCK = (12, 2)
 _PATTERN_MASK = (12, 3)
 
@@ -584,10 +587,27 @@ class _Walk:
             raise _Rejected(REJECTED_MALFORMED)
         return layout
 
+    def _attributes(self, prefix: int, number: int) -> None:
+        """Walk ``number`` device attributes, each as long as its own length octet says.
+
+        An attribute is a data type code, a length octet and that many octets,
+        and the length of an extended list is 256 more than the octet states
+        (IEEE 1815-2012 5.5.4). A device attribute is not a point, so its octets
+        are kept as the header's ``data``.
+        """
+        index_octets = _INDEX_PREFIX_OCTETS.get(prefix, 0)
+        for _ in range(number):
+            self._take(index_octets)
+            code, length = self._take(2)
+            self._take(length + 256 if code == _EXTENDED_LIST else length)
+
     def _objects(
         self, group: int, variation: int, prefix: int, start: int | None, number: int
     ) -> None:
         """Read the objects under one header."""
+        if group == _GROUP_DEVICE_ATTRIBUTES:
+            self._attributes(prefix, number)
+            return
         known = (group, variation) in _LAYOUTS or group in _OCTET_GROUPS
         if prefix in _SIZE_PREFIX_OCTETS and not known:
             # An object this module does not read, such as a file or an

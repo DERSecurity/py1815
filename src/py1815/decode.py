@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from py1815.application import QualifierCode
+from py1815.attributes import GROUP_DEVICE_ATTRIBUTES, Attribute, DataType, parse_attribute
 
 #: The state of a binary point, in the octet that also carries its flags.
 STATE_MASK = 0x80
@@ -265,6 +266,10 @@ class DecodedObject:
     event: bool
     #: The object's own octets, without header, index or prefix.
     raw: bytes
+    #: For a device attribute, the attribute with its data type code; None for
+    #: any other object. The attribute's variable length is why it is read
+    #: apart from the layouts, and its text, list or float is not a ``value``.
+    attribute: Attribute | None = None
 
 
 @dataclass(frozen=True)
@@ -388,11 +393,81 @@ def _packed(
     ]
 
 
+def _attribute(variation: int, index: int, attribute: Attribute) -> DecodedObject:
+    """Return a device attribute as a decoded object."""
+    decoded = attribute.value
+    number = decoded if isinstance(decoded, int | float) else None
+    return DecodedObject(
+        GROUP_DEVICE_ATTRIBUTES,
+        variation,
+        index,
+        number,
+        None,
+        number if attribute.code == DataType.DNP3TIME and isinstance(number, int) else None,
+        None,
+        None,
+        False,
+        attribute.encode(),
+        attribute,
+    )
+
+
+def _attributes(
+    body: bytes, offset: int, variation: int, raw_qualifier: int
+) -> tuple[list[DecodedObject], int]:
+    """Read the device attributes under one header, each as long as its length octet says.
+
+    The set number is the object's index: the start of a range, counting up,
+    or the index written before each attribute.
+    """
+    try:
+        qualifier = QualifierCode(raw_qualifier)
+    except ValueError:
+        raise _Stop(f"qualifier 0x{raw_qualifier:02X} is not one this library reads") from None
+    indices: list[int | None]
+    prefix = 0
+    if qualifier in (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP):
+        width = 2 if qualifier is QualifierCode.UINT16_START_STOP else 1
+        _need(body, offset, 2 * width, "an object range")
+        start = int.from_bytes(body[offset : offset + width], "little")
+        stop = int.from_bytes(body[offset + width : offset + 2 * width], "little")
+        offset += 2 * width
+        if stop < start:
+            raise _Stop(f"the range {start}..{stop} ends before it begins")
+        indices = list(range(start, stop + 1))
+    elif qualifier in (
+        QualifierCode.UINT8_COUNT_UINT8_INDEX,
+        QualifierCode.UINT16_COUNT_UINT16_INDEX,
+    ):
+        prefix = 2 if qualifier is QualifierCode.UINT16_COUNT_UINT16_INDEX else 1
+        _need(body, offset, prefix, "an object count")
+        count = int.from_bytes(body[offset : offset + prefix], "little")
+        offset += prefix
+        indices = [None] * count
+    else:
+        raise _Stop(f"qualifier 0x{raw_qualifier:02X} does not appear in a response")
+
+    objects: list[DecodedObject] = []
+    for index in indices:
+        if index is None:
+            _need(body, offset, prefix, "an attribute set number")
+            index = int.from_bytes(body[offset : offset + prefix], "little")
+            offset += prefix
+        try:
+            attribute, offset = parse_attribute(body, offset)
+        except ValueError as error:
+            raise _Stop(f"group 0 variation {variation} is cut short: {error}") from None
+        objects.append(_attribute(variation, index, attribute))
+    return objects, offset
+
+
 def _block(body: bytes, offset: int, common: _CommonTime) -> tuple[list[DecodedObject], int]:
     """Read one object header and the objects under it."""
     _need(body, offset, 3, "an object header")
     group, variation, raw_qualifier = body[offset : offset + 3]
     offset += 3
+    if group == GROUP_DEVICE_ATTRIBUTES:
+        return _attributes(body, offset, variation, raw_qualifier)
     layout = LAYOUTS.get((group, variation))
     if layout is None:
         raise _Stop(f"group {group} variation {variation} is not an object this library reads")

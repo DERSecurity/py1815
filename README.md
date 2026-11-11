@@ -229,7 +229,8 @@ certification body:
 | Technical bulletins and application notes | Each of the DNP Users Group's bulletins and notes is cataloged as acted on or not applicable. Acted on: the updated transport reception table, special addresses, error indications, relative time for events stamped before the clock is set, LAN time synchronization, validation of incoming data, disabling function codes, and the rules for unsolicited responses |
 | Unsolicited responses (optional in the profile) | Implemented, off by default: `py1815-der run --unsolicited`, or `session(unsolicited=True)` |
 | Floating-point and time-stamped variations, and analog input deadbands that a master reads and writes | Implemented at `level=4` |
-| Device attributes (optional in the profile), secure authentication | Not implemented |
+| Device attributes (optional in the profile) | Implemented at `level=4` |
+| Secure authentication | Not implemented |
 
 `py1815-der profile` writes the outstation's DNP3 Device Profile document (schema version
 2.12.00), generated from the running configuration: its point lists, limits and

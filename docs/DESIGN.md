@@ -2042,6 +2042,70 @@ response when none is buffered (Table 12-9, note a). Packed ranges are split int
 each point took one octet, which keeps a block inside its budget. *Trade-off:* a range of packed
 points near the block size is split earlier than the octets require.
 
+**D119 -- Level 4 serves every required device attribute from what the outstation has and
+does.** `DerOutstation` builds a `DeviceAttributes` store at Level 4 and hands it to each
+session it makes; below Level 4 group 0 is an unknown object, as it was. Each value is
+taken from where it lives: the counts and highest indices of points from the served
+points (a group with none reports no points and an index of zero, since IEEE 1815-2012
+A.1 states no value for it); "support for events" from the classes the served points
+report in, for the kinds `poll` records and for frozen counters, and false for the rest;
+the manufacturer, product, versions and serial number from `DeviceInformation`, which the
+`identity` configuration fills; the subset attribute (variation 249) from the level, as
+`"4:"` with no test year because the library is not certified (A.1.40); the Secure
+Authentication version, the security statistics and the data set counts as zero, because
+none is implemented; variation 211 as text of no characters when there is no
+user-specific set, as TB2014-001 corrects A.1.3.2.3 to say (the standard names data type
+254, which is a list); the local timing accuracy (217) from
+`timing_accuracy_us`, one second by default, since only the host knows its clock; and the
+duration of timing accuracy (218) as zero, since nothing waits for a master to send the
+time again. The variations that belong to the session, the two fragment sizes and the
+limit on binary outputs in a request (variations 240, 241 and 216), come from the
+session. The limit is the most control relay output blocks that fit both a request and the
+echo that answers it, counted with two-octet indices and counts. The optional variations
+196 to 208 and 244 are not offered, so a read of one is an unknown object (TB2013-004b
+makes reporting them a configurable option). A response puts each attribute under
+qualifier 0x00 with its set as the range, as the example in 5.5.5 does, and the list of
+variations under 0x17 with a count of one, as 5.5.6.2 requires. Only set 0 exists: a
+read of another set, or with qualifier 0x06 for a variation other than 254 and 255, is a
+parameter error. Text is visible ASCII of at most 128 characters, which is what VSTR
+holds (TB2017-007a Table 11-4) and keeps one attribute inside the smallest fragment the
+outstation can be configured with. *Trade-off:* a kind of event that a later change
+makes the outstation record has to be added to the table of event kinds in
+`profile/outstation.py`, and until it is, its "support for events" attribute says false.
+The timing accuracy is a statement the operator makes and the library cannot check.
+
+**D120 -- A master may write the maximum transmit fragment size and three names, and a
+written value does not survive a restart.** Variations 240, 245, 246 and 247 are
+writable, as the Level 4 table has them, and a write is answered with a null response. A
+request is checked whole before any of it is stored, because 5.5.8 has an unacceptable
+value leave the attribute alone and set IIN2.2, and half a request stored would leave a
+master unsure which half. A write of a variation that is not writable is an unknown
+object; a text that is not visible ASCII, is too long or has another data type, a set
+other than 0, or a qualifier other than 0x00 and 0x01 is a parameter error. The
+transmit fragment size is the session's `max_response`, so a write changes how the
+session fragments its responses from the next response on. It has to be at least the
+largest static block plus a response header (1028 octets with the default block
+budget), because the session refuses a read whose block is larger than a fragment, and
+at most the `max_response` the session was built with, which is the limit an operator
+sets under 4.3 rule 1; a master can lower the size and raise it back and no further.
+Nothing is stored beyond the process: 5.5.8 does not require a written attribute to
+survive a reset, `Session.restart` returns every attribute and the fragment size to the
+values they were given, and a new connection keeps them, as it keeps events.
+*Trade-off:* a master cannot shrink fragments below the block budget unless the operator
+lowers `block_octets`, and a restart forgets a rename a person made.
+
+**D121 -- The master reads a device attribute by the length it states.** `decode` walks
+group 0 apart from its layout table, since an attribute's size is in the octets that
+follow its header: the data type code, a length octet (256 more for an extended list)
+and the value, under a range or an index-prefixed qualifier. The decoded object keeps the
+attribute whole, with its data type code, in `attribute`; its `value` is set only where
+the attribute is a number, a time or a bit string, so that `value` is never a string or a
+list. A data type code this library has no name for is walked past by its length. The
+traffic walk reads group 0 the same way and keeps the octets after the header as the
+header's `data`. The Device Profile lists every attribute under its implementation table
+at Level 4, because the schema has no element for attributes beyond that.
+*Trade-off:* a master reads attributes but has no request helper for them yet.
+
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in its
 value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter
 events optional, and has a device that supports them raise one whenever any of a counter's
@@ -2096,6 +2160,9 @@ Each layer is testable without the ones above it, and the session does no I/O.
   every group and variation, which the map knows and this layer does not.
 - `session` holds what is true of a conversation rather than of a frame.
 - `decode` reads objects and knows nothing of who asked for them.
+- `attributes` encodes and decodes the device attributes of group 0 and holds the ones an
+  outstation reports; it knows nothing of where a value comes from, and the session
+  answers reads and writes from it.
 - `master.association` is the session's mirror: what is true of a conversation, from the end
   that asks. Like the session it does no I/O. `master.api` owns the socket, and
   `master.loopback` stands in for one by handing octets straight to a session.

@@ -386,6 +386,106 @@ class TestSign:
         assert _one(octets).value == value
 
 
+class TestDeviceAttributes:
+    """Group 0 objects carry their own data type and length, so each is as long as it says."""
+
+    def test_the_maximum_receive_fragment_size_of_the_standards_example(self):
+        # IEEE 1815-2012 5.5.5, EX 5-10: unsigned integer, two octets, 1500.
+        decoded = _one("00 F1 00 00 00  02 02 DC 05")
+        assert (decoded.group, decoded.variation, decoded.index) == (0, 241, 0)
+        assert decoded.value == 1500
+        assert decoded.raw == bytes.fromhex("02 02 DC 05")
+        assert decoded.attribute is not None and decoded.attribute.code == 2
+        assert decoded.point is None and not decoded.event and decoded.flags is None
+
+    def test_text_is_the_attribute_and_not_a_number(self):
+        decoded = _one("00 FA 00 00 00  01 03 41 42 43")
+        assert decoded.value is None
+        assert decoded.attribute.value == "ABC"
+
+    def test_a_range_of_sets_gives_one_object_per_set_in_order(self):
+        first, second = _read("00 F2 00 00 01  01 01 41  01 02 42 43")
+        assert (first.index, first.attribute.value) == (0, "A")
+        assert (second.index, second.attribute.value) == (1, "BC")
+
+    def test_an_attribute_with_an_index_in_front_of_it_reads_that_index(self):
+        # Qualifier 0x17, one object, set 1; and qualifier 0x28 with two-octet fields.
+        (narrow,) = _read("00 FA 17 01 01  01 01 41")
+        (wide,) = _read("00 FA 28 01 00 02 00  01 01 42")
+        assert (narrow.index, narrow.attribute.value) == (1, "A")
+        assert (wide.index, wide.attribute.value) == (2, "B")
+
+    def test_the_list_of_variations_gives_each_variation_and_whether_it_is_writable(self):
+        # IEEE 1815-2012 5.5.6.3, EX 5-12: variations 240 and 246 to 249, read only.
+        decoded = _one("00 FF 17 01 01  FE 0A F0 00 F6 00 F7 00 F8 00 F9 01")
+        assert decoded.index == 1
+        assert decoded.attribute.value == (
+            (240, False),
+            (246, False),
+            (247, False),
+            (248, False),
+            (249, True),
+        )
+
+    def test_an_extended_list_is_256_octets_longer_than_its_length_octet_says(self):
+        decoded = _one("00 FF 17 01 00  FF 00" + " 01 00" * 128)
+        assert len(decoded.attribute.data) == 256
+        assert len(decoded.attribute.value) == 128
+        assert decoded.raw[:2] == bytes([255, 0])
+
+    def test_no_attribute_sets_is_text_of_no_characters(self):
+        # TB2014-001 corrects IEEE 1815-2012 A.1.3.2.3: data type VSTR, length 0.
+        decoded = _one("00 D3 00 00 00  01 00")
+        assert decoded.attribute.value == ""
+        assert _one("00 D3 00 00 00  FE 00").attribute.value == ()
+
+    def test_a_floating_point_attribute_with_no_number_is_a_not_a_number(self):
+        # TB2016-005: a quiet NaN marks floating-point data of poor quality.
+        decoded = _one("00 CB 00 00 00  04 04 00 00 C0 7F")
+        assert decoded.value != decoded.value
+        assert _one("00 CB 00 00 00  04 04 00 00 C8 42").value == 100.0
+        assert _one("00 CB 00 00 00  04 08 00 00 00 00 00 00 59 40").value == 100.0
+
+    def test_a_time_attribute_has_its_time(self):
+        decoded = _one(f"00 C6 00 00 00  07 06 {TIME_OCTETS}")
+        assert (decoded.value, decoded.time_ms) == (TIME, TIME)
+
+    def test_a_data_type_this_library_has_no_name_for_is_walked_past(self):
+        first, second = _read("00 F9 00 00 00  63 02 AA BB  00 D1 00 00 00  02 01 00")
+        assert first.attribute.code == 0x63 and first.attribute.value is None
+        assert second.variation == 209
+
+    def test_objects_of_other_groups_before_and_after_are_read(self):
+        before, attribute, after = _read(
+            "01 02 00 00 00  81  00 D1 00 00 00  02 01 00  01 02 00 01 01  01"
+        )
+        assert (before.group, attribute.group, after.group) == (1, 0, 1)
+
+    def test_a_response_ends_inside_an_attribute_is_reported_with_what_was_read(self):
+        decoded = decode_objects(
+            bytes.fromhex("00 D1 00 00 00  02 01 00  00 FA 00 00 00  01 05 41")
+        )
+        assert not decoded.complete
+        assert [obj.variation for obj in decoded.objects] == [209]
+        assert decoded.unread == bytes.fromhex("00 FA 00 00 00  01 05 41")
+        assert "cut short" in decoded.problem
+
+    @pytest.mark.parametrize(
+        "octets",
+        [
+            pytest.param("00 D1 06", id="all objects"),
+            pytest.param("00 D1 07 01 02 01 00", id="a count with no index"),
+            pytest.param("00 D1 00 00", id="a range cut short"),
+            pytest.param("00 D1 00 01 00 02 01 00", id="a range that runs backward"),
+            pytest.param("00 D1 17", id="a count cut short"),
+            pytest.param("00 D1 17 01", id="an index cut short"),
+        ],
+    )
+    def test_a_header_this_library_cannot_read_ends_the_walk(self, octets):
+        decoded = decode_objects(bytes.fromhex(octets))
+        assert not decoded.complete and decoded.objects == ()
+
+
 class TestTheTable:
     def test_it_agrees_with_the_sizes_the_certification_harness_was_written_with(self):
         """Two tables written separately, compared wherever both have an entry."""

@@ -24,6 +24,7 @@ TESTED: dict[str, tuple[str, str]] = {
         "test_technical_bulletins.py",
         "test_tb2013_003_",
     ),
+    "TB2014-001 errata": ("test_technical_bulletins.py", "test_tb2014_001_"),
     "TB2014-002 control-related status codes": ("test_technical_bulletins.py", "test_tb2014_002_"),
     "TB2016-001 indications 2.0, 2.1 and 2.2": ("test_technical_bulletins.py", "test_tb2016_001_"),
     "TB2015-002 unsolicited response behavior": (
@@ -36,6 +37,10 @@ TESTED: dict[str, tuple[str, str]] = {
         "test_tb2016_004_",
     ),
     "TB2017-003 event reporting requirements": ("test_ied_8_inputs.py", "test_8_15_3_"),
+    "TB2017-007 data type codes in device attributes": (
+        "test_technical_bulletins.py",
+        "test_tb2017_007_",
+    ),
     "TB2018-001 time management, common time and event ordering": (
         "test_technical_bulletins.py",
         "test_tb2018_001_",
@@ -63,15 +68,17 @@ TESTED: dict[str, tuple[str, str]] = {
 
 #: Documents that ask nothing of this outstation, and why.
 NOT_APPLICABLE: dict[str, str] = {
-    "TB2013-004 additional nameplate attributes": "device attributes are not implemented",
-    "TB2014-001 errata": "the corrections concern device attributes, which are not implemented",
+    "TB2013-004 additional nameplate attributes": (
+        "the attributes it adds are optional at every level and are not offered; "
+        "the master reads them"
+    ),
     "TB2014-005 device profile schema correction": (
         "the document is generated for a later schema version than the one corrected"
     ),
     "TB2015-001 object groups 110 to 115": "octet string objects are not implemented",
     "TB2016-002 secure authentication deficiencies": "secure authentication is not implemented",
     "TB2016-005 invalid floating point in device attributes": (
-        "device attributes are not implemented"
+        "no attribute reported is floating point; the master reads a quiet NaN"
     ),
     "TB2017-001 certification procedure corrections": (
         "corrects the local mode tests, and outputs here have no local mode"
@@ -82,7 +89,6 @@ NOT_APPLICABLE: dict[str, str] = {
         "a requirement on masters; the integrity poll it relies on is in the procedures"
     ),
     "TB2017-006 erratum to four figures": "a correction to figures that changes no behavior",
-    "TB2017-007 data type codes in device attributes": "device attributes are not implemented",
     "AN2004-001 system management data points": "advice on point lists for a kind of device",
     "AN2006-001 writing application notes": "about writing application notes",
     "AN2010-001 handling state event data": "advice to system designers on event buffers",

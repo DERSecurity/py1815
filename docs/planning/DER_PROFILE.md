@@ -68,7 +68,8 @@ and controls, because that is the order both consumers need them in and
 because the monitoring half exercises every mechanism the command half reuses.
 
 Not in scope: a master, secure authentication, file transfer, datasets, and the
-device attribute objects the profile marks optional. Counters are in scope
+device attribute objects the profile marks optional (a Level 4 outstation serves them
+anyway; see [D119](../DESIGN.md)). Counters are in scope
 because the profile's fixed system block carries them, and the library has no
 counter objects today.
 
