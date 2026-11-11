@@ -32,6 +32,7 @@ from ied_harness import (
 )
 
 from py1815.profile import device_profile
+from py1815.profile.binding import Quality
 from py1815.profile.model import Kind
 
 CLASS_BITS = IIN1_CLASS_1 | IIN1_CLASS_2 | IIN1_CLASS_3
@@ -280,6 +281,44 @@ class TestLevel3:
         dut.master.request(FREEZE, bytes.fromhex("14 00 06"))
         one = dut.master.read(classes(1)).fragment
         assert indices(one, 23) == [1]
+
+    @pytest.mark.parametrize("group", ["14", "15"])
+    def test_counter_events_move_with_the_counter_class(self, group):
+        # A counter's events and its frozen counter events share one class
+        # (D110, D124), whichever of g20 and g21 names the counter.
+        dut = Dut(level=3)
+        dut.master.empty_events()
+        # Class 1 (3C 02 06), then counter 1 by a one-octet range.
+        assigned(dut, f"3C 02 06 {group} 00 00 01 01")
+        dut.quality[(Kind.CTR, 1)] = Quality.COMM_LOST
+        dut.outstation.poll()
+        assert not dut.master.read(classes(3)).fragment.body
+        one = dut.master.read(classes(1)).fragment
+        # Counter event: index 1, flags 0x04 (communication lost), count 5.
+        assert one.body.hex(" ").upper() == "16 01 17 01 01 04 05 00 00 00"
+
+    def test_a_counter_assigned_to_class_0_raises_no_counter_events(self):
+        dut = Dut(level=3)
+        dut.master.empty_events()
+        assigned(dut, "3C 01 06 14 00 06")
+        dut.quality[(Kind.CTR, 0)] = Quality.COMM_LOST
+        assert dut.outstation.poll() == 0
+        dut.master.request(FREEZE, bytes.fromhex("14 00 06"))
+        assert not dut.master.read(classes(1, 2, 3)).fragment.body
+
+    def test_a_counter_given_a_class_again_reports_only_later_flag_changes(self):
+        dut = Dut(level=3)
+        dut.master.empty_events()
+        assigned(dut, "3C 01 06 14 00 00 00 00")
+        dut.quality[(Kind.CTR, 0)] = Quality.COMM_LOST
+        dut.outstation.poll()
+        assigned(dut, "3C 04 06 14 00 00 00 00")
+        assert not dut.master.read(classes(1, 2, 3)).fragment.body
+        dut.quality[(Kind.CTR, 0)] = Quality.GOOD
+        dut.outstation.poll()
+        # Counter 0 back online: index 0, flags 0x01, count 5.
+        three = dut.master.read(classes(3)).fragment
+        assert three.body.hex(" ").upper() == "16 01 17 01 00 01 05 00 00 00"
 
     @pytest.mark.parametrize("group", [0x0A, 0x0C, 0x28, 0x29])
     def test_output_groups_are_not_assignable_at_level_3(self, group):

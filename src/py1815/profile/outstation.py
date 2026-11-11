@@ -1121,6 +1121,8 @@ class DerOutstation:
                     self._deadbands[point.index] = self._binding.deadbands[point.index]
                 elif default is not None and default.deadband is not None:
                     self._deadbands[point.index] = _transmitted(point, default.deadband)
+        elif point.kind is Kind.CTR and self.at_least(SubsetLevel.LEVEL_3):
+            self.events.prime_counter(point.index, self._counter(point))
 
     # -------------------------------------------------------------- freezes
 

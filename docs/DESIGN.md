@@ -1845,6 +1845,9 @@ outstation follows them.
   assigned a class again, its next change is measured from its value at that moment, so a
   change that happened while it reported nothing is not reported afterwards. Procedure steps
   46 to 48 check this.
+- *Counters.* A counter has one class, which its counter events (D124) and its frozen counter
+  events both use. Assigning it through group 20 or group 21 moves both kinds of event, and
+  class 0 stops both.
 - *Restart.* A device that does not keep assignments in non-volatile memory returns to its
   default assignments after a restart (4.4.14). This outstation keeps none, so a cold restart
   and a new process both start from the point map's classes. A master sends the assignments
