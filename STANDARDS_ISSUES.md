@@ -113,8 +113,19 @@ by name, and fails if a later edition fixes the text.
 - **Clause 14.6.2 (Level 4):** lists device attributes as one of Level 4's additions.
 - **The subset tables in TB2016-003b:** tick group 0 for Level 4 only.
 
-**py1815:** follows the subset tables, which the DNP Users Group published to replace the
-clause 12 tables. Device attributes are a Level 4 item.
+TB2014-001 (IEEE 1815-2012 errata) removes the group 0 bullets from 14.3.2 and 14.5.2, which
+leaves Level 4 as the only level that requires device attributes. The printed standard still
+carries the bullets.
+
+**py1815:** follows the subset tables and TB2014-001. Device attributes are a Level 4 item.
+
+### Attribute sets with none supported (A.1.3.2.2)
+
+A.1.3.2.2 says that when no attribute sets are supported, the data type code of attribute
+variation 211 is 254. Its data type explanation for the same attribute says VSTR. TB2014-001
+corrects the note to VSTR with length 0.
+
+**py1815:** sends VSTR with length 0, as TB2014-001 says.
 
 ### Level 4 items the subset tables do not carry
 
