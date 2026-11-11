@@ -295,9 +295,6 @@ class DerOutstation:
         #: Held to Level 2 and nothing more, as opposed to answering with the
         #: profile's additions.
         self._level2 = level is not None and self._level == SubsetLevel.LEVEL_2
-        #: A level was given, so the subset tables apply where the profile
-        #: departs from them: a freeze-and-clear clears (D107).
-        self._tabled = level is not None
         self._defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
         #: What each counter read when it was last cleared, so that a
         #: counter bound to a running total can be cleared without the
@@ -1194,7 +1191,8 @@ class DerOutstation:
             if header.group != GROUP_COUNTER:
                 raise UnknownObject(f"group {header.group} cannot be frozen")
             named += self._selected(header)
-        if clear and self._tabled:
+        if clear and (self._level2 or self._level > SubsetLevel.LEVEL_2):
+            # A level was given, so the subset tables apply (D107).
             self._freeze(named, clear=True)
             return
         if clear:
