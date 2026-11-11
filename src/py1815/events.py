@@ -106,10 +106,21 @@ class FrozenCounterEvent:
     order: int = field(default=0, compare=False)
 
 
+@dataclass(frozen=True)
+class CounterEvent:
+    """One change in a counter's flags, with the count it held at the change."""
+
+    index: int
+    point: CounterPoint
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+
+
 #: Any kind of event. The buffers hold them together, because a class is a
 #: reporting priority rather than a data type -- a master asking for class 1
 #: wants everything assigned to class 1.
-Event = AnalogEvent | BinaryEvent | FrozenCounterEvent
+Event = AnalogEvent | BinaryEvent | FrozenCounterEvent | CounterEvent
 
 #: The largest index an event block can prefix an object with, the wider of the
 #: two qualifiers this outstation accepts being sixteen bits.
@@ -178,6 +189,7 @@ class EventBuffers:
         self._buffers = {cls: _ClassBuffer(capacity) for cls in EventClass}
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
+        self._last_counter: dict[int, CounterPoint] = {}
         self._overflow_generation = 0
         self._recorded = 0
         self._analog_latest_only = analog_latest_only
@@ -409,6 +421,40 @@ class EventBuffers:
     def prime_binary(self, index: int, point: BinaryPoint) -> None:
         """Note where a binary point stands, without reporting it."""
         self._last_binary[self._checked_index(index)] = point
+
+    def prime_counter(self, index: int, point: CounterPoint) -> None:
+        """Note a counter's flags, without reporting them."""
+        self._last_counter[self._checked_index(index)] = point
+
+    def record_counter(
+        self,
+        index: int,
+        point: CounterPoint,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+    ) -> CounterEvent | None:
+        """Record a counter reading, returning the event it generated, if any.
+
+        Only a change in the flags is an event. IEEE 1815-2012 11.9.5.2 has a
+        device that supports counter events generate one whenever a flag
+        changes, and leaves events for a change in value optional; this
+        library reports none for a value change. Each change is kept, as
+        binary changes are, because the sequence of flags is the information.
+        """
+        self._checked_index(index)
+        previous = self._last_counter.get(index)
+        self._last_counter[index] = point
+        if previous is None or previous.flags == point.flags:
+            return None
+        event = CounterEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
+        self._buffer(event_class, event)
+        return event
 
     def record_frozen_counter(
         self,

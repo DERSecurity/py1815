@@ -4,7 +4,8 @@ Binary inputs and their events, counters and frozen counters, analog inputs
 and their events, requests for several objects at once, point ranges, specific
 variations, and class assignment. The device is tested as a subset level 2
 outstation; where the procedures let a level 2 device either do what level 3
-requires or refuse it, the tests say which this one does.
+requires or refuse it, the tests say which this one does. Counter events exist
+only from level 3, so their sections are carried out at level 3.
 """
 
 from __future__ import annotations
@@ -46,6 +47,10 @@ RANGES = {Q_RANGE_8, Q_RANGE_16}
 INDEXED = {Q_INDEX_8, Q_INDEX_16}
 NO_POINTS = IIN2_OBJECT_UNKNOWN | IIN2_PARAMETER
 COUNTS = pytest.mark.parametrize("qualifier", [Q_COUNT_8, Q_COUNT_16], ids=["07", "08"])
+
+
+def _hex(octets: bytes) -> str:
+    return octets.hex(" ").upper()
 
 
 def _toggles(dut: Dut, indices: list[int]) -> list[int]:
@@ -529,6 +534,60 @@ class TestBinaryCounterEvents:
         fragment = dut.master.read(header(22, 0)).fragment
         assert fragment.is_null
 
+    # From Level 3 a counter event is raised when a counter's flags change (D124), so these
+    # sections generate events by taking counters offline and back.
+
+    def test_8_17_2_3_counter_events_qualifier_06(self):
+        dut = Dut(level=3)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+        _counter_quality(dut, [0, 1], Quality.COMM_LOST)
+        fragment = dut.master.read(header(22, 0)).fragment
+        assert fragment.con, "not confirmed"
+        events = fragment.objects
+        assert [(o.variation, o.index, o.flags, o.value) for o in events] == [
+            (1, 0, 0x04, 5),
+            (1, 1, 0x04, 5),
+        ]
+        assert {o.qualifier for o in events} <= INDEXED
+        _counter_quality(dut, [0], Quality.GOOD)
+        again = dut.master.read(header(22, 0)).fragment.objects
+        assert [(o.index, o.flags) for o in again] == [(0, 0x04), (1, 0x04), (0, FLAG_ONLINE)]
+
+    @COUNTS
+    def test_8_17_2_4_and_5_counter_events_limited_quantity(self, qualifier):
+        dut = Dut(level=3)
+        _counter_quality(dut, [0, 1, 2], Quality.COMM_LOST)
+        first = dut.master.read(header(22, 0, qualifier, 2)).fragment
+        assert [o.index for o in first.objects] == [0, 1] and first.con
+        dut.master.confirm(first)
+        rest = dut.master.read(header(22, 0, qualifier, 5)).fragment
+        assert [o.index for o in rest.objects] == [2] and rest.con
+        dut.master.confirm(rest)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+
+    def test_8_17_2_6_counter_events_without_confirm(self):
+        dut = Dut(level=3)
+        _counter_quality(dut, [0], Quality.COMM_LOST)
+        unconfirmed = dut.master.read(header(22, 0)).fragment
+        assert unconfirmed.con
+        assert dut.master.listen().silent, "not sent again"
+        _counter_quality(dut, [0], Quality.GOOD)
+        _counter_quality(dut, [2], Quality.COMM_LOST)
+        fragment = dut.master.read(header(22, 0)).fragment
+        assert [(o.index, o.flags) for o in fragment.objects] == [
+            (0, 0x04),
+            (0, FLAG_ONLINE),
+            (2, 0x04),
+        ]
+        dut.master.confirm(fragment)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+
+
+def _counter_quality(dut: Dut, indices: list[int], quality: Quality) -> None:
+    for index in indices:
+        dut.quality[(Kind.CTR, index)] = quality
+    dut.outstation.poll()
+
 
 class TestAnalogInputs:
     def test_8_18_2_2_a_device_with_no_analog_inputs(self):
@@ -774,6 +833,26 @@ class TestSpecificEventVariations:
             fragment = dut.master.read(header(22, variation)).fragment
             assert not fragment.body, "none are generated, so none are returned"
             assert not fragment.iin2 & IIN2_BAD_FUNCTION
+
+    def test_8_25_2_3_counter_events_at_level_3(self):
+        # Steps 1 and 7 generate two events with normal flags: two counters are taken
+        # offline, those events are read and confirmed, and the counters are restored.
+        dut = Dut(level=3)
+        for variation, confirm in ((1, True), (2, False)):
+            _counter_quality(dut, [0, 1], Quality.COMM_LOST)
+            dut.master.empty_events()
+            _counter_quality(dut, [0, 1], Quality.GOOD)
+            fragment = dut.master.read(header(22, variation)).fragment
+            # A read of variation 2 is answered in variation 1: the counters have 32 bits.
+            assert _hex(fragment.body) == "16 01 17 02 00 01 05 00 00 00 01 01 05 00 00 00"
+            assert fragment.con
+            if confirm:
+                dut.master.confirm(fragment)
+        assert dut.master.listen().silent, "not sent again"
+        again = dut.master.read(header(22, 2)).fragment
+        assert len(again.of(22)) == 2
+        dut.master.confirm(again)
+        assert dut.master.read(header(22, 0)).fragment.is_null
 
     def test_8_25_2_4_frozen_counter_events(self):
         dut = Dut()

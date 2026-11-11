@@ -30,6 +30,8 @@ from ied_harness import (
 )
 
 from py1815.profile import device_profile
+from py1815.profile.binding import Quality
+from py1815.profile.model import Kind
 
 FREEZE_ALL = header(20, 0)
 
@@ -203,6 +205,33 @@ class TestBufferOverflow:
         dut.master.confirm(one)
         next_one = dut.master.read(classes(1, qualifier=Q_COUNT_8, count=1)).fragment
         assert len(next_one.of(2)) == 1
+        assert not next_one.iin2 & IIN2_OVERFLOW, "room was made, and the master was told"
+        dut.master.confirm(next_one)
+
+    def test_8_6_6_2_3_counter_events_at_level_3(self):
+        # A counter event is raised by a flag change (D124), so counter 0 goes offline and
+        # back until the class 3 buffer holds five.
+        dut = Dut(level=3, capacity=5)
+        dut.master.empty_events()
+
+        def flip() -> None:
+            lost = dut.quality.pop((Kind.CTR, 0), None) is None
+            if lost:
+                dut.quality[(Kind.CTR, 0)] = Quality.COMM_LOST
+            dut.outstation.poll()
+
+        for _ in range(5):
+            flip()
+        full = dut.master.read(classes(3)).fragment
+        assert len(full.of(22)) == 5
+        assert not full.iin2 & IIN2_OVERFLOW, "full, and nothing lost yet"
+        flip()
+        one = dut.master.read(classes(3, qualifier=Q_COUNT_8, count=1)).fragment
+        assert len(one.of(22)) == 1
+        assert one.iin2 & IIN2_OVERFLOW
+        dut.master.confirm(one)
+        next_one = dut.master.read(classes(3, qualifier=Q_COUNT_8, count=1)).fragment
+        assert len(next_one.of(22)) == 1
         assert not next_one.iin2 & IIN2_OVERFLOW, "room was made, and the master was told"
         dut.master.confirm(next_one)
 

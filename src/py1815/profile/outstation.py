@@ -691,7 +691,9 @@ class DerOutstation:
         return AnalogPoint(raw, flags)
 
     def _counter(self, point: Point) -> CounterPoint:
-        reading = self._reading(point)
+        return self._counter_of(point, self._reading(point))
+
+    def _counter_of(self, point: Point, reading: Reading) -> CounterPoint:
         flags = {
             Quality.GOOD: CounterQuality.ONLINE,
             Quality.COMM_LOST: CounterQuality.COMM_LOST,
@@ -981,7 +983,33 @@ class DerOutstation:
                 timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
+        if self.at_least(SubsetLevel.LEVEL_3):
+            buffered += self._poll_counters(now)
         self._primed = True
+        return buffered
+
+    def _poll_counters(self, now: int) -> int:
+        """Buffer a counter event for each counter whose flags changed (D124).
+
+        A counter reports in the class its frozen counter events use. A
+        change in value alone raises no event.
+        """
+        buffered = 0
+        for point in self._served[Kind.CTR]:
+            reported = self._classes[point.address]
+            if not reported:
+                continue
+            reading = self._reading(point)
+            counter = self._counter_of(point, reading)
+            if not self._primed:
+                self.events.prime_counter(point.index, counter)
+            elif self.events.record_counter(
+                point.index,
+                counter,
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
         return buffered
 
     # -------------------------------------------------------------- freezes

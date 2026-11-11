@@ -242,7 +242,14 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     10: "Frozen Counter - 16-bit without flag",
                 },
             )
-        if facts.events:
+        if facts.events and outstation.at_least(SubsetLevel.LEVEL_3):
+            # A flag change raises a counter event (D124). Variation 2 is read
+            # and answered in variation 1.
+            events(22, "Counter Event", {1: "Counter Event - 32-bit with flag"})
+            rows.append(
+                Row(22, 2, "Counter Event - 16-bit with flag", request=(READ, tuple(_ALL + _COUNT)))
+            )
+        elif facts.events:
             for variation, description in (
                 (0, "Counter Event - any variation"),
                 (1, "Counter Event - 32-bit with flag"),
@@ -377,6 +384,8 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                         response=(UNSOLICITED_RESPONSE, (0x07,)),
                     )
                 )
+        if served[Kind.CTR] and outstation.at_least(SubsetLevel.LEVEL_3):
+            rows.append(Row(22, 1, "Counter Event - 32-bit with flag", response=unsolicited))
         if served[Kind.CTR] and not outstation.level2:
             rows.append(
                 Row(
@@ -821,6 +830,16 @@ def _database(
             )
         )
     if served[Kind.CTR]:
+        # A flag change raises a counter event and a value change does not
+        # (D124), so value-change reporting stays "no".
+        counter_events = (
+            [
+                _both("defaultCounterEventVariation", _variation(1)),
+                _both("counterEventReportingMode", ["allEvents"]),
+            ]
+            if outstation.at_least(SubsetLevel.LEVEL_3)
+            else []
+        )
         groups.append(
             (
                 "counterGroup",
@@ -829,7 +848,9 @@ def _database(
                         "configuration",
                         [
                             _both("defaultCounterStaticVariation", _variation(1)),
+                            *counter_events[:1],
                             _both("counterClass0ResponseMode", ["always"]),
+                            *counter_events[1:],
                             _both("defaultFrozenCounterStaticVariation", _variation(frozen)),
                             *(
                                 []
@@ -1025,7 +1046,10 @@ def _points(
         items: list[Any] = [
             *_names(point),
             ("countersIncludedInClass0", _included(point)),
-            ("counterEventClass", "none"),
+            (
+                "counterEventClass",
+                event_class(point) if outstation.at_least(SubsetLevel.LEVEL_3) else "none",
+            ),
             ("frozenCounterExists", point.frozen),
         ]
         if point.frozen:

@@ -94,6 +94,7 @@ from py1815.control import (
 from py1815.events import (
     AnalogEvent,
     BinaryEvent,
+    CounterEvent,
     Event,
     EventBuffers,
     EventClass,
@@ -239,8 +240,9 @@ _CLEARING_FREEZES = frozenset({FunctionCode.FREEZE_CLEAR, FunctionCode.FREEZE_CL
 DEFAULT_CONFIRM_TIMEOUT = 10.0
 
 #: The variations an event group may be read in by name (D46). Zero asks for
-#: this session's default. Group 22, counter change events, is never
-#: buffered, so its entries are variations that are answered with nothing.
+#: this session's default. Group 22, counter change events, holds events
+#: only when the outstation records them (D124); variation 2 is answered in
+#: variation 1.
 _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
     GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2, 3}),
     GROUP_ANALOG_INPUT_EVENT: frozenset({0, 1, 2, 3, 4}),
@@ -310,14 +312,14 @@ _TIMED_ANALOG_EVENTS = frozenset(
 )
 
 #: The event groups a master may read by name instead of by class, and the
-#: kind of event each one selects (D46). Group 22 is the counter change event,
-#: which this outstation never buffers: reading it is answered, with nothing,
-#: because an empty answer is what a group with no events in it holds.
+#: kind of event each one selects (D46). Group 22 is the counter change event.
+#: An outstation that records none answers a read of it with nothing, because
+#: an empty answer is what a group with no events in it holds.
 _EVENT_GROUPS: dict[int, type | None] = {
     GROUP_BINARY_INPUT_EVENT: BinaryEvent,
     GROUP_ANALOG_INPUT_EVENT: AnalogEvent,
     GROUP_FROZEN_COUNTER_EVENT: FrozenCounterEvent,
-    GROUP_COUNTER_EVENT: None,
+    GROUP_COUNTER_EVENT: CounterEvent,
 }
 
 #: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
@@ -343,6 +345,9 @@ _EVENT_SIZES: dict[tuple[int, int], int] = {
     # Answered in variation 1 when a master reads variation 2 (D108).
     (GROUP_FROZEN_COUNTER_EVENT, 2): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
+    # Counter events travel in variation 1 whichever is read (D124).
+    (GROUP_COUNTER_EVENT, 1): 5,
+    (GROUP_COUNTER_EVENT, 2): 5,
     **{
         (GROUP_ANALOG_INPUT_EVENT, int(variation)): size
         for variation, size in ANALOG_EVENT_SIZES.items()
@@ -3256,7 +3261,9 @@ class Session:
             1 + _EVENT_SIZES[(GROUP_ANALOG_INPUT_EVENT, int(self._analog_event_variation))],
         )
         defaults = min(
-            defaults, 1 + _EVENT_SIZES[(GROUP_FROZEN_COUNTER_EVENT, self._frozen_event_variation)]
+            defaults,
+            1 + _EVENT_SIZES[(GROUP_FROZEN_COUNTER_EVENT, self._frozen_event_variation)],
+            1 + _EVENT_SIZES[(GROUP_COUNTER_EVENT, 1)],
         )
         if self._events is not None and self._events.holds_unsynchronized:
             # Those travel with relative time, which is smaller than the default.
@@ -3317,6 +3324,13 @@ class Session:
                     if variation == FROZEN_COUNTER_EVENT_VARIATION
                     else encode_counter(event.point)
                 )
+            elif isinstance(event, CounterEvent):
+                # Variation 1 for a class read and for variations 0, 1 and 2:
+                # the counter has 32 bits, as IED procedure 8.25.2.3 step 9
+                # allows for a read of variation 2 (D124).
+                group = GROUP_COUNTER_EVENT
+                variation = 1
+                encoded = encode_counter(event.point)
             else:
                 group = GROUP_BINARY_INPUT_EVENT
                 variation = named or int(_BINARY_EVENT_VARIATION)

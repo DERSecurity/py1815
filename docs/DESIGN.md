@@ -1946,6 +1946,28 @@ variation, and a frozen counter event in variation 1 in class polls and unsolici
 variations with time. A freeze already buffered a frozen counter event at every level but an
 explicit Level 2 (D55), so Level 3 needed no new event generation.
 
+**D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in
+its value does not.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a
+device that supports them raise one whenever any of a counter's flags change; reporting a
+change in value is left to the device. TB2016-003b Table 12-49 footnote o says the same of
+class polls, and Table 12-23 lists reads of group 22 variations 1 and 2 (qualifiers 0x06,
+0x07, 0x08) from Level 3. At `at_least(3)` each poll of the inputs compares a counter's
+flags with the last reading and buffers a group 22 event holding the current count and the
+new flags, in the class the counter's frozen counter events use (the IEEE 1815.2 tables give a counter
+no class of its own, and an event policy sets both). A counter with no class raises none.
+Every flag change is kept, as binary changes are, since the sequence is the information.
+Class polls, unsolicited responses and reads of group 22 variation 0, 1 or 2 report it in
+variation 1, 32 bits with flag: the counters have 32 bits, and IED Certification Procedure
+3.1 rev 1 section 8.25.2.3 step 9 takes variation 1 for a variation 2 read from such a
+device. The variations with time (5 and 6) are optional and stay refused. This replaces,
+from Level 3, the sentence of D46 that has counter change events never buffered. Level 2
+and the default buffer none, as before; whether footnote o already binds Level 2 was
+settled by the maintainer in favor of leaving Level 2 unchanged. The Device Profile
+gives each counter's event class, a default counter event variation of 1, all events
+reported, and `reportValueChangeCounterEvents` of `no`.
+*Trade-off:* IED procedures 8.17 and 8.25.2.3 are written for counters whose events follow
+their value, so a tester generates these events by changing a counter's quality.
+
 ## Open
 
 - Contribution terms: whether to require a DCO, a CLA, or neither.

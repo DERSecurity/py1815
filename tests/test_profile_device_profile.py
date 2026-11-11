@@ -867,6 +867,12 @@ class TestAgainstTheSchema:
         root = _document(simulation, unsolicited=True, unsolicited_retries=retries)
         assert _validate(root) == []
 
+    @pytest.mark.parametrize("level", [3, 4])
+    def test_it_validates_at_levels_3_and_4(self, level):
+        built = der.build(load.resolve(for_reference_der(), Composition()), level=level)
+        root = device_profile.build(built.outstation, built.outstation.session(unsolicited=True))
+        assert _validate(root) == []
+
     def test_a_monitor_validates(self):
         outstation, _ = _monitor()
         assert _validate(device_profile.build(outstation, outstation.session())) == []
