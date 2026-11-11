@@ -547,9 +547,15 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     )
                 )
         if served[Kind.DBI]:
-            for variation, kind in ((2, "absolute"), (3, "relative")):
-                description = f"Double-bit Binary Input Event - with {kind} time"
-                rows.append(Row(4, variation, description, response=unsolicited))
+            rows += [
+                Row(
+                    4,
+                    variation,
+                    f"Double-bit Binary Input Event - with {when} time",
+                    response=unsolicited,
+                )
+                for variation, when in ((2, "absolute"), (3, "relative"))
+            ]
         if served[Kind.CTR] and outstation.at_least(SubsetLevel.LEVEL_3):
             rows.append(Row(22, 1, "Counter Event - 32-bit with flag", response=unsolicited))
         if served[Kind.CTR] and not outstation.level2:

@@ -1069,6 +1069,7 @@ def _included(word: str | None) -> bool | None:
 #: and the type a master reads it as.
 _LISTS = {
     "binaryInputPoints": ("binaryInput", PointType.BINARY_INPUT),
+    "doubleBitInputPoints": ("doubleBitInput", PointType.DOUBLE_BIT_INPUT),
     "binaryOutputPoints": ("binaryOutput", PointType.BINARY_OUTPUT),
     "counterPoints": ("counter", PointType.COUNTER),
     "analogInputPoints": ("analogInput", PointType.ANALOG_INPUT),

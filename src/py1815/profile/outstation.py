@@ -396,14 +396,17 @@ class DerOutstation:
         self._sources = self._resolve_sources()
         #: For each input of a function, the output that enables the function.
         self._gates: dict[Address, Address] = self._function_gates() if disabled_offline else {}
+        # Double-bit inputs are a Level 4 object (TB2016-003b Table 12-7): below it
+        # a read of group 3 or 4 names an unknown object, and the points are in no
+        # class 0 or class poll response.
         self._served: dict[Kind, list[Point]] = {
-            kind: [p for p in point_map.of(kind) if self._is_served(p)] for kind in Kind
+            kind: (
+                [p for p in point_map.of(kind) if self._is_served(p)]
+                if kind is not Kind.DBI or self.at_least(SubsetLevel.LEVEL_4)
+                else []
+            )
+            for kind in Kind
         }
-        if not self.at_least(SubsetLevel.LEVEL_4):
-            # Double-bit inputs are a Level 4 object (TB2016-003b Table 12-7):
-            # below it a read of group 3 or 4 names an unknown object, and the
-            # points are in no class 0 or class poll response.
-            self._served[Kind.DBI] = []
         self._by_index: dict[Kind, dict[int, Point]] = {
             kind: {p.index: p for p in points} for kind, points in self._served.items()
         }

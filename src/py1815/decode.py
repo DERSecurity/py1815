@@ -64,7 +64,7 @@ class _Time(Enum):
 
 
 @dataclass(frozen=True)
-class Layout:
+class Layout:  # pylint: disable=too-many-instance-attributes
     """How one object of a group and variation is laid out."""
 
     #: The point type the value belongs to, or None for an object that is not

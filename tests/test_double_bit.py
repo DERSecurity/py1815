@@ -30,8 +30,11 @@ from ied_harness import (
     header,
 )
 from profile_fixtures import document, row
+from test_profile_device_profile_view import column, table
 
-from py1815.profile import device_profile, load
+from py1815.decode import PointType
+from py1815.master.profile import read_device_profile
+from py1815.profile import device_profile, device_profile_view, load
 from py1815.profile.binding import Binding, Quality, Reading
 from py1815.profile.device_profile import NAMESPACE
 from py1815.profile.model import Composition, Kind
@@ -493,6 +496,19 @@ class TestTheDeviceProfile:
         }
         assert Q_INDEX_8 in qualifiers[(3, 2)]
         assert Q_INDEX_8 not in qualifiers[(3, 1)]
+
+    def test_the_master_reads_the_declared_points_with_their_classes(self):
+        text = device_profile.render(_profile(4))
+        declared = [d for d in read_device_profile(text) if d.type is PointType.DOUBLE_BIT_INPUT]
+        assert [(d.index, d.name, d.event_class) for d in declared] == [
+            (index, f"Valve {index}", cls) for index, cls in CLASSES.items()
+        ]
+
+    def test_the_console_view_lists_the_points_as_a_table(self):
+        document = device_profile_view.read(device_profile.render(_profile(4)))
+        points = table(document, "Data points list", "Double bit input points")
+        assert column(points, "Index") == [str(index) for index in CLASSES]
+        assert column(points, "Name") == [f"Valve {index}" for index in CLASSES]
 
 
 SCHEMA = pathlib.Path(__file__).resolve().parent.parent / "schema" / device_profile.SCHEMA_FILE

@@ -406,6 +406,18 @@ _OUTPUT_EVENT_GROUPS: dict[int, type | None] = {
     GROUP_ANALOG_OUTPUT_COMMAND_EVENT: None,
 }
 
+#: For each kind of two-state event (a binary input and a double-bit input), its
+#: group and the encoders for its absolute-time and relative-time variations. Their
+#: events are timed, grouped and put behind a common time of occurrence alike.
+_TWO_STATE_EVENTS: dict[type, tuple[int, Callable[..., bytes], Callable[..., bytes]]] = {
+    BinaryEvent: (GROUP_BINARY_INPUT_EVENT, encode_binary_event, encode_binary_event_relative),
+    DoubleBitEvent: (
+        GROUP_DOUBLE_BIT_INPUT_EVENT,
+        encode_double_bit_event,
+        encode_double_bit_event_relative,
+    ),
+}
+
 #: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
 #: the class holds; the count qualifiers ask for at most that many, which is how
 #: a master paces a buffer it does not want in one fragment.
@@ -3607,11 +3619,7 @@ class Session:
             elif isinstance(event, (CounterEvent, BinaryOutputEvent, AnalogOutputEvent)):
                 group, variation, encoded = _encode_change_event(event, named)
             else:
-                group = (
-                    GROUP_DOUBLE_BIT_INPUT_EVENT
-                    if isinstance(event, DoubleBitEvent)
-                    else GROUP_BINARY_INPUT_EVENT
-                )
+                group, encode_event, encode_relative = _TWO_STATE_EVENTS[type(event)]
                 variation = named or int(_BINARY_EVENT_VARIATION)
                 synchronized = event.synchronized
                 if variation == BinaryEventVariation.WITH_TIME and not synchronized:
@@ -3630,22 +3638,14 @@ class Session:
                     else:
                         base = event.timestamp_ms
                         prefix = common_time(base, synchronized=synchronized)
-                    relative = event.timestamp_ms - base
-                    if isinstance(event, DoubleBitEvent):
-                        encoded = encode_double_bit_event_relative(event.point, relative)
-                    else:
-                        encoded = encode_binary_event_relative(event.point, relative)
+                    encoded = encode_relative(event.point, event.timestamp_ms - base)
                 else:
                     timed = variation == BinaryEventVariation.WITH_TIME
-                    stamp = event.timestamp_ms if timed else None
-                    if isinstance(event, DoubleBitEvent):
-                        encoded = encode_double_bit_event(
-                            event.point, with_time=timed, timestamp_ms=stamp
-                        )
-                    else:
-                        encoded = encode_binary_event(
-                            event.point, with_time=timed, timestamp_ms=stamp
-                        )
+                    encoded = encode_event(
+                        event.point,
+                        with_time=timed,
+                        timestamp_ms=event.timestamp_ms if timed else None,
+                    )
             last = blocks[-1] if blocks else None
             if (
                 last is not None
