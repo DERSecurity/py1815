@@ -58,10 +58,22 @@ _INDEXED = [0x17, 0x28]
 
 READ, WRITE, SELECT, OPERATE, DIRECT, DIRECT_NR = 1, 2, 3, 4, 5, 6
 FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR = 7, 8, 9, 10
-ENABLE_UNSOLICITED, DISABLE_UNSOLICITED = 20, 21
+ENABLE_UNSOLICITED, DISABLE_UNSOLICITED, ASSIGN_CLASS = 20, 21, 22
 RECORD_CURRENT_TIME = 24
 RESPONSE = 129
 UNSOLICITED_RESPONSE = 130
+
+#: The groups an ASSIGN_CLASS request may name, as the implementation table words them.
+_ASSIGNABLE_NAMES = {
+    1: "Binary Input",
+    10: "Binary Output",
+    12: "Binary Output Command",
+    20: "Counter",
+    21: "Frozen Counter",
+    30: "Analog Input",
+    40: "Analog Output Status",
+    41: "Analog Output",
+}
 
 #: The schema spells variation numbers out.
 _NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 9: "nine"}
@@ -429,6 +441,22 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 response=(RESPONSE, (0x00,)),
             )
         )
+    if facts.assign_class:
+        # A class header with variation 1 turns events off. The groups named
+        # after it are the points whose events move (IEEE 1815-2012 Table 4-12).
+        for variation in (1, 2, 3, 4):
+            rows.append(
+                Row(
+                    60,
+                    variation,
+                    f"Class Objects - class {variation - 1} data",
+                    request=(ASSIGN_CLASS, tuple(_ALL)),
+                )
+            )
+        select = tuple(_ALL + _RANGE + _INDEXED)
+        for group in outstation.assignable_groups():
+            name = _ASSIGNABLE_NAMES[group]
+            rows.append(Row(group, 0, f"{name} - any variation", request=(ASSIGN_CLASS, select)))
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, delay measurement, and the
     # two that depend on how the session was built. Enable and disable

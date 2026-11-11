@@ -309,9 +309,13 @@ included, as the paragraph above says: the line is between a master that reads a
 not, not between one that reads events and one that reads static data. A master that never reads at
 all has nothing to retire, and nothing it would do with the answer.
 
-**D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller records the event, and
-under **D6** this library holds no point map for a master to reassign. Accepting the request would
-mean either ignoring it or inventing the map the design exists to keep out.
+**D24 -- `ASSIGN_CLASS` is accepted from Subset Level 3.** TB2016-003b Table 12-49 and the
+group tables require it of Levels 3 and 4, so an outstation held to either answers it
+(**D110**, **D111**). The earlier decision refused it because the library held no point map
+for a master to reassign. `DerOutstation` now loads a map the caller supplies, and the map gives
+each point its starting class, so the assignment has a place to live. **D6** still holds: the
+library embeds no map. A session built without a class provider, and so a Level 2 or default
+outstation, keeps refusing function code 22 with `IIN2.0`.
 
 **D25 -- A repeated request is replayed, not rebuilt, and a repeat is one that matches octet for
 octet.** A master that did not receive a response repeats the request. The outstation holds the
@@ -1821,6 +1825,58 @@ variation, and a frozen counter event in variation 1 in class polls and unsolici
 (`Session(frozen_counter_event_variation=1)`). Level 4 and the default keep the profile's
 variations with time. A freeze already buffered a frozen counter event at every level but an
 explicit Level 2 (D55), so Level 3 needed no new event generation.
+
+**D110 -- An assignment changes the class of events recorded after it, lasts until a
+restart, and leaves buffered events where they are.** The class a point reports in is held
+in the outstation, started from the point map and the event policy, and an ASSIGN_CLASS request
+changes it. Three questions have answers in the standard and the procedure, and the
+outstation follows them.
+
+- *Events already buffered.* An event takes its class when it is created, and a point that
+  is reassigned does not have to move events already buffered (IEEE 1815-2012 4.4.14).
+  IED Certification Procedure 3.1 rev 1, 8.26.1, allows either, provided each is reported in
+  the old or the new class. They stay in the class they were recorded in, so no event is
+  moved, reordered or lost by a request. A change the sources made before the request, which
+  the outstation has not yet scanned, is recorded first under the old class, so the request
+  does not move the point's last change into the new class.
+- *Class 0.* A point assigned to class 0 raises no new events (4.4.14; 8.26.1). It stays in
+  a class 0 read, because static data is always class 0 and cannot be reassigned. Events it
+  buffered earlier may be reported or deleted (8.26.1); they are reported. When the point is
+  assigned a class again, its next change is measured from its value at that moment, so a
+  change that happened while it reported nothing is not reported afterwards. Procedure steps
+  46 to 48 check this.
+- *Restart.* A device that does not keep assignments in non-volatile memory returns to its
+  default assignments after a restart (4.4.14). This outstation keeps none, so a cold restart
+  and a new process both start from the point map's classes. A master sends the assignments
+  again, as TB2016-003b expects of a master that assigns classes. The Device Profile does not
+  list assign class among the settings preserved through a restart.
+
+*Trade-off:* a master that reassigns a busy point sees its old events under the old class
+until it has read them. 4.4.14 advises polling all three event classes straight after an
+assign class request for that reason.
+
+**D111 -- The session parses the request and a provider applies it as one unit.**
+`Session` takes a `class_provider` beside its freeze and control providers, and keeps no
+point map. It reads each group 60 header (variation 1 to 4 for class 0 to 3, qualifier 0x06)
+and the point headers up to the next one, and hands every set of the request to the provider
+together. `DerOutstation` implements the provider and offers it from Level 3. The provider
+checks every set before it changes any point, so a refused request changes nothing, and
+the answer is a null response whose `IIN2` says why a refusal happened.
+
+- Level 3 takes groups 1, 20, 21 and 30, and Level 4 adds the output status groups 10 and
+  40 and the command groups 12 and 41, which name the output they command (Table 4-12;
+  TB2016-003b). Points are named by range, by "all" or by index list, as a read names them.
+  Group 3 joins when double-bit inputs are served.
+- Any other group is an unknown object (`IIN2.1`). A point that is not there, or a range that
+  runs past the last point, is a parameter error (`IIN2.2`), as in a read.
+- A header before the first class header would assign points to no class. TB2021-001 makes that
+  optional and the outstation does not offer it, so it is a parameter error, as are a class
+  header with another qualifier and a group 60 variation that names no class.
+- A set that gives a class to a point that cannot report events leaves that point alone, so
+  that "all" can be used without naming the points the tables keep static. A set that gives it
+  class 0 is always accepted. Outputs record the class they are given; they generate no
+  events yet.
+- Where sets overlap, the later one wins.
 
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in
 its value does not.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a

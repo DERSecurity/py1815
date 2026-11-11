@@ -27,6 +27,7 @@ import math
 import warnings
 import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from py1815.application import CLASS_GROUP, RESPONSE_HEADER_SIZE, ObjectHeader, QualifierCode
@@ -71,7 +72,7 @@ from py1815.profile.binding import Binding, Output, Quality, Reader, Reading
 from py1815.profile.coverage import Coverage, Entry, Source
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
 from py1815.profile.policy import EventPolicy, EventRule
-from py1815.session import Control, ParameterError, Session, UnknownObject
+from py1815.session import ClassAssignment, Control, ParameterError, Session, UnknownObject
 from py1815.subset import SubsetLevel
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,22 @@ _GROUP_KINDS = {
     GROUP_FROZEN_COUNTER: Kind.CTR,
     GROUP_ANALOG_INPUT: Kind.AI,
     GROUP_ANALOG_OUTPUT_STATUS: Kind.AO,
+}
+
+#: The groups an ASSIGN_CLASS request may name, each with the group whose points
+#: it selects and the subset level that requires it. IEEE 1815-2012 Table 4-12
+#: names the static group of the points whose events move, and TB2016-003b
+#: ticks groups 1, 20, 21 and 30 for Level 3 and the output groups for Level 4.
+#: A command group selects the output it commands.
+_ASSIGNABLE_GROUPS = {
+    GROUP_BINARY_INPUT: (GROUP_BINARY_INPUT, SubsetLevel.LEVEL_3),
+    GROUP_COUNTER: (GROUP_COUNTER, SubsetLevel.LEVEL_3),
+    GROUP_FROZEN_COUNTER: (GROUP_FROZEN_COUNTER, SubsetLevel.LEVEL_3),
+    GROUP_ANALOG_INPUT: (GROUP_ANALOG_INPUT, SubsetLevel.LEVEL_3),
+    GROUP_BINARY_OUTPUT_STATUS: (GROUP_BINARY_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+    GROUP_BINARY_OUTPUT_COMMAND: (GROUP_BINARY_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+    GROUP_ANALOG_OUTPUT_STATUS: (GROUP_ANALOG_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+    GROUP_ANALOG_OUTPUT_COMMAND: (GROUP_ANALOG_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
 }
 
 #: The groups a class 0 read is answered with, in the order they are sent.
@@ -214,8 +231,8 @@ class DerOutstation:
                 time, analog output status in 16 bits, a freeze buffers no
                 event, and freeze-and-clear clears. A master may still name
                 the fuller variations outright. Levels 3 and 4 serve the
-                profile's additions, as the default does, and the Device
-                Profile claims the level. None, the default, claims Level 2
+                profile's additions, as the default does, accept ASSIGN_CLASS
+                (D110), and the Device Profile claims the level. None, the default, claims Level 2
                 and serves the profile's additions, which is what the DER
                 profile asks for when no level is chosen.
             level2: Deprecated; use ``level=2``. True means ``level=2`` and
@@ -323,7 +340,11 @@ class DerOutstation:
         #: Each event-reporting analog input's deadband, in transmitted units.
         #: One absent from here reports every change of its transmitted value.
         self._deadbands: dict[int, float] = {}
+        self._event_policy = event_policy
         self._apply_policy(event_policy)
+        #: The class each point had at startup, which a restart or a reset
+        #: returns every assignment to.
+        self._initial_classes = dict(self._classes)
 
         if strict:
             missing = sorted(
@@ -1012,6 +1033,95 @@ class DerOutstation:
                 buffered += 1
         return buffered
 
+    # ----------------------------------------------------- class assignment
+
+    def assign_class(self, assignments: Sequence[ClassAssignment]) -> None:
+        """Move points between event classes, or turn their events off (D110).
+
+        Every set is checked before any is applied, so a request that names
+        something unassignable changes nothing. A set applies to the points its
+        headers select; where sets overlap, the later one wins. A point that
+        cannot report events, such as a "supports" input, is left as it is by a
+        set that gives it a class, so a range or an "all" header can be used
+        without naming the points that never had events.
+
+        Events already buffered keep the class they were recorded in and are
+        reported there. Changes the sources made before the request are
+        recorded first, under the classes they had. Only changes after the
+        request use the new class (IEEE 1815-2012 4.4.14).
+
+        Raises:
+            UnknownObject: A header names a group this level does not assign.
+            ParameterError: A header names a point that is not there.
+        """
+        chosen: dict[Address, int] = {}
+        for assignment in assignments:
+            for header in assignment.headers:
+                for point in self._assignable(header):
+                    if assignment.event_class and not self._can_report(point):
+                        continue
+                    chosen[point.address] = assignment.event_class
+        self._set_classes(chosen)
+
+    def reset_classes(self) -> None:
+        """Return every point to the class it had at startup."""
+        self._set_classes(
+            {address: self._initial_classes.get(address, 0) for address in self._classes}
+        )
+
+    def assignable_groups(self) -> list[int]:
+        """The groups an ASSIGN_CLASS request may name at this level, in order."""
+        return sorted(
+            group
+            for group, (selecting, level) in _ASSIGNABLE_GROUPS.items()
+            if self.at_least(level) and self._points(selecting)
+        )
+
+    def _assignable(self, header: ObjectHeader) -> list[Point]:
+        """The served points an ASSIGN_CLASS header names."""
+        group, level = _ASSIGNABLE_GROUPS.get(header.group, (None, None))
+        if group is None or level is None or not self.at_least(level):
+            raise UnknownObject(f"group {header.group} cannot be assigned a class")
+        selecting = replace(header, group=group)
+        if header.qualifier in _INDEXED:
+            return self._named(selecting)
+        return self._selected(selecting)
+
+    def _can_report(self, point: Point) -> bool:
+        """Whether a point may be given a class that reports events."""
+        if point.kind.is_output:
+            return True
+        if self._initial_classes.get(point.address, 0):
+            return True
+        if point.kind is Kind.CTR:
+            return point.frozen and point.in_class_0
+        return point.event_class in (1, 2, 3)
+
+    def _set_classes(self, chosen: Mapping[Address, int]) -> None:
+        """Apply new classes, giving a point that starts reporting a fresh baseline."""
+        if self._primed:
+            self.poll()
+        for address, event_class in chosen.items():
+            if self._classes.get(address, 0) == event_class:
+                continue
+            self._classes[address] = event_class
+            if event_class and self._primed:
+                self._rebaseline(self._map.points[address])
+        logger.info("profile: %d point(s) changed event class", len(chosen))
+
+    def _rebaseline(self, point: Point) -> None:
+        """Measure a point's next change from its value now, not from when it last reported."""
+        if point.kind is Kind.BI:
+            self.events.prime_binary(point.index, self._binary(point))
+        elif point.kind is Kind.AI:
+            self.events.prime_analog(point.index, self._analog(point))
+            if point.index not in self._deadbands:
+                default = self._event_policy.defaults.get(point.kind)
+                if point.index in self._binding.deadbands:
+                    self._deadbands[point.index] = self._binding.deadbands[point.index]
+                elif default is not None and default.deadband is not None:
+                    self._deadbands[point.index] = _transmitted(point, default.deadband)
+
     # -------------------------------------------------------------- freezes
 
     def freeze(self, headers: Sequence[ObjectHeader], *, clear: bool) -> None:
@@ -1179,6 +1289,8 @@ class DerOutstation:
             # A freeze is offered only where a counter freezes. One accepted by a device
             # whose counters do not would store nothing a read can return (D100).
             freeze_provider=self if any(p.frozen for p in self._served[Kind.CTR]) else None,
+            # ASSIGN_CLASS is required from Level 3 (TB2016-003b Table 12-49) and refused below it.
+            class_provider=self if self.at_least(SubsetLevel.LEVEL_3) else None,
             time_sink=self.set_time,
             max_response=max_response,
             **options,

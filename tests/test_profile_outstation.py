@@ -16,7 +16,7 @@ import pytest
 from profile_fixtures import analog, document, row, small, units
 
 from py1815 import link
-from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
+from py1815.application import FunctionCode, IIN2Bit, IINBit, ObjectHeader, QualifierCode
 from py1815.control import (
     CommandStatus,
     ControlRelayOutputBlock,
@@ -32,6 +32,7 @@ from py1815.profile.model import Kind, MapError
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.policy import EventPolicy, EventRule
 from py1815.profile.probe import parse_objects
+from py1815.session import ClassAssignment
 from py1815.transport import Reassembler
 
 AI, AO, BI, BO, CTR = Kind.AI, Kind.AO, Kind.BI, Kind.BO, Kind.CTR
@@ -1458,6 +1459,34 @@ class TestAnEventPolicy:
         assert outstation.event_class(AO, 0) == 0
         assert outstation.deadband(2) == 20
         assert outstation.deadband(1) == 0
+
+
+class TestAssigningClasses:
+    """The provider behind ASSIGN_CLASS, called without a session."""
+
+    def test_an_input_that_starts_with_events_off_takes_the_default_deadband(self):
+        outstation, _ = _built(
+            level=3,
+            event_policy={
+                "defaults": {"AI": {"deadband": 5.0}},
+                "points": {"AI1": {"events": False}},
+            },
+        )
+        assert outstation.event_class(AI, 1) == 0
+        assert outstation.deadband(1) == 0.0
+        outstation.poll()
+        header = ObjectHeader(30, 0, QualifierCode.UINT8_START_STOP, start=1, stop=1)
+        outstation.assign_class([ClassAssignment(2, (header,))])
+        assert outstation.event_class(AI, 1) == 2
+        assert outstation.deadband(1) == 5.0
+
+    def test_an_input_the_tables_keep_static_is_left_alone(self):
+        outstation, _ = _built(level=3)
+        assert outstation.event_class(AI, 4) == 0
+        header = ObjectHeader(30, 0, QualifierCode.ALL_OBJECTS)
+        outstation.assign_class([ClassAssignment(3, (header,))])
+        assert outstation.event_class(AI, 4) == 0
+        assert outstation.event_class(AI, 1) == 3
 
 
 class TestFreezing:

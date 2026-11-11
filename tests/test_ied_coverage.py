@@ -219,7 +219,7 @@ NOT_APPLICABLE: dict[str, str] = {
     "8.25.2.1 binary input event variations": "carried out as 8.14.2.7 to 8.14.2.15",
     "8.25.2.2 double-bit event variations": "double-bit inputs are not supported",
     "8.26.2 steps 20 to 58": "assign class is refused, which ends the procedure at step 19",
-    "8.26.3 no-class assignment": "assign class is not implemented",
+    "8.26.3 no-class assignment": "optional; points before the first class header are refused",
     "9.5.1.3 specific IP address": "optional; peers are admitted by TLS certificate, not address",
     "9.5.1.4 wildcard IP address": "optional; peers are admitted by TLS certificate, not address",
     "9.5.1.6 UDP multicast": "optional; not supported",

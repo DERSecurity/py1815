@@ -548,6 +548,15 @@ quality is not normal, so an offline point is never read as a plain number. Leve
 the configuration the conformance tests run against; see
 [Testing](testing.md#the-certification-procedures-are-carried-out-section-by-section).
 
+From Level 3 a master may move points between event classes, or turn their events off,
+with an assign-class request (function code 22). Levels 3 and 4 accept it for binary
+inputs, counters, frozen counters and analog inputs, and Level 4 also for the outputs.
+A point assigned to class 0 raises no events but stays in a class 0 read. A change made
+after the request is reported in the new class; events already buffered stay in the class
+they were recorded in. A restart returns every point to the class it started with: the
+outstation does not keep assignments. Level 2 and the default refuse the request as an
+unsupported function.
+
 ## Memory on a small controller
 
 The library is pure Python with no runtime dependencies, so it runs wherever

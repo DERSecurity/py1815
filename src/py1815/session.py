@@ -536,6 +536,8 @@ class SessionFacts:
     #: Seconds a fragment waits to be confirmed, or None for no limit.
     confirm_timeout: float | None = None
     cold_restart: bool = False
+    #: Whether ASSIGN_CLASS moves points between event classes.
+    assign_class: bool = False
     #: Whether a control sent to a broadcast address is operated.
     broadcast_controls: bool = False
     #: Function codes turned off by configuration, and refused as unsupported.
@@ -575,6 +577,41 @@ class FreezeProvider(Protocol):
 
     def freeze(self, headers: Sequence[ObjectHeader], *, clear: bool) -> None:
         """Freeze what *headers* name, or raise :class:`UnknownObject`."""
+        ...
+
+
+@dataclass(frozen=True)
+class ClassAssignment:
+    """One set of an ASSIGN_CLASS request: a class and the points that move to it."""
+
+    #: The class the points' events are reported in, 1 to 3. 0 turns their
+    #: events off: the class 0 header names no class, it only has the same
+    #: object format (IEEE 1815-2012 4.4.14).
+    event_class: int
+    #: The headers that follow the class header, up to the next one. Each names
+    #: points by an object group, as a read does.
+    headers: tuple[ObjectHeader, ...]
+
+
+class ClassProvider(Protocol):
+    """Which event class each point reports in, and the means to change it.
+
+    Synchronous, like the other providers. The session hands over every set of
+    one request together, so the provider can accept all of them or none: the
+    answer to an ASSIGN_CLASS is a null response, and a master that is told it
+    succeeded has to be able to rely on all of it (D110).
+    """
+
+    def assign_class(self, assignments: Sequence[ClassAssignment]) -> None:
+        """Apply every set of one request, or raise and change nothing.
+
+        Raises :class:`UnknownObject` for a group that cannot be assigned and
+        :class:`ParameterError` for a point that is not there.
+        """
+        ...
+
+    def reset_classes(self) -> None:
+        """Return every point to the class it had at startup."""
         ...
 
 
@@ -802,6 +839,7 @@ class Session:
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
         freeze_provider: FreezeProvider | None = None,
+        class_provider: ClassProvider | None = None,
         time_sink: Callable[[int], None] | None = None,
         need_time: bool = False,
         analog_event_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
@@ -876,6 +914,9 @@ class Session:
             freeze_provider: Freezes counters. Without one the freeze functions
                 are refused as unsupported, which for an outstation holding no
                 counters is the truthful answer (D45).
+            class_provider: Reassigns the event class of points. Without one
+                ASSIGN_CLASS is refused as an unsupported function, as a
+                device whose classes are fixed does (D110).
             time_sink: Receives the time a master writes, in milliseconds since
                 the Unix epoch, UTC. Without one a time write is refused as an
                 unknown object. What the caller does with the time is its own:
@@ -1034,6 +1075,7 @@ class Session:
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
         self._freezer = freeze_provider
+        self._classifier = class_provider
         self._time_sink = time_sink
         if need_time and time_sink is None:
             # An outstation that asks for the time has to be able to take
@@ -1177,6 +1219,10 @@ class Session:
         self._need_time = self._need_time_at_start
         self._broadcast = None
         self._recorded_at = None
+        if self._classifier is not None:
+            # An outstation that does not keep class assignments across a
+            # restart returns to its defaults (IEEE 1815-2012 4.4.14).
+            self._classifier.reset_classes()
         if self._need_time and self._events is not None:
             self._events.synchronized = False
 
@@ -1214,6 +1260,7 @@ class Session:
             analog_event_variation=int(self._analog_event_variation),
             confirm_timeout=self._confirm_timeout,
             cold_restart=self._restart_handler is not None,
+            assign_class=self._classifier is not None,
             broadcast_controls=self._broadcast_controls,
             disabled_functions=self._disabled,
             unsolicited=self._unsolicited,
@@ -2295,6 +2342,7 @@ class Session:
         if (
             known not in _SUPPORTED_FUNCTIONS
             and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
+            and not (known is FunctionCode.ASSIGN_CLASS and self._classifier is not None)
             and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
             and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
             and not (known in _UNSOLICITED_FUNCTIONS and self._unsolicited)
@@ -2326,6 +2374,9 @@ class Session:
 
         if known in _FREEZE_FUNCTIONS:
             return self._acting(fragment, known, self._handle_freeze(request, known))
+
+        if known is FunctionCode.ASSIGN_CLASS:
+            return self._handle_assign_class(request)
 
         if known is FunctionCode.DELAY_MEASURE:
             return self._delay_measure(request, started)
@@ -2462,6 +2513,51 @@ class Session:
             return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
         logger.info("dnp3: %s executed (%d header(s))", known.name, len(headers))
         return null_response(sequence=sequence, iin=self._indications())
+
+    def _handle_assign_class(self, request: Request) -> bytes:
+        """Move points between event classes, and answer with a null response (D110).
+
+        The request is a run of sets. Each starts with a group 60 header whose
+        variation names the class (variation 1 is class 0, which turns events
+        off) and is followed by the headers of the points it applies to
+        (IEEE 1815-2012 4.4.14). The sets are checked here and applied by the
+        provider as one unit, so a request that fails changes nothing.
+        """
+        assert self._classifier is not None
+        sequence = request.control.sequence
+        assignments: list[ClassAssignment] = []
+        named: list[ObjectHeader] = []
+        event_class: int | None = None
+        for header in request.headers:
+            if header.group == CLASS_GROUP:
+                if header.qualifier is not QualifierCode.ALL_OBJECTS or header.event_class is None:
+                    return self._assign_refused(sequence, IIN2Bit.PARAM_ERROR, "bad class header")
+                if event_class is not None:
+                    assignments.append(ClassAssignment(event_class, tuple(named)))
+                event_class, named = header.event_class, []
+            elif event_class is None:
+                # Points ahead of the first class header would be assigned to
+                # no class, which is optional (TB2021-001) and not offered.
+                return self._assign_refused(
+                    sequence, IIN2Bit.PARAM_ERROR, "points named before a class header"
+                )
+            else:
+                named.append(header)
+        if event_class is None:
+            return self._assign_refused(sequence, IIN2Bit.PARAM_ERROR, "no class header")
+        assignments.append(ClassAssignment(event_class, tuple(named)))
+        try:
+            self._classifier.assign_class(assignments)
+        except UnknownObject as exc:
+            return self._assign_refused(sequence, IIN2Bit.OBJECT_UNKNOWN, str(exc))
+        except ParameterError as exc:
+            return self._assign_refused(sequence, IIN2Bit.PARAM_ERROR, str(exc))
+        logger.info("dnp3: ASSIGN_CLASS applied %d set(s)", len(assignments))
+        return null_response(sequence=sequence, iin=self._indications())
+
+    def _assign_refused(self, sequence: int, bit: IIN2Bit, reason: str) -> bytes:
+        logger.info("dnp3: ASSIGN_CLASS refused: %s", reason)
+        return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
 
     def _freeze_unacknowledged(self, fragment: bytes) -> None:
         """Execute a freeze that asks for no response, and tell nobody."""
