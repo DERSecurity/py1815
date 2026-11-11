@@ -1,0 +1,51 @@
+# Dependabot version updates: open a pull request for every new release of a
+# dependency, not only for releases that fix a vulnerability. Security updates
+# are enabled separately in the repository settings and still arrive as soon as
+# an advisory is published.
+#
+# Minor and patch releases are grouped into one pull request per ecosystem, so
+# a week of bumps costs one CI run. Every bump is still listed in that pull
+# request. Major releases get their own pull request because they are the ones
+# that can break the build.
+version: 2
+updates:
+  # Runtime and optional dependencies declared in pyproject.toml.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Base image of the master and outstation containers.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Independent Rust peers that the interop workflow tests against.
+  - package-ecosystem: cargo
+    directories:
+      - /interop/rust-master
+      - /interop/rust-outstation
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
