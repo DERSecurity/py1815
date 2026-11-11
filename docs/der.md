@@ -539,7 +539,7 @@ What each level answers, beyond what the level before it does:
 | 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears, as it does at Levels 3 and 4. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
 | none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
 | 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises one only where the event policy turns `value_changes` on. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
-| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. |
+| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Below Level 4 a request that names one of these is refused as an unknown object. |
 
 Every level reads each static group by range as well as for all points, and each event
 group by count as well as for all events.
@@ -557,6 +557,63 @@ after the request is reported in the new class; events already buffered stay in 
 they were recorded in. A restart returns every point to the class it started with: the
 outstation does not keep assignments. Level 2 and the default refuse the request as an
 unsupported function.
+
+## Level 4: floating point and deadbands
+
+With `level=4` the outstation serves, in addition to everything below Level 4:
+
+| Object | What a master reads |
+|---|---|
+| Analog input, variation 5 (group 30) | Each served analog input as a single-precision float with a flag octet |
+| Analog output status, variation 3 (group 40) | Each served output as a single-precision float with a flag octet |
+| Analog input events, variations 5 and 7 (group 32) | A change as a float, without and with time |
+| Frozen counters, variation 6 (group 21) | Answered as variation 5: 32 bits, with flag and time |
+| Frozen counter events, variation 6 (group 23) | Answered as variation 5: 32 bits, with flag and time |
+| Analog input reporting deadbands, variations 1 to 3 (group 34) | Read and written, as described below |
+
+**Floating point is not scaled.** An integer variation carries the value after the
+point's scaling from the tables. A floating-point variation carries the value as
+the binding gave it, in engineering units, which is the number a setpoint of
+variation 3 or 4 already carries. A power of 1500 W with a multiplier of 1 reads as
+1500 in both forms; a voltage of 240.0 V with a multiplier of 0.1 reads as 2400 in
+variation 1 and as 240.0 in variation 5. Variation 0 and class 0 stay integer, and the
+flags are the same in every form. Whether a change is an event is still decided on
+the integer form, so a change smaller than one count of the multiplier is not an
+event; the event carries the value as it stands when the change is seen.
+
+**Class polls.** A class 1, 2 or 3 read is answered in one analog event variation,
+which `analog_event_variation` chooses. At Level 4 that may be
+`AnalogEventVariation.FLOAT32` or `FLOAT32_WITH_TIME`; below Level 4 the session
+refuses them with `ValueError`. Timed 16-bit and 32-bit integer events (variations 3
+and 4) are answered at every level.
+
+**A 16-bit frozen counter** is answered in 32 bits, as a 16-bit counter without time
+already is: a counter that accumulates energy passes 65535 quickly, and a master
+that implements Level 4 parses both the 16-bit and the 32-bit variation.
+
+**Deadbands.** A master reads the deadband of every served analog input with a
+range, all objects or an index for each, in variation 0 (answered in 32 bits) or in
+variation 1, 2 or 3, and writes variation 1, 2 or 3 by range or by index. A write is
+answered with a null response. A write that names an index that is not an analog
+input, carries a value that is negative or not a number, or does not hold the objects
+it declares, is answered with the parameter-error indication and changes nothing.
+Deadbands are not part of a class 0 response.
+
+A written deadband is the one that decides whether the input's next change is an
+event. The deadband you configured, with the binding or the event policy, is the
+starting value. Variations 1 and 2 are unsigned counts in the transmitted units,
+the numbers the integer variations carry, so a deadband of 20 on a voltage with a
+multiplier of 0.1 is 2.0 V. Variation 3 is in engineering units, like the other
+floating-point objects, and is converted with the point's multiplier: a written 5.0 is
+50 for that voltage. Variations 1 and 2 read back rounded to a whole count, and a
+deadband at or past what the variation holds reads as the largest value it holds.
+A deadband written for an input that reports no events is kept and is used if that
+input reports events later; `outstation.deadband(index)` returns the one in force, in
+transmitted units.
+
+A written deadband is held in memory. It is lost when the outstation restarts, which
+then uses the configured deadbands again, and the Device Profile says that no
+settings are kept through a restart.
 
 ## Memory on a small controller
 
@@ -630,9 +687,9 @@ enough to show the points working and is the whole of what it will do.
 
 ## What is not there yet
 
-- **Floating-point variations.** Inputs are served as integers, scaled by the
-  tables, which is the profile's baseline. A floating-point setpoint is
-  accepted and taken as engineering units.
+- **Floating-point variations below Level 4.** Inputs are served as integers,
+  scaled by the tables, which is the profile's baseline. Level 4 adds the
+  floating-point variations.
 - **Measured figures in the Device Profile.** Clock drift, response time and
   timestamp error are left unstated until someone measures them.
 

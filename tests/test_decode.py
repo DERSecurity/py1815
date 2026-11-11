@@ -219,6 +219,28 @@ class TestAnalogOutputs:
         assert decoded.event
 
 
+class TestAnalogDeadbands:
+    def test_each_width_is_unsigned(self):
+        assert _one("22 01 00 03 03  FF FF").value == 65535
+        assert _one("22 02 00 03 03  FF FF FF FF").value == 4294967295
+
+    def test_single_precision(self):
+        decoded = _one("22 03 00 03 03  00 00 A0 40")
+        assert decoded.value == 5.0 and isinstance(decoded.value, float)
+
+    def test_objects_carry_no_flags_and_are_not_points(self):
+        decoded = _one("22 01 00 03 03  0A 00")
+        assert (decoded.index, decoded.value, decoded.flags) == (3, 10, None)
+        assert decoded.point is None and not decoded.event and decoded.time_ms is None
+        assert decoded.raw == bytes.fromhex("0A 00")
+
+    def test_a_range_and_an_index_each(self):
+        first, second = _read("22 01 00 01 02  05 00  14 00")
+        assert [(first.index, first.value), (second.index, second.value)] == [(1, 5), (2, 20)]
+        first, second = _read("22 02 17 02  01  05 00 00 00  09  14 00 00 00")
+        assert [(first.index, first.value), (second.index, second.value)] == [(1, 5), (9, 20)]
+
+
 class TestObjectsThatAreNotPoints:
     def test_the_time_and_date(self):
         decoded = _one(f"32 01 07 01 {TIME_OCTETS}")
@@ -346,6 +368,9 @@ class TestTheTable:
             ((21, 6), 9),
             ((22, 5), 11),
             ((30, 6), 9),
+            ((34, 1), 2),
+            ((34, 2), 4),
+            ((34, 3), 4),
             ((32, 8), 15),
             ((42, 7), 11),
             ((50, 1), 6),

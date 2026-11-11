@@ -19,7 +19,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import struct
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -475,6 +475,70 @@ def parse_object_blocks(
 
         blocks.append(ObjectBlock(header=header, items=tuple(items)))
 
+        if offset == len(body):
+            return tuple(blocks)
+        header, offset = _parse_header(body, offset, indices_follow=False)
+
+
+def parse_data_blocks(
+    request: Request, size_of: Callable[[int, int], int | None]
+) -> tuple[ObjectBlock, ...]:
+    """Walk a request that carries object data after each header, such as a write.
+
+    A header with a start and a stop is followed by one object for each index
+    from start to stop. A header with a count and an index prefix is followed by
+    that many objects, each behind its own index. Both come back as ``(index,
+    octets)`` pairs, in the order they arrived. Any other qualifier is refused,
+    since nothing says how many objects follow it or which points they belong to.
+
+    ``size_of`` answers how wide one object of a group and variation is, as it
+    does for :func:`parse_object_blocks`. A body that ends inside an object, or
+    a header whose objects are missing, refuses the whole fragment with
+    :class:`RequestError`.
+    """
+    if not request.headers:
+        raise RequestError("a request carrying objects has no object header")
+
+    blocks: list[ObjectBlock] = []
+    header = request.headers[0]
+    body = request.body
+    offset = 0
+    while True:
+        size = size_of(header.group, header.variation)
+        if size is None:
+            raise RequestError(
+                f"no object of group {header.group} variation {header.variation} is known, "
+                "so its width cannot be read"
+            )
+        items: list[tuple[int, bytes]] = []
+        width = _INDEX_WIDTHS.get(header.qualifier)
+        if width is not None:
+            if header.count is None:
+                raise RequestError("an index-prefixed qualifier carries no count")
+            positions: Iterable[int | None] = [None] * header.count
+        elif header.start is not None and header.stop is not None:
+            width = 0
+            positions = range(header.start, header.stop + 1)
+        else:
+            raise RequestError(
+                f"qualifier 0x{int(header.qualifier):02X} names neither a range nor an index "
+                "for each object"
+            )
+        for position in positions:
+            end = offset + width + size
+            if end > len(body):
+                raise RequestError(
+                    f"group {header.group} variation {header.variation} declares more objects "
+                    "than the body holds"
+                )
+            index = (
+                position
+                if position is not None
+                else int.from_bytes(body[offset : offset + width], "little")
+            )
+            items.append((index, bytes(body[offset + width : end])))
+            offset = end
+        blocks.append(ObjectBlock(header=header, items=tuple(items)))
         if offset == len(body):
             return tuple(blocks)
         header, offset = _parse_header(body, offset, indices_follow=False)

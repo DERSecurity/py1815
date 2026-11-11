@@ -1887,6 +1887,61 @@ the answer is a null response whose `IIN2` says why a refusal happened.
   events yet.
 - Where sets overlap, the later one wins.
 
+**D112 -- Floating-point variations are Level 4 objects, and carry the value unscaled.**
+`level=4` serves group 30 variation 5, group 40 variation 3 and group 32 variations 5 and 7,
+which TB2016-003b's subset tables require at Level 4 and no lower level. This replaces the
+floating-point half of D2 and of the planning record's D39, which left them to an agreement
+the builder did not offer; the integer baseline of both stands. D6 says the library does not scale values, and the map's multiplier is the one
+place scaling happens, so the relation between a point's two forms is fixed here: an integer
+variation carries the transmitted value (the value after the multiplier and offset), and a
+floating-point variation carries the value as the binding gave it, in engineering units, as
+the setpoint of group 41 variation 3 already did. A voltage of 240.0 V with a multiplier of 0.1
+is 2400 in variation 1 and 240.0 in variation 5. The flags are the integer form's, including
+`OVER_RANGE`, which is judged against the range the tables give for the transmitted value.
+Variation 0 and class 0 stay integer, since a master that names no variation has asked for
+the baseline that every level requires. A class poll is answered in the session's
+`analog_event_variation`, which may be a floating-point one at Level 4 and is refused below
+it, so Table 12-49's class polls carry whichever variation the caller chose. Whether a change
+is an event is decided on the integer form, as before; the event keeps the unscaled value seen
+at that moment for the floating-point variations. *Trade-off:* an input that moves by less
+than one count of its multiplier is never an event, though a floating-point master could have
+seen the movement; the integer form's resolution is the one the tables state.
+
+**D113 -- A 16-bit frozen counter with time is answered in 32 bits at Level 4, and the timed
+integer analog events are answered at every level.** Group 21 variation 6 and group 23
+variation 6 are Level 4 requests. They are answered in variation 5 of their group, for the
+reason D100 gives for the other 16-bit counters: counters are kept in 32 bits and a 16-bit
+count of energy wraps within hours. TB2016-003b's response tables for both groups list
+variation 5 beside variation 6 at Level 4, so a Level 4 master parses the 32-bit answer, and
+DNP3 IED Certification Procedure 3.1 rev 1, 8.24.2, accepts a 32-bit answer from a device
+that keeps only 32-bit values. Group 32 variations 3 and 4 are Level 4 in the tables, and
+this outstation has always answered them when named by group, and uses variation 3 by
+default outside the profile. A lower level does not refuse them: D55 already lets a master
+name the fuller variations at Level 2, and refusing at Level 3 alone would make the levels
+disagree for no gain. Below Level 4, group 21 variation 6 and group 23 variation 6 are
+unknown objects. *Trade-off:* a lower level answers objects its subset does not list, as it
+did before.
+
+**D114 -- A master reads and writes analog input deadbands at Level 4, and a written deadband
+decides the next event until the outstation restarts.** Group 34 variations 1 to 3 are
+read with qualifiers 0x06, 0x00 and 0x01 (and by index, as other static groups are) and
+written with 0x00, 0x01, 0x17 and 0x28, per TB2016-003b Table 12-35. A write is answered with a
+null response. Variation 0 is answered in variation 2, the widest integer. Every served analog
+input has a deadband, and the configured one (the binding's, the policy's) is the starting
+value; a write replaces it, including for a point that reports no events, whose deadband then
+applies if it reports events later. The units follow D112: variations 1 and 2 are unsigned
+counts in transmitted units, which is where `EventPolicy` converts to (D66), and variation 3
+is in engineering units, converted with the point's multiplier. A deadband read at or past what
+a variation holds is reported as the largest value it holds (IEEE 1815-2012 A.18). A write is
+all or nothing: an index that is not a served analog input, a negative or non-numeric float, a
+count that disagrees with the objects present or a header the fragment does not hold is a
+parameter error and changes nothing. IEEE 1815-2012 11.9.1.3 does not require a deadband to
+survive a restart and asks a device that keeps it to say so in the Device Profile. A written
+deadband is held in memory only; the restarted outstation uses the configured values, and the
+Device Profile lists no settings as kept through a restart. Group 34 is never in class 0.
+*Trade-off:* a master that writes deadbands writes them again after each restart, in return
+for an outstation that holds no state outside the process.
+
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in
 its value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter events optional, and has a
 device that supports them raise one whenever any of a counter's flags change; reporting a

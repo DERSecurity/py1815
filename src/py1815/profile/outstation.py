@@ -50,6 +50,7 @@ from py1815.events import EventBuffers, EventClass
 from py1815.events import now_ms as wall_clock_ms
 from py1815.objects import (
     COUNTER_VARIATION,
+    GROUP_ANALOG_DEADBAND,
     GROUP_ANALOG_INPUT,
     GROUP_BINARY_INPUT,
     GROUP_COUNTER,
@@ -66,6 +67,7 @@ from py1815.objects import (
     encode_analog,
     encode_binary,
     encode_counter,
+    encode_deadband,
     encode_frozen_counter,
     indexed_block,
 )
@@ -97,9 +99,8 @@ _LEVEL_2_VARIATIONS = {
     GROUP_ANALOG_OUTPUT_STATUS: 2,
 }
 
-#: The variations a master may also name outright. Integers only: the
-#: floating-point variations exceed DNP3 Level 2, and the profile makes them a
-#: matter of agreement this builder does not yet offer (D39).
+#: The variations a master may also name outright, below Level 4. Integers
+#: only: the floating-point variations are Level 4 objects (D112).
 _SERVED_VARIATIONS = {
     GROUP_BINARY_INPUT: {2},
     GROUP_BINARY_OUTPUT_STATUS: {2},
@@ -127,6 +128,24 @@ _WIDENED_VARIATIONS = {
 #: footnote a allows (D5).
 _LEVEL_3_WIDENED = {GROUP_BINARY_INPUT: {1: int(BinaryVariation.WITH_FLAGS)}}
 
+#: What a Level 4 outstation serves in addition: the floating-point static
+#: variations (D112) and the analog input deadbands (D114).
+_LEVEL_4_VARIATIONS = {
+    GROUP_ANALOG_INPUT: {int(AnalogVariation.FLOAT32_WITH_FLAG)},
+    GROUP_ANALOG_OUTPUT_STATUS: {3},
+    GROUP_ANALOG_DEADBAND: {1, 2, 3},
+}
+
+#: What a Level 4 outstation also answers in a variation it keeps: a 16-bit
+#: frozen counter with time is answered in the 32-bit one (D113).
+_LEVEL_4_WIDENED = {
+    GROUP_FROZEN_COUNTER: {6: int(FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME)},
+}
+
+#: The variation a read of group 34 variation 0 is answered in. The 32-bit
+#: deadband holds the most.
+_DEADBAND_DEFAULT = 2
+
 #: The analog input variation that carries the same value with its flags.
 _FLAGGED_ANALOG = {
     int(AnalogVariation.INT32): int(AnalogVariation.INT32_WITH_FLAG),
@@ -140,6 +159,7 @@ _GROUP_KINDS = {
     GROUP_FROZEN_COUNTER: Kind.CTR,
     GROUP_ANALOG_INPUT: Kind.AI,
     GROUP_ANALOG_OUTPUT_STATUS: Kind.AO,
+    GROUP_ANALOG_DEADBAND: Kind.AI,
 }
 
 #: The groups an ASSIGN_CLASS request may name, each with the group whose points
@@ -233,11 +253,15 @@ class DerOutstation:
                 event, and freeze-and-clear clears. A master may still name
                 the fuller variations outright. Levels 3 and 4 serve the
                 profile's additions, as the default does, accept ASSIGN_CLASS
-                (D110), and the Device Profile claims the level. At any level
-                given, freeze-and-clear clears. None, the default, claims
-                Level 2 and serves the profile's additions, which is what the
-                DER profile asks for when no level is chosen, and its
-                counters are never cleared.
+                (D110), and the Device Profile claims the level. Level 4 also
+                serves the floating-point variations, which carry the value
+                unscaled (D112), the time-stamped 16-bit frozen counters,
+                answered in 32 bits (D113), and analog input deadbands that a
+                master reads and writes (D114). At any level given,
+                freeze-and-clear clears. None, the default, claims Level 2 and
+                serves the profile's additions, which is what the DER profile
+                asks for when no level is chosen, and its counters are never
+                cleared.
             level2: Deprecated; use ``level=2``. True means ``level=2`` and
                 warns. False changes nothing. True with a ``level`` other
                 than 2 raises ``ValueError``.
@@ -295,7 +319,7 @@ class DerOutstation:
         #: Held to Level 2 and nothing more, as opposed to answering with the
         #: profile's additions.
         self._level2 = level is not None and self._level == SubsetLevel.LEVEL_2
-        self._defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
+        self._defaults, self._served_variations, self._widened = self._variations_at_level()
         #: What each counter read when it was last cleared, so that a
         #: counter bound to a running total can be cleared without the
         #: source being asked to forget.
@@ -368,6 +392,31 @@ class DerOutstation:
                 )
 
     # ------------------------------------------------------------ assembly
+
+    def _variations_at_level(
+        self,
+    ) -> tuple[dict[int, int], dict[int, set[int]], dict[int, dict[int, int]]]:
+        """Return the variations at the claimed level, by group.
+
+        Three tables: the variation a read of variation 0 is answered in, the
+        variations a master may name, and those answered in another one. Level
+        3 answers a packed binary input read with flags (D5). Level 4
+        adds the floating-point variations, the deadbands and the time-stamped
+        16-bit frozen counter (D112, D113, D114).
+        """
+        defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
+        served = {group: set(each) for group, each in _SERVED_VARIATIONS.items()}
+        widened = {group: dict(each) for group, each in _WIDENED_VARIATIONS.items()}
+        if self.at_least(SubsetLevel.LEVEL_3):
+            for group, extra_widened in _LEVEL_3_WIDENED.items():
+                widened.setdefault(group, {}).update(extra_widened)
+        if self.at_least(SubsetLevel.LEVEL_4):
+            for group, extra in _LEVEL_4_VARIATIONS.items():
+                served.setdefault(group, set()).update(extra)
+            for group, extra_widened in _LEVEL_4_WIDENED.items():
+                widened.setdefault(group, {}).update(extra_widened)
+            defaults[GROUP_ANALOG_DEADBAND] = _DEADBAND_DEFAULT
+        return defaults, served, widened
 
     def _resolve_sources(self) -> dict[Address, Reader]:
         """Where each input's value comes from, the caller's word first.
@@ -625,10 +674,37 @@ class DerOutstation:
     def deadband(self, index: int) -> float:
         """An analog input's event deadband in force, in transmitted units.
 
-        Zero reports every change of the transmitted value, and is also the
-        answer for a point that reports no events at all.
+        The configured one until a master writes another (D114). Zero reports
+        every change of the transmitted value, and is also the answer for a
+        point with no deadband.
         """
         return self._deadbands.get(self._map.point(Kind.AI, index).index, 0.0)
+
+    def write_deadbands(self, deadbands: Sequence[tuple[int, int, float]]) -> None:
+        """Take the deadbands a master wrote, all or none (D114).
+
+        Each item is ``(variation, index, value)`` as group 34 carries it.
+        Variations 1 and 2 are in transmitted units, the integers a point's
+        integer variations carry. Variation 3 is in engineering units, as the
+        floating-point variations of the analog input are (D112), and is
+        converted with the point's scaling. A write for the same point twice
+        leaves the later one. Raises ``ParameterError``, with nothing changed,
+        for an index that is not a served analog input.
+        """
+        chosen: dict[int, float] = {}
+        for variation, index, value in deadbands:
+            point = self._by_index[Kind.AI].get(index)
+            if point is None:
+                raise ParameterError(f"analog input {index} is not served")
+            chosen[index] = _transmitted(point, value) if variation == 3 else float(value)
+        self._deadbands.update(chosen)
+
+    def _deadband_in(self, point: Point, variation: int) -> float:
+        """The deadband in force for a point, in the units a variation carries."""
+        span = self._deadbands.get(point.index, 0.0)
+        if variation == 3 and point.multiplier is not None:
+            return span * abs(point.multiplier)
+        return span
 
     def value(self, kind: Kind, index: int) -> float | bool | None:
         """The last value an output accepted, or None if it has none yet."""
@@ -797,14 +873,12 @@ class DerOutstation:
         return blocks
 
     def _variation(self, header: ObjectHeader) -> int:
-        served = _SERVED_VARIATIONS.get(header.group)
+        served = self._served_variations.get(header.group)
         if served is None:
             raise UnknownObject(f"group {header.group} is not served")
         if header.variation == 0:
             return self._defaults[header.group]
-        widened = _WIDENED_VARIATIONS.get(header.group, {}).get(header.variation)
-        if widened is None and self.at_least(SubsetLevel.LEVEL_3):
-            widened = _LEVEL_3_WIDENED.get(header.group, {}).get(header.variation)
+        widened = self._widened.get(header.group, {}).get(header.variation)
         if widened is not None:
             return widened
         if header.variation not in served:
@@ -875,9 +949,16 @@ class DerOutstation:
         """
         if group == GROUP_BINARY_INPUT:
             return variation, encode_binary(self._binary(point))
+        if group == GROUP_ANALOG_DEADBAND:
+            return variation, encode_deadband(self._deadband_in(point, variation), variation)
         if group == GROUP_ANALOG_INPUT:
-            analog = self._analog(point)
-            if analog.flags != AnalogQuality.ONLINE:
+            reading = self._reading(point)
+            analog = self._analog_of(point, reading)
+            if variation == AnalogVariation.FLOAT32_WITH_FLAG:
+                # The value as the source gave it: a floating-point variation
+                # is not scaled (D112). The flags are the integer form's.
+                analog = AnalogPoint(float(reading.value), analog.flags)
+            elif analog.flags != AnalogQuality.ONLINE:
                 variation = _FLAGGED_ANALOG.get(variation, variation)
             return variation, encode_analog(analog, AnalogVariation(variation))
         if group == GROUP_COUNTER:
@@ -902,6 +983,8 @@ class DerOutstation:
         value, flags = self._output_status(point)
         if group == GROUP_BINARY_OUTPUT_STATUS:
             return variation, encode_binary_output_status(state=bool(value), flags=flags)
+        if variation == 3:
+            return variation, encode_analog_output_status(float(value or 0), 3, flags=flags)
         raw = point.to_wire(float(value or 0))
         if math.isfinite(raw):
             # Rounded to the integer the variation carries. A value with no
@@ -1021,6 +1104,8 @@ class DerOutstation:
         """
         now = self.now_ms()
         buffered = 0
+        # Only a Level 4 outstation has a floating-point event to report.
+        floats = self.at_least(SubsetLevel.LEVEL_4)
         for point in self._served[Kind.BI]:
             reported = self._classes[point.address]
             if not reported:
@@ -1050,6 +1135,7 @@ class DerOutstation:
                 event_class=EventClass(reported),
                 deadband=self._deadbands.get(point.index, 0.0),
                 timestamp_ms=self._event_time(reading, now),
+                unscaled=float(reading.value) if floats else None,
             ):
                 buffered += 1
         if self.at_least(SubsetLevel.LEVEL_3):
@@ -1309,6 +1395,11 @@ class DerOutstation:
         if self._level == SubsetLevel.LEVEL_3:
             # Class polls carry frozen counter events without time (Table 12-49).
             options["frozen_counter_event_variation"] = 1
+        if self.at_least(SubsetLevel.LEVEL_4):
+            # Writes of analog input deadbands (D114), and reads of the
+            # floating-point and 16-bit frozen counter events (D112, D113).
+            options["deadband_provider"] = self
+            options["extended_events"] = True
         return options
 
     def session(self, *, max_response: int = 2048, **options: Any) -> Session:

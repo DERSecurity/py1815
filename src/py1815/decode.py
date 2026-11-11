@@ -168,6 +168,11 @@ LAYOUTS: dict[tuple[int, int], Layout] = {
     (32, 6): _number(_AI, "<d", event=True),
     (32, 7): _number(_AI, "<f", event=True, time=_ABS),
     (32, 8): _number(_AI, "<d", event=True, time=_ABS),
+    # Analog input reporting deadbands: unsigned 16 and 32 bits, and single
+    # precision. A deadband is not a point's value, so it has no point type.
+    (34, 1): Layout(None, flags=False, number="<H"),
+    (34, 2): Layout(None, flags=False, number="<I"),
+    (34, 3): Layout(None, flags=False, number="<f"),
     # Analog output status, and its events.
     (40, 1): _number(_AO, "<i"),
     (40, 2): _number(_AO, "<h"),

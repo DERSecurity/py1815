@@ -52,6 +52,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import logging
+import math
 import struct
 import time
 from collections import deque
@@ -81,6 +82,7 @@ from py1815.application import (
     RequestError,
     build_response,
     null_response,
+    parse_data_blocks,
     parse_header_list,
     parse_object_blocks,
     parse_request,
@@ -102,7 +104,9 @@ from py1815.events import (
 )
 from py1815.objects import (
     ANALOG_EVENT_SIZES,
+    DEADBAND_SIZES,
     FROZEN_COUNTER_EVENT_VARIATION,
+    GROUP_ANALOG_DEADBAND,
     GROUP_ANALOG_INPUT_EVENT,
     GROUP_BINARY_INPUT_EVENT,
     GROUP_COUNTER_EVENT,
@@ -110,8 +114,10 @@ from py1815.objects import (
     MAX_RELATIVE_MS,
     TIME_SIZE,
     AnalogEventVariation,
+    AnalogPoint,
     BinaryEventVariation,
     common_time,
+    decode_deadband,
     encode_analog_event,
     encode_binary_event,
     encode_binary_event_relative,
@@ -258,12 +264,21 @@ _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
 #: group: the variation named, and the variation sent. Counters are kept in 32
 #: bits, so a read of a 16-bit counter or frozen counter event is answered in
 #: the 32-bit variation, which IED Certification Procedure 3.1 rev 1 sections
-#: 8.25.2.3 and 8.25.2.4, step 9, accept from such a device (D108, D124). A
-#: frozen counter event read in variation 2 is accepted only when the session
-#: is built with ``frozen_counter_event_16_bit``.
+#: 8.25.2.3 and 8.25.2.4, step 9, accept from such a device (D108, D113, D124).
+#: A frozen counter event read in variation 2 is accepted only when the session
+#: is built with ``frozen_counter_event_16_bit``, and one in variation 6 only
+#: when it is built with ``extended_events``.
 _WIDENED_EVENT_VARIATIONS: dict[int, dict[int, int]] = {
-    GROUP_FROZEN_COUNTER_EVENT: {2: 1},
+    GROUP_FROZEN_COUNTER_EVENT: {2: 1, 6: FROZEN_COUNTER_EVENT_VARIATION},
     GROUP_COUNTER_EVENT: {2: 1},
+}
+
+#: The event variations a session reads by name only when it is built to serve
+#: the Level 4 objects: floating-point analog events, and 16-bit frozen counter
+#: events with time, which are answered in 32 bits (D113).
+_EXTENDED_EVENT_VARIATIONS: dict[int, frozenset[int]] = {
+    GROUP_ANALOG_INPUT_EVENT: frozenset({5, 7}),
+    GROUP_FROZEN_COUNTER_EVENT: frozenset({6}),
 }
 
 #: Requests whose repetition, octet for octet, is a retry and not a second
@@ -324,7 +339,16 @@ _ANALOG_EVENT_VARIATION = AnalogEventVariation.INT32_WITH_TIME
 _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 
 _TIMED_ANALOG_EVENTS = frozenset(
-    {AnalogEventVariation.INT32_WITH_TIME, AnalogEventVariation.INT16_WITH_TIME}
+    {
+        AnalogEventVariation.INT32_WITH_TIME,
+        AnalogEventVariation.INT16_WITH_TIME,
+        AnalogEventVariation.FLOAT32_WITH_TIME,
+    }
+)
+
+#: The analog event variations that carry the value as the source gave it.
+_FLOAT_ANALOG_EVENTS = frozenset(
+    {AnalogEventVariation.FLOAT32, AnalogEventVariation.FLOAT32_WITH_TIME}
 )
 
 #: The event groups a master may read by name instead of by class, and the
@@ -615,6 +639,23 @@ class ClassProvider(Protocol):
         ...
 
 
+class DeadbandProvider(Protocol):  # pylint: disable=too-few-public-methods
+    """Where a written analog input deadband goes (IEEE 1815-2012 Table 12-18).
+
+    The session decodes each object of a write of group 34 and hands the provider
+    every one of the write together, so that a write naming a point that does
+    not exist changes none of them.
+    """
+
+    def write_deadbands(self, deadbands: Sequence[tuple[int, int, float]]) -> None:
+        """Apply ``(variation, index, value)`` for each deadband written.
+
+        The value is as the variation carries it. Raises :class:`ParameterError`,
+        having changed nothing, when an index names no analog input.
+        """
+        ...
+
+
 @dataclass
 class _ArmedSelect:
     """What a select left behind for the operate that may follow."""
@@ -857,6 +898,8 @@ class Session:
         unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME,
         anomaly_observer: AnomalyObserver | None = None,
         request_observer: RequestObserver | None = None,
+        deadband_provider: DeadbandProvider | None = None,
+        extended_events: bool = False,
     ) -> None:
         """
         Args:
@@ -944,6 +987,17 @@ class Session:
             indications_read: Whether a master may read the internal
                 indications as object group 80 variation 1. Without it the
                 read is refused as an unknown object.
+            deadband_provider: Takes a write of analog input deadbands (group
+                34, variations 1 to 3, with a range or an index for each
+                object). Without one the write is refused as an unknown
+                object. Reading deadbands is the read provider's.
+            extended_events: Whether the event variations of subset Level 4
+                that this session can write are read by name and may be
+                chosen as ``analog_event_variation``: floating-point analog
+                events, and 16-bit frozen counter events with time, which are
+                answered in 32 bits (D113). Off, they are unknown objects, and
+                choosing a floating-point ``analog_event_variation`` raises
+                ``ValueError``.
             confirm_timeout: Seconds a fragment that asked for confirmation
                 waits for it, or None to wait indefinitely. A confirmation
                 arriving later retires nothing and continues nothing.
@@ -1094,9 +1148,15 @@ class Session:
         #: The variations an event group may be read in by name.
         self._event_variations = dict(_EVENT_VARIATIONS)
         if frozen_counter_event_16_bit:
-            self._event_variations[GROUP_FROZEN_COUNTER_EVENT] |= frozenset(
-                _WIDENED_EVENT_VARIATIONS[GROUP_FROZEN_COUNTER_EVENT]
+            self._event_variations[GROUP_FROZEN_COUNTER_EVENT] |= frozenset({2})
+        if extended_events:
+            for group, extra in _EXTENDED_EVENT_VARIATIONS.items():
+                self._event_variations[group] |= extra
+        elif self._analog_event_variation in _FLOAT_ANALOG_EVENTS:
+            raise ValueError(
+                "analog_event_variation is a floating-point variation and extended_events is off"
             )
+        self._deadbands = deadband_provider
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
         self._broadcast_controls = broadcast_controls
@@ -3398,6 +3458,24 @@ class Session:
                     smallest = min(smallest, 1 + named)
         return smallest
 
+    def _encoded_analog_event(self, event: AnalogEvent, named: int) -> tuple[int, bytes]:
+        """Return the variation an analog event is sent in, and the event encoded in it.
+
+        ``named`` is the variation the read named, or 0 for this session's
+        default. A floating-point variation carries the unscaled value the
+        event kept, where it kept one (D112).
+        """
+        analog = AnalogEventVariation(named) if named else self._analog_event_variation
+        reported = event.point
+        if analog in _FLOAT_ANALOG_EVENTS and event.unscaled is not None:
+            reported = AnalogPoint(event.unscaled, reported.flags)
+        encoded = encode_analog_event(
+            reported,
+            variation=analog,
+            timestamp_ms=event.timestamp_ms if analog in _TIMED_ANALOG_EVENTS else None,
+        )
+        return int(analog), encoded
+
     def _event_blocks(
         self, chosen: Sequence[tuple[Event, int]], headers: Sequence[ObjectHeader]
     ) -> list[_Block]:
@@ -3430,13 +3508,7 @@ class Session:
             synchronized = True
             if isinstance(event, AnalogEvent):
                 group = GROUP_ANALOG_INPUT_EVENT
-                analog = AnalogEventVariation(named) if named else self._analog_event_variation
-                variation = int(analog)
-                encoded = encode_analog_event(
-                    event.point,
-                    variation=analog,
-                    timestamp_ms=event.timestamp_ms if analog in _TIMED_ANALOG_EVENTS else None,
-                )
+                variation, encoded = self._encoded_analog_event(event, named)
             elif isinstance(event, FrozenCounterEvent):
                 group = GROUP_FROZEN_COUNTER_EVENT
                 variation = _answered_in(group, named) or self._frozen_event_variation
@@ -3494,7 +3566,7 @@ class Session:
                 )
         return blocks
 
-    def _handle_write(self, request: Request) -> bytes:
+    def _handle_write(self, request: Request) -> bytes:  # pylint: disable=too-many-return-statements
         """The only write a monitor outstation honors: clearing the restart bit.
 
         Everything else is refused as an unknown object rather than as an
@@ -3536,10 +3608,49 @@ class Session:
             logger.info("dnp3: time written by master, %d ms after it was recorded", elapsed_ms)
             return null_response(sequence=sequence, iin=self._indications())
 
+        if (
+            self._deadbands is not None
+            and request.headers
+            and request.headers[0].group == GROUP_ANALOG_DEADBAND
+            and request.headers[0].variation in DEADBAND_SIZES
+        ):
+            return self._write_deadbands(request, self._deadbands)
+
         # A write naming nothing is malformed; one naming an object this
         # outstation does not take a write of is an unknown object.
         bit = IIN2Bit.OBJECT_UNKNOWN if request.headers else IIN2Bit.PARAM_ERROR
         return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
+
+    def _write_deadbands(self, request: Request, provider: DeadbandProvider) -> bytes:
+        """Apply a write of analog input deadbands, all of it or none of it.
+
+        A value no deadband can have, or an object the fragment does not hold,
+        is a parameter error and changes nothing.
+        """
+        sequence = request.control.sequence
+        try:
+            written: list[tuple[int, int, float]] = []
+            blocks = parse_data_blocks(
+                request,
+                lambda group, variation: (
+                    DEADBAND_SIZES.get(variation) if group == GROUP_ANALOG_DEADBAND else None
+                ),
+            )
+            for block in blocks:
+                header = block.header
+                for index, data in block.items:
+                    value = decode_deadband(data, header.variation)
+                    if not math.isfinite(value) or value < 0:
+                        raise RequestError(f"{value} is not a deadband")
+                    written.append((header.variation, index, value))
+            provider.write_deadbands(written)
+        except (RequestError, ParameterError) as exc:
+            logger.info("dnp3: write of deadbands refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        logger.info("dnp3: %d deadband(s) written by master", len(written))
+        return null_response(sequence=sequence, iin=self._indications())
 
     def _time_was_set(self) -> None:
         """A master has written the time: stop asking, and trust the clock from here."""

@@ -76,8 +76,31 @@ _ASSIGNABLE_NAMES = {
 }
 
 #: The schema spells variation numbers out.
-_NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 9: "nine"}
+_NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 7: "seven", 9: "nine"}
 _CLASS_WORDS = {0: "none", 1: "one", 2: "two", 3: "three", None: "none"}
+
+#: What a Level 4 outstation lists beyond the rows below it, by group and variation:
+#: the floating-point static and event variations, the time-stamped 16-bit frozen
+#: counters, which are read and answered in 32 bits (D113), and the deadbands (D114).
+_LEVEL_4_STATIC = {
+    30: {5: "Analog Input - single-precision floating point with flag"},
+    40: {3: "Analog Output Status - single-precision floating point with flag"},
+}
+_LEVEL_4_EVENTS = {
+    32: {
+        5: "Analog Input Event - single-precision floating point without time",
+        7: "Analog Input Event - single-precision floating point with time",
+    }
+}
+_LEVEL_4_WIDENED = {
+    21: {6: "Frozen Counter - 16-bit with flag and time"},
+    23: {6: "Frozen Counter Event - 16-bit with flag and time"},
+}
+_DEADBANDS = {
+    1: "Analog Input Reporting Deadband - 16-bit",
+    2: "Analog Input Reporting Deadband - 32-bit",
+    3: "Analog Input Reporting Deadband - single-precision floating point",
+}
 
 #: A nested description of child elements: a bare name is an empty element, a
 #: pair is a name with either text or children of its own.
@@ -164,6 +187,13 @@ def _served(outstation: DerOutstation) -> dict[Kind, list[Point]]:
     return {kind: outstation.served(kind) for kind in Kind}
 
 
+def _added(
+    outstation: DerOutstation, table: dict[int, dict[int, str]], group: int
+) -> dict[int, str]:
+    """Return the variations a group gains at Level 4, and none below it."""
+    return table.get(group, {}) if outstation.at_least(SubsetLevel.LEVEL_4) else {}
+
+
 def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementation:
     """The implementation table for an outstation as it is configured.
 
@@ -181,6 +211,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
     def static(group: int, default: str, variations: dict[int, str]) -> None:
         # A read by index is answered by index, and every other read by range.
         select = tuple(_RANGE + _ALL + _INDEXED)
+        variations = variations | _added(outstation, _LEVEL_4_STATIC, group)
         rows.append(Row(group, 0, f"{default} - any variation", request=(READ, select)))
         for variation, description in variations.items():
             rows.append(
@@ -195,8 +226,14 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
 
     def widened(group: int, variations: dict[int, str]) -> None:
         # Read and answered in a 32-bit variation with flags, so the row lists
-        # the request and no response of its own.
+        # the request and no response of its own. Frozen counter events are read
+        # by class or count, and everything else by range, all or index.
         select = tuple(_RANGE + _ALL + _INDEXED)
+        variations = variations | _added(outstation, _LEVEL_4_WIDENED, group)
+        if group == 23:
+            if not facts.events:
+                return
+            select = tuple(_ALL + _COUNT)
         for variation, description in variations.items():
             rows.append(Row(group, variation, description, request=(READ, select)))
 
@@ -207,6 +244,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
             # Read, and answered with nothing: a Level 2 outstation buffers none.
             variations = {}
         select = tuple(_ALL + _COUNT)
+        variations = variations | _added(outstation, _LEVEL_4_EVENTS, group)
         rows.append(Row(group, 0, f"{name} - any variation", request=(READ, select)))
         for variation, description in variations.items():
             rows.append(
@@ -308,16 +346,14 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 5: "Frozen Counter Event - 32-bit with flag and time",
             },
         )
-        if facts.events and facts.frozen_counter_event_16_bit:
-            # Read, and answered in the 32-bit variation.
-            rows.append(
-                Row(
-                    23,
-                    2,
-                    "Frozen Counter Event - 16-bit with flag",
-                    request=(READ, tuple(_ALL + _COUNT)),
-                )
-            )
+        widened(
+            23,
+            (
+                {2: "Frozen Counter Event - 16-bit with flag"}
+                if facts.frozen_counter_event_16_bit
+                else {}
+            ),
+        )
     if served[Kind.AI]:
         static(
             30,
@@ -339,6 +375,13 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 4: "Analog Input Event - 16-bit with time",
             },
         )
+        if outstation.at_least(SubsetLevel.LEVEL_4):
+            # Read like any static object, and written by range or by index.
+            static(34, "Analog Input Reporting Deadband", _DEADBANDS)
+            rows += [
+                Row(34, variation, text, request=(WRITE, tuple(_RANGE + _INDEXED)))
+                for variation, text in _DEADBANDS.items()
+            ]
     if served[Kind.AO]:
         static(
             40,
@@ -673,7 +716,7 @@ def _application(facts: SessionFacts, statuses: Sequence[int]) -> Items:
     ]
 
 
-def _outstation(facts: SessionFacts) -> Items:
+def _outstation(facts: SessionFacts, level: SubsetLevel) -> Items:
     capacity = facts.event_capacity
     return [
         (
@@ -739,6 +782,12 @@ def _outstation(facts: SessionFacts) -> Items:
                 )
             ],
         ),
+        # A deadband a master writes lasts until the outstation restarts. The
+        # element is stated where a master can write deadbands, so that an empty
+        # list is read as "none" and not as "not stated".
+        _setting("settingsPreservedThroughDeviceRestart", [], [])
+        if level >= SubsetLevel.LEVEL_4
+        else None,
         _both("configurationSignatureSupported", ["notSupported"]),
         _both(
             "requestsApplicationConfirmation",
@@ -950,7 +999,16 @@ def _database(
                                 ],
                             ),
                             _both("analogInputClass0ResponseMode", _class_0(served[Kind.AI])),
-                            _both("analogDeadbandAssignments", ["configurableViaOtherMeans"]),
+                            _setting(
+                                "analogDeadbandAssignments",
+                                (["configurableViaDNP3"] if outstation.at_least(4) else [])
+                                + ["configurableViaOtherMeans"],
+                                (
+                                    ["configurableViaDNP3"]
+                                    if outstation.at_least(4)
+                                    else ["configurableViaOtherMeans"]
+                                ),
+                            ),
                             _both("analogDeadbandAlgorithm", ["simple"]),
                         ],
                     )
@@ -1240,7 +1298,7 @@ def build(
                     ("networkConfig", _network(identity, facts)),
                     ("linkConfig", _link(facts)),
                     ("applConfig", _application(facts, codes)),
-                    ("outstationConfig", _outstation(facts)),
+                    ("outstationConfig", _outstation(facts, outstation.level)),
                     ("unsolicitedConfig", _unsolicited(facts)),
                     ("outstationPerformance", _performance(facts)),
                 ],

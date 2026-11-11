@@ -74,6 +74,7 @@ GROUP_CONSTANTS = {
     (objects, "GROUP_FROZEN_COUNTER_EVENT"): (23, "frozen counter events"),
     (objects, "GROUP_ANALOG_INPUT"): (30, "analog inputs"),
     (objects, "GROUP_ANALOG_INPUT_EVENT"): (32, "analog input events"),
+    (objects, "GROUP_ANALOG_DEADBAND"): (34, "analog input reporting deadbands"),
     (objects, "GROUP_COMMON_TIME"): (51, "time and date common time-of-occurrences"),
     (control, "GROUP_BINARY_OUTPUT_STATUS"): (10, "binary outputs"),
     (control, "GROUP_BINARY_OUTPUT_COMMAND"): (12, "binary output commands"),
@@ -166,7 +167,7 @@ def test_a_widened_event_read_is_sized_by_the_variation_sent() -> None:
     """The event sizes are keyed by the variation sent, never by the one read."""
     widened = session._WIDENED_EVENT_VARIATIONS  # pylint: disable=protected-access
     sizes = session._EVENT_SIZES  # pylint: disable=protected-access
-    assert widened == {22: {2: 1}, 23: {2: 1}}
+    assert widened == {22: {2: 1}, 23: {2: 1, 6: 5}}
     for group, answers in widened.items():
         for read, sent in answers.items():
             assert (group, sent) in sizes

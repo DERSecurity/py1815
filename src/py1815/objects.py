@@ -10,9 +10,10 @@ is given. That separation is what keeps the wire format testable without a map
 and a map reviewable without reading an encoder.
 
 **Integers are the baseline variation.** Floating-point analog inputs are not
-DNP3 Level 2 objects -- the profile permits them by agreement between master and
-outstation -- and any device offering them must offer the integer variations as
-well, so the integer path is the one that is always present.
+DNP3 Level 2 objects. They are Level 4 objects, and a device offering them must
+offer the integer variations as well, so the integer path is the one that is
+always present. A floating-point variation carries the value as it stands and
+does not apply a scale factor (D112).
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -35,6 +36,7 @@ GROUP_COUNTER_EVENT = 22
 GROUP_FROZEN_COUNTER_EVENT = 23
 GROUP_ANALOG_INPUT = 30
 GROUP_ANALOG_INPUT_EVENT = 32
+GROUP_ANALOG_DEADBAND = 34
 
 
 class BinaryQuality(IntEnum):
@@ -93,6 +95,8 @@ class AnalogEventVariation(IntEnum):
     INT16 = 2
     INT32_WITH_TIME = 3
     INT16_WITH_TIME = 4
+    FLOAT32 = 5
+    FLOAT32_WITH_TIME = 7
 
 
 class BinaryEventVariation(IntEnum):
@@ -460,10 +464,16 @@ _EVENT_TO_STATIC = {
     AnalogEventVariation.INT32_WITH_TIME: AnalogVariation.INT32_WITH_FLAG,
     AnalogEventVariation.INT16: AnalogVariation.INT16_WITH_FLAG,
     AnalogEventVariation.INT16_WITH_TIME: AnalogVariation.INT16_WITH_FLAG,
+    AnalogEventVariation.FLOAT32: AnalogVariation.FLOAT32_WITH_FLAG,
+    AnalogEventVariation.FLOAT32_WITH_TIME: AnalogVariation.FLOAT32_WITH_FLAG,
 }
 
 _TIMED_ANALOG_EVENTS = frozenset(
-    {AnalogEventVariation.INT32_WITH_TIME, AnalogEventVariation.INT16_WITH_TIME}
+    {
+        AnalogEventVariation.INT32_WITH_TIME,
+        AnalogEventVariation.INT16_WITH_TIME,
+        AnalogEventVariation.FLOAT32_WITH_TIME,
+    }
 )
 
 
@@ -594,4 +604,39 @@ ANALOG_EVENT_SIZES = {
     AnalogEventVariation.INT16: 3,
     AnalogEventVariation.INT32_WITH_TIME: 5 + TIME_SIZE,
     AnalogEventVariation.INT16_WITH_TIME: 3 + TIME_SIZE,
+    AnalogEventVariation.FLOAT32: 5,
+    AnalogEventVariation.FLOAT32_WITH_TIME: 5 + TIME_SIZE,
 }
+
+
+#: Octets one analog input deadband occupies in each variation of group 34.
+DEADBAND_SIZES = {1: 2, 2: 4, 3: 4}
+_DEADBAND_LIMITS = {1: 0xFFFF, 2: 0xFFFFFFFF}
+
+
+def encode_deadband(value: float, variation: int) -> bytes:
+    """Group 34: one analog input deadband, unsigned in variations 1 and 2.
+
+    A value at or above what the variation holds is sent as the largest it
+    holds, and a negative or non-numeric one as zero, as IEEE 1815-2012 A.18
+    has an outstation report one it cannot represent. Variation 3 is a
+    single-precision float, saturated like any other float on the wire.
+    """
+    if variation not in DEADBAND_SIZES:
+        raise ValueError(f"group 34 has no variation {variation}")
+    if math.isnan(value) or value < 0:
+        value = 0.0
+    if variation == 3:
+        return struct.pack("<f", min(value, _FLOAT32_MAX))
+    limit = _DEADBAND_LIMITS[variation]
+    counts = limit if math.isinf(value) else min(math.floor(value + 0.5), limit)
+    return counts.to_bytes(DEADBAND_SIZES[variation], "little")
+
+
+def decode_deadband(data: bytes, variation: int) -> float:
+    """Return the deadband in one group 34 object, which is never negative."""
+    if variation not in DEADBAND_SIZES or len(data) != DEADBAND_SIZES[variation]:
+        raise ValueError(f"group 34 variation {variation} is not {len(data)} octets")
+    if variation == 3:
+        return float(struct.unpack("<f", data)[0])
+    return float(int.from_bytes(data, "little"))

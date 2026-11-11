@@ -74,6 +74,11 @@ class AnalogEvent:
     #: Not part of what the event says, so two events are still equal
     #: without it; it is what puts a response in the order things happened.
     order: int = field(default=0, compare=False)
+    #: The value as the source gave it, for the floating-point variations.
+    #: ``point`` carries the value after scaling and rounding to the integer
+    #: that decides whether a change is an event. None means the floating-point
+    #: variations carry ``point``'s value.
+    unscaled: float | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -367,7 +372,7 @@ class EventBuffers:
             )
         return index
 
-    def record_analog(
+    def record_analog(  # pylint: disable=too-many-arguments
         self,
         index: int,
         point: AnalogPoint,
@@ -375,8 +380,13 @@ class EventBuffers:
         event_class: EventClass,
         deadband: float = 0.0,
         timestamp_ms: int | None = None,
+        unscaled: float | None = None,
     ) -> AnalogEvent | None:
-        """Record an analog reading, returning the event it generated, if any."""
+        """Record an analog reading, returning the event it generated, if any.
+
+        ``unscaled`` is the value a floating-point variation reports for the
+        event. It plays no part in deciding whether the change is an event.
+        """
         self._checked_index(index)
         previous = self._last_analog.get(index)
         if previous is not None and not self._analog_changed(previous, point, deadband):
@@ -387,6 +397,7 @@ class EventBuffers:
             point,
             timestamp_ms if timestamp_ms is not None else now_ms(),
             order=self._next_order(),
+            unscaled=unscaled,
         )
         self._last_analog[index] = point
         if self._analog_latest_only:

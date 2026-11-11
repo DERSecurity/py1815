@@ -306,6 +306,15 @@ The one write this outstation honors is a master clearing the restart
 indication, at group 80 variation 1 index 7. An outstation that never cleared it
 would flag every response it ever sent.
 
+A session built with `deadband_provider` also takes a write of group 34, the
+analog input reporting deadbands, in variations 1 to 3, by range or by index, and
+hands every deadband of the write to the provider at once; a write naming an index
+the provider does not hold is refused as a parameter error and applies none of it.
+`extended_events=True` lets a master read floating-point analog events and 16-bit
+frozen counter events with time by group, and lets `analog_event_variation` be a
+floating-point variation. `DerOutstation.session()` sets both at Level 4; see
+[Level 4](der.md#level-4-floating-point-and-deadbands).
+
 ### Reading the time and the internal indications
 
 A session built with `time_source` answers a read of the current time: group 50

@@ -70,7 +70,7 @@ keep their defaults.
 | `master_address` | `1` | `--master-address`, `--any-master` | The master's DNP3 link address. `null` (or `--any-master`) serves whichever master speaks first on a connection |
 | `unsolicited` | `false` | `--unsolicited` | Send unsolicited responses: announce a restart, and report the events of each class a master enables |
 | `read_only` | `false` | `--read-only` | Refuse every control, so a master can read and cannot command. See [Reporting without commanding](der.md#reporting-without-commanding) |
-| `level` | `null` | `--level` | The DNP3 subset level to claim and answer at: `2`, `3` or `4`. `null` claims Level 2 and serves the profile's additions. Level 2 answers without the additions. See [Choosing a subset level](der.md#choosing-a-subset-level). `level2: true` and `--level2` are the earlier spelling of `2` |
+| `level` | `null` | `--level` | The DNP3 subset level to claim and answer at: `2`, `3` or `4`. `null` claims Level 2 and serves the profile's additions. Level 2 answers without the additions. Level 4 also serves floating-point variations and deadbands a master reads and writes. See [Choosing a subset level](der.md#choosing-a-subset-level). `level2: true` and `--level2` are the earlier spelling of `2` |
 | `disabled_offline` | `true` | | Clear the `ONLINE` flag on the inputs of a function that is disabled, as IEEE 1815.2 clause 6.1.1 requires |
 | `event_capacity` | `2000` | `--event-capacity` | Events each class holds before the oldest is dropped |
 | `max_response` | `2048` | `--max-response` | Largest response fragment to send, in octets |

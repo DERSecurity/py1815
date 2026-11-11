@@ -18,6 +18,7 @@ from py1815.application import (
     parse_request,
 )
 from py1815.objects import (
+    ANALOG_EVENT_SIZES,
     GROUP_ANALOG_INPUT,
     GROUP_ANALOG_INPUT_EVENT,
     GROUP_BINARY_INPUT,
@@ -33,10 +34,12 @@ from py1815.objects import (
     analog_range,
     binary_flags,
     binary_range,
+    decode_deadband,
     encode_analog,
     encode_analog_event,
     encode_binary,
     encode_binary_event,
+    encode_deadband,
     encode_time,
     event_block,
 )
@@ -398,3 +401,90 @@ class TestEventBlocks:
     def test_an_empty_block_is_refused(self):
         with pytest.raises(ValueError, match="at least one event"):
             event_block(GROUP_ANALOG_INPUT_EVENT, AnalogEventVariation.INT32, [])
+
+
+class TestFloatingPointEvents:
+    def test_an_event_without_time_is_the_flag_and_a_float(self):
+        encoded = encode_analog_event(
+            AnalogPoint(241.5), variation=AnalogEventVariation.FLOAT32, timestamp_ms=None
+        )
+        # Flag ONLINE, then 241.5 as a little-endian single-precision float.
+        assert encoded == bytes.fromhex("01 00 80 71 43")
+
+    def test_an_event_with_time_adds_the_six_octet_time(self):
+        encoded = encode_analog_event(
+            AnalogPoint(241.5),
+            variation=AnalogEventVariation.FLOAT32_WITH_TIME,
+            timestamp_ms=5000,
+        )
+        assert encoded == bytes.fromhex("01 00 80 71 43 88 13 00 00 00 00")
+
+    def test_the_timed_and_untimed_forms_refuse_a_time_that_disagrees(self):
+        with pytest.raises(ValueError, match="carries a timestamp"):
+            encode_analog_event(AnalogPoint(1.5), variation=AnalogEventVariation.FLOAT32_WITH_TIME)
+        with pytest.raises(ValueError, match="carries no timestamp"):
+            encode_analog_event(
+                AnalogPoint(1.5), variation=AnalogEventVariation.FLOAT32, timestamp_ms=5000
+            )
+
+    def test_the_sizes_match_what_is_encoded(self):
+        timed = (
+            AnalogEventVariation.INT32_WITH_TIME,
+            AnalogEventVariation.INT16_WITH_TIME,
+            AnalogEventVariation.FLOAT32_WITH_TIME,
+        )
+        for variation, size in ANALOG_EVENT_SIZES.items():
+            encoded = encode_analog_event(
+                AnalogPoint(7),
+                variation=variation,
+                timestamp_ms=5000 if variation in timed else None,
+            )
+            assert len(encoded) == size
+
+
+class TestDeadbandEncoding:
+    @pytest.mark.parametrize(
+        ("value", "variation", "octets"),
+        [
+            (10, 1, "0A 00"),
+            (10, 2, "0A 00 00 00"),
+            (7.5, 3, "00 00 F0 40"),
+            (7.5, 1, "08 00"),
+            (7.4, 2, "07 00 00 00"),
+            (0, 1, "00 00"),
+            # The largest value the variation holds, which is what an outstation
+            # reports for one at or past it.
+            (65535, 1, "FF FF"),
+            (70000, 1, "FF FF"),
+            (4294967295, 2, "FF FF FF FF"),
+            (5e9, 2, "FF FF FF FF"),
+            (float("inf"), 1, "FF FF"),
+            (float("inf"), 2, "FF FF FF FF"),
+        ],
+    )
+    def test_octets(self, value, variation, octets):
+        assert encode_deadband(value, variation) == bytes.fromhex(octets)
+
+    @pytest.mark.parametrize("variation", [1, 2, 3])
+    def test_a_value_that_is_not_a_deadband_is_sent_as_zero(self, variation):
+        assert not any(encode_deadband(-3.0, variation))
+        assert not any(encode_deadband(float("nan"), variation))
+
+    def test_a_float_past_what_a_single_holds_saturates(self):
+        assert encode_deadband(1e300, 3) == struct.pack("<f", 3.4028234663852886e38)
+
+    def test_there_is_no_variation_0_or_4(self):
+        for variation in (0, 4):
+            with pytest.raises(ValueError, match="no variation"):
+                encode_deadband(1, variation)
+
+    @pytest.mark.parametrize(
+        ("octets", "variation", "value"),
+        [("FF FF", 1, 65535), ("01 00 00 80", 2, 2147483649), ("00 00 A0 40", 3, 5.0)],
+    )
+    def test_decoding_reads_the_octets_as_unsigned_or_float(self, octets, variation, value):
+        assert decode_deadband(bytes.fromhex(octets), variation) == value
+
+    def test_decoding_refuses_the_wrong_width(self):
+        with pytest.raises(ValueError, match="octets"):
+            decode_deadband(bytes.fromhex("00 00"), 2)
