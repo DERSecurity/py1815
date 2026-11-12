@@ -3584,14 +3584,8 @@ class Session:
                     if variation == FROZEN_COUNTER_EVENT_VARIATION
                     else encode_counter(event.point)
                 )
-            elif isinstance(event, CounterEvent):
-                # A class read and variation 0 are answered in variation 1,
-                # 32 bits with flag (D124).
-                group = GROUP_COUNTER_EVENT
-                variation = _answered_in(group, named) or 1
-                encoded = encode_counter(event.point)
-            elif isinstance(event, (BinaryOutputEvent, AnalogOutputEvent)):
-                group, variation, encoded = _encode_output_event(event, named)
+            elif isinstance(event, (CounterEvent, BinaryOutputEvent, AnalogOutputEvent)):
+                group, variation, encoded = _encode_change_event(event, named)
             else:
                 group = GROUP_BINARY_INPUT_EVENT
                 variation = named or int(_BINARY_EVENT_VARIATION)
@@ -3755,13 +3749,18 @@ class Session:
         )
 
 
-def _encode_output_event(
-    event: BinaryOutputEvent | AnalogOutputEvent, named: int
+def _encode_change_event(
+    event: CounterEvent | BinaryOutputEvent | AnalogOutputEvent, named: int
 ) -> tuple[int, int, bytes]:
-    """Return the group, variation and octets of an output event.
+    """Return the group, variation and octets of a counter or output event.
 
     ``named`` is the variation the read asked for, or 0 for the default.
     """
+    if isinstance(event, CounterEvent):
+        # A class read and variation 0 are answered in variation 1, 32 bits
+        # with flag (D124).
+        variation = _answered_in(GROUP_COUNTER_EVENT, named) or 1
+        return GROUP_COUNTER_EVENT, variation, encode_counter(event.point)
     if isinstance(event, BinaryOutputEvent):
         variation = named or _BINARY_OUTPUT_EVENT_VARIATION
         return (

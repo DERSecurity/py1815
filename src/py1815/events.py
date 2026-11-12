@@ -195,7 +195,9 @@ class _ClassBuffer:
         return evicted
 
 
-class EventBuffers:
+# Each kind of point has its own prime and record method, which puts the class
+# over pylint's limit on public methods.
+class EventBuffers:  # pylint: disable=too-many-public-methods
     """Per-class event storage, and the deadband rules that fill it.
 
     Holds the last reported value per point so a deadband can be applied against
