@@ -1,14 +1,13 @@
 # Serving an outstation
 
-!!! warning "Early development"
+!!! note "Status"
     The protocol layers, the listener, controls and the event path are
     implemented and tested: a master reads classes 1 to 3, confirms what it was
     sent, and is told through the indication bits what is still waiting. An
     answer too large for one fragment is a conversation:
     the master confirms each fragment and the next follows. Unsolicited
-    responses are there for a session built to send them, and off otherwise. The first release is
-    `0.1.0` and the API is not stable: while the major version is `0`, a minor
-    bump may carry a breaking change.
+    responses are there for a session built to send them, and off otherwise.
+    From 1.0.0, a breaking change takes a new major version.
 
 ## The shape of it
 

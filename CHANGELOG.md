@@ -1,13 +1,84 @@
 # Changelog
 
 Notable changes to this project, newest first. Versions follow
-[semantic versioning](https://semver.org/spec/v2.0.0.html): while the major
-version is `0`, a minor bump may carry a breaking change and the release note
-says so explicitly.
+[semantic versioning](https://semver.org/spec/v2.0.0.html): from 1.0.0, a
+breaking change takes a new major version. Before 1.0.0, a minor bump could
+carry a breaking change, and the release note says so explicitly.
 
 ## [Unreleased]
 
 Nothing yet.
+
+## [1.0.0] - 2026-11-12
+
+The first stable release: from here on, a breaking change takes a new major version. It
+adds Subset Levels 3 and 4. The outstation takes a subset level of 2, 3 or 4, and at Levels
+3 and 4 serves what those levels add: reads by variation and by range, the time and the
+internal indications, counter and frozen counter events, class assignment, floating-point
+and time-stamped variations, analog input deadbands, binary and analog output events,
+double-bit binary inputs and device attributes. The master is held to each outstation's
+subset level and sends the Level 3 and Level 4 requests. CI runs dnp3c under revision 3.1
+rev 1 of the DNP3 IED Certification Procedure at Subset Level 3, and every procedure that
+runs passes. That procedure stops at Level 3, and no test checks Level 4 against the DNP
+Users Group subset tables: Level 4 is implemented and covered by the unit suite, and is not
+certified. `py1815.catalog` names every object in
+IEEE 1815-2012, and `python -m py1815.object_coverage` reports what the library does with
+each. The project is now marked Production/Stable.
+
+**Breaking change.** The master reads named points from an outstation set to Level 2, the
+default, by asking for each point type whole and keeping the points named, where it sent
+start-stop ranges (#119). A read of a point the outstation does not have now comes back
+empty instead of drawing a parameter error. Set `level` to 3 or 4 for an outstation that
+supports it to keep range reads. An outstation given no level answers as before, and
+`level2=True` still works but warns that it is deprecated.
+
+### Added
+
+- **A Level 3 or 4 outstation answers four more reads.** It reads the packed binary input variation (group 1 variation 1, answered with flags), 16-bit frozen counter events (group 23 variation 2, answered in 32 bits), the current time (group 50 variation 1) and the internal indications (group 80 variation 1, indexes 0 to 15). Level 2 and the default refuse them as before. `Session` takes `time_source` and `indications_read` for the last two. The master reads group 80 variation 1 in a response. (#110)
+
+  **A Level 3 or 4 outstation reports counter events when a counter's flags change.** A counter that loses or regains communication raises a group 22 event with its count and new flags, reported in the class of its frozen counter events by class polls, unsolicited responses and reads of group 22 variations 0, 1 and 2, all in variation 1. A change in value raises none unless the event policy turns value events on for that counter (#112); IEEE 1815-2012 11.9.5.2 and TB2016-003b Table 12-49 footnote o make them optional. The Device Profile states the counter event class and that value changes are not reported. Level 2 and the default report no counter events, as before. (#110)
+
+- **The outstation accepts ASSIGN_CLASS at Levels 3 and 4.** A master can move binary inputs, counters, frozen counters and analog inputs between event classes, or give them class 0 to turn their events off, and every class poll after the request reflects it. Level 4 also takes the output groups. Events already buffered stay in the class they were recorded in, and a restart returns every point to its starting class. Level 2 and the default still refuse function code 22. The Device Profile lists the function for the groups the level takes. (#111)
+
+- **A counter can report changes of its count as events, from Level 3.** An event policy rule with `"value_changes": true` has a counter raise a group 22 event when its count changes, beside the event every change of its flags raises; a `deadband` on the same rule, in engineering units, is how far the count moves from the count in the last event before the change is an event. It is off unless a rule turns it on. The Device Profile states which counters report value changes, in `reportValueChangeCounterEvents` and in each counter's `reportCounterValueChangeEvents`. (#112)
+
+- **A Level 4 outstation serves the floating-point and time-stamped analog and counter variations (#113).** With `level=4`, a master reads analog inputs as single-precision floats (group 30 variation 5), analog output status as floats (group 40 variation 3), and analog input events as floats without and with time (group 32 variations 5 and 7), and a class poll may be answered in either float variation. A 16-bit frozen counter, and a 16-bit frozen counter event, with time are answered in 32 bits, as the other 16-bit counters are. Floating-point variations carry the value in engineering units and do not apply the point's multiplier. Below Level 4 each is an unknown object, and a session refuses a floating-point `analog_event_variation`. The Device Profile lists them.
+
+- **A master can read and write analog input deadbands (#114).** With `level=4`, group 34 variations 1 to 3 are read by range, by index or with all objects, and written by range or by index. A written deadband replaces the configured one and decides when that input next raises an event; it is lost when the outstation restarts. Variations 1 and 2 are counts in the transmitted units and variation 3 is in engineering units. A write that names an input that is not served, or carries a negative value or one that is not a number, is refused as a parameter error and changes nothing. The master's decoder reads group 34, and the Device Profile says deadbands are set over DNP3.
+
+- **A Level 4 outstation reports binary and analog output events, and the master decodes command events (#115).** With `level=4`, an output whose value or flags change raises a group 11 or group 42 event, starting in the class of the input paired with it, which class 1, 2 and 3 polls and reads of the group return, with overflow handling as for the inputs. An assign-class request that names group 10 or group 40 moves an output's events to another class, or turns them off with class 0, which keeps the output in class 0; assigning the paired input moves only the input, and one that names group 12 or group 41 changes nothing. Class 0 then carries the status of each output that has a class, as the subset tables require when output events are reported. Reads of groups 13 and 43 are answered with a null response, since command events are not generated. The Device Profile lists the new groups and each output's class. The master decodes groups 13 and 43. Levels 2 and 3 and the default answer as before.
+
+- **An outstation at Subset Level 4 serves double-bit binary inputs (#116).** A point map can hold points of the new kind `DBI`; `Binding.read(Kind.DBI, index, reader)` binds one to a reader that returns its state, 0 to 3. At Level 4 the outstation answers group 3 reads in the packed variation and in the variation with flags (a point in an exception condition always takes the variation with flags), reports state and quality changes as group 4 events without time, with absolute time, or with relative time behind a common time of occurrence, and includes the points in class 0 and in class 1 to 3 reads. An assign-class request naming group 3 moves the points' events to another class or turns them off. Below Level 4 groups 3 and 4 are unknown objects. The Device Profile declares the points, and the master reads, decodes and stores them (`read(double_bit_inputs=...)`, `Store.double_bit_input`, point type `dbi` in the API). The master console shows them in a table of their own.
+
+- **A Level 4 outstation serves device attributes, and the master reads them.** With `level` 4 the outstation answers reads of object group 0 for every attribute Level 4 requires, the list of attribute variations and the read of all attributes. It takes writes of the location name, ID code and device name, and of the maximum transmit fragment size, which changes how its responses are fragmented. Values come from the points served, the session and the `identity` settings, which gain `serial_number`, `location_name`, `device_id` and `device_name`; `timing_accuracy_us` sets the reported timing accuracy. A written value lasts until the outstation restarts. The Device Profile lists the attributes. The master's decoder and the traffic records read group 0 by the length each attribute states, and the traffic records by the size prefix where a response carries one. (#117)
+
+- **The master is given each outstation's subset level, and sends no request above it (#118).** Set `level` to 2, 3 or 4 when adding an outstation, in the configuration file, or with `--level`. It is 2 when not given. A request above the level raises `AboveSubsetLevel` and is not sent, as IEEE 1815-2012 14.7.2 requires of a master. The console's add form has a **Subset level** field, and the Overview tab shows it. The checks of the `subset` set are not applicable below the level they need.
+
+- **The master sends the requests of Subset Level 3 and Level 4 (#119).** `read_group` reads a group by a named variation, by a range of points or by a list of indices; `read_time` and `read_indications` read the time (group 50) and the internal indications (group 80); `assign_class` sends ASSIGN_CLASS for named points, double-bit inputs among them; `read_deadbands` and `write_deadbands` read and write analog input deadbands (group 34); `read_attributes` and `write_attribute` read and write device attributes (group 0). Each is on the Python master, in the service and its HTTP API and in the OpenAPI document, except `read_deadbands`, which is on the Python master only: the service and the HTTP API read deadbands with `read_group` on group 34. Each is refused before it is sent when the outstation is set to a lower level.
+
+  **The console and `py1815-master evaluate` cover the requests of Subset Level 3 and Level 4 (#119).** The console's Commands tab reads by variation, by range or by list, reads the time, the internal indications, the device attributes and the deadbands, and with `--allow-control` assigns event classes and writes deadbands and attributes. The `subset` set of `py1815-master evaluate` checks what a Level 3 and a Level 4 outstation answer.
+
+- **An object catalog names every group and variation in IEEE 1815-2012, and a command reports what the library does with each (#120).** `py1815.catalog` lists each object by group, variation, name, type and size, and `tests/test_conformance.py` checks it against Annex A as `scripts/extract_conformance.py` reads it into `conformance/ieee-1815-2012.json`. `python -m py1815.object_coverage` lists, for every variation, whether the outstation serves it, accepts it in a request and whether the master reads it, and adds the subset level when given your copy of the DNP Users Group subset tables.
+
+### Changed
+
+- **CI tests a locked set of development dependencies, and the release SBOM says so (#107).** `uv.lock` pins the versions CI installs, so a new upstream release cannot change what CI tests until a Dependabot pull request updates the lock. The package still has no runtime dependencies and the lock does not ship. Set up a development environment with `uv sync --extra dev`. When a release has runtime dependencies, its SBOM records their resolution as `tested-lock`: the versions the lock pins and the test suite runs against, which a consumer resolving the ranges may not get. A release with none, as this package is today, has an SBOM that says it has no runtime dependencies.
+
+- **The outstation takes a subset level of 2, 3 or 4.** Set it with `DerOutstation(level=...)`, `"level"` in the configuration file or `--level` on the command line; the Device Profile reports the level. `level2=True`, `"level2": true` and `--level2` still mean level 2, and the keyword warns that it is deprecated. (#109)
+
+- **A Level 3 outstation reports frozen counters and frozen counter events without time.** A read of frozen counters that names no variation is answered in variation 1, and class polls and unsolicited responses carry frozen counter events in variation 1, as Tables 12-21 and 12-25 list for Level 3. Level 4 and the default keep the variations with time. `Session` takes `frozen_counter_event_variation` to choose. (#110)
+
+- **The dnp3c conformance run is held at Subset Level 3.** CI runs revision 3.1 rev 1 of the IED certification procedures with dnp3c against a Level 3 configuration of the outstation, in place of the Level 2 run, and `compliance/` keeps the report of that run. The device reports counter events, with value changes turned on by its event policy, frozen counter events and class assignment. The unit suite carries out the procedures Level 3 requires at Level 3 as well as at Level 2: unsolicited responses, frozen counter events, point ranges, specific variations and class assignment. (#112)
+
+- **A read of named points to an outstation set to Level 2 asks for each point type whole (#119).** IEEE 1815-2012 Table 14-3 and TB2016-003b give a Level 2 outstation static reads with qualifier 0x06 only; reads by range are Level 3. So `read(...)`, the service's `read`, the console's **Read points** and the DER profile's reads now ask an outstation set to Level 2, the default, for every point of each type named, and return only the points named. An outstation set to Level 3 or 4 is still asked by ranges of indices. A read of a point the outstation does not have now comes back empty from a Level 2 outstation, where a range read drew a parameter error. Set `level` to 3 or 4 for an outstation that supports it to keep the smaller requests.
+
+### Fixed
+
+- **A freeze-and-clear clears the counters at Levels 3 and 4, as at Level 2.** TB2016-003b Table 12-19 requires it of every subset level, so an outstation given a level now clears on function codes 9 and 10. Only an outstation given no level, which serves the IEEE 1815.2 profile, keeps its counters through a freeze-and-clear. (#112)
+
+### Security
+
+- **Dependabot now proposes every new dependency release, not only security fixes (#107).** A weekly pull request per ecosystem groups the minor and patch releases of the locked Python dependencies, the GitHub Actions, the container base image and the Rust interop peers. Each major release gets its own pull request.
 
 ## [0.4.0] - 2026-10-28
 

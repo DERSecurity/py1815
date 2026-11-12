@@ -2,15 +2,14 @@
 
 A DNP3 (IEEE 1815) outstation in pure Python.
 
-!!! warning "Early development"
+!!! note "Status"
     The protocol layers, the listener, controls and the event path are
     implemented and tested: a master reads classes 1 to 3, confirms what it was
     sent, and is told through the indication bits what is still waiting.
     Unsolicited responses, outstation-initiated traffic, are there for a session
     built to send them. An answer too large for one fragment is a conversation:
-    the master confirms each fragment and the next follows. The first release is
-    `0.1.0` and the API is not stable: while the major version is `0`, a minor
-    bump may carry a breaking change.
+    the master confirms each fragment and the next follows.
+    From 1.0.0, a breaking change takes a new major version.
 
 ## Why it is pure Python
 
