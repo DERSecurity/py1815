@@ -493,12 +493,18 @@ class TestCommands:
     async def test_a_request_the_outstation_refuses_says_so(self, console):
         page = console.page
         await console.tab("commands")
+        # The simulated DER serves no double-bit inputs below Level 4, so it
+        # answers a read of group 3 with OBJECT_UNKNOWN. A read of a point it
+        # lacks is no longer refused: a master held to Level 2 reads the whole
+        # group and keeps the points named (D82).
         await page.evaluate(
             "(() => { const form = document.querySelector('#read-form');"
-            " form.elements.type.value = 'ai'; form.elements.indices.value = '60000';"
+            " form.elements.type.value = 'dbi'; form.elements.indices.value = '0';"
             " form.requestSubmit(); })()"
         )
-        await page.wait_for("document.querySelector('#result').textContent.includes('PARAM_ERROR')")
+        await page.wait_for(
+            "document.querySelector('#result').textContent.includes('OBJECT_UNKNOWN')"
+        )
         assert await page.text("#result .outcome") == "complete"
 
     @pytest.mark.asyncio

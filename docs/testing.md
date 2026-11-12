@@ -89,7 +89,8 @@ its Python bindings do not offer them.
 The first run found a real fault. The master read named points with the
 index-list qualifiers (0x17 and 0x28), which a Subset Level 2 outstation is not
 required to accept, and opendnp3 rejected them. The master now reads named
-points as start-stop ranges (D82).
+points as start-stop ranges from an outstation set to Level 3 or 4, and reads the
+whole group from one set to Level 2, which is the only form Level 2 requires (D82).
 
 ### The function code sweep
 

@@ -1295,18 +1295,28 @@ read more slowly than it could be; a reading service leaves an outstation saying
 restarted; and a connection that could not be made in the first place is still the
 caller's to retry.
 
-**D82 -- The master reads named points as start-stop ranges.** A read of named points
-sends one range header (qualifier 0x00 or 0x01) for each run of consecutive indices,
-in ascending order. A Subset Level 2 outstation must accept ranges in a read. The
-index-list qualifiers (0x17 and 0x28) are optional at that level, and opendnp3
-rejects them: the master used them at first, and the first run against an
-independent outstation returned nothing for every such read. The master is tested
-against two outstations this project did not write on every pull request, because
-its tests against this library's own outstation could not have found this: that
-outstation accepts both forms.
-*Trade-off:* scattered indices cost one header each (5 or 7 octets) where an index
-list would cost 1 or 2 octets each, and the points come back in ascending order
-whatever order they were asked in.
+**D82 -- The master reads named points as start-stop ranges from a Level 3 or 4
+outstation, and reads the whole group from a Level 2 one.** A static read by start and
+stop is a Level 3 request: IEEE 1815-2012 Table 14-3 gives a Level 2 outstation reads of
+groups 1, 10, 20, 21, 30 and 40 with qualifier 0x06 only, Table 14-4 adds the start-stop
+qualifiers 0x00 and 0x01 at Level 3, and TB2016-003b Tables 12-3, 12-11, 12-19, 12-21,
+12-27 and 12-37 mark the same rows (0x06 from Level 2, or Level 1 for groups 10 and 40;
+0x00 and 0x01 from Level 3). So a read of named points to an outstation set to Level 3 or
+4 (D122) sends one range header for each run of consecutive indices, in ascending order,
+and a read to one set to Level 2, the master's default, asks for every point of each type
+named and returns only the points named; the store keeps every value received. The
+index-list qualifiers (0x17 and 0x28) are never used for named points: the subset tables
+list them for static reads only in the subset-independent column, so no level requires
+them, and opendnp3 rejects them. The master used them at first, and the first run against
+an independent outstation returned nothing for every such read. The master is tested
+against two outstations this project did not write on every pull request, because its
+tests against this library's own outstation could not have found this: that outstation
+accepts every form. This text corrects an earlier one that said a Level 2 outstation must
+accept ranges; the tables say it need not.
+*Trade-off:* a Level 2 read of one point costs the response of its whole group, which
+for a large group is several frames or fragments, and at Level 3 and 4 scattered indices
+cost one header each (5 or 7 octets) where an index list would cost 1 or 2 octets each.
+The points come back in ascending order whatever order they were asked in.
 
 **D83 -- The master tries again only a read, and a first connection when asked.** A read
 that times out with nothing received is sent again `read_retries` times, under its own
@@ -1478,7 +1488,8 @@ absent; a point returned that is not declared is undeclared; class 0 membership 
 checked against the class 0 read. An outstation may refuse a whole read for one range
 that holds no point it serves (D63), and a profile names many points an outstation may
 leave out, so a read of the profile that is refused whole is made again one range at a
-time. A read changes nothing, so making it again is not the repetition D80 forbids. A
+time, or one point type at a time to an outstation read a whole group at a time (D82). A
+read changes nothing, so making it again is not the repetition D80 forbids. A
 point's event class and deadband cannot be asked of an outstation, so they are listed
 as the document declares them. A document that declares a document type is refused
 before it is parsed: a Device Profile needs none, and an entity declared there is how an
@@ -2109,7 +2120,36 @@ list. A data type code this library has no name for is walked past by its length
 traffic walk reads group 0 the same way and keeps the octets after the header as the
 header's `data`. The Device Profile lists every attribute under its implementation table
 at Level 4, because the schema has no element for attributes beyond that.
-*Trade-off:* a master reads attributes but has no request helper for them yet.
+*Trade-off:* an attribute with a data type this library has no name for is kept as
+octets and not interpreted. The requests that read and write attributes are D122's.
+
+**D122 -- The master is told each outstation's subset level, holds to Level 2 until told, and
+refuses a request above it.** An outstation has a `level` of 2, 3 or 4 (`SubsetLevel`), given
+to `Outstation(level=...)` and `Loopback(level=...)`, as `level` in `add` and in the
+configuration, and with `--level`. IEEE 1815-2012 14.7.2 requires a master to be
+configurable to avoid the requests an outstation of a lower level cannot parse. The
+default is Level 2, the lowest level this library implements: a master that is not told
+what an outstation supports sends nothing the standard leaves out of Level 2, and a person
+who points it at real equipment chooses to send more. A request that needs more raises
+`AboveSubsetLevel` (a `ValueError`, so the service reports it as a `request` error) before
+anything is built or sent. The level of a request is read from TB2016-003b's request
+tables: a static group read by a variation or a range is Level 3, as are a variation of
+groups 22 and 32, group 23, the time, the internal indications and an ASSIGN_CLASS of
+binary inputs, counters, frozen counters and analog inputs (Tables 12-3, 12-19, 12-21,
+12-23, 12-25, 12-27, 12-31, 12-45 and 12-52); device attributes, deadbands, the groups only
+Level 4 defines, and an ASSIGN_CLASS of double-bit inputs or output status are Level 4
+(Tables 12-1, 12-7, 12-11, 12-35 and 12-37). A read by index list of a static group, and a
+group or variation the tables do not name (such as g10v1, g30v6 or g32v6), are listed at no
+level; they are taken to need Level 4, the highest this master knows, so that nothing is
+sent that a lower level might not parse. The requests that existed before the level are
+not held to it, except that `read` changes form with it (D82); `request` and `broadcast`
+send the octets they are given. Attributes are built with the outstation's own attribute
+encoding (D119), so both sides agree on it: a number takes the fewest octets of 1, 2 or 4,
+and text is visible ASCII of at most 255 characters, the most a length octet holds.
+*Trade-off:* the default refuses Level 3 and 4 requests until the level is set, which a
+person who knows the outstation is Level 4 has to do once. The level is the operator's
+statement and is not read from the outstation. An outstation that accepts index lists
+below Level 4 is still not sent one.
 
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in its
 value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter

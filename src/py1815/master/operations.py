@@ -12,14 +12,18 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from py1815 import link
 from py1815.application import FunctionCode
-from py1815.decode import PointType
+from py1815.attributes import Variation
+from py1815.decode import DecodedObject, PointType
 from py1815.master import controls, requests
+from py1815.master.association import Exchange
 from py1815.master.timesync import LAN, TimeSync
+from py1815.subset import SubsetLevel
 
 #: What an operation returns: an :class:`~py1815.master.association.Exchange`,
 #: or an awaitable of one.
@@ -80,6 +84,16 @@ ALL: Literal["all"] = "all"
 
 Indices = Sequence[int] | Literal["all"] | None
 
+#: A test of which objects of a response an operation returns.
+Keep = Callable[[DecodedObject], bool]
+
+
+def kept(exchange: Exchange, keep: Keep | None) -> Exchange:
+    """Return the exchange with only the objects ``keep`` accepts, or as it is without one."""
+    if keep is None:
+        return exchange
+    return replace(exchange, objects=tuple(each for each in exchange.objects if keep(each)))
+
 
 def _event_classes(classes: Sequence[int]) -> Sequence[int]:
     named = classes or (1, 2, 3)
@@ -88,12 +102,37 @@ def _event_classes(classes: Sequence[int]) -> Sequence[int]:
     return named
 
 
-class Operations(Generic[ResultT, OperatedT, SyncedT]):
+class Operations(Generic[ResultT, OperatedT, SyncedT]):  # pylint: disable=too-many-public-methods
     """What a master can be asked to do."""
 
+    #: The subset level of the outstation this master talks to. A request that
+    #: only a higher level is required to parse is refused with
+    #: :class:`~py1815.master.requests.AboveSubsetLevel` before it is sent
+    #: (IEEE 1815-2012 14.7.2). See :data:`~py1815.master.requests.DEFAULT_LEVEL`.
+    level: SubsetLevel = requests.DEFAULT_LEVEL
+
+    def _require(self, needed: SubsetLevel, what: str) -> None:
+        """Refuse a request that needs a higher subset level than the outstation's."""
+        if self.level < needed:
+            raise requests.AboveSubsetLevel(
+                f"{what} is a Level {int(needed)} request, and this outstation is set to "
+                f"Level {int(self.level)}. Set its level to {int(needed)} or higher only if "
+                "the outstation supports it"
+            )
+
     def _exchange(
-        self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
+        self,
+        function: FunctionCode,
+        body: bytes,
+        *,
+        broadcast: link.Broadcast | None = None,
+        keep: Keep | None = None,
     ) -> ResultT:
+        """Make one request and return its exchange.
+
+        With ``keep``, the exchange returned holds only the objects ``keep``
+        accepts. The store and the exchange log get every object received.
+        """
         raise NotImplementedError
 
     def _carry_out(self, plan: controls.Plan) -> OperatedT:
@@ -248,16 +287,34 @@ class Operations(Generic[ResultT, OperatedT, SyncedT]):
         Each argument is the indices wanted of one point type, or ``"all"``
         for every point of that type. The outstation answers in whichever
         variation it sends by default.
+
+        An outstation set to Level 3 or 4 is asked for the points by ranges
+        of indices. One set to Level 2 is asked for every point of each type
+        named, the only static read Level 2 requires, and the exchange
+        returned holds the points named and no others (D82).
         """
-        named = {
-            PointType.BINARY_INPUT: binary_inputs,
-            PointType.BINARY_OUTPUT: binary_outputs,
-            PointType.COUNTER: counters,
-            PointType.FROZEN_COUNTER: frozen_counters,
-            PointType.ANALOG_INPUT: analog_inputs,
-            PointType.ANALOG_OUTPUT: analog_outputs,
-            PointType.DOUBLE_BIT_INPUT: double_bit_inputs,
-        }
+        wanted = self._points(
+            {
+                PointType.BINARY_INPUT: binary_inputs,
+                PointType.BINARY_OUTPUT: binary_outputs,
+                PointType.COUNTER: counters,
+                PointType.FROZEN_COUNTER: frozen_counters,
+                PointType.ANALOG_INPUT: analog_inputs,
+                PointType.ANALOG_OUTPUT: analog_outputs,
+                PointType.DOUBLE_BIT_INPUT: double_bit_inputs,
+            }
+        )
+        if requests.reads_ranges(self.level):
+            return self._exchange(FunctionCode.READ, requests.read_points(wanted))
+        return self._exchange(
+            FunctionCode.READ,
+            requests.read_points(wanted, ranges=False),
+            keep=requests.named(wanted),
+        )
+
+    @staticmethod
+    def _points(named: Mapping[PointType, Indices]) -> dict[PointType, Sequence[int] | None]:
+        """Return the points named, as indices by type, with ``"all"`` as None."""
         wanted: dict[PointType, Sequence[int] | None] = {}
         for point, indices in named.items():
             if indices is None:
@@ -269,5 +326,132 @@ class Operations(Generic[ResultT, OperatedT, SyncedT]):
             else:
                 wanted[point] = list(indices)
         if not wanted:
-            raise ValueError("a read names at least one point")
-        return self._exchange(FunctionCode.READ, requests.read_points(wanted))
+            raise ValueError("a request names at least one point")
+        return wanted
+
+    def read_group(
+        self,
+        group: int,
+        variation: int = requests.DEFAULT_VARIATION,
+        *,
+        start: int | None = None,
+        stop: int | None = None,
+        indices: Sequence[int] | None = None,
+    ) -> ResultT:
+        """Read one group in one variation: every object, a range, or named points.
+
+        ``variation`` 0 asks for whichever the outstation sends by default.
+        ``start`` and ``stop`` read a range of points and ``indices`` the
+        points named. A read by variation or by range needs an outstation set
+        to Level 3 or higher, and a read of a group that only Level 4
+        defines, or by index, one set to Level 4
+        (:func:`~py1815.master.requests.read_group_level`).
+        """
+        needed = requests.read_group_level(
+            group, variation, ranged=start is not None, indexed=indices is not None
+        )
+        body = requests.read_group(group, variation, start=start, stop=stop, indices=indices)
+        self._require(needed, f"a read of group {group} variation {variation}")
+        return self._exchange(FunctionCode.READ, body)
+
+    def read_time(self) -> ResultT:
+        """Read the outstation's clock (group 50 variation 1). A Level 3 request."""
+        self._require(SubsetLevel.LEVEL_3, "a read of the time")
+        return self._exchange(FunctionCode.READ, requests.read_time())
+
+    def read_indications(self, start: int = 0, stop: int = 15) -> ResultT:
+        """Read internal indications by index (group 80 variation 1). A Level 3 request.
+
+        Index 0 to 15 are the bits of the two indication octets, in order.
+        """
+        body = requests.read_indications(start, stop)
+        self._require(SubsetLevel.LEVEL_3, "a read of the internal indications")
+        return self._exchange(FunctionCode.READ, body)
+
+    def assign_class(  # pylint: disable=too-many-arguments
+        self,
+        event_class: int,
+        *,
+        binary_inputs: Indices = None,
+        binary_outputs: Indices = None,
+        counters: Indices = None,
+        frozen_counters: Indices = None,
+        analog_inputs: Indices = None,
+        analog_outputs: Indices = None,
+        double_bit_inputs: Indices = None,
+    ) -> ResultT:
+        """Assign the events of named points to an event class: ASSIGN_CLASS.
+
+        ``event_class`` is 1, 2 or 3, or 0 to turn the events of the points
+        off. The points are named as :meth:`read` names them. The outstation
+        answers with no objects. It is a Level 3 request, and Level 4 for
+        double-bit inputs and output status, and it changes the outstation,
+        so it is sent once.
+        """
+        wanted = self._points(
+            {
+                PointType.BINARY_INPUT: binary_inputs,
+                PointType.BINARY_OUTPUT: binary_outputs,
+                PointType.COUNTER: counters,
+                PointType.FROZEN_COUNTER: frozen_counters,
+                PointType.ANALOG_INPUT: analog_inputs,
+                PointType.ANALOG_OUTPUT: analog_outputs,
+                PointType.DOUBLE_BIT_INPUT: double_bit_inputs,
+            }
+        )
+        sets = [(event_class, wanted)]
+        body = requests.assign_class(sets)
+        self._require(requests.assign_class_level(sets), "an ASSIGN_CLASS")
+        return self._exchange(FunctionCode.ASSIGN_CLASS, body)
+
+    def read_deadbands(
+        self,
+        variation: int = requests.DEFAULT_VARIATION,
+        *,
+        start: int | None = None,
+        stop: int | None = None,
+        indices: Sequence[int] | None = None,
+    ) -> ResultT:
+        """Read analog input deadbands (group 34): every one, a range or named points.
+
+        A Level 4 request. Variation 0 asks for whichever the outstation holds.
+        """
+        return self.read_group(
+            requests.DEADBAND_GROUP, variation, start=start, stop=stop, indices=indices
+        )
+
+    def write_deadbands(self, variation: int, values: Mapping[int, int | float]) -> ResultT:
+        """Write analog input deadbands (group 34), by point index. A Level 4 request.
+
+        Variation 1 and 2 take whole numbers of 16 and 32 bits, and variation 3 a
+        single-precision float. The deadband is in counts for the integer
+        variations and in engineering units for the float one.
+        """
+        body = requests.write_deadbands(variation, values)
+        self._require(SubsetLevel.LEVEL_4, "a write of analog deadbands")
+        return self._exchange(FunctionCode.WRITE, body)
+
+    def read_attributes(
+        self, variation: int = Variation.ALL_ATTRIBUTES, attribute_set: int | None = None
+    ) -> ResultT:
+        """Read device attributes (group 0). A Level 4 request.
+
+        Variation 254 reads every attribute and 255 the list of the variations
+        the outstation holds. Any other variation reads that one attribute.
+        ``attribute_set`` is the index of the attribute set, 0 for the
+        outstation's own.
+        """
+        body = requests.read_attributes(variation, attribute_set)
+        self._require(SubsetLevel.LEVEL_4, "a read of device attributes")
+        return self._exchange(FunctionCode.READ, body)
+
+    def write_attribute(self, variation: int, value: int | str, attribute_set: int = 0) -> ResultT:
+        """Write one device attribute. A Level 4 request.
+
+        The writable attributes are 240 (maximum transmit fragment size, a
+        number) and 245, 246 and 247 (location name, ID code or number and
+        device name, text).
+        """
+        body = requests.write_attribute(variation, value, attribute_set)
+        self._require(SubsetLevel.LEVEL_4, "a write of a device attribute")
+        return self._exchange(FunctionCode.WRITE, body)

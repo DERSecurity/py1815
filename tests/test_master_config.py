@@ -16,6 +16,7 @@ from py1815.master.tasks import Tasks
 from py1815.profile import der, load
 from py1815.profile.model import Composition
 from py1815.server import OutstationServer
+from py1815.subset import SubsetLevel
 
 ALL_TASKS = {
     "startup": True,
@@ -71,6 +72,7 @@ class TestDefaults:
                 "tls": None,
                 "connect": True,
                 "reconnect": 5.0,
+                "level": 2,
                 "confirm": True,
                 "manual": False,
                 "profile": False,
@@ -165,6 +167,51 @@ class TestOutstations:
         assert MasterConfig.from_mapping(json.loads(config.render())) == config
 
 
+class TestSubsetLevel:
+    def test_an_outstation_is_held_to_level_2_unless_told_its_level(self):
+        (lab,) = MasterConfig.from_mapping(
+            {"outstations": [{"name": "a", "host": "h"}]}
+        ).outstations
+        assert lab.level is SubsetLevel.LEVEL_2
+        assert lab.add_params(allow_control=False)["level"] == 2
+
+    def test_an_outstation_takes_the_level_of_its_entry_or_of_the_defaults(self):
+        config = MasterConfig.from_mapping(
+            {
+                "defaults": {"level": 3},
+                "outstations": [
+                    {"name": "a", "host": "h"},
+                    {"name": "b", "host": "i", "level": 4},
+                ],
+            }
+        )
+        first, second = config.outstations
+        assert (first.level, second.level) == (SubsetLevel.LEVEL_3, SubsetLevel.LEVEL_4)
+        assert second.add_params(allow_control=False)["level"] == 4
+
+    def test_the_level_is_printed_as_a_number_and_loads_back(self):
+        config = MasterConfig.from_mapping({"defaults": {"level": 4}})
+        assert json.loads(config.render())["defaults"]["level"] == 4
+        assert MasterConfig.from_mapping(json.loads(config.render())) == config
+
+    def test_the_flag_sets_the_level_of_every_outstation(self):
+        config = cli.configuration(
+            _args("serve", "--outstation", "lab=10.0.0.5:20001", "--level", "3")
+        )
+        assert config.outstations[0].level is SubsetLevel.LEVEL_3
+
+    def test_the_flag_overrides_the_file(self, tmp_path):
+        path = _file(tmp_path, {"defaults": {"level": 4}})
+        assert cli.configuration(_args("serve", "--config", path)).defaults.level == 4
+        flagged = cli.configuration(_args("serve", "--config", path, "--level", "2"))
+        assert flagged.defaults.level is SubsetLevel.LEVEL_2
+
+    def test_a_level_that_is_not_one_is_refused_by_the_command_line(self, capsys):
+        with pytest.raises(SystemExit):
+            _args("serve", "--level", "5")
+        assert "invalid choice" in capsys.readouterr().err
+
+
 class TestAddParams:
     def test_repeat_becomes_the_three_intervals(self):
         outstation = OutstationConfig().changed(
@@ -224,6 +271,13 @@ class TestErrors:
             ({"defaults": {"tasks": {"enable_unsolicited": [1.9]}}}, "defaults.tasks:"),
             ({"defaults": {"tasks": {"enable_unsolicited": [None]}}}, "defaults.tasks:"),
             ({"defaults": {"manual": 1}}, "defaults.manual must be true or false"),
+            ({"defaults": {"level": 1}}, "defaults.level must be 2, 3 or 4, not 1"),
+            ({"defaults": {"level": "3"}}, "defaults.level must be 2, 3 or 4, not '3'"),
+            ({"defaults": {"level": True}}, "defaults.level must be 2, 3 or 4, not True"),
+            (
+                {"outstations": [{"name": "a", "host": "h", "level": 5}]},
+                "outstations[0].level must be 2, 3 or 4, not 5",
+            ),
             ({"evaluate": []}, "evaluate must be an object"),
             ({"evaluate": {"settel": 1}}, "evaluate.settel is not a setting"),
             ({"evaluate": {"settle": 0}}, "evaluate.settle must be greater than 0"),
@@ -488,6 +542,20 @@ class TestAppliedToTheService:
         assert lab["tasks"] == ALL_TASKS | {"write_time": False, "events_when_indicated": False}
         # The restart was cleared and the time was not written.
         assert "DEVICE_RESTART" not in lab["indications"] and "NEED_TIME" in lab["indications"]
+
+    @pytest.mark.asyncio
+    async def test_the_level_in_a_file_is_the_one_the_outstation_is_held_to(
+        self, outstation, tmp_path
+    ):
+        path = _file(
+            tmp_path,
+            {
+                "defaults": {"level": 3},
+                "outstations": [{"name": "lab", "host": "127.0.0.1", "port": outstation.port}],
+            },
+        )
+        lab = await self._status(cli.configuration(_args("serve", "--config", path)))
+        assert lab["level"] == 3
 
     @pytest.mark.asyncio
     async def test_read_only_file_with_default_tasks_is_accepted(self, outstation, tmp_path):

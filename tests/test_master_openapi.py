@@ -238,12 +238,19 @@ ORDER = [
     "profile",
     "scan",
     "read",
+    "read_group",
+    "read_time",
+    "read_indications",
+    "read_attributes",
     "wait_for",
     "values",
     "events",
     "request",
     "operate",
     "write_time",
+    "assign_class",
+    "write_deadbands",
+    "write_attribute",
     "synchronize_time",
     "clear_restart",
     "freeze",
@@ -287,7 +294,8 @@ class TestWhatTheServiceAnswers:
             example = dict(openapi.OPERATIONS[name]["example"])
             if name == "add":
                 # The document's address is one for documentation; this one answers.
-                example |= {"host": "127.0.0.1", "port": outstation.port}
+                # Level 4, so that the requests of Level 3 and 4 are sent.
+                example |= {"host": "127.0.0.1", "port": outstation.port, "level": 4}
             if name == "read":
                 example["points"] = {"ai": [der.AI_METER_FIRST + 4], "bi": "all"}
 

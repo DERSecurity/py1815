@@ -57,6 +57,12 @@ returns an `Outstation`, which is where the requests are:
 | `integrity_poll()` | Classes 1, 2 and 3, then class 0: every event, then every static value |
 | `scan(kind)` | `"integrity"`, `"events"`, one class: `"class0"` to `"class3"`, or `"outputs"` |
 | `read(...)` | Named points, by type and index, or `ALL` of a type, in one request. Double-bit inputs are `double_bit_inputs=` |
+| `read_group(group, variation, start=, stop=, indices=)` | One group in one variation: every object, a range of points or named points. See [Subset levels](#subset-levels) |
+| `read_time()` | The outstation's clock (group 50 variation 1) |
+| `read_indications(start=, stop=)` | Internal indications by index (group 80 variation 1) |
+| `assign_class(event_class, ...)` | Events of named points assigned to an event class, or turned off |
+| `read_deadbands(variation, ...)`, `write_deadbands(variation, values)` | Analog input deadbands (group 34) |
+| `read_attributes(variation, attribute_set)`, `write_attribute(variation, value)` | Device attributes (group 0) |
 | `operate(...)` | Outputs commanded, by type and index. See [Commanding outputs](#commanding-outputs) |
 | `write_time(ms)` | The outstation's clock, in milliseconds since the epoch, or now |
 | `synchronize_time(procedure)` | The outstation's clock, by the `"lan"` or `"non_lan"` procedure. See [Setting the clock](#setting-the-clock) |
@@ -69,14 +75,94 @@ returns an `Outstation`, which is where the requests are:
 Requests made at the same time take turns, in the order they were made. An
 outstation carries one request at a time.
 
-`read(...)` sends each run of consecutive indices as one start-stop range, in
-ascending order, because that is the form every outstation accepts. The points
-come back in ascending order, whatever order you named them in.
+How `read(...)` asks for the points depends on the outstation's
+[subset level](#subset-levels). To an outstation set to Level 3 or 4 it sends each run
+of consecutive indices as one start-stop range, in ascending order. To one set to
+Level 2, the level an outstation has when none is given, it asks for every point of each
+type named (qualifier 0x06), because that is the only read of present values Level 2
+requires (IEEE 1815-2012 Table 14-3). The exchange returned then holds the points named
+and no others, while the store keeps every value that came back. The points come back in
+ascending order, whatever order you named them in.
 
 An integrity poll does not return what the outputs stand at. The IEEE 1815.2
 profile leaves output status out of class 0, so it is read by naming its
 groups: `scan("outputs")` reads binary and analog output status, and
 `read(analog_outputs=ALL)` reads one of them.
+
+## Subset levels
+
+DNP3 groups what an outstation has to accept into subset levels, each adding objects,
+variations and function codes to the one before (IEEE 1815-2012 clause 14). A master has
+to be configurable to avoid sending an outstation of a lower level a request it could not
+parse (14.7.2). Each outstation has a `level`, 2, 3 or 4, given when it is added:
+
+```python
+lab = await master.add("lab", host="192.0.2.10", level=3)
+```
+
+The level is 2 when none is given. That is the lowest level this library implements, so
+nothing above it is sent until you say the outstation supports it. A request above the
+outstation's level is not sent. It raises `AboveSubsetLevel`, a `ValueError` that names the
+level the request needs and the level the outstation is set to. The other requests in the
+table above, `read(...)` and `scan(...)` among them, are not refused for the level, though
+`read(...)` asks for the points in the form the level allows.
+`request(function, body)` and `broadcast(...)` send the octets you give and are not held to
+the level either.
+
+| Request | Level |
+|---|---|
+| `read_group(group)`, every object in the default variation, for a group Level 2 defines | 2 |
+| `read_group(group, variation)` or with `start` and `stop`, for the static groups 1, 10, 20, 21, 30 and 40 | 3 |
+| `read_group(group, variation)` for the event groups 22 and 32, and any read of group 23 | 3 |
+| `read_time()`, `read_indications()` | 3 |
+| `assign_class(...)` for binary inputs, counters, frozen counters and analog inputs | 3 |
+| `assign_class(...)` for double-bit inputs and binary or analog output status | 4 |
+| `read_group(group, indices=[...])`, a read by list of indices, which no level requires an outstation to accept | 4 |
+| `read_group` of groups 0, 3, 4, 11, 13, 34, 42 and 43, and of the variations that carry a float or a time in groups 21, 23, 30, 32 and 40 | 4 |
+| `read_deadbands(...)`, `write_deadbands(...)` | 4 |
+| `read_attributes(...)`, `write_attribute(...)` | 4 |
+
+The levels are those of the DNP Users Group's request and response subset tables
+(TB2016-003b). A group or a variation the tables do not name is taken to need Level 4.
+
+```python
+await lab.read_group(30, 1)                       # group 30 variation 1, every point
+await lab.read_group(30, 0, start=4, stop=8)      # points 4 to 8, default variation
+await lab.read_group(1, 2, indices=[4, 9])        # Level 4: points 4 and 9
+await lab.read_time()
+await lab.read_indications(0, 15)                 # every bit of the two indication octets
+await lab.assign_class(1, analog_inputs=[4, 6])   # their events go to class 1
+await lab.assign_class(0, binary_inputs=ALL)      # 0 turns their events off
+await lab.read_attributes()                       # every device attribute
+await lab.read_attributes(255)                    # the list of the attributes held
+await lab.read_attributes(241)                    # one attribute
+await lab.write_attribute(247, "Inverter 4")      # the device name
+await lab.write_deadbands(1, {4: 100, 5: 100})    # 16-bit deadbands, in counts
+```
+
+`read_group` sends a range as one start-stop header (qualifier 0x00, or 0x01 past point
+255) and a list of indices as one index-list header (0x17, or 0x28). Variation 0 asks for
+whichever the outstation sends by default.
+
+`assign_class` sends ASSIGN_CLASS: a class object for the class (group 60 variation 2 to 4,
+or variation 1 to turn events off) and the points whose events go to it. The outstation
+answers with no objects. It changes the outstation, so it is sent once, and the service
+sends it only when started to command. A Level 3 or Level 4 outstation has to accept it
+(TB2016-003b, Table 12-49).
+
+Device attributes are read by variation: 254 for every attribute, 255 for the list of the
+variations the outstation holds, and any other for one attribute. `attribute_set` is the
+index of the attribute set, 0 for the outstation's own. The writable attributes are 240
+(the maximum transmit fragment size, a number) and 245, 246 and 247 (the location name,
+the ID code or number and the device name, visible ASCII text of at most 255 characters).
+A number is sent in the fewest octets of 1, 2 or 4 that hold it. A device attribute comes
+back as an object whose `attribute` holds its data type code and value.
+
+The responses to these requests come back as an `Exchange` like any other. The objects of
+every group these requests read are decoded, including double-bit inputs (groups 3 and
+4), output events (11 and 42) and deadbands (34). Where a response cannot be decoded the
+objects stop at the first one that cannot, and `undecoded` says where. The octets of the
+response are in `fragments`.
 
 ## What comes back
 

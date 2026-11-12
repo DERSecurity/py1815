@@ -43,6 +43,7 @@ from py1815.master.bench import DEFAULT_SETTLE
 from py1815.master.tasks import WRITING, Tasks
 from py1815.master.tls import TlsSettings
 from py1815.settings import ConfigError, read
+from py1815.subset import SubsetLevel
 
 #: ``repeat.outputs`` value that means "as often as the integrity poll".
 WITH_INTEGRITY = "with_integrity"
@@ -77,6 +78,9 @@ class OutstationConfig:
     #: Seconds between reconnection attempts after a lost connection, or None
     #: for no reconnection.
     reconnect: float | None = DEFAULT_RECONNECT
+    #: The DNP3 subset level of the outstation: 2, 3 or 4. The master refuses
+    #: to send a request above it (IEEE 1815-2012 14.7.2).
+    level: SubsetLevel = requests.DEFAULT_LEVEL
     #: Confirm response fragments that ask for confirmation.
     confirm: bool = True
     #: Send only what is asked for. Disables every task and confirmation,
@@ -129,6 +133,11 @@ class OutstationConfig:
                 values[key] = settings.boolean(value, at)
             elif key == "reconnect":
                 values[key] = None if value is None else settings.seconds(value, at)
+            elif key == "level":
+                try:
+                    values[key] = SubsetLevel.parse(value, at)
+                except ValueError as error:
+                    raise ConfigError(str(error)) from None
             elif key == "device_profile":
                 values[key] = None if value is None else settings.text(value, at)
             elif key == "tasks":
@@ -187,6 +196,7 @@ class OutstationConfig:
             "tls": None if self.tls is None else self.tls.describe(),
             "connect": self.connect,
             "reconnect": self.reconnect,
+            "level": int(self.level),
             "integrity_interval": integrity,
             "event_interval": events,
             "output_interval": self.output_interval(),
@@ -213,6 +223,8 @@ class OutstationConfig:
                 value = value.describe()
             elif each.name == "repeat":
                 value = dict(value)
+            elif each.name == "level":
+                value = int(value)
             described[each.name] = value
         return described
 

@@ -295,6 +295,7 @@ async def _run(
         tasks=tasks,
         manual=chosen.manual,
         reconnect=None,
+        level=chosen.level,
     )
     capture: CaptureFile | None = None
     recorder: Recorder | None = None

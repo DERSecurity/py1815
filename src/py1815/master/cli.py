@@ -197,6 +197,7 @@ def configuration(args: argparse.Namespace) -> MasterConfig:
         "profile",
         "read_retries",
         "device_profile",
+        "level",
     ):
         value = getattr(args, key, None)
         if value is not None:
@@ -526,6 +527,14 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         metavar="N",
         help="send a read that times out again this many times; nothing else is ever "
         "sent again (default: 0)",
+    )
+    parser.add_argument(
+        "--level",
+        type=int,
+        choices=(2, 3, 4),
+        default=None,
+        help="the DNP3 subset level of the outstations: the master sends no request above "
+        "it (default: 2)",
     )
     poll.add_tls_options(parser)
     parser.add_argument(

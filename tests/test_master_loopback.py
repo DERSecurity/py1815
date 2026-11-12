@@ -160,7 +160,7 @@ class TestEvents:
 class TestReadingNamedPoints:
     def test_points_named_by_index_come_back_and_only_those(self, simulation):
         simulation.advance(1.0)
-        master = Loopback(simulation.outstation.session())
+        master = Loopback(simulation.outstation.session(), level=3)
         power = der.AI_METER_FIRST + 4
 
         answer = master.read(analog_inputs=[power], binary_inputs=[0, 1])
@@ -177,9 +177,34 @@ class TestReadingNamedPoints:
     def test_a_point_the_outstation_does_not_have_is_a_result_and_not_an_exception(
         self, simulation
     ):
-        answer = Loopback(simulation.outstation.session()).read(analog_inputs=[60000])
+        # Level 3, so the point is asked for by range, which the outstation refuses.
+        answer = Loopback(simulation.outstation.session(), level=3).read(analog_inputs=[60000])
         assert answer.complete and answer.objects == ()
         assert answer.iin.is_set(IIN2Bit.PARAM_ERROR)
+
+    def test_below_level_3_the_points_named_come_back_from_a_read_of_each_type(self, simulation):
+        simulation.advance(1.0)
+        master = Loopback(simulation.outstation.session())
+        power = der.AI_METER_FIRST + 4
+
+        answer = master.read(analog_inputs=[power], binary_inputs=[1, 0])
+
+        # Group 1 then group 30, each in variation 0 with qualifier 0x06 (D82).
+        assert answer.request[2:] == bytes.fromhex("01 00 06 1E 00 06")
+        assert [(o.point, o.index) for o in answer.objects] == [
+            (PointType.BINARY_INPUT, 0),
+            (PointType.BINARY_INPUT, 1),
+            (PointType.ANALOG_INPUT, power),
+        ]
+        # The store keeps every value the outstation sent.
+        assert master.store.analog_input(power).value == round(simulation.der.watts)
+        assert len(master.store) > 3
+
+    def test_below_level_3_a_point_the_outstation_does_not_have_comes_back_empty(self, simulation):
+        answer = Loopback(simulation.outstation.session()).read(analog_inputs=[60000])
+        assert answer.request[2:] == bytes.fromhex("1E 00 06")
+        assert answer.complete and answer.objects == ()
+        assert not answer.iin.is_set(IIN2Bit.PARAM_ERROR)
 
     def test_a_read_that_names_nothing_is_misuse(self, simulation):
         master = Loopback(simulation.outstation.session())

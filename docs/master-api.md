@@ -54,11 +54,16 @@ disagree.
 | `POST /api/profile` | Every point of the profile an outstation is meant to serve |
 | `POST /api/scan` | A poll by `kind`: `integrity`, `events`, `class0` to `class3`, `outputs` |
 | `POST /api/read` | Named points, in one request |
+| `POST /api/read_group` | One group in one variation: every object, a range or named points |
+| `POST /api/read_time`, `POST /api/read_indications` | The clock, and the internal indications by index |
+| `POST /api/read_attributes` | Device attributes: every one, the list of them, or one |
 | `POST /api/values` | What has been read, with no traffic |
 | `POST /api/events` | The events received |
 | `POST /api/request` | Any request, by function code |
 | `POST /api/operate` | Outputs commanded, by type and index |
 | `POST /api/write_time`, `POST /api/clear_restart` | The clock, and the restart indication |
+| `POST /api/assign_class` | The events of named points assigned to an event class |
+| `POST /api/write_deadbands`, `POST /api/write_attribute` | Analog input deadbands, and a device attribute |
 | `POST /api/synchronize_time` | The clock, by the LAN or the non-LAN procedure of IEEE 1815-2012 |
 | `POST /api/freeze` | Counters frozen |
 | `POST /api/restart` | A cold or a warm restart |
@@ -134,6 +139,7 @@ curl -s http://127.0.0.1:8815/api/add -H 'Content-Type: application/json' \
 | `tasks` | An object of choices by task: `startup`, `clear_restart`, `write_time`, `events_when_indicated` and `integrity_on_overflow`, each true or false, and `enable_unsolicited`, a list of event classes. A task left out stands at its default |
 | `manual` | True to send nothing that was not asked for: no task, and no confirmation. `tasks` and `confirm` given beside it are kept as given |
 | `reconnect` | Seconds between attempts to make a lost connection again. Five when left out, and null for never |
+| `level` | The DNP3 subset level of the outstation: 2, 3 or 4. Two when left out. A request above it is refused as `request` before anything is sent. See [Subset levels](#subset-levels) |
 | `read_retries` | Times a read that times out with nothing received is sent again, under the same sequence number. None when left out. No other request is ever sent again |
 | `tls` | Connect over TLS: an object of `ca`, `certificate`, `key` and `server_name`, files on the machine the service runs on. See [Configuring the master](master-config.md#tls) |
 
@@ -166,6 +172,37 @@ either on in the same way.
 the connection cannot be made, and answers with the last connection error when
 the time is up. Without it the first failure is the answer.
 
+## Subset levels
+
+An outstation is added with a `level` of 2, 3 or 4, which is 2 when left out and which
+`status` reports. The service refuses a request above that level as a `request` error, and
+sends nothing: IEEE 1815-2012 14.7.2 has a master avoid the requests an outstation of a
+lower level could not parse. `request` and `broadcast` send the octets they are given and
+are not held to it.
+
+The level also decides how `read` asks for named points: by ranges of indices at Level 3
+and 4, and at Level 2 by every point of each type named, of which the answer holds only
+the points named.
+
+```bash
+curl -s http://127.0.0.1:8815/api/read_group -H 'Content-Type: application/json' \
+     -d '{"outstation": "lab", "group": 30, "variation": 1, "start": 4, "stop": 8}'
+```
+
+| Operation | Takes | Needs |
+|---|---|---|
+| `read_group` | `group`, `variation` (0 when left out), and a range with `start` and `stop`, or `indices`, or neither for every object | Level 2 for every object in the default variation, 3 for a variation or a range of a static group, 4 for `indices`, which no level requires, and for the groups only Level 4 defines |
+| `read_time` | nothing | Level 3 |
+| `read_indications` | `start` and `stop`, 0 and 15 when left out | Level 3 |
+| `read_attributes` | `variation` (254, every attribute, when left out; 255 is the list; any other is one attribute) and `attribute_set` | Level 4 |
+| `assign_class` | `event_class`, 1 to 3 or 0 to turn events off, and `points` by type as `read` takes them | Level 3, and Level 4 for `dbi`, `bo` and `ao`. Commands |
+| `write_deadbands` | `variation` (1, 2 or 3) and `values`, the deadband of each point by index | Level 4. Commands |
+| `write_attribute` | `variation` (240, 245, 246 or 247), `value` and `attribute_set` | Level 4. Commands |
+
+Each answers with an exchange, as `read` does. The ones that write are refused with
+`not_allowed` unless the service was started to command, after what is wrong with the
+request has been refused as `request`. They are recorded in the command log.
+
 ## Commanding
 
 A service reads unless it is started to command:
@@ -177,7 +214,8 @@ py1815-master serve --allow-control
 
 Without that, every operation that changes an outstation is refused with
 `not_allowed` and nothing is sent: `operate`, `write_time`,
-`synchronize_time`, `clear_restart`, `freeze`, `restart`, `der.write`,
+`synchronize_time`, `clear_restart`, `freeze`, `restart`, `assign_class`,
+`write_deadbands`, `write_attribute`, `der.write`,
 `der.enable`, `der.disable`, `der.write_curve`, `der.curve` given a curve to
 select, and a `request` or a `broadcast` by any function code other than
 `READ`, `ENABLE_UNSOLICITED`, `DISABLE_UNSOLICITED` and `DELAY_MEASURE`. The
@@ -291,7 +329,8 @@ only, and a name that still means two points is refused with both addresses.
 
 A read that the outstation refuses whole, because one range in it holds no
 point it serves, is made again a range at a time, and a point no read returned
-is `not_reported`. A disabled function's inputs come back `offline`: IEEE
+is `not_reported`. To an outstation set to Level 2, which is read a whole point type at a
+time, the read is made again one type at a time. A disabled function's inputs come back `offline`: IEEE
 1815.2 has them sent without `ONLINE`.
 
 A curve's points are the numbers that travel. The tables give the curve block no

@@ -62,6 +62,13 @@ def simulation(point_map) -> der.Simulation:
 
 @pytest.fixture
 def master(simulation, point_map) -> LoopbackDer:
+    # Level 3, so a read of named points is sent as ranges, the form these
+    # tests pin (D82). The Level 2 form is tested in TestReadingBelowLevel3.
+    return LoopbackDer(Loopback(simulation.outstation.session(), level=3), point_map)
+
+
+@pytest.fixture
+def at_level_2(simulation, point_map) -> LoopbackDer:
     return LoopbackDer(Loopback(simulation.outstation.session()), point_map)
 
 
@@ -277,6 +284,23 @@ class TestReading:
     def test_a_point_not_in_the_profile_is_refused_before_anything_is_sent(self, point_map):
         with pytest.raises(ValueError, match="no AI60000"):
             LoopbackDer(Untouchable(), point_map).read("AI60000")
+
+
+class TestReadingBelowLevel3:
+    """A master held to Level 2 reads each point type whole and keeps the points named (D82)."""
+
+    def test_each_type_is_read_whole_and_only_the_points_named_are_returned(self, at_level_2):
+        read = at_level_2.read("BO17", "AI147", f"AI{MIRROR + 87}")
+        # g10v0 and g30v0, each with qualifier 0x06: every point of the group.
+        assert _requests(read.exchanges) == ["c0 01 0a 00 06 1e 00 06"]
+        (exchange,) = read.exchanges
+        assert [(o.group, o.index) for o in exchange.objects] == [
+            (10, 17),
+            (30, 147),
+            (30, MIRROR + 87),
+        ]
+        assert read[f"AI{MIRROR + 87}"].value == 100.0
+        assert read["BO17"].quality == "good"
 
 
 class TestWriting:

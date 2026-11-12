@@ -47,6 +47,7 @@ JSON file and loaded with `--config`. See
 | `--demo` | Starts a simulated IEEE 1815.2 DER and connects to it |
 | `--outstation NAME=HOST:PORT` | Adds an outstation and connects to it. May be given more than once |
 | `--outstation-address`, `--master-address` | The link addresses, for the outstations named. 1024 and 1 unless given |
+| `--level 2\|3\|4` | The DNP3 subset level of the outstations named. The master sends no request above it. 2 unless given. See [Subset levels](master.md#subset-levels) |
 | `--read-retries N` | Sends a read that times out again, up to this many times. Nothing else is ever sent again. 0 unless given |
 | `--tls-ca`, `--tls-certificate`, `--tls-key FILE` | Connects to the outstations named over TLS: the authorities their certificates are checked against, and the master's own certificate and key. See [Configuring the master](master-config.md#tls) |
 | `--tls-server-name NAME` | The name an outstation's certificate is checked against, when it is not the host |
@@ -192,7 +193,7 @@ and the values are listed one to a line:
 | Card | Does |
 |---|---|
 | **Scan** | An integrity poll, an event poll, one class, or output status. **Repeat** sets how often each is made unasked, and an empty field stops it |
-| **Read points** | One point type, by a list of indices or `all` |
+| **Read points** | One point type, by a list of indices or `all`. An outstation set to Level 2 is asked for every point of the type, and the result shows the points named |
 | **Operate outputs** | Commands one binary or analog output. See [Commanding](#commanding) |
 | **Clock, restart and counters** | Writes the time, clears the restart indication, freezes the counters, or freezes and clears them |
 | **Unsolicited responses** | Asks the outstation to report the classes ticked without being polled, or to stop |

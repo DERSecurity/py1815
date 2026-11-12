@@ -49,6 +49,7 @@ from py1815.profile.binding import Binding
 from py1815.profile.model import Composition, Kind, Point, PointMap
 from py1815.profile.outstation import DerOutstation
 from py1815.server import OutstationServer
+from py1815.subset import SubsetLevel
 
 PASSED, FAILED = Verdict.PASSED, Verdict.FAILED
 NOT_RUN, NOT_APPLICABLE_ = Verdict.NOT_RUN, Verdict.NOT_APPLICABLE
@@ -177,6 +178,9 @@ class TestOverASocket:
 
     async def test_each_check_names_its_frames_in_the_trace(self, served, points):
         _simulation, outstation, _server = served
+        # Level 3, so each read is of the points named and its response fits one
+        # frame. Below Level 3 a read asks for the whole group (D82).
+        outstation.level = SubsetLevel.LEVEL_3
         report = await evaluate(outstation, points, checks=select(["MON-001", "OP-001"]))
         first, second = (result.frames for result in report.results)
         assert first is not None and second is not None

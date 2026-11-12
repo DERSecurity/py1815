@@ -24,17 +24,18 @@ from __future__ import annotations
 
 import asyncio
 import decimal
+import inspect
 import math
 import re
 import weakref
-from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 from xml.etree import ElementTree
 
 from py1815.application import IIN2Bit
 from py1815.decode import DecodedObject, PointType
-from py1815.master import controls
+from py1815.master import controls, requests
 from py1815.master.association import Exchange
 from py1815.master.controls import Command, Mode, Operated
 from py1815.objects import AnalogQuality
@@ -735,13 +736,20 @@ def _read_points(
     An outstation may refuse a whole read for one range that holds no point
     it serves, and a profile names many points an outstation may leave out.
     So a refused read is made again one range at a time, which reads every
-    range that holds a point and leaves out only the ones that do not. A
-    read changes nothing at the outstation, so making it again is harmless.
+    range that holds a point and leaves out only the ones that do not. An
+    outstation below Level 3 is read one point type at a time instead, since
+    each type is asked for whole (D82). A read changes nothing at the
+    outstation, so making it again is harmless.
     """
     exchange: Exchange = yield _read_step(wanted)
     exchanges = [exchange]
     received = _static(exchange.objects)
     runs = _runs(wanted)
+    if _refused(exchange) and len(runs) > 1:
+        level = yield lambda target: getattr(target, "level", requests.DEFAULT_LEVEL)
+        if not requests.reads_ranges(level):
+            # Below Level 3 each type is read whole, so a run is no narrower than its type.
+            runs = [(kind, sorted(set(indices))) for kind, indices in wanted.items()]
     if _refused(exchange) and len(runs) > 1:
         for kind, run_indices in runs:
             again: Exchange = yield _read_step({kind: run_indices})
@@ -1245,12 +1253,16 @@ def run(target: Any, plan: Plan[T]) -> T:
 
 
 async def run_async(target: Any, plan: Plan[T]) -> T:
-    """Carry out a plan on a master whose requests are awaited, as an Outstation's are."""
+    """Carry out a plan on a master whose requests are awaited, as an Outstation's are.
+
+    A step that reads a setting of the master, and not the outstation,
+    returns its value at once and is not awaited.
+    """
     try:
         step = next(plan)
         while True:
-            outcome: Awaitable[Any] = step(target)
-            step = plan.send(await outcome)
+            outcome = step(target)
+            step = plan.send(await outcome if inspect.isawaitable(outcome) else outcome)
     except StopIteration as done:
         return done.value  # type: ignore[no-any-return]
 

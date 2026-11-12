@@ -44,7 +44,7 @@ from py1815.master.association import (
 )
 from py1815.master.controls import Operated, Plan
 from py1815.master.deviations import Deviations
-from py1815.master.operations import Operations, Steps
+from py1815.master.operations import Keep, Operations, Steps, kept
 from py1815.master.store import Store
 from py1815.master.tasks import WRITING, Housekeeper, Tasks
 from py1815.master.timesync import Synchronized, TimeSync
@@ -59,6 +59,7 @@ from py1815.observers import (
     Endpoint,
     ObserverGuard,
 )
+from py1815.subset import SubsetLevel
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
         tasks: Tasks | None = None,
         manual: bool = False,
         reconnect: float | None = DEFAULT_RECONNECT,
+        level: SubsetLevel | int = requests.DEFAULT_LEVEL,
         on_unsolicited: Callable[[Unsolicited], None] | None = None,
         on_exchange: Callable[[Exchange], None] | None = None,
         on_connection: Callable[[bool], None] | None = None,
@@ -213,6 +215,9 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             reconnect: Seconds between reconnection attempts after a
                 connection is lost, or None to disable reconnection. A
                 connection ended by :meth:`close` is not reopened.
+            level: The subset level of the outstation: 2, 3 or 4. A request that
+                only a higher level is required to parse is refused before it is
+                sent. See :class:`~py1815.master.operations.Operations`.
             on_unsolicited: Called with each unsolicited response as it
                 arrives, after it has been confirmed and stored.
             on_exchange: Called with each exchange as it ends, after its
@@ -235,6 +240,7 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             raise ValueError("server_name names the certificate of a TLS connection; give tls")
         self.tls = tls
         self.server_name = server_name
+        self.level = SubsetLevel.parse(level, "level")
         self.association = MasterAssociation(
             outstation_address=outstation_address,
             master_address=master_address,
@@ -665,10 +671,16 @@ class Outstation(Operations[Awaitable[Exchange], Awaitable[Operated], Awaitable[
             self._turn.release()
 
     async def _exchange(
-        self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
+        self,
+        function: FunctionCode,
+        body: bytes,
+        *,
+        broadcast: link.Broadcast | None = None,
+        keep: Keep | None = None,
     ) -> Exchange:
         async with self._taking_turn():
-            return await self._exchange_in_turn(function, body, broadcast=broadcast)
+            exchange = await self._exchange_in_turn(function, body, broadcast=broadcast)
+        return kept(exchange, keep)
 
     async def _carry_out(self, plan: Plan) -> Operated:
         # One turn for the whole plan: an operate has to follow its select
