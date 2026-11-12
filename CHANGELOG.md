@@ -19,8 +19,9 @@ and time-stamped variations, analog input deadbands, binary and analog output ev
 double-bit binary inputs and device attributes. The master is held to each outstation's
 subset level and sends the Level 3 and Level 4 requests. CI runs dnp3c under revision 3.1
 rev 1 of the DNP3 IED Certification Procedure at Subset Level 3, and every procedure that
-runs passes. That procedure stops at Level 3, so Level 4 is implemented and tested against
-the DNP Users Group subset tables, not certified. `py1815.catalog` names every object in
+runs passes. That procedure stops at Level 3, and no test checks Level 4 against the DNP
+Users Group subset tables: Level 4 is implemented and covered by the unit suite, and is not
+certified. `py1815.catalog` names every object in
 IEEE 1815-2012, and `python -m py1815.object_coverage` reports what the library does with
 each. The project is now marked Production/Stable.
 

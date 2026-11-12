@@ -101,6 +101,6 @@ Two properties are deliberate and documented rather than defects:
 | earlier releases | no |
 
 Fixes land on `main` and reach PyPI in the next release. Earlier releases are
-not patched: while the major version is `0` there is one line of development,
-and the fix for an older version is to upgrade. Reports against a release or
+not patched: there is one line of development, and the fix for an older
+version is to upgrade. Reports against a release or
 against a commit are both welcome; please name which.

@@ -168,6 +168,12 @@ The pull request folds the pending fragments in with
 `pyproject.toml`, and deletes the fragments it consumed in that same commit, so
 the entries and the record of them cannot drift apart.
 
+A release that changes what the project promises about stability, such as a
+new major version, updates the stability statements in that same commit:
+`README.md`, which is also the description on PyPI, `docs/index.md`,
+`docs/outstation.md` and `SECURITY.md`. A published version cannot be
+corrected, so these have to be right before the tag.
+
 Once it merges, push the tag:
 
 ```bash

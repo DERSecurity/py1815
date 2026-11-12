@@ -24,16 +24,14 @@ and industry consortium members.
 
 A DNP3 (IEEE 1815) outstation in pure Python.
 
-**Status: early development.** The protocol layers, the listener, controls and the event path are
+**Status.** The protocol layers, the listener, controls and the event path are
 implemented and tested: a master reads classes 1 to 3, confirms what it was sent, and is told
 through the indication bits what is still waiting. An answer too large to send at once is a
 conversation -- the master confirms each fragment and the next follows -- and a provider that says
 where its own objects end has its point map split the same way. An IEEE 1815.2 DER outstation is
 assembled from the profile's point tables and runs from one command, below. Unsolicited
 responses, which is outstation-initiated traffic, are there for a session built to send them,
-and off otherwise. The first release
-is `0.1.0`, and the API is not stable: while the major version is `0`, a minor bump may carry a
-breaking change.
+and off otherwise. From 1.0.0, a breaking change takes a new major version.
 
 ## Run an IEEE 1815.2 DER outstation
 
