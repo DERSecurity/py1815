@@ -191,9 +191,10 @@ _COMMAND_EVENT_ASSIGNMENTS = frozenset({GROUP_BINARY_OUTPUT_COMMAND, GROUP_ANALO
 #: The groups a class 0 read is answered with, in the order they are sent.
 _CLASS_0_GROUPS = (GROUP_BINARY_INPUT, GROUP_COUNTER, GROUP_FROZEN_COUNTER, GROUP_ANALOG_INPUT)
 
-#: The same at Level 4, which adds the output status of the outputs that report
-#: events: a master learns an output's value from class 0 before the events that
-#: change it (IEEE 1815-2012, A.7.1.1; TB2016-003b, Table 12-49 note i).
+#: The same at Level 4, which adds the output status of the outputs that have a
+#: class, class 0 included: a master learns an output's value from class 0 before
+#: the events that change it (IEEE 1815-2012, A.7.1.1; TB2016-003b, Table 12-49
+#: notes b and i).
 _CLASS_0_GROUPS_L4 = (
     GROUP_BINARY_INPUT,
     GROUP_BINARY_OUTPUT_STATUS,
@@ -396,7 +397,8 @@ class DerOutstation:
         #: The event class each input reports in, and 0 for one that reports
         #: none. For a counter it is the class its freezes are logged in, and
         #: from Level 3 the class of its counter events as well. From Level 4
-        #: it holds each output's class too (D115).
+        #: it holds the class of each output that has one, class 0 included;
+        #: an output with no class is absent (D115).
         self._classes: dict[Address, int] = {}
         #: Each event-reporting analog input's deadband, in transmitted units.
         #: One absent from here reports every change of its transmitted value.
@@ -588,8 +590,10 @@ class DerOutstation:
                 paired = None if point.associated is None else self._map.get(*point.associated)
                 if paired is None:
                     self._classes[point.address] = int(_DEFAULT_OUTPUT_CLASS)
-                else:
-                    self._classes[point.address] = self._classes.get(paired.address, 0)
+                elif self._classes.get(paired.address, 0):
+                    self._classes[point.address] = self._classes[paired.address]
+                # Otherwise the output has no class: it reports no events and is
+                # out of the class 0 response until a master assigns it one.
 
     def _settle_counter(
         self, point: Point, default: EventRule | None, own: EventRule | None, reported: int
@@ -937,14 +941,21 @@ class DerOutstation:
     def _class_0_groups(self) -> tuple[int, ...]:
         return _CLASS_0_GROUPS_L4 if self.at_least(SubsetLevel.LEVEL_4) else _CLASS_0_GROUPS
 
-    def _in_class_0(self, point: Point) -> bool:
-        """Whether a class 0 read carries this point.
+    def in_class_0(self, kind: Kind, index: int) -> bool:
+        """Return whether a class 0 read carries a point.
 
-        An output is carried only when it reports events, so an outstation that
-        does not report output events answers class 0 as it always has.
+        An output is carried when it has a class: one it reports events in, or
+        class 0 by assignment, which stops its events and keeps it in class 0
+        (TB2016-003b Table 12-49 note b). An output with no class is left out,
+        as note i allows, so an outstation that reports no output events
+        answers class 0 as it always has (D115).
         """
+        return self._in_class_0(self._map.point(kind, index))
+
+    def _in_class_0(self, point: Point) -> bool:
         if point.kind.is_output:
-            return bool(self._classes.get(point.address))
+            # An output in the classes has a class, class 0 included.
+            return point.address in self._classes
         return point.in_class_0
 
     def _variation(self, header: ObjectHeader) -> int:
@@ -1326,6 +1337,10 @@ class DerOutstation:
         self._set_classes(
             {address: self._initial_classes.get(address, 0) for address in self._classes}
         )
+        # An output that started with no class has none again, and leaves the
+        # class 0 response (D115).
+        for address in self._classes.keys() - self._initial_classes.keys():
+            del self._classes[address]
 
     def assignable_groups(self) -> list[int]:
         """The groups an ASSIGN_CLASS request may name at this level, in order."""
@@ -1360,7 +1375,7 @@ class DerOutstation:
         if self._primed:
             self.poll()
         for address, event_class in chosen.items():
-            if self._classes.get(address, 0) == event_class:
+            if self._classes.get(address) == event_class:
                 continue
             self._classes[address] = event_class
             if event_class and self._primed:

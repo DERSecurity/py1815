@@ -438,20 +438,42 @@ class TestAssigningAnOutputsClass:
         fragment = dut.master.request(ASSIGN_CLASS, _bytes("3C 02 06  0C 00 00 09 09")).fragment
         assert fragment.iin2 & IIN2_PARAMETER
 
-    def test_an_output_assigned_to_class_0_raises_no_events_and_leaves_class_0(self):
+    def test_an_output_assigned_to_class_0_raises_no_events_and_stays_in_class_0(self):
         dut = Dut(level=4)
-        # Events off (g60v1) for binary output 1 and analog output 2.
+        # Class 0 (g60v1) for binary output 1 and analog output 2.
         _assigned(dut.master, "3C 01 06  0A 00 00 01 01  28 00 00 02 02")
         _switch(dut, 1)
         _setpoint(dut, 2, 1234)
         assert dut.master.read(classes(1, 2, 3)).fragment.is_null
         body = dut.master.read(classes(0)).fragment.body
-        # g10v2 for outputs 0 and then 2 to 3, all off, without output 1.
-        assert _bytes("0A 02 00 00 00  01  0A 02 00 02 03  01 01") in body
-        # g40v1 for outputs 0 and 1, then 3, all 0, without output 2.
+        # g10v2 for outputs 0 to 3, with output 1 on.
+        assert _bytes("0A 02 00 00 03  01 81 01 01") in body
+        # g40v1 for outputs 0 to 3, with output 2 at 1234.
         assert body.endswith(
-            _bytes("28 01 00 00 01  01 00 00 00 00  01 00 00 00 00  28 01 00 03 03  01 00 00 00 00")
+            _bytes("28 01 00 00 03  01 00 00 00 00  01 00 00 00 00  01 D2 04 00 00  01 00 00 00 00")
         )
+
+    def test_an_output_with_no_class_joins_class_0_when_assigned_class_0(self):
+        plant = Plant()
+        outstation, master = _outstation(_tables(binary_pair_class=0, analog_pair_class=0), plant)
+        assert {obj.group for obj in master.read(classes(0)).fragment.objects} == {1, 30}
+        _assigned(master, "3C 01 06  0A 00 06  28 00 06")
+        assert outstation.event_class(Kind.BO, 0) == outstation.event_class(Kind.AO, 0) == 0
+        assert outstation.in_class_0(Kind.BO, 0) and outstation.in_class_0(Kind.AO, 0)
+        plant.relay = Reading(True)
+        outstation.poll()
+        assert master.read(classes(1, 2, 3)).fragment.is_null
+        body = master.read(classes(0)).fragment.body
+        # g10v2 for output 0, on, and g40v1 for output 0 at 0, after the inputs.
+        assert _bytes("0A 02 00 00 00  81") in body
+        assert body.endswith(_bytes("28 01 00 00 00  01 00 00 00 00"))
+
+    def test_a_restart_leaves_out_of_class_0_an_output_that_started_with_no_class(self):
+        outstation, master = _outstation(_tables(binary_pair_class=0, analog_pair_class=0), Plant())
+        _assigned(master, "3C 01 06  0A 00 06  28 00 06")
+        outstation.reset_classes()
+        assert not outstation.in_class_0(Kind.BO, 0) and not outstation.in_class_0(Kind.AO, 0)
+        assert {obj.group for obj in master.read(classes(0)).fragment.objects} == {1, 30}
 
     def test_an_output_given_a_class_again_reports_only_later_changes(self):
         dut = Dut(level=4)

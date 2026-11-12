@@ -904,8 +904,8 @@ def _class_0(points: Sequence[Point]) -> list[str]:
 
 
 def _output_class_0(outstation: DerOutstation, points: Sequence[Point]) -> list[str]:
-    """How an output group answers class 0: the outputs that report events are in it."""
-    reporting = {bool(outstation.event_class(point.kind, point.index)) for point in points}
+    """How an output group answers class 0: the outputs that have a class are in it."""
+    reporting = {outstation.in_class_0(point.kind, point.index) for point in points}
     if reporting == {True}:
         return ["always"]
     if reporting == {False}:
@@ -1186,8 +1186,8 @@ def _points(
         return _CLASS_WORDS[outstation.event_class(point.kind, point.index)]
 
     def output_class_0(point: Point) -> str:
-        # An output is in class 0 where it reports events (D115).
-        return "always" if outstation.event_class(point.kind, point.index) else "never"
+        # An output is in class 0 where it has a class, class 0 included (D115).
+        return "always" if outstation.in_class_0(point.kind, point.index) else "never"
 
     def binary_input(point: Point) -> list[Any]:
         return [

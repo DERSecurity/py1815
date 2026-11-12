@@ -220,7 +220,7 @@ event and changes no output.
 | **Range** | An input outside the tables' range is reported with `OVER_RANGE`. A setpoint outside it is refused with `OUT_OF_RANGE`, not clamped. |
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
 | **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. Whether it is enabled is what its enable output stands at: your `status=` reader when you give one, the last accepted write when you do not. `disabled_offline=False` turns this off. |
-| **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. At Level 4, the output status of each output that reports events is carried too ([Output events](#output-events-at-level-4)). |
+| **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. At Level 4, the output status of each output that has an event class, class 0 included, is carried too ([Output events](#output-events-at-level-4)). |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The time is the one the `Reading` gives, when it gives one and its quality is `GOOD`, moved onto the clock a master has set; otherwise it is when `poll()` recorded the event. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone, and so does a control relay output block with the clear bit or the obsolete queue bit set. |
 | **Output status** | An output's status and the input that mirrors it report the same thing: your `status=` reader when you give one, the last accepted write when you do not. |
@@ -552,8 +552,9 @@ the configuration the conformance tests run against; see
 From Level 3 a master may move points between event classes, or turn their events off,
 with an assign-class request (function code 22). Levels 3 and 4 accept it for binary
 inputs, counters, frozen counters and analog inputs, and Level 4 also for the outputs.
-A point assigned to class 0 raises no events but stays in a class 0 read; an output is the
-exception, as [Output events at Level 4](#output-events-at-level-4) describes. A change made
+A point assigned to class 0 raises no events but stays in a class 0 read; at Level 4 an
+output assigned to class 0 is in a class 0 read too, as [Output events at
+Level 4](#output-events-at-level-4) describes. A change made
 after the request is reported in the new class; events already buffered stay in the class
 they were recorded in. A restart returns every point to the class it started with: the
 outstation does not keep assignments. Level 2 and the default refuse the request as an
@@ -636,7 +637,8 @@ none. An output with no paired input reports in class 3. The [event
 policy](#setting-the-event-policy) does not apply to outputs.
 
 A master moves an output's events to another class with an assign-class request that
-names group 10 or group 40, and turns them off by assigning class 0. Assigning the paired
+names group 10 or group 40, and turns them off by assigning class 0, which keeps the
+output in a class 0 read. Assigning the paired
 input moves only the input. An assignment that names group 12 or group 41 is accepted and
 changes nothing, because it assigns the command events, which are not generated. An
 output given a class again reports only the changes after the request. A restart returns
@@ -657,10 +659,12 @@ The command event groups, 13 and 43, are read and answered with nothing: no outs
 is required to generate them, and this one does not. A read of a variation these groups
 do not offer is answered as an unknown object.
 
-An output that reports events is also carried by a class 0 read, in group 10 variation 2
-and group 40 variation 1, because a master learns the value an event changes from class 0.
-The other outputs are left out, as at the lower levels, and so is an output assigned to
-class 0.
+An output that has a class is also carried by a class 0 read, in group 10 variation 2 and
+group 40 variation 1, because a master learns the value an event changes from class 0.
+That includes an output a master assigned to class 0, which reports no events. An output
+with no class, one whose paired input reports no events and that no master has assigned,
+is left out, as at the lower levels; a restart returns each output to how it started.
+`outstation.in_class_0(Kind.BO, index)` says whether a class 0 read carries a point.
 
 ## Memory on a small controller
 

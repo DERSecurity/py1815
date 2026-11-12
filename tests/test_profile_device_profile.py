@@ -20,7 +20,7 @@ import pytest
 from profile_fixtures import REAL_TABLES, for_reference_der, small, units
 
 from py1815 import link
-from py1815.application import FunctionCode, IIN2Bit
+from py1815.application import FunctionCode, IIN2Bit, ObjectHeader, QualifierCode
 from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType, encode_crob
 from py1815.decode import decode_objects
 from py1815.objects import AnalogEventVariation
@@ -30,7 +30,7 @@ from py1815.profile.device_profile import NAMESPACE, Identity, Row
 from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.probe import parse_objects
-from py1815.session import Session
+from py1815.session import ClassAssignment, Session
 from py1815.transport import Reassembler
 
 SCHEMA = pathlib.Path(__file__).resolve().parent.parent / "schema" / device_profile.SCHEMA_FILE
@@ -1175,6 +1175,21 @@ class TestOutputEventsAtLevel4:
                 assert _text(point, "d:changeEventClass") == "three"
                 assert _text(point, "d:includedInClass0Response") == "always"
                 assert _text(point, "d:commandEventClass") == "none"
+
+    def test_an_output_assigned_class_0_reports_no_events_and_stays_in_class_0(self, level_4):
+        headers = tuple(ObjectHeader(group, 0, QualifierCode.ALL_OBJECTS) for group in (10, 40))
+        level_4.outstation.assign_class([ClassAssignment(0, headers)])
+        root = _document(level_4)
+        lists = "d:referenceDevice/d:dataPointsList"
+        for element in (
+            "binaryOutputPoints/d:dataPoints/d:binaryOutput",
+            "analogOutputPoints/d:dataPoints/d:analogOutput",
+        ):
+            points = root.findall(f"{lists}/d:{element}", NS)
+            assert points
+            for point in points:
+                assert _text(point, "d:changeEventClass") == "none"
+                assert _text(point, "d:includedInClass0Response") == "always"
 
     def test_below_level_4_the_points_report_no_output_events(self, simulation):
         root = _document(simulation)

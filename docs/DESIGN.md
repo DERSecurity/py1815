@@ -1851,9 +1851,10 @@ outstation follows them.
   buffered earlier may be reported or deleted (8.26.1); they are reported. When the point is
   assigned a class again, its next change is measured from its value at that moment, so a
   change that happened while it reported nothing is not reported afterwards. Procedure steps
-  46 to 48 check this. An output is the exception to staying in class 0: TB2016-003b Table
-  12-49 note i does not require output status in class 0, and D115 carries it there only while
-  the output reports events.
+  46 to 48 check this. Outputs follow the same rule: TB2016-003b Table 12-49 note b puts
+  the static data of every point assigned to class 0, 1, 2 or 3 in a class 0 response, so an
+  output assigned to class 0 stays in it, or joins it. Only an output with no class at all,
+  which note i lets an outstation leave out of class 0, is not there (D115).
 - *Outputs.* An output has one class, the class of its output events (D115), and only
   groups 10 and 40 move it. Assigning its paired input does not.
 - *Counters.* A counter has one class, which its counter events (D124) and its frozen counter
@@ -1953,7 +1954,7 @@ writes deadbands writes them again after each restart, in return for an outstati
 no state outside the process.
 
 **D115 -- At Level 4 an output reports an event when its status changes, starting in the
-class of its paired input, and class 0 carries the status of every output that reports.**
+class of its paired input, and class 0 carries the status of every output that has a class.**
 Binary output events (g11) and analog output events (g42) are required of a Level 4
 outstation (TB2016-003b, Tables 12-13 and 12-41). `poll()` reads each output's status as a
 read of group 10 or 40 does and records a change of value or flags, whether a control, the
@@ -1972,13 +1973,17 @@ on its integer form, as an analog input's is (D112).
   sets the class of command events (Table 4-12), which are not generated (D116), so it is
   accepted and moves nothing. TB2016-003b Tables 12-11 and 12-37 require ASSIGN_CLASS on
   groups 10 and 40 at Level 4, so D111 already takes them.
-- *Class 0.* Table 12-49 note i has an outstation that leaves g10 and g40 out of class 0
-  leave their events out of classes 1 to 3, and A.7.1.1 allows an output event only for a
-  point that class 0 reports. So at Level 4 class 0 carries g10v2 and g40v1 for each output
-  that reports events, and no other output; Levels 2 and 3 and the default answer class 0 as
-  before. An output assigned to class 0 stops reporting events (4.4.14) and so leaves class
-  0 as well, unlike an input, whose static data is always in class 0 (D110). Given a class
-  again, it reports from its value at that moment, as an input does.
+- *Class 0.* Table 12-49 note b puts the static data of every point assigned to class 0, 1,
+  2 or 3 in a class 0 response. Note i lets an outstation leave g10 and g40 out of class 0,
+  and then leave their events out of classes 1 to 3, and A.7.1.1 allows an output event only
+  for a point that class 0 reports. So at Level 4 class 0 carries g10v2 and g40v1 for each
+  output that has a class: one it reports events in, or class 0 by assignment. An output
+  that starts with no class, because its paired input reports no events, is left out under
+  note i until a master assigns it a class; assigning it class 0 puts it in the class 0
+  response without events. An output assigned to class 0 stops reporting events (4.4.14)
+  and stays in class 0, as an input does (D110). A restart returns each output to its
+  starting class and class 0 membership. Given a class again, an output reports from its
+  value at that moment. Levels 2 and 3 and the default answer class 0 as before.
 - *Variations.* A class poll and a variation 0 read answer g11v2 and g42v3, with time.
   g42v3 is an integer, as D112 keeps variation 0 and class 0 of the analog groups; the
   session's `analog_event_variation` applies to analog inputs only. A read by name takes any
