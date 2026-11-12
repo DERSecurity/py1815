@@ -551,7 +551,8 @@ the configuration the conformance tests run against; see
 
 From Level 3 a master may move points between event classes, or turn their events off,
 with an assign-class request (function code 22). Levels 3 and 4 accept it for binary
-inputs, counters, frozen counters and analog inputs, and Level 4 also for the outputs.
+inputs, counters, frozen counters and analog inputs, and Level 4 also for the outputs
+and the [double-bit inputs](#double-bit-inputs).
 A point assigned to class 0 raises no events but stays in a class 0 read; at Level 4 an
 output assigned to class 0 is in a class 0 read too, as [Output events at
 Level 4](#output-events-at-level-4) describes. A change made
@@ -698,7 +699,9 @@ by class or by naming the group, in the variations without time, with absolute t
 relative time. A change of state, or of any quality flag, is an event. Below Level 4, groups 3
 and 4 are unknown objects, no event is buffered, and the Device Profile lists none of the points.
 An event policy's `defaults` may name the kind `DBI`, and a point's class is set in the same
-way as for a binary input.
+way as for a binary input. A master moves a point to another class, or turns its events off,
+with an assign-class request that names group 3; a point assigned to class 0 stays in a class
+0 read.
 
 ## Memory on a small controller
 

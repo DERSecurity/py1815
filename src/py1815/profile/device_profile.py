@@ -66,6 +66,7 @@ UNSOLICITED_RESPONSE = 130
 #: The groups an ASSIGN_CLASS request may name, as the implementation table words them.
 _ASSIGNABLE_NAMES = {
     1: "Binary Input",
+    3: "Double-bit Binary Input",
     10: "Binary Output",
     12: "Binary Output Command",
     20: "Counter",

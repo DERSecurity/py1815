@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 
 import pytest
 from ied_harness import (
+    ASSIGN_CLASS,
     IIN1_CLASS_1,
     IIN1_CLASS_2,
     IIN2_OBJECT_UNKNOWN,
@@ -422,6 +423,79 @@ class TestTheEventPolicy:
             event_policy={"points": {"DBI0": {"class": 3}}},
         )
         assert outstation.event_class(Kind.DBI, 0) == 3
+
+
+class TestAssignClass:
+    """ASSIGN_CLASS on group 3, which TB2016-003b Table 12-7 requires at Level 4 (D110).
+
+    Each class header is group 60 with qualifier 0x06: variation 1 is class 0 and
+    variation 4 is class 3. The group 3 header after it names the points.
+    """
+
+    @staticmethod
+    def assigned(device: Device, body: str) -> None:
+        fragment = device.master.request(ASSIGN_CLASS, _hex(body)).fragment
+        assert fragment.is_null and not fragment.iin2, f"IIN2 0x{fragment.iin2:02X}"
+
+    def test_a_point_assigned_to_class_3_reports_its_events_there(self):
+        device = Device()
+        # Class 3, then g3v0 with a start-stop range of index 0.
+        self.assigned(device, "3C 04 06  03 00 00 00 00")
+        assert device.outstation.event_class(Kind.DBI, 0) == 3
+        device.move(0, 2)
+        assert device.master.read(classes(1)).fragment.is_null
+        assert device.body(classes(3)) == _hex("04 02 17 01  00  81  28 46 0F 00 00 00")
+
+    def test_all_points_move_and_a_point_with_no_events_keeps_none(self):
+        device = Device()
+        # Class 2, then g3v0 for all points.
+        self.assigned(device, "3C 03 06  03 00 06")
+        assert [device.outstation.event_class(Kind.DBI, i) for i in CLASSES] == [2, 2, 2, 2, 0, 2]
+
+    def test_class_0_stops_events_and_keeps_the_point_in_a_class_0_read(self):
+        device = Device()
+        self.assigned(device, "3C 01 06  03 00 00 00 00")
+        device.move(0, 2)
+        assert device.master.read(classes(1, 2, 3)).fragment.is_null
+        # g1v2 for the binary input, then g3v2 for points 0 to 5 with point 0 at state 2.
+        assert device.body(classes(0)) == _hex(
+            "01 02 00 00 00  01  03 02 00 00 05  81 01 01 01 01 01"
+        )
+
+    def test_a_point_given_a_class_again_reports_only_later_changes(self):
+        device = Device()
+        self.assigned(device, "3C 01 06  03 00 00 00 00")
+        device.move(0, 2)
+        self.assigned(device, "3C 02 06  03 00 00 00 00")
+        # The change made in class 0 is not reported once the point has a class again.
+        device.outstation.poll()
+        assert device.master.read(classes(1, 2, 3)).fragment.is_null
+        device.move(0, 3)
+        # The second change, at 1002000 ms.
+        assert device.body(classes(1)) == _hex("04 02 17 01  00  C1  10 4A 0F 00 00 00")
+
+    def test_a_restart_returns_each_point_to_its_starting_class(self):
+        device = Device()
+        self.assigned(device, "3C 04 06  03 00 00 00 01  3C 01 06  03 00 00 02 02")
+        device.session.restart()
+        assert [device.outstation.event_class(Kind.DBI, i) for i in (0, 1, 2)] == [1, 1, 2]
+
+    def test_at_level_3_group_3_is_an_unknown_object(self):
+        # Level 3 takes ASSIGN_CLASS for other groups; Level 2 and the default
+        # refuse the function itself.
+        device = Device(level=3)
+        fragment = device.master.request(ASSIGN_CLASS, _hex("3C 03 06  03 00 06")).fragment
+        assert fragment.iin2 & IIN2_OBJECT_UNKNOWN
+
+    def test_the_device_profile_lists_group_3_for_assign_class(self):
+        device = Device()
+        table = device_profile.implementation(device.outstation, device.session.facts)
+        assert any(
+            (row.group, row.variation) == (3, 0)
+            and row.request is not None
+            and row.request[0] == ASSIGN_CLASS
+            for row in table.rows
+        )
 
 
 def _profile(level: int | None) -> ElementTree.Element:

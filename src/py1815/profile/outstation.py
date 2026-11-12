@@ -183,10 +183,11 @@ _GROUP_KINDS = {
 #: The groups an ASSIGN_CLASS request may name, each with the group whose points
 #: it selects and the subset level that requires it. IEEE 1815-2012 Table 4-12
 #: names the static group of the points whose events move, and TB2016-003b
-#: ticks groups 1, 20, 21 and 30 for Level 3 and the output groups for Level 4.
-#: A command group selects the output it commands.
+#: ticks groups 1, 20, 21 and 30 for Level 3, and group 3 (Table 12-7) and the
+#: output groups for Level 4. A command group selects the output it commands.
 _ASSIGNABLE_GROUPS = {
     GROUP_BINARY_INPUT: (GROUP_BINARY_INPUT, SubsetLevel.LEVEL_3),
+    GROUP_DOUBLE_BIT_INPUT: (GROUP_DOUBLE_BIT_INPUT, SubsetLevel.LEVEL_4),
     GROUP_COUNTER: (GROUP_COUNTER, SubsetLevel.LEVEL_3),
     GROUP_FROZEN_COUNTER: (GROUP_FROZEN_COUNTER, SubsetLevel.LEVEL_3),
     GROUP_ANALOG_INPUT: (GROUP_ANALOG_INPUT, SubsetLevel.LEVEL_3),
@@ -1470,6 +1471,8 @@ class DerOutstation:
         """Measure a point's next change from its value now, not from when it last reported."""
         if point.kind is Kind.BI:
             self.events.prime_binary(point.index, self._binary(point))
+        elif point.kind is Kind.DBI:
+            self.events.prime_double_bit(point.index, self._double_bit(point))
         elif point.kind is Kind.AI:
             self.events.prime_analog(point.index, self._analog(point))
             if point.index not in self._deadbands:

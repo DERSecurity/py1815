@@ -1881,7 +1881,7 @@ the answer is a null response whose `IIN2` says why a refusal happened.
 - Level 3 takes groups 1, 20, 21 and 30, and Level 4 adds the output status groups 10 and
   40 and the command groups 12 and 41, which name the output they command (Table 4-12;
   TB2016-003b). Points are named by range, by "all" or by index list, as a read names them.
-  Group 3 joins when double-bit inputs are served.
+  Level 4 also takes group 3, the double-bit inputs (Table 12-7; D117).
 - Any other group is an unknown object (`IIN2.1`). A point that is not there, or a range that
   runs past the last point, is a parameter error (`IIN2.2`), as in a read.
 - A header before the first class header would assign points to no class. TB2021-001 makes that
@@ -2021,7 +2021,10 @@ and is logged, so a master is told the value cannot be trusted. Groups 3 and 4 a
 objects (TB2016-003b Tables 12-7 and 12-9): below Level 4 the outstation serves no `DBI` point, a
 read of either group is an unknown object, and the points are in no class 0 or class 1 to 3
 response and buffer no event. The class of a point's events comes from its row and the event policy
-like any other input's (`DBI` is a kind a policy `defaults` rule may name). *Trade-off:* a map
+like any other input's (`DBI` is a kind a policy `defaults` rule may name), and an ASSIGN_CLASS
+naming group 3 moves it as D110 describes for a binary input: class 0 stops the point's events
+and keeps it in a class 0 read, and a point given a class again reports from its state at that
+moment. *Trade-off:* a map
 holding `DBI` points at Level 3 or below carries points that nothing serves.
 
 **D118 -- Group 3 is answered with flags unless a point is online and the read names
