@@ -1931,9 +1931,10 @@ with qualifiers 0x06, 0x00 and 0x01 (and by index, as other static groups are) a
 response. Variation 0 is answered in variation 2, the widest integer. Every served analog input
 has a deadband, and the configured one (the binding's, the policy's) is the starting value; a
 write replaces it, including for a point that reports no events, whose deadband then applies if
-it reports events later. The units follow D112: variations 1 and 2 are unsigned counts in
-transmitted units, which is where `EventPolicy` converts to (D66), and variation 3 is in
-engineering units, converted with the point's multiplier. A deadband read at or past what a
+it reports events later. The units follow D112 and the formal structures of IEEE 1815-2012
+A.18.1 to A.18.3: variations 1 and 2 are unsigned counts in transmitted units, which is where
+`EventPolicy` converts to (D66), and variation 3 is in engineering units, converted with the
+point's multiplier. A deadband read at or past what a
 variation holds is reported as the largest value it holds (IEEE 1815-2012 A.18). A write is all
 or nothing: an index that is not a served analog input, a negative or non-numeric float, a
 count that disagrees with the objects present or a header the fragment does not hold is a
