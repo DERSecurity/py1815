@@ -412,10 +412,31 @@ class TestWriteFragmentSize:
 
     def test_a_size_in_one_octet_or_four_is_read_as_the_same_number(self):
         small = Dut(level=4, block_octets=32)
-        assert _write(small, (240, "02 01 80")).is_null
-        assert _read(small, 240).body.endswith(bytes.fromhex("02 01 80"))
+        assert _write(small, (240, "02 01 C8")).is_null
+        assert _read(small, 240).body.endswith(bytes.fromhex("02 01 C8"))
         assert _write(small, (240, "02 04 00 08 00 00")).is_null
         assert _read(small, 240).body.endswith(bytes.fromhex("02 02 00 08"))
+
+    def test_the_least_size_holds_the_longest_name_and_the_list_of_variations(self):
+        small = Dut(level=4, block_octets=32)
+        # A 128-character name is 139 octets: the response header, the range
+        # header 00 F5 00 00 00, the data type, the length and the text.
+        assert _write(small, (240, "02 01 8A")).iin2 == IIN2_PARAMETER  # 138
+        assert _write(small, (240, "02 01 8B")).is_null  # 139
+        name = "N" * 128
+        assert _write(small, (247, _text(name))).is_null
+        named = _read(small, 247)
+        assert named.iin2 == 0
+        assert named.body == bytes.fromhex("00 F7 00 00 00 01 80") + b"N" * 128
+        listing = small.master.read(header(0, 255)).fragment
+        assert listing.iin2 == 0
+        assert listing.body == bytes([0, 255, 0x17, 1, 0, 254, len(LIST)]) + LIST
+
+    def test_a_session_whose_largest_response_cannot_hold_an_attribute_is_refused(self):
+        small = Dut(level=4, block_octets=32)
+        with pytest.raises(ValueError, match="the device attributes need 139 octets"):
+            small.outstation.session(max_response=138)
+        assert small.outstation.session(max_response=139).facts.max_response == 139
 
     def test_responses_are_fragmented_to_the_size_written(self):
         many = Dut(level=4, extra_analogs=800, capacity=50)
@@ -592,7 +613,7 @@ class TestDeviceInformation:
         with pytest.raises(ValueError, match=r"^product: "):
             DeviceInformation(product="x" * 129)
 
-    @pytest.mark.parametrize("accuracy", [-1, 2**32, True])
+    @pytest.mark.parametrize("accuracy", [-1, 2**32, True, 0.5, 1000.0, "5"])
     def test_the_timing_accuracy_is_an_unsigned_32_bit_number(self, accuracy):
         with pytest.raises(ValueError, match="timing_accuracy_us"):
             DeviceInformation(timing_accuracy_us=accuracy)

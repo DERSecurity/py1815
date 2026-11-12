@@ -190,6 +190,19 @@ class TestStatesAndQualityFromTheBinding:
         # State 3 adds 0xC0 to the COMM_LOST flag 0x04.
         assert device.body(header(3, 2, Q_RANGE_8, 0, 0)) == _hex("03 02 00 00 00  C4")
 
+    def test_coverage_reports_a_value_that_is_not_a_state_as_offline(self):
+        device = Device()
+        device.states[0] = 4
+        reads = []
+        reader = device.outstation._sources[(Kind.DBI, 0)]
+        device.outstation._sources[(Kind.DBI, 0)] = lambda: reads.append(1) or reader()
+        coverage = device.outstation.coverage()
+        assert reads == [1], "the source is read once"
+        entry = coverage.entry(Kind.DBI, 0)
+        assert entry.served and not entry.online
+        assert entry in coverage.offline
+        assert coverage.entry(Kind.DBI, 1).online
+
     def test_a_state_given_as_a_whole_float_is_taken(self):
         device = Device()
         device.states[0] = 2.0
@@ -350,6 +363,13 @@ class TestBelowLevelFour:
     @pytest.mark.parametrize("level", [None, 2, 3])
     def test_no_point_is_served(self, level):
         assert Device(level=level).outstation.served(Kind.DBI) == []
+
+    @pytest.mark.parametrize("level", [None, 2, 3])
+    def test_coverage_reports_every_point_absent(self, level):
+        coverage = Device(level=level).outstation.coverage()
+        entries = [coverage.entry(Kind.DBI, index) for index in CLASSES]
+        assert all(not entry.served and not entry.online for entry in entries)
+        assert set(entries) <= set(coverage.absent)
 
     def test_level_4_serves_every_point_of_the_map(self):
         points = Device(level=4).outstation.served(Kind.DBI)
@@ -539,6 +559,25 @@ class TestTheDeviceProfile:
         table = device_profile.implementation(device.outstation, device.session.facts)
         listed = {(r.group, r.variation) for r in table.rows}
         assert {(3, 0), (3, 1), (3, 2), (4, 0), (4, 1), (4, 2), (4, 3)} <= listed
+
+    def test_unsolicited_rows_list_the_common_time_with_only_double_bit_inputs(self):
+        binding = Binding()
+        binding.read(Kind.DBI, 0, lambda: 1)
+        outstation = DerOutstation(
+            load.resolve(document({"DBI": [row("Valve", 0, event_class=1)]}), Composition()),
+            binding,
+            strict=False,
+            level=4,
+        )
+        session = outstation.session(unsolicited=True)
+        table = device_profile.implementation(outstation, session.facts)
+        unsolicited = {
+            (r.group, r.variation)
+            for r in table.rows
+            if r.response and r.response[0] == device_profile.UNSOLICITED_RESPONSE
+        }
+        # g4v3 travels behind g51v2 when the clock was not set (D118).
+        assert {(4, 2), (4, 3), (51, 1), (51, 2)} <= unsolicited
 
     @pytest.mark.parametrize("level", [None, 2, 3])
     def test_below_level_4_neither_group_is_listed(self, level):
