@@ -29,14 +29,13 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import datetime
-import importlib.metadata
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 from xml.etree import ElementTree
 
 from py1815 import link
-from py1815.attributes import SESSION_VARIATIONS, DeviceAttributes, Variation
+from py1815.attributes import SESSION_VARIATIONS, DeviceAttributes, Variation, software_version
 from py1815.attributes import describe as describe_attribute
 from py1815.control import CommandStatus
 from py1815.profile.model import Kind, Point
@@ -136,12 +135,7 @@ class Identity:
 
     def software(self) -> str:
         """The stated software version, or this library's own."""
-        if self.software_version:
-            return self.software_version
-        try:
-            return f"py1815 {importlib.metadata.version('py1815')}"
-        except importlib.metadata.PackageNotFoundError:
-            return "py1815"
+        return software_version(self.software_version)
 
 
 @dataclass(frozen=True)

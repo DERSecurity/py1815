@@ -496,17 +496,7 @@ class DerOutstation:
         self._initial_classes = dict(self._classes)
 
         if strict:
-            missing = sorted(
-                (p for p in point_map.points.values() if p.mandatory and not self._is_served(p)),
-                key=lambda p: (p.kind.value, p.index),
-            )
-            if missing:
-                listed = ", ".join(f"{p.kind.value}{p.index}" for p in missing[:20])
-                more = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
-                raise MapError(
-                    f"{len(missing)} point(s) the profile makes mandatory are not bound: "
-                    f"{listed}{more}"
-                )
+            self._require_mandatory()
         #: The device attributes served at Level 4, or None below it (D119).
         self._attributes = (
             self._device_attributes(information or DeviceInformation())
@@ -515,6 +505,19 @@ class DerOutstation:
         )
 
     # ------------------------------------------------------------ assembly
+
+    def _require_mandatory(self) -> None:
+        """Raise MapError when a point the profile makes mandatory is not served."""
+        missing = sorted(
+            (p for p in self._map.points.values() if p.mandatory and not self._is_served(p)),
+            key=lambda p: (p.kind.value, p.index),
+        )
+        if missing:
+            listed = ", ".join(f"{p.kind.value}{p.index}" for p in missing[:20])
+            more = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
+            raise MapError(
+                f"{len(missing)} point(s) the profile makes mandatory are not bound: {listed}{more}"
+            )
 
     def _variations_at_level(
         self,

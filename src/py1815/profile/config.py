@@ -39,6 +39,13 @@ _COMPOSITION = ("meters", "der_units", "inverters", "batteries")
 _SIMULATION = ("seed", "tick")
 _MAX_COUNT = 1000
 
+#: The whole-number settings, each with the least and the most it may be.
+_INTEGERS = {
+    "event_capacity": (1, 1_000_000),
+    "max_response": (249, 65535),
+    "timing_accuracy_us": (0, 0xFFFFFFFF),
+}
+
 
 @dataclass(frozen=True)
 class Identity:  # pylint: disable=too-many-instance-attributes
@@ -164,12 +171,8 @@ class DerConfig:
                     values["level"] = 2
                 elif value and given.get("level") is not None:
                     raise ConfigError("level2 conflicts with level")
-            elif key == "event_capacity":
-                values[key] = settings.integer(value, key, 1, 1_000_000)
-            elif key == "max_response":
-                values[key] = settings.integer(value, key, 249, 65535)
-            elif key == "timing_accuracy_us":
-                values[key] = settings.integer(value, key, 0, 0xFFFFFFFF)
+            elif key in _INTEGERS:
+                values[key] = settings.integer(value, key, *_INTEGERS[key])
             elif key in ("select_timeout", "idle_timeout"):
                 values[key] = settings.seconds(value, key)
             elif key == "confirm_timeout":
@@ -199,13 +202,7 @@ class DerConfig:
                         raise ConfigError(f"{key}.{name} must be a string")
                 values[key] = Identity(**identity)
         config = cls(**values)
-        if config.level == SubsetLevel.LEVEL_4:
-            # The device attributes carry these as visible ASCII.
-            for name, entry in zip(_ATTRIBUTE_TEXT, config.device_information_texts(), strict=True):
-                try:
-                    Attribute.text(entry)
-                except ValueError as error:
-                    raise ConfigError(f"identity.{name}: {error}") from None
+        config._check_attribute_texts()
         if config.master_address == config.outstation_address:
             raise ConfigError("outstation_address and master_address must be different")
         if config.unsolicited and config.confirm_timeout is None:
@@ -233,6 +230,19 @@ class DerConfig:
     def load(cls, path: str | pathlib.Path) -> DerConfig:
         """Read a configuration from a JSON file."""
         return cls.from_mapping(settings.read(path))
+
+    def _check_attribute_texts(self) -> None:
+        """Raise ConfigError when Level 4 has to report an identity setting it cannot.
+
+        The device attributes carry these settings as visible ASCII.
+        """
+        if self.level != SubsetLevel.LEVEL_4:
+            return
+        for name, entry in zip(_ATTRIBUTE_TEXT, self.device_information_texts(), strict=True):
+            try:
+                Attribute.text(entry)
+            except ValueError as error:
+                raise ConfigError(f"identity.{name}: {error}") from None
 
     def device_information_texts(self) -> tuple[str, ...]:
         """Return the identity settings that device attributes carry as text."""

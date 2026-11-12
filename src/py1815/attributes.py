@@ -403,12 +403,17 @@ class DeviceInformation:  # pylint: disable=too-many-instance-attributes
 
     def software(self) -> str:
         """Return the stated software version, or this library's own."""
-        if self.software_version:
-            return self.software_version
-        try:
-            return f"py1815 {importlib.metadata.version('py1815')}"
-        except importlib.metadata.PackageNotFoundError:
-            return "py1815"
+        return software_version(self.software_version)
+
+
+def software_version(stated: str) -> str:
+    """Return ``stated``, or this library's own version when it is empty."""
+    if stated:
+        return stated
+    try:
+        return f"py1815 {importlib.metadata.version('py1815')}"
+    except importlib.metadata.PackageNotFoundError:
+        return "py1815"
 
 
 class DeviceAttributes:
