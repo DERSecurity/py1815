@@ -17,10 +17,10 @@ the control parser. A variation that no table mentions is reported as
 supported by none.
 
 The marks cover every subset level and setting the tables hold: an object that
-only a Level 3 outstation serves or accepts is marked as served or requested, so
-a mark says the library can do it, not that every configuration does. A read
-that is answered in another variation marks the variation read as requested and
-the variation sent as served.
+only a Level 3 or Level 4 outstation serves or accepts is marked as served or
+requested, so a mark says the library can do it, not that every configuration
+does. A read that is answered in another variation marks the variation read as
+requested and the variation sent as served.
 
 The subset level at which a variation is required comes from the DNP Users
 Group's subset tables, which this repository does not carry. Name a copy with
@@ -78,6 +78,15 @@ class Coverage:
     level: int | None = None
 
 
+def _widened() -> tuple[dict[int, dict[int, int]], ...]:
+    """Return the outstation's tables of reads answered in another variation, at every level."""
+    return (
+        outstation._WIDENED_VARIATIONS,
+        outstation._LEVEL_3_WIDENED,
+        outstation._LEVEL_4_WIDENED,
+    )
+
+
 def _controls() -> set[Key]:
     """The control objects the outstation reads, and echoes in its answer."""
     return {
@@ -93,9 +102,10 @@ def served() -> set[Key]:
     found: set[Key] = set()
     found.update(outstation._DEFAULT_VARIATIONS.items())
     found.update(outstation._LEVEL_2_VARIATIONS.items())
-    for group, variations in outstation._SERVED_VARIATIONS.items():
-        found.update((group, variation) for variation in variations)
-    for widened in (outstation._WIDENED_VARIATIONS, outstation._LEVEL_3_WIDENED):
+    for table in (outstation._SERVED_VARIATIONS, outstation._LEVEL_4_VARIATIONS):
+        for group, variations in table.items():
+            found.update((group, variation) for variation in variations)
+    for widened in _widened():
         for group, answers in widened.items():
             found.update((group, variation) for variation in answers.values())
     found.update(session._EVENT_SIZES)
@@ -115,13 +125,15 @@ def requested() -> set[Key]:
     found: set[Key] = set()
     found.update(outstation._DEFAULT_VARIATIONS.items())
     found.update(outstation._LEVEL_2_VARIATIONS.items())
-    for group, variations in outstation._SERVED_VARIATIONS.items():
-        found.update((group, variation) for variation in variations)
-    for widened in (outstation._WIDENED_VARIATIONS, outstation._LEVEL_3_WIDENED):
+    for table in (outstation._SERVED_VARIATIONS, outstation._LEVEL_4_VARIATIONS):
+        for group, variations in table.items():
+            found.update((group, variation) for variation in variations)
+    for widened in _widened():
         for group, answers in widened.items():
             found.update((group, variation) for variation in answers)
-    for group, named in session._EVENT_VARIATIONS.items():
-        found.update((group, variation) for variation in named if variation)
+    for event_table in (session._EVENT_VARIATIONS, session._EXTENDED_EVENT_VARIATIONS):
+        for group, named in event_table.items():
+            found.update((group, variation) for variation in named if variation)
     for group, answers in session._WIDENED_EVENT_VARIATIONS.items():
         found.update((group, variation) for variation in answers)
     found.update(session._OWN_OBJECTS)

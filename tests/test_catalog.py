@@ -163,6 +163,12 @@ def test_the_event_sizes_the_encoders_use_are_the_catalog_sizes() -> None:
         assert item is not None and item.size.octets == size, (group, variation)
 
 
+def test_the_deadband_sizes_are_the_catalog_sizes() -> None:
+    for variation, size in objects.DEADBAND_SIZES.items():
+        item = catalog.find(objects.GROUP_ANALOG_DEADBAND, variation)
+        assert item is not None and item.size.octets == size, variation
+
+
 def test_a_widened_event_read_is_sized_by_the_variation_sent() -> None:
     """The event sizes are keyed by the variation sent, never by the one read."""
     widened = session._WIDENED_EVENT_VARIATIONS  # pylint: disable=protected-access
@@ -292,10 +298,21 @@ def test_the_report_follows_the_master_layouts(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_the_report_follows_the_outstation_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert (_row(30, 6).served, _row(30, 6).requested) == (False, False)
     served = object_coverage.outstation._SERVED_VARIATIONS  # pylint: disable=protected-access
-    monkeypatch.setitem(served, 30, served[30] | {5})
-    row = _row(30, 5)
+    monkeypatch.setitem(served, 30, served[30] | {6})
+    row = _row(30, 6)
     assert (row.served, row.requested) == (True, True)
+
+
+def test_the_level_4_objects_are_reported() -> None:
+    # Floating point, the deadbands and the time-stamped 16-bit frozen counters,
+    # which are read and answered in 32 bits.
+    for group, variation in ((30, 5), (40, 3), (32, 5), (32, 7), (34, 1), (34, 2), (34, 3)):
+        row = _row(group, variation)
+        assert (row.served, row.requested) == (True, True), (group, variation)
+    for group in (21, 23):
+        assert (_row(group, 6).served, _row(group, 6).requested) == (False, True)
 
 
 def test_the_text_report_names_every_group_and_marks_each_column() -> None:
