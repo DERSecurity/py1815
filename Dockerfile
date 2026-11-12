@@ -19,7 +19,7 @@
 # them from that volume. `.dockerignore` keeps a copy sitting in a checkout
 # out of the build context for the same reason.
 
-FROM python:3.12-slim AS base
+FROM python:3.15-slim AS base
 
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE NOTICE ./
