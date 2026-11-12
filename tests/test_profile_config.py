@@ -438,6 +438,19 @@ class TestAppliedToTheOutstation:
         assert DerConfig.from_mapping({"level2": True}).level == 2
         assert DerConfig.from_mapping({"level2": False}).level is None
 
+    @pytest.mark.parametrize(
+        "document",
+        [{"level2": True, "level": None}, {"level": None, "level2": True}],
+    )
+    def test_a_null_level_keeps_level2_in_either_key_order(self, document):
+        assert DerConfig.from_mapping(document).level == 2
+
+    @pytest.mark.parametrize("level", [3, 4])
+    def test_level_flag_overrides_level2_in_the_file(self, tmp_path, level):
+        path = _file(tmp_path, {"level2": True})
+        config = cli.configuration(_args("run", "--config", path, "--level", str(level)))
+        assert config.level == level
+
     def test_level2_true_with_another_level_is_refused(self):
         with pytest.raises(ConfigError, match="level2 conflicts with level"):
             DerConfig.from_mapping({"level2": True, "level": 3})

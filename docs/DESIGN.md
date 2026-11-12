@@ -1782,7 +1782,8 @@ is written twice, in the JSON and in the module, and the test is what keeps them
 **D105 -- Coverage is read from the tables the code uses, and the subset level is read from
 the user's own copy of the subset tables.** `python -m py1815.object_coverage` marks each
 variation served, requested and parsed from the outstation's variation tables, the session's
-event tables, `decode.LAYOUTS` and the control parser, so it cannot drift from the code.
+event tables, the device attributes a Level 4 outstation builds (D119), `decode.LAYOUTS`, the
+group 0 walk of `decode` (D121) and the control parser, so it cannot drift from the code.
 The DNP Users Group's subset tables may not be committed (the subset test reads them from
 `PY1815_SUBSET_TABLES` for that reason), so the level column is present only when the command
 is given a copy, as `--subset-tables` or that variable, and holds the lowest level whose
@@ -1958,7 +1959,8 @@ count that disagrees with the objects present or a header the fragment does not 
 parameter error and changes nothing. IEEE 1815-2012 11.9.1.3 does not require a deadband to
 survive a restart and asks a device that keeps it to say so in the Device Profile. A written
 deadband is held in memory only; the restarted outstation uses the configured values, and the
-Device Profile lists no settings as kept through a restart. Group 34 is never in class 0. It
+Device Profile lists no settings as kept through a restart. `Session.restart`, which a cold
+restart runs, puts them back through the provider's `reset_deadbands`, as it puts classes back. Group 34 is never in class 0. It
 holds analog input deadbands only: the deadband of a counter that reports value changes (D124)
 comes from the event policy and is not read or written over DNP3. *Trade-off:* a master that
 writes deadbands writes them again after each restart, in return for an outstation that holds
@@ -1971,7 +1973,11 @@ outstation (TB2016-003b, Tables 12-13 and 12-41). `poll()` reads each output's s
 read of group 10 or 40 does and records a change of value or flags, whether a control, the
 device or a failing status reader caused it (IEEE 1815-2012, A.7.1.1). There is no
 deadband, and every change is kept, as for binary inputs; an analog output's change is judged
-on its integer form, as an analog input's is (D112).
+on its integer form, as an analog input's is (D112). When one request commands an output
+again, the outstation polls before carrying out the later control, so a request that latches an
+output on and then off reports both changes, and the inputs mirroring it report both too
+(A.7.1.1 and A.21.1 describe an event for each control that changes an output). A request that
+commands each output once is polled once, after its last control.
 
 - *Class.* The tables give an output no event class, so it starts in the class of the input
   paired with it, which reports the same change; an output whose paired input reports no
@@ -2036,7 +2042,8 @@ like any other input's (`DBI` is a kind a policy `defaults` rule may name), and 
 naming group 3 moves it as D110 describes for a binary input: class 0 stops the point's events
 and keeps it in a class 0 read, and a point given a class again reports from its state at that
 moment. *Trade-off:* a map
-holding `DBI` points at Level 3 or below carries points that nothing serves.
+holding `DBI` points at Level 3 or below carries points that nothing serves, and
+`coverage()` reports them as absent.
 
 **D118 -- Group 3 is answered with flags unless a point is online and the read names
 variation 1; group 4 follows the binary event rules.** Variation 0 is answered with flags,
@@ -2100,8 +2107,11 @@ object; a text that is not visible ASCII, is too long or has another data type, 
 other than 0, or a qualifier other than 0x00 and 0x01 is a parameter error. The
 transmit fragment size is the session's `max_response`, so a write changes how the
 session fragments its responses from the next response on. It has to be at least the
-largest static block plus a response header (1028 octets with the default block
-budget), because the session refuses a read whose block is larger than a fragment, and
+largest block a read can need plus a response header, because the session refuses a read
+whose block is larger than a fragment: the largest static block (1028 octets with the
+default block budget), and with a small budget the list of variations or an attribute at
+its longest, a written name of 128 characters (139 octets). A session is not built with a
+`max_response` below that floor either, and
 at most the `max_response` the session was built with, which is the limit an operator
 sets under 4.3 rule 1; a master can lower the size and raise it back and no further.
 Nothing is stored beyond the process: 5.5.8 does not require a written attribute to
@@ -2118,7 +2128,8 @@ attribute whole, with its data type code, in `attribute`; its `value` is set onl
 the attribute is a number, a time or a bit string, so that `value` is never a string or a
 list. A data type code this library has no name for is walked past by its length. The
 traffic walk reads group 0 the same way and keeps the octets after the header as the
-header's `data`. The Device Profile lists every attribute under its implementation table
+header's `data`; under a size prefix it walks each attribute by the prefix, as it walks any
+object that states its size. The Device Profile lists every attribute under its implementation table
 at Level 4, because the schema has no element for attributes beyond that.
 *Trade-off:* an attribute with a data type this library has no name for is kept as
 octets and not interpreted. The requests that read and write attributes are D122's.

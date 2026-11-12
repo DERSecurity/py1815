@@ -1099,6 +1099,28 @@ class TestOutputEventsAtLevel4:
         _, lower = self._rows(below)
         assert not {r.group for r in lower.rows} & {11, 13, 42, 43}
 
+    @pytest.mark.parametrize("groups", [[11], [13], [42], [43], [11, 43], [13, 42], []])
+    def test_the_table_lists_each_output_event_group_the_session_serves(self, level_4, groups):
+        session, table = self._rows(level_4, output_events=groups)
+        listed = {r.group for r in table.rows if r.group in (11, 13, 42, 43)}
+        assert listed == set(groups)
+        # A group the table lists is answered, and one it leaves out is refused.
+        sender = Sender(session)
+        for group in (11, 13, 42, 43):
+            response = sender.send(1, bytes([group, 0, 0x06]))
+            assert bool(response[3] & IIN2Bit.OBJECT_UNKNOWN) is (group not in groups), group
+
+    def test_class_0_mode_follows_what_class_0_carries_without_output_event_groups(self, level_4):
+        root = _document(level_4, output_events=[])
+        base = "d:referenceDevice/d:database"
+        for group in ("binaryOutputGroup", "analogOutputGroup"):
+            class_0 = f"{base}/d:{group}/d:configuration/d:class0ResponseMode/d:currentValue"
+            assert root.find(f"{class_0}/d:always", NS) is not None, group
+        # The class 0 response carries the output status the document declares.
+        sender = Sender(level_4.outstation.session(output_events=[]))
+        groups = {each.group for each in decode_objects(sender.send(1, b"<")[4:]).objects}
+        assert {10, 40} <= groups
+
     def test_every_listed_read_is_answered_in_each_qualifier(self, level_4):
         session, table = self._rows(level_4)
         sender = Sender(session)

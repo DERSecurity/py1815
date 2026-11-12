@@ -605,14 +605,15 @@ class _Walk:
         self, group: int, variation: int, prefix: int, start: int | None, number: int
     ) -> None:
         """Read the objects under one header."""
-        if group == _GROUP_DEVICE_ATTRIBUTES:
-            self._attributes(prefix, number)
-            return
         known = (group, variation) in _LAYOUTS or group in _OCTET_GROUPS
         if prefix in _SIZE_PREFIX_OCTETS and not known:
             # An object this module does not read, such as a file or an
             # authentication object, can still be walked past by its size.
             self._sized(prefix, number)
+            return
+        if group == _GROUP_DEVICE_ATTRIBUTES:
+            # Without a size prefix, each attribute states its own length.
+            self._attributes(prefix, number)
             return
         layout = self._layout(group, variation)
         if layout.packed_bits:

@@ -123,6 +123,29 @@ class TestBinaryOutputEvents:
             f"2A 03 17 01 02 01 D2 04 00 00 {STAMP}  0B 02 17 01 00 81 {STAMP}"
         )
 
+    def test_two_controls_of_one_output_in_one_request_raise_an_event_each(self):
+        dut = Dut(level=4)
+        # Group 12 variation 1, qualifier 0x17, two blocks for output 1: latch on
+        # (03), then latch off (04), each once, 100 ms on and 200 ms off.
+        reply = dut.master.request(
+            DIRECT_OPERATE,
+            _bytes(
+                "0C 01 17 02"
+                " 01 03 01 64 00 00 00 C8 00 00 00 00"
+                " 01 04 01 64 00 00 00 C8 00 00 00 00"
+            ),
+        )
+        assert reply.fragment.iin1 & IIN1_CLASS_3
+        assert _events(dut) == _bytes(f"0B 02 17 02  01 81 {STAMP}  01 01 {STAMP}")
+
+    def test_each_setpoint_of_one_output_in_one_request_raises_an_event(self):
+        dut = Dut(level=4)
+        # Group 41 variation 2, qualifier 0x17, output 2 set to 1234 and then 5678.
+        dut.master.request(DIRECT_OPERATE, _bytes("29 02 17 02  02 D2 04 00  02 2E 16 00"))
+        assert _events(dut) == _bytes(
+            f"2A 03 17 02  02 01 D2 04 00 00 {STAMP}  02 01 2E 16 00 00 {STAMP}"
+        )
+
     def test_a_full_buffer_drops_the_oldest_and_reports_overflow(self):
         dut = Dut(level=4, capacity=3)
         for on in (True, False, True, False, True):

@@ -290,6 +290,20 @@ def test_the_output_event_reads_are_accepted() -> None:
     assert not _row(42, 6).requested
 
 
+def test_the_device_attributes_are_served_accepted_and_read() -> None:
+    # The fragment size and the location name a master may write, the manufacturer
+    # it may not, and the list of variations, which is answered as itself.
+    for variation in (240, 245, 252, 255):
+        row = _row(0, variation)
+        assert (row.served, row.requested, row.parsed) == (True, True, True), variation
+    # A read of every attribute is answered with the attributes themselves.
+    assert (_row(0, 254).served, _row(0, 254).requested, _row(0, 254).parsed) == (
+        False,
+        True,
+        False,
+    )
+
+
 def test_a_class_object_is_accepted_in_a_request_and_never_served() -> None:
     row = _row(60, 2)
     assert (row.served, row.requested, row.parsed) == (False, True, False)
