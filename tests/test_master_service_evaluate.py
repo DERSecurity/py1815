@@ -73,7 +73,9 @@ class TestTheCatalog:
             "set": "der",
             "writes": False,
             "deviates": False,
+            "level": 2,
         }
+        assert by_id["LEVEL3-001"]["level"] == 3 and by_id["LEVEL4-001"]["level"] == 4
         assert by_id["CONN-001"]["writes"] and not by_id["CONN-001"]["deviates"]
         assert by_id["LINK-001"]["deviates"] and by_id["LINK-001"]["set"] == "deviation"
 

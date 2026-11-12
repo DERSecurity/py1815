@@ -95,6 +95,39 @@ serves with its DNP3 Device Profile document, given with `--device-profile FILE`
 declared and not served, served and not declared, or in class 0 when the document says
 otherwise fails it.
 
+### The subset set
+
+The `subset` set checks what an outstation of a subset level answers: the requests the
+master's [Subset levels](master.md#subset-levels) offer. A check applies from a level, and
+is reported as `not applicable` when the outstation is set to a lower one (`--level`, or
+`level` in the configuration). An outstation that is not given a level is held to Level 2,
+so the set is `not applicable` until it is. These are interoperability checks and not a
+certification: each says whether the outstation takes a request and answers it in the form
+the standard gives, and none says the outstation conforms to a level.
+
+| Check | Level | Writes | What it requires |
+|---|---|---|---|
+| `LEVEL3-001` | 3 | no | A read of a served group by a named variation (analog inputs in variation 1, else binary inputs in variation 2, else counters in variation 1) carries the served point, only in the variation asked for, and draws none of the indications for an unsupported function, an unknown object or a parameter error |
+| `LEVEL3-002` | 3 | no | A read of the first served point by a range of that one point returns that point and no other |
+| `LEVEL3-003` | 3 | no | The time is read as one object of group 50 variation 1 with a 6-octet time |
+| `LEVEL3-004` | 3 | no | The internal indications are read as the range 0 to 15 of group 80 variation 1, with two octets of bits |
+| `LEVEL3-005` | 3 | yes | An assignment of an analog input to the class the tables give it is taken, and answered with no objects. Not applicable when no analog input the outstation serves is in the point map with a class |
+| `LEVEL4-001` | 4 | no | A read of variation 254 returns device attributes, and never variation 254 or 255 |
+| `LEVEL4-002` | 4 | no | A read of variation 255 returns a list of variation and properties pairs for each attribute set, at the set's index, and each attribute a list names is returned when read by its variation from that set's index |
+| `LEVEL4-003` | 4 | no | A read of the analog input deadbands is taken, and what it returns is group 34 |
+| `LEVEL4-004` | 4 | no | A read of every double-bit input and double-bit event is taken, and returns only groups 3 and 4, with the common time of occurrence (group 51) that relative-time events (group 4 variation 3) are reported after. Not applicable to an outstation that serves no double-bit input |
+| `LEVEL4-005` | 4 | no | A read of every binary output event, binary command event, analog output event and analog command event is taken, and returns only groups 11, 13, 42 and 43 |
+
+The time and the internal indications are compared octet for octet. Every other response
+is judged by its decoded objects: one that cannot be decoded fails, as does one that carries
+a group the request did not ask for. A response that stops before its final fragment fails
+every check, which is not judged on the part that arrived. The reads of events in `LEVEL4-004` and `LEVEL4-005`
+take the events the outstation holds for those groups, and the master confirms them as it
+does for any poll. A response with no events passes.
+`LEVEL3-005` assigns the point the class its tables give it, so an outstation left as its
+tables describe it is left as it was. It is a check that writes, and is run only with
+`--allow-control`.
+
 ### The deviation set
 
 The `deviation` set has the master break a protocol rule on purpose and requires what the
@@ -326,6 +359,12 @@ report = await evaluate(outstation, point_map, checks=[*CATALOG, mine])
 
 The third argument says whether the check writes. One that does is run only when
 `commanding` is set.
+
+A check that applies only from a subset level is made with `level=SubsetLevel.LEVEL_3` (or
+`LEVEL_4`), and is reported as not applicable below it. `bench.ask(send, what)` makes a
+request of the master that is not a point read: `send` is called with the master, as in
+`bench.ask(lambda master: master.read_time(), "a read of the time")`, and the check fails
+if nothing is answered.
 
 A check that has the master break a protocol rule is made with `deviates=True`, and is
 run only when `deviating` is set. `bench.deviate("corrupt_header_crc")` turns a deviation

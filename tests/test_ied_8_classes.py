@@ -196,7 +196,7 @@ class TestMultipleObjectRequest:
         dut.master.confirm(fragment)
 
     def test_8_5_5_1_several_events_of_one_analog_point_keep_their_order(self):
-        dut = Dut(level2=True, capacity=50)
+        dut = Dut(level=2, capacity=50)
         # A session that keeps every analog change, to have several to order.
         dut.outstation.events._analog_latest_only = False
         dut.master.empty_events()

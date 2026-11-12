@@ -10,6 +10,7 @@ const TOKEN = new URLSearchParams(location.search).get("token");
 
 const POINT_TYPES = [
   ["bi", "Binary inputs"],
+  ["dbi", "Double-bit inputs"],
   ["bo", "Binary outputs"],
   ["counter", "Counters"],
   ["frozen", "Frozen counters"],
@@ -263,6 +264,14 @@ async function select(name) {
   renderAll();
 }
 
+// What the subset level the outstation was added with lets the page send. A
+// request above it is refused by the service before anything is sent.
+const LEVEL_HINTS = {
+  2: "This outstation is held to Level 2. Reads by variation or by range, the time, the internal indications and event class assignment need Level 3, and device attributes and deadbands need Level 4.",
+  3: "This outstation is held to Level 3. Reads by a list of indices, device attributes, deadbands and the groups only Level 4 defines need Level 4.",
+  4: "This outstation is held to Level 4. Every request on this page can be sent.",
+};
+
 function renderHeader() {
   const outstation = current();
   if (!outstation) return;
@@ -271,6 +280,7 @@ function renderHeader() {
   chip.textContent = outstation.connected ? "Connected" : "Not connected";
   chip.className = `chip ${outstation.connected ? "good" : "bad"}`;
   $("#connect-button").textContent = outstation.connected ? "Disconnect" : "Connect";
+  $("#level-hint").textContent = LEVEL_HINTS[outstation.level] || "";
   // The DER tab is for an outstation that was given a profile to name its points by.
   $(".tabs [data-tab='der']").hidden = !outstation.profile;
   if (!outstation.profile && state.tab === "der") showTab("overview");
@@ -285,6 +295,8 @@ function renderControl() {
   chip.className = `chip ${state.allowControl ? "armed" : ""}`;
   $("#operate-fields").disabled = !state.allowControl;
   $("#control-off").hidden = state.allowControl;
+  $("#configure-fields").disabled = !state.allowControl;
+  $("#configure-off").hidden = state.allowControl;
   for (const button of document.querySelectorAll("#write-buttons button")) {
     button.disabled = !state.allowControl;
   }
@@ -353,6 +365,7 @@ function renderOverview() {
     ["Address", `${outstation.host}:${outstation.port}`],
     ["Outstation address", outstation.outstation_address],
     ["Master address", outstation.master_address],
+    ["Subset level", `Level ${outstation.level}`],
     ["State", outstation.connected ? "Connected" : "Not connected"],
     ["Last response", outstation.last_response_at ? clockTime(outstation.last_response_at) : "None"],
     ["Repeated scans", repeat.length ? repeat.join(", ") : "None"],
@@ -747,8 +760,23 @@ function renderFrame() {
 
 // What came of one request, as the Commands and Requests tabs both show it:
 // the facts of the exchange, and a table of the objects that came back.
+// The value of an object that is not a point: a device attribute, the time,
+// an internal indication or a deadband.
+function otherValue(object) {
+  const attribute = object.attribute;
+  if (attribute) {
+    if (Array.isArray(attribute.value)) {
+      return attribute.value.map((each) => `${each.variation}${each.writable ? " (writable)" : ""}`).join(", ");
+    }
+    return attribute.value === null ? attribute.octets : formatValue(attribute.value);
+  }
+  if (object.time_ms !== null && object.time_ms !== undefined) return stationTime(object.time_ms);
+  return formatValue(object.value);
+}
+
 function exchangeNodes(exchange) {
   const rows = exchange.objects.filter((object) => object.type !== null).slice(0, 200);
+  const others = exchange.objects.filter((object) => object.type === null).slice(0, 200);
   const named = rows.some((row) => row.name);
   return [
     el("dl", { class: "facts" },
@@ -771,6 +799,16 @@ function exchangeNodes(exchange) {
           el("td", { class: "num value", text: formatValue(row.value) }),
           el("td", {}, flagChips(row.flags)),
           el("td", { class: "mono", text: `g${row.group}v${row.variation}${row.event ? " event" : ""}` })))))) : null,
+    others.length ? el("div", { class: "table-wrap", style: "margin-top:12px; max-height:320px" },
+      el("table", { class: "other-objects" },
+        el("thead", {}, el("tr", {},
+          el("th", { text: "Object" }), el("th", { class: "num", text: "Index" }),
+          el("th", { text: "Value" }), el("th", { text: "Data type" }))),
+        el("tbody", {}, others.map((object) => el("tr", {},
+          el("td", { class: "mono", text: `g${object.group}v${object.variation}` }),
+          el("td", { class: "num", text: object.index === null ? "" : object.index }),
+          el("td", { class: "value", text: otherValue(object) }),
+          el("td", { class: "mono", text: object.attribute ? object.attribute.data_type : "" })))))) : null,
   ].filter(Boolean);
 }
 
@@ -832,6 +870,16 @@ async function operate(type, index, value, mode, variation, readback) {
     $("#result").replaceChildren(el("p", { class: "error", text: error.message }));
   }
   refreshStatus();
+}
+
+// The points a read names, from what was typed: nothing or "all" for every
+// object, "4-8" for a range, and "4, 6, 8" for a list.
+function pointsGiven(text) {
+  const typed = text.trim();
+  if (typed === "" || typed.toLowerCase() === "all") return {};
+  const range = typed.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (range) return { start: Number(range[1]), stop: Number(range[2]) };
+  return { indices: typed.split(/[\s,]+/).filter(Boolean).map(Number) };
 }
 
 async function command(label, op, params) {
@@ -1055,6 +1103,54 @@ function wire() {
       : typed.split(/[\s,]+/).filter(Boolean).map(Number);
     const type = form.elements.type.value;
     command(`read ${TYPE_LABELS[type].toLowerCase()}`, "read", { points: { [type]: indices } });
+  });
+
+  $("#group-form").addEventListener("submit", (submitted) => {
+    submitted.preventDefault();
+    const form = submitted.target;
+    const group = Number(form.elements.group.value);
+    const variation = Number(form.elements.variation.value || 0);
+    command(`read group ${group} variation ${variation}`, "read_group",
+      { group, variation, ...pointsGiven(form.elements.points.value) });
+  });
+
+  const levelReads = {
+    read_time: ["read the time", "read_time", {}],
+    read_indications: ["read the internal indications", "read_indications", {}],
+    attributes_all: ["read every device attribute", "read_attributes", { variation: 254 }],
+    attributes_list: ["read the list of device attributes", "read_attributes", { variation: 255 }],
+    deadbands: ["read the analog input deadbands", "read_group", { group: 34 }],
+  };
+  for (const button of document.querySelectorAll("#level-reads button")) {
+    button.addEventListener("click", () => command(...levelReads[button.dataset.read]));
+  }
+
+  $("#assign-form").addEventListener("submit", (submitted) => {
+    submitted.preventDefault();
+    const fields = submitted.target.elements;
+    const typed = fields.indices.value.trim();
+    const indices = typed === "" || typed.toLowerCase() === "all"
+      ? "all"
+      : typed.split(/[\s,]+/).filter(Boolean).map(Number);
+    const event_class = Number(fields.event_class.value);
+    command(`assign ${TYPE_LABELS[fields.type.value].toLowerCase()} events to class ${event_class}`,
+      "assign_class", { event_class, points: { [fields.type.value]: indices } });
+  });
+
+  $("#deadband-form").addEventListener("submit", (submitted) => {
+    submitted.preventDefault();
+    const fields = submitted.target.elements;
+    command(`write the deadband of analog input ${fields.index.value}`, "write_deadbands",
+      { variation: Number(fields.variation.value), values: { [fields.index.value]: Number(fields.value.value) } });
+  });
+
+  $("#attribute-form").addEventListener("submit", (submitted) => {
+    submitted.preventDefault();
+    const fields = submitted.target.elements;
+    const variation = Number(fields.variation.value);
+    // Attribute 240 is a number, and the others are text.
+    const value = variation === 240 ? Number(fields.value.value) : fields.value.value;
+    command(`write device attribute ${variation}`, "write_attribute", { variation, value });
   });
 
   $("#operate-form").elements.type.addEventListener("change", showOperateFields);

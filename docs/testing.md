@@ -89,7 +89,8 @@ its Python bindings do not offer them.
 The first run found a real fault. The master read named points with the
 index-list qualifiers (0x17 and 0x28), which a Subset Level 2 outstation is not
 required to accept, and opendnp3 rejected them. The master now reads named
-points as start-stop ranges (D82).
+points as start-stop ranges from an outstation set to Level 3 or 4, and reads the
+whole group from one set to Level 2, which is the only form Level 2 requires (D82).
 
 ### The function code sweep
 
@@ -185,6 +186,7 @@ widths read out of the document, and the suite diffs this package against them:
 | Index prefix widths | Table 4-4 |
 | Range field widths, from both sides | Table 4-5 |
 | Every accepted qualifier is one the standard permits | Table 4-6 |
+| The object catalog has every group and variation, with its name, type and size | Annex A |
 | The sweep has a case for every assigned request code | Table 4-2 |
 
 The last row is the one that closes the hole `ACTIVATE_CONFIG` fell through: the
@@ -196,6 +198,14 @@ one case per code, by sending each one and asserting silence. The range field
 widths are checked from both sides, because a parser that reads too few octets
 does not raise; it leaves the remainder to be misread as the next object header.
 
+The object catalog (`py1815.catalog`) names every group and variation Annex A
+defines. The suite checks the group constants, the variation enums, the master's
+object layouts and the event and control sizes against it
+(`tests/test_catalog.py`), so a number or a width that disagrees with the
+standard fails there. `python -m py1815.object_coverage` lists, for each
+variation, whether the outstation serves it, accepts it in a request and whether
+the master reads it; see [Object catalog](reference/catalog.md).
+
 Where this package departs from a table on purpose (seven names the standard
 abbreviates, two indication-bit names, and the two reserved bits that are always
 zero) the departure is listed beside the test with its reason. Anything not on
@@ -205,12 +215,16 @@ The standard is a paid document and is not in the repository, so regenerating
 the tables is a step someone takes deliberately, with their own copy:
 
 ```bash
-pip install pypdf
+pip install pypdf                 # and pdftotext from poppler-utils, for Annex A
 python scripts/extract_conformance.py --pdf "IEEE 1815-2012.pdf" --check
 ```
 
 `conformance/README.md` covers what that file holds and what it deliberately
-does not.
+does not. The way the script reads Annex A is tested without the standard
+(`tests/test_extract_conformance.py`): synthetic text laid out as `pdftotext`
+prints Annex A checks how a size is read from a formal structure, that each named
+erratum corrects its object, and that an erratum is refused once the text no
+longer needs it.
 
 ## The certification procedures are carried out section by section
 

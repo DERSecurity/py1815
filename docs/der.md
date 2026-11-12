@@ -220,11 +220,11 @@ event and changes no output.
 | **Range** | An input outside the tables' range is reported with `OVER_RANGE`. A setpoint outside it is refused with `OUT_OF_RANGE`, not clamped. |
 | **Quality** | `GOOD` is `ONLINE`. `COMM_LOST` clears `ONLINE` and sets `COMM_LOST`. `NEVER_READ` sets `RESTART`. A reader that raises is reported as `COMM_LOST` and logged; the rest of the response is unaffected. |
 | **Functions** | A function is supported when its enable output is bound. While it is disabled its inputs are sent with their values and without `ONLINE`, as clause 6.1.1 requires; the supports input and the input reporting whether it is enabled stay `ONLINE`. Whether it is enabled is what its enable output stands at: your `status=` reader when you give one, the last accepted write when you do not. `disabled_offline=False` turns this off. |
-| **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. |
+| **Class 0** | Binary inputs, counters, frozen counters and analog inputs. Output status is read by naming its group, and the advertisement block is left out, as the profile selects. At Level 4, the output status of each output that has an event class, class 0 included, is carried too ([Output events](#output-events-at-level-4)). |
 | **Events** | `poll()` reads every input with an event class and buffers what changed, in the class the tables give it unless an [event policy](#setting-the-event-policy) says otherwise. Analog events keep only the latest per point and travel as 32-bit without time; binary events keep every change, with time. The time is the one the `Reading` gives, when it gives one and its quality is `GOOD`, moved onto the clock a master has set; otherwise it is when `poll()` recorded the event. The first `poll()` only notes where each point stands. |
 | **Controls** | A select runs every check and executes nothing; an operate calls your binding. A binary output behaves as latched whichever operation commanded it. A point with no binding answers `NOT_SUPPORTED` for that point alone, and so does a control relay output block with the clear bit or the obsolete queue bit set. |
 | **Output status** | An output's status and the input that mirrors it report the same thing: your `status=` reader when you give one, the last accepted write when you do not. |
-| **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear. Call `freeze_all()` on the period the master sets. |
+| **Counters** | Bind a counter to a running total. A freeze copies each one into its frozen twin and buffers a timestamped event. Counters are never cleared, including by freeze-and-clear, unless the outstation is given a subset level; then freeze-and-clear clears them, as the subset tables require. Call `freeze_all()` on the period the master sets. |
 | **Time** | The session asks for the time until a master writes it, and event and freeze times follow what was written. |
 | **Unsolicited responses** | Off unless the session is built with `outstation.session(unsolicited=True)`. Then the events `poll()` buffers are reported to a master that has enabled their class, without waiting to be polled; call `server.notify()` after `poll()` to send them at once. Nothing in the map or the binding changes. See [Serving an outstation](outstation.md#unsolicited-responses). |
 
@@ -315,14 +315,15 @@ policy = {
 outstation = DerOutstation(point_map, binding, event_policy=policy)
 ```
 
-`defaults` holds a rule for a kind of point (`BI`, `AI` or `CTR`) and `points` a
-rule for one point, named by kind and index. A rule may carry any of three keys:
+`defaults` holds a rule for a kind of point (`BI`, `DBI`, `AI` or `CTR`) and `points` a
+rule for one point, named by kind and index. A rule may carry any of four keys:
 
 | Key | Meaning |
 |---|---|
 | `class` | The class the point's events are reported in: 1, 2 or 3. |
 | `events` | `false` turns events off. The point is still read and still answers class 0. `true` turns them back on for one point of a kind whose rule turned them off. |
-| `deadband` | Analog inputs only. How far the value moves before the change is an event, in engineering units; the point's multiplier converts it. |
+| `deadband` | Analog inputs, and counters that report value changes. How far the value moves before the change is an event, in engineering units; the point's multiplier converts it. A counter measures from the count in its last event. |
+| `value_changes` | Counters only, from Level 3. `true` has a change in the count raise a counter event, beside the event every change of the counter's flags raises. Off unless a rule turns it on, since energy counters change all the time. |
 
 What is in force for a point is settled in this order:
 
@@ -516,22 +517,244 @@ A profile generated from the IEEE 1815.2 tables carries that standard's point
 names. Publishing one for your own device is what the document is for;
 the tables themselves stay where they were.
 
-## Answering as Subset Level 2 only
+## Choosing a subset level
 
 IEEE 1815.2 asks for more than DNP3 Subset Level 2 in places: 32-bit setpoints,
-frozen counter events, counters that a freeze never clears. A master that implements
-the subset and no more can be served by building the outstation with `level2=True`:
+frozen counter events, counters that a freeze never clears. The outstation's `level`
+is 2, 3 or 4, and the Device Profile claims the level chosen. A master that implements
+the subset and no more is served with `level=2`:
 
 ```python
-outstation = DerOutstation(profile, binding, level2=True)
+outstation = DerOutstation(profile, binding, level=2)
 ```
 
-A read that names no variation is then answered in the variations Level 2 requires a
-master to parse, frozen counter events are not reported, and a freeze-and-clear
-clears. An unflagged variation is replaced by its flagged one for any point whose
-quality is not normal, so an offline point is never read as a plain number. This is
+Without a level, the outstation claims Level 2 and serves the profile's additions.
+Any other value is refused with an error. `level2=True` still works as `level=2`, with
+a deprecation warning.
+
+What each level answers, beyond what the level before it does:
+
+| Level | Answers |
+|---|---|
+| 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears, as it does at Levels 3 and 4. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
+| none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
+| 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises one only where the event policy turns `value_changes` on. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
+| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Binary and analog output events, and reads of the command event groups, answered with nothing; see [Output events at Level 4](#output-events-at-level-4). Double-bit inputs; see [Double-bit inputs](#double-bit-inputs). Device attributes (group 0); see [Device attributes](#device-attributes). Below Level 4 a request that names one of these is refused as an unknown object. |
+
+Every level reads each static group by range as well as for all points, and each event
+group by count as well as for all events.
+
+An unflagged variation is replaced by its flagged one for any point whose
+quality is not normal, so an offline point is never read as a plain number. Level 2 is
 the configuration the conformance tests run against; see
 [Testing](testing.md#the-certification-procedures-are-carried-out-section-by-section).
+
+From Level 3 a master may move points between event classes, or turn their events off,
+with an assign-class request (function code 22). Levels 3 and 4 accept it for binary
+inputs, counters, frozen counters and analog inputs, and Level 4 also for the outputs
+and the [double-bit inputs](#double-bit-inputs).
+A point assigned to class 0 raises no events but stays in a class 0 read; at Level 4 an
+output assigned to class 0 is in a class 0 read too, as [Output events at
+Level 4](#output-events-at-level-4) describes. A change made
+after the request is reported in the new class; events already buffered stay in the class
+they were recorded in. A restart returns every point to the class it started with: the
+outstation does not keep assignments. Level 2 and the default refuse the request as an
+unsupported function.
+
+## Level 4: floating point and deadbands
+
+With `level=4` the outstation serves, in addition to everything below Level 4:
+
+| Object | What a master reads |
+|---|---|
+| Analog input, variation 5 (group 30) | Each served analog input as a single-precision float with a flag octet |
+| Analog output status, variation 3 (group 40) | Each served output as a single-precision float with a flag octet |
+| Analog input events, variations 5 and 7 (group 32) | A change as a float, without and with time |
+| Frozen counters, variation 6 (group 21) | Answered as variation 5: 32 bits, with flag and time |
+| Frozen counter events, variation 6 (group 23) | Answered as variation 5: 32 bits, with flag and time |
+| Analog input reporting deadbands, variations 1 to 3 (group 34) | Read and written, as described below |
+
+**Floating point is not scaled.** An integer variation carries the value after the
+point's scaling from the tables. A floating-point variation carries the value as
+the binding gave it, in engineering units, which is the number a setpoint of
+variation 3 or 4 already carries. A power of 1500 W with a multiplier of 1 reads as
+1500 in both forms; a voltage of 240.0 V with a multiplier of 0.1 reads as 2400 in
+variation 1 and as 240.0 in variation 5. Variation 0 and class 0 stay integer, and the
+flags are the same in every form. Whether a change is an event is still decided on
+the integer form, so a change smaller than one count of the multiplier is not an
+event; the event carries the value as it stands when the change is seen.
+
+**Class polls.** A class 1, 2 or 3 read is answered in one analog event variation,
+which `analog_event_variation` chooses. At Level 4 that may be
+`AnalogEventVariation.FLOAT32` or `FLOAT32_WITH_TIME`; below Level 4 the session
+refuses them with `ValueError`. Timed 16-bit and 32-bit integer events (variations 3
+and 4) are answered at every level.
+
+**A 16-bit frozen counter** is answered in 32 bits, as a 16-bit counter without time
+already is: a counter that accumulates energy passes 65535 quickly, and a master
+that implements Level 4 parses both the 16-bit and the 32-bit variation.
+
+**Deadbands.** A master reads the deadband of every served analog input with a
+range, all objects or an index for each, in variation 0 (answered in 32 bits) or in
+variation 1, 2 or 3, and writes variation 1, 2 or 3 by range or by index. A write is
+answered with a null response. A write that names an index that is not an analog
+input, carries a value that is negative or not a number, or does not hold the objects
+it declares, is answered with the parameter-error indication and changes nothing.
+Deadbands are not part of a class 0 response.
+
+A written deadband is the one that decides whether the input's next change is an
+event. The deadband you configured, with the binding or the event policy, is the
+starting value. Variations 1 and 2 are unsigned counts in the transmitted units,
+the numbers the integer variations carry, so a deadband of 20 on a voltage with a
+multiplier of 0.1 is 2.0 V. Variation 3 is in engineering units, like the other
+floating-point objects, and is converted with the point's multiplier: a written 5.0 is
+50 for that voltage. Variations 1 and 2 read back rounded to a whole count, and a
+deadband at or past what the variation holds reads as the largest value it holds.
+A deadband written for an input that reports no events, such as one assigned to class
+0, is kept and is used if that input reports events later;
+`outstation.deadband(index)` returns the one in force, in transmitted units.
+
+Group 34 holds analog input deadbands only. The deadband of a counter that reports
+value changes is set by the event policy and is not read or written over DNP3;
+`outstation.counter_deadband(index)` returns it.
+
+A written deadband is held in memory. It is lost when the outstation restarts, which
+then uses the configured deadbands again, and the Device Profile says that no
+settings are kept through a restart.
+
+### Output events at Level 4
+
+At Level 4, an output reports an event when its value or flags change: binary output
+events (group 11) and analog output events (group 42). `poll()` reads the output's status
+as a master would, which is your `status=` reader when you give one and the last accepted
+write when you do not, so a control a master sends, a change the device makes itself and
+a status that goes stale each produce an event. The first `poll()` only notes where each
+output stands. When one request commands an output twice, the outstation polls between
+the two controls, so a request that latches an output on and then off reports both changes.
+
+An output starts in the class the tables give it. The tables give none, so the class is
+that of the input paired with the output, which reports the same change: a master polling
+that class hears of both together. An output whose paired input reports no events reports
+none. An output with no paired input reports in class 3. The [event
+policy](#setting-the-event-policy) does not apply to outputs.
+
+A master moves an output's events to another class with an assign-class request that
+names group 10 or group 40, and turns them off by assigning class 0, which keeps the
+output in a class 0 read. Assigning the paired
+input moves only the input. An assignment that names group 12 or group 41 is accepted and
+changes nothing, because it assigns the command events, which are not generated. An
+output given a class again reports only the changes after the request. A restart returns
+each output to the class it started in. `outstation.event_class(Kind.BO, index)` returns the
+class in force.
+
+Every change is kept, and a full class drops its oldest event and sets the overflow
+indication, as for the inputs. A class poll returns the events in the order they
+happened, binary and analog outputs among the inputs, with time. A master can also read
+them by group, as variation 0, or in variations 1 and 2 of group 11 and 1 to 5 and 7 of
+group 42. A class poll and a variation 0 read return group 11 variation 2 and group 42
+variation 3, a 32-bit integer with time; `analog_event_variation` chooses the variation of
+analog input events only. Floating-point values are in engineering units, as in an analog
+output command and the other floating-point objects; whether a value changed is decided on
+the integer form, as for analog inputs.
+
+The command event groups, 13 and 43, are read and answered with nothing: no outstation
+is required to generate them, and this one does not. A read of a variation these groups
+do not offer is answered as an unknown object.
+
+An output that has a class is also carried by a class 0 read, in group 10 variation 2 and
+group 40 variation 1, because a master learns the value an event changes from class 0.
+That includes an output a master assigned to class 0, which reports no events. An output
+with no class, one whose paired input reports no events and that no master has assigned,
+is left out, as at the lower levels; a restart returns each output to how it started.
+`outstation.in_class_0(Kind.BO, index)` says whether a class 0 read carries a point.
+
+## Double-bit inputs
+
+A double-bit binary input is one point with four states, for a device that has two
+contacts to report, such as a switch that can be open, closed, moving or faulted. The
+profile defines none, so a double-bit point is one a tables document lists under the key
+`DBI`, in the rows the other kinds use, and it is served only by an outstation at Level 4.
+
+```python
+binding.read(Kind.DBI, 3, lambda: switch.state())   # 0, 1, 2 or 3
+```
+
+The reader returns the state as a whole number from 0 to 3, or a `Reading` that carries the
+state and its quality:
+
+| State | Name | Meaning |
+|---|---|---|
+| 0 | INTERMEDIATE | Moving between its end conditions |
+| 1 | DETERMINED_OFF | The end condition that a single-bit input would report as 0 |
+| 2 | DETERMINED_ON | The end condition that a single-bit input would report as 1 |
+| 3 | INDETERMINATE | Abnormal, or a condition the device defines |
+
+Which physical condition is OFF and which is ON is the device's to say; the standard leaves
+it to the vendor to document. A value that is not one of the four is sent as INDETERMINATE
+with the point marked as not reachable, and `coverage()` lists the point as offline.
+
+At Level 4 a master reads the points as group 3, in the packed variation (two bits a point)
+or with flags. A point in an exception condition, such as one that is not online, is always
+sent with flags. The points answer class 0 and report events as group 4, which a master reads
+by class or by naming the group, in the variations without time, with absolute time and with
+relative time. A change of state, or of any quality flag, is an event. Below Level 4, groups 3
+and 4 are unknown objects, no event is buffered, the Device Profile lists none of the points,
+and `coverage()` reports each of them as absent.
+An event policy's `defaults` may name the kind `DBI`, and a point's class is set in the same
+way as for a binary input. A master moves a point to another class, or turns its events off,
+with an assign-class request that names group 3; a point assigned to class 0 stays in a class
+0 read.
+
+## Device attributes
+
+At Level 4 the outstation answers reads of object group 0, the attributes a master can
+discover about it, and takes writes of four of them. Below Level 4 group 0 is an object
+the outstation does not have.
+
+A master reads one attribute at a time (group 0 with the variation, qualifier 0x00,
+range 0 to 0), reads variation 254 with qualifier 0x06 for every attribute in one response, and
+reads variation 255 for the list of variations and which of them it may write. Each
+attribute is answered with its data type, its length and its value. Only attribute set 0, the
+one the standard defines, exists.
+
+| Variation | What it reports | Where the value comes from |
+|---|---|---|
+| 209 to 215 | Secure Authentication version, security statistics, data sets | Zero: none of them is implemented. Variation 211 reports no user-specific attribute sets |
+| 216 | Most binary outputs in a control request | The response and request sizes |
+| 217, 218 | Timing accuracy, and how long it holds | `timing_accuracy_us`, and zero |
+| 219 to 239 | For each kind of point, whether it reports events, its highest index and its count | The points served and the event classes they can report in |
+| 240, 241 | Largest fragment sent, and received | The session: `max_response`, and the request size it accepts |
+| 242, 243, 248, 250, 252 | Software and hardware versions, serial number, product, manufacturer | The `identity` settings of the [configuration](der-config.md#identity) |
+| 245, 246, 247 | Location name, ID, device name | The `identity` settings, and a master may rewrite them |
+| 249 | The subset level claimed | The level, as `4:` |
+
+A group the outstation does not serve reports no points and a highest index of zero.
+"Supports events" is true for a kind of point (binary, double-bit and analog inputs,
+counters, frozen counters, binary and analog outputs) when a served point of that kind
+reports its events in a class, or may be given one by an assign-class request. An
+assign-class request therefore does not change it. Frozen analog inputs are not served, so
+that attribute is false. The optional attributes 196 to 208 and 244 are not offered.
+
+A master may write variations 245, 246 and 247 with text of at most 128 visible ASCII
+characters, and variation 240, the largest fragment the outstation sends. A write of 240
+changes how the session fragments its responses from the next one: it may be any size from
+the largest block a read can need plus a response header (1028 octets with the default block
+size; with a small one, at least the 139 octets that a 128-character name needs) up to the
+`max_response` the session was given. A session given a smaller `max_response` than that
+floor is refused with `ValueError`. A request that holds one unacceptable value changes
+nothing and is answered with the parameter error indication. A written value lasts until
+the outstation restarts; it is not stored.
+
+In Python, the attributes belong to the outstation and its sessions:
+
+```python
+from py1815.attributes import DeviceInformation
+
+information = DeviceInformation(manufacturer="Example", product="Controller 9", serial_number="1234")
+outstation = DerOutstation(profile, binding, level=4, information=information)
+session = outstation.session()   # answers group 0
+outstation.attributes.snapshot() # every attribute now, by variation
+```
 
 ## Memory on a small controller
 
@@ -605,9 +828,9 @@ enough to show the points working and is the whole of what it will do.
 
 ## What is not there yet
 
-- **Floating-point variations.** Inputs are served as integers, scaled by the
-  tables, which is the profile's baseline. A floating-point setpoint is
-  accepted and taken as engineering units.
+- **Floating-point variations below Level 4.** Inputs are served as integers,
+  scaled by the tables, which is the profile's baseline. Level 4 adds the
+  floating-point variations.
 - **Measured figures in the Device Profile.** Clock drift, response time and
   timestamp error are left unstated until someone measures them.
 

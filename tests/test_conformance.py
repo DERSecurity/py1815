@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from py1815 import link
+from py1815 import catalog, link
 from py1815.application import (
     _INDEX_WIDTHS,  # the widths under test
     FunctionCode,
@@ -374,3 +374,59 @@ def test_range_field_width_matches_table_4_5(tables: dict, qualifier: QualifierC
     if octets:
         with pytest.raises(RequestError):
             parse_request(_read_request(qualifier, octets - 1))
+
+
+# ------------------------------------- Annex A: the object library catalog
+
+
+def _annex_a(tables: dict) -> dict[tuple[int, int | None], dict]:
+    """Annex A keyed by (group, variation), with None for a group's "all" entry."""
+    return {
+        (int(group), None if variation == "all" else int(variation)): row
+        for group, entry in tables["A"]["groups"].items()
+        for variation, row in entry["variations"].items()
+    }
+
+
+def test_every_group_in_annex_a_is_in_the_catalog(tables: dict) -> None:
+    """Each group has the number and name the standard gives it, and no group is added."""
+    theirs = {int(group): entry["name"] for group, entry in tables["A"]["groups"].items()}
+    ours = {number: group.name for number, group in catalog.GROUPS.items()}
+    assert ours == theirs, (
+        f"missing {sorted(set(theirs) - set(ours))}, extra {sorted(set(ours) - set(theirs))}, "
+        "different names "
+        f"{sorted(n for n in set(ours) & set(theirs) if ours[n] != theirs[n])}"
+    )
+
+
+def test_every_variation_in_annex_a_is_in_the_catalog(tables: dict) -> None:
+    """A group and variation the standard defines is named here, and none is invented."""
+    theirs = set(_annex_a(tables))
+    ours = {(item.group, item.variation) for item in catalog.objects()}
+    assert ours == theirs, (
+        f"in Annex A and not in the catalog: {sorted(theirs - ours, key=str)}; "
+        f"in the catalog and not in Annex A: {sorted(ours - theirs, key=str)}"
+    )
+
+
+def test_variation_names_and_types_agree_with_annex_a(tables: dict) -> None:
+    """Same group and variation, same name and object type."""
+    differing = []
+    for (group, variation), row in _annex_a(tables).items():
+        item = catalog.find(group, variation)
+        if item is not None and (item.name, item.kind.value) != (row["name"], row["type"]):
+            differing.append(f"g{group}v{variation}: {item.name!r} {item.kind.value}")
+    assert not differing, "differs from Annex A: " + "; ".join(differing)
+
+
+def test_variation_sizes_agree_with_annex_a(tables: dict) -> None:
+    """Same size kind and the same octets or bits, wherever the standard fixes one."""
+    differing = []
+    for (group, variation), row in _annex_a(tables).items():
+        item = catalog.find(group, variation)
+        if item is None:
+            continue
+        expected = (row["size"], row.get("octets", row.get("bits")))
+        if (item.size.kind.value, item.size.amount) != expected:
+            differing.append(f"g{group}v{variation}: {item.size} against {expected}")
+    assert not differing, "differs from Annex A: " + "; ".join(differing)

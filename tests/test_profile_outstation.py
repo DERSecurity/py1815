@@ -16,7 +16,7 @@ import pytest
 from profile_fixtures import analog, document, row, small, units
 
 from py1815 import link
-from py1815.application import FunctionCode, IIN2Bit, IINBit, QualifierCode
+from py1815.application import FunctionCode, IIN2Bit, IINBit, ObjectHeader, QualifierCode
 from py1815.control import (
     CommandStatus,
     ControlRelayOutputBlock,
@@ -32,6 +32,7 @@ from py1815.profile.model import Kind, MapError
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.policy import EventPolicy, EventRule
 from py1815.profile.probe import parse_objects
+from py1815.session import ClassAssignment
 from py1815.transport import Reassembler
 
 AI, AO, BI, BO, CTR = Kind.AI, Kind.AO, Kind.BI, Kind.BO, Kind.CTR
@@ -561,13 +562,32 @@ class TestWhatAnEventPolicyIsRefusedFor:
         "policy",
         [
             pytest.param({"points": {"BI0": {"deadband": 1.0}}}, id="a binary input"),
-            pytest.param({"points": {"CTR0": {"deadband": 1.0}}}, id="a counter"),
             pytest.param({"defaults": {"BI": {"deadband": 1.0}}}, id="every binary input"),
         ],
     )
-    def test_a_deadband_on_anything_but_an_analog_input(self, policy):
-        with pytest.raises(ValueError, match="only an analog input"):
+    def test_a_deadband_on_anything_but_an_analog_input_or_a_counter(self, policy):
+        with pytest.raises(ValueError, match="only an analog input or a counter"):
             _with_policy(policy)
+
+    def test_a_counter_deadband_without_value_changes(self):
+        with pytest.raises(MapError, match="CTR0 a deadband, and its value changes raise no"):
+            _with_policy({"points": {"CTR0": {"deadband": 1.0}}})
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            pytest.param({"points": {"AI2": {"value_changes": True}}}, id="an analog input"),
+            pytest.param({"defaults": {"BI": {"value_changes": True}}}, id="every binary input"),
+        ],
+    )
+    def test_value_changes_on_anything_but_a_counter(self, policy):
+        with pytest.raises(ValueError, match="only a counter reports value changes"):
+            _with_policy(policy)
+
+    @pytest.mark.parametrize("value_changes", ["yes", 1])
+    def test_value_changes_that_is_not_true_or_false(self, value_changes):
+        with pytest.raises(ValueError, match="value_changes is true or false"):
+            _with_policy({"points": {"CTR0": {"value_changes": value_changes}}})
 
     @pytest.mark.parametrize(
         "policy",
@@ -1460,6 +1480,34 @@ class TestAnEventPolicy:
         assert outstation.deadband(1) == 0
 
 
+class TestAssigningClasses:
+    """The provider behind ASSIGN_CLASS, called without a session."""
+
+    def test_an_input_that_starts_with_events_off_takes_the_default_deadband(self):
+        outstation, _ = _built(
+            level=3,
+            event_policy={
+                "defaults": {"AI": {"deadband": 5.0}},
+                "points": {"AI1": {"events": False}},
+            },
+        )
+        assert outstation.event_class(AI, 1) == 0
+        assert outstation.deadband(1) == 0.0
+        outstation.poll()
+        header = ObjectHeader(30, 0, QualifierCode.UINT8_START_STOP, start=1, stop=1)
+        outstation.assign_class([ClassAssignment(2, (header,))])
+        assert outstation.event_class(AI, 1) == 2
+        assert outstation.deadband(1) == 5.0
+
+    def test_an_input_the_tables_keep_static_is_left_alone(self):
+        outstation, _ = _built(level=3)
+        assert outstation.event_class(AI, 4) == 0
+        header = ObjectHeader(30, 0, QualifierCode.ALL_OBJECTS)
+        outstation.assign_class([ClassAssignment(3, (header,))])
+        assert outstation.event_class(AI, 4) == 0
+        assert outstation.event_class(AI, 1) == 3
+
+
 class TestFreezing:
     def _freeze(self, session, function: FunctionCode, header: bytes) -> bytes:
         return session._handle_fragment(bytes([0xC0, function]) + header)
@@ -1493,6 +1541,16 @@ class TestFreezing:
         response = self._freeze(session, FunctionCode.FREEZE_CLEAR, bytes([20, 0, ALL]))
         assert not response[3]
         assert _values(_read(session, CLASS_0, sequence=1))[(20, 0)] == 10
+
+    @pytest.mark.parametrize("level", [2, 3, 4])
+    def test_freeze_and_clear_clears_at_any_level_given(self, level):
+        """TB2016-003b Table 12-19 requires a freeze-and-clear that clears (D107)."""
+        outstation, _ = _built(level=level)
+        session = outstation.session()
+        response = self._freeze(session, FunctionCode.FREEZE_CLEAR, bytes([20, 0, ALL]))
+        assert not response[3]
+        values = _values(_read(session, CLASS_0, sequence=1))
+        assert (values[(20, 0)], values[(21, 0)]) == (0, 10)
 
     def test_a_range_freezes_only_what_it_names(self):
         outstation, _ = _built()

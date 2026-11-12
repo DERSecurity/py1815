@@ -13,9 +13,12 @@ this package's own source already declares. It deliberately holds none of the
 standard's prose: no descriptions, no clause text. The `kind` fields are
 one-word categories derived from the tables, not quotations of them.
 
-Tables are found by their captions rather than by page number, so a differently
-paginated PDF of the same edition still works. `pypdf` is not a dependency of
-this package; install it just to run this script.
+Tables 4-2 to 4-6 are found by their captions rather than by page number, so a
+differently paginated PDF of the same edition still works. The object library of
+Annex A is read from the text of the whole PDF as `pdftotext -layout` (poppler)
+prints it, because pypdf scrambles the letters on those pages. Neither `pypdf`
+nor `pdftotext` is a dependency of this package; install them just to run this
+script.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ import argparse
 import json
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 from typing import Any
 
@@ -239,6 +244,195 @@ def valid_qualifier_codes(std: Standard) -> list[int]:
     return found
 
 
+# ------------------------------------------------- Annex A: the object library
+
+#: Groups in Annex A, one subclause each: A.1 for group 0 up to A.47 for group 122.
+_GROUP_COUNT = 47
+
+#: Object subclauses in Annex A in this edition. A guard on "roughly enough" would
+#: let an omitted variation be written out as authoritative.
+_VARIATION_COUNT = 216
+
+#: A typed field of a formal structure, as the standard spells it: the type and
+#: its width. A letter where the width should be (`OSTRn`, `UINTn`) is no number.
+_FIELD = re.compile(r"^\s*(DNP3TIME|UINT|INT|FLT|BSTR|BCD|VSTR|OSTR)(\w*):", re.MULTILINE)
+
+#: The standard's headings use an em dash and typographic apostrophes.
+# U+2014, U+2013 and U+2019.
+_ASCII = str.maketrans({0x2014: " - ", 0x2013: "-", 0x2019: "'"})
+
+#: The object type of a variation whose header box prints another one.
+_TYPE_ERRATA: dict[tuple[str, str], tuple[str, str]] = {
+    ("23", "8"): ("Event", "the header box says Static for a frozen counter event"),
+}
+
+#: Where a formal structure contradicts the rest of its own subclause, the size
+#: its heading and pictorial state. Each entry is checked against what the
+#: structure yields, so an edition that fixes the text makes the entry fail
+#: instead of lingering.
+_ERRATA: dict[tuple[str, str], tuple[dict[str, Any], str]] = {
+    ("32", "8"): (
+        {"size": "fixed", "octets": 15},
+        "the structure types the value FLT32 under a double-precision heading",
+    ),
+    ("33", "8"): (
+        {"size": "fixed", "octets": 15},
+        "the structure types the value FLT32 under a double-precision heading",
+    ),
+    ("86", "2"): (
+        {"size": "fixed", "octets": 1},
+        "the structure types the characteristics BSTR4, and the pictorial shows one octet",
+    ),
+}
+
+#: The type codes a variation's header box carries; the longest comes first.
+_OBJECT_TYPES = ("Info/Event", "Static", "Event", "Cmnd", "Info", "Attrib", "Any")
+
+
+def annex_a_text(path: pathlib.Path) -> str:
+    """The text of Annex A, as `pdftotext -layout` prints it, up to Annex B."""
+    tool = shutil.which("pdftotext")
+    if tool is None:
+        raise SystemExit("Annex A needs pdftotext from poppler-utils: pypdf cannot read it")
+    done = subprocess.run(
+        [tool, "-enc", "UTF-8", "-layout", str(path), "-"], check=True, capture_output=True
+    )
+    text = done.stdout.decode("utf-8")
+    # The table of contents lists the heading with dot leaders, so the heading
+    # itself is the occurrence that ends its line.
+    start = re.search(r"^A\.1\s+Object group 0: device attributes\s*$", text, re.MULTILINE)
+    end = re.search(r"^Annex B\s*$", text[start.end() :], re.MULTILINE) if start else None
+    if start is None or end is None:
+        raise ExtractionError("Annex A not found in the text of the PDF")
+    return text[start.start() : start.end() + end.start()]
+
+
+def _bits(kind: str, width: str) -> int | None:
+    """The bits a field type occupies, or None where its width is not a number."""
+    if kind == "DNP3TIME":
+        return 48
+    if not width.isdigit():
+        return None
+    # Strings count octets, and a BCD digit is four bits.
+    return int(width) * {"BCD": 4, "VSTR": 8, "OSTR": 8}.get(kind, 1)
+
+
+def _size(body: str, label: str, known: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The size of one object, read from the formal structure in its subclause."""
+    start = body.find("Formal structure")
+    section = body[start:] if start >= 0 else ""
+    # The formal structure ends at the next numbered subheading, which is Notes.
+    section = re.split(r"\n\s*A\.\d+\.\d+\.\d+\.\d+\.3\s", section, maxsplit=1)[0]
+    squashed = _squash(body)
+    if "doesnothaveobjects" in squashed:
+        return {"size": "fixed", "octets": 0}
+    squashed = _squash(section)
+    same = re.search(r"formalstructureforobjectg(\d+)v(\d+)", squashed)
+    if same:
+        return dict(known[f"{same.group(1)}.{same.group(2)}"])
+    if "privatelydefined" in squashed:
+        return {"size": "variable"}
+    # A bit-string object holds one bit per point, or two for a double-bit state,
+    # packed from bit 0 of the first octet.
+    packed = re.search(r"SET of n UINT(\d+)", section)
+    if packed:
+        return {"size": "packed", "bits": int(packed.group(1))}
+    # A repeated element, a trailing run of other objects or a text of any length
+    # leaves the size to the sender.
+    if re.search(r"SET of [nm]\b|\bN sets of|variable length|^\s*Data objects:", section, re.M):
+        return {"size": "variable"}
+    fields = _FIELD.findall(section)
+    if fields == [("BSTR", "n")] and "numberofindexes" in squashed:
+        return {"size": "packed", "bits": 1}
+    if not fields:
+        # An object with nothing in its structure is a request placeholder.
+        if "classobjects" in _squash(body[:400]):
+            return {"size": "fixed", "octets": 0}
+        # The standard describes no layout for the obsolete floating-point group.
+        if "generaldescriptioncommontoallvariations" in _squash(body[:400]):
+            return {"size": "variable"}
+        raise ExtractionError(f"{label}: no typed field in the formal structure")
+    widths = [_bits(kind, width) for kind, width in fields]
+    if None in widths:
+        return {"size": "variable"}
+    total = sum(width for width in widths if width is not None)
+    if total % 8:
+        raise ExtractionError(f"{label}: the fields total {total} bits, not whole octets")
+    return {"size": "fixed", "octets": total // 8}
+
+
+def _title(text: str, start: int) -> str:
+    """The title of a subclause heading, joined across the line break a long one has."""
+    first, _, rest = text[start:].partition("\n")
+    # The continuation is the next non-blank line, which may follow one blank line.
+    second = next((line for line in rest.split("\n", 2)[:2] if line.strip()), "")
+    if second and not re.match(r"\s*(Group|DNP3)", second):
+        first += " " + second.strip()
+    return " ".join(first.split(None, 1)[1].translate(_ASCII).split())
+
+
+def object_library(text: str) -> dict[str, Any]:
+    """Annex A, as group number to its name and variation number to its object."""
+    groups: dict[str, Any] = {}
+    owner: dict[int, str] = {}
+    for match in re.finditer(r"^A\.(\d+)\s+Object group (\d+): (.+?)\s*$", text, re.MULTILINE):
+        number = match.group(2)
+        if number in groups:
+            raise ExtractionError(f"group {number} appears twice")
+        groups[number] = {"name": match.group(3).translate(_ASCII), "variations": {}}
+        owner[int(match.group(1))] = number
+    if len(groups) != _GROUP_COUNT:
+        raise ExtractionError(f"Annex A yielded {len(groups)} groups, expected {_GROUP_COUNT}")
+
+    headings = list(re.finditer(r"^A\.(\d+)\.(\d+)\s{2,}\S.*$", text, re.MULTILINE))
+    if len(headings) != _VARIATION_COUNT:
+        raise ExtractionError(
+            f"Annex A yielded {len(headings)} object subclauses, expected {_VARIATION_COUNT}"
+        )
+    sizes: dict[str, dict[str, Any]] = {}
+    for position, heading in enumerate(headings):
+        end = headings[position + 1].start() if position + 1 < len(headings) else len(text)
+        body = text[heading.end() : end]
+        group = owner[int(heading.group(1))]
+        # The header box gives the variation and the type in a right-hand column.
+        # Some boxes wrap, which leaves the number on the line below its label.
+        box = re.split(r"\n\s*A\.\d+\.\d+\.1\s+Description", body, maxsplit=1)[0]
+        number = re.search(r"Variation:[^\n]*?(?<![\w-])(\d+|All)(?![\w-])", box) or re.search(
+            r"Variation:[^\n]*\n[^\n]*?(?<![\w.:-])(\d+)(?![\w.:-])", box
+        )
+        after_type = box[box.find("Type:") :]
+        kind = next((t for t in _OBJECT_TYPES if re.search(rf"\b{t}\b", after_type)), None)
+        label = f"subclause {heading.group(0).split()[0]}"
+        if number is None or kind is None:
+            raise ExtractionError(f"{label}: no variation number or object type")
+        variation = number.group(1).lower()
+        if (group, variation) in _TYPE_ERRATA:
+            corrected, reason = _TYPE_ERRATA[(group, variation)]
+            if kind == corrected:
+                raise ExtractionError(f"{label}: the erratum ({reason}) no longer applies")
+            kind = corrected
+        try:
+            size = _size(body, label, sizes)
+        except ExtractionError:
+            size = None
+        if (group, variation) in _ERRATA:
+            corrected, reason = _ERRATA[(group, variation)]
+            if size == corrected:
+                raise ExtractionError(f"{label}: the erratum ({reason}) no longer applies")
+            size = corrected
+        elif size is None:
+            size = _size(body, label, sizes)
+        sizes[f"{group}.{variation}"] = size
+        if variation in groups[group]["variations"]:
+            raise ExtractionError(f"{label}: variation {variation} appears twice")
+        groups[group]["variations"][variation] = {
+            "name": _title(text, heading.start()),
+            "type": kind,
+            **size,
+        }
+    return groups
+
+
 def extract(path: pathlib.Path) -> dict[str, Any]:
     """Every table this script knows how to read, keyed by table number."""
     std = Standard(path)
@@ -251,6 +445,10 @@ def extract(path: pathlib.Path) -> dict[str, Any]:
             "4-4": {"title": "Object prefix codes", "prefix_codes": object_prefix_codes(std)},
             "4-5": {"title": "Range specifier codes", "range_codes": range_specifier_codes(std)},
             "4-6": {"title": "Valid qualifier codes", "qualifiers": valid_qualifier_codes(std)},
+            "A": {
+                "title": "DNP3 data object library",
+                "groups": object_library(annex_a_text(path)),
+            },
         },
     }
 

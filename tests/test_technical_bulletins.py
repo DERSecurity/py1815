@@ -48,6 +48,7 @@ from ied_harness import (
 
 from py1815 import crc
 from py1815.control import CommandStatus
+from py1815.decode import decode_objects
 from py1815.objects import encode_time
 from py1815.profile import device_profile
 from py1815.session import Session
@@ -704,3 +705,30 @@ class TestUnsolicitedResponseBehavior:
         dut.session.connection_reset()
 
         _unsolicited_null(dut)
+
+
+class TestDeviceAttributeBulletins:
+    def test_tb2014_001_no_user_specific_attribute_set_is_text_of_no_characters(self):
+        dut = Dut(level=4)
+        response = dut.master.read(header(0, 211, Q_RANGE_8, 0, 0)).fragment
+        # Data type VSTR (1) and a length of 0, not the list type the standard names.
+        assert response.body == bytes.fromhex("00 D3 00 00 00 01 00")
+
+    def test_tb2014_001_a_level_3_outstation_is_not_asked_to_process_group_0(self):
+        response = Dut(level=3).master.read(header(0, 254)).fragment
+        assert response.iin2 & IIN2_OBJECT_UNKNOWN and response.body == b""
+
+    def test_tb2017_007_each_attribute_uses_a_data_type_code_of_the_table(self):
+        decoded = decode_objects(Dut(level=4).master.read(header(0, 254)).fragment.body)
+        codes = {obj.variation: obj.attribute.code for obj in decoded.objects}
+        # Text, unsigned integers and integers (Booleans), and nothing else.
+        assert set(codes.values()) == {1, 2, 3}
+        assert codes[252] == 1 and codes[239] == 2 and codes[237] == 3
+
+    def test_tb2017_007_the_master_reads_the_time_and_unicode_codes_permitted_in_group_0(self):
+        decoded = decode_objects(
+            bytes.fromhex("00 C6 00 00 00  07 06 00 E4 0B 54 02 00  00 F7 00 00 00  08 02 C3 A9")
+        )
+        assert decoded.complete
+        assert decoded.objects[0].attribute.value == 10_000_000_000
+        assert decoded.objects[1].attribute.value == "é"

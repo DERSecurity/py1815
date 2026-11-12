@@ -243,10 +243,11 @@ header was complete, `iin` remain.
 This library reads every object group and variation in the tables above, the
 time and date (group 50 variations 1 to 4), the common time of occurrence
 (51), the time delay (52), class data (60), virtual terminal objects (112,
-113), and any object sent with a size prefix. A fragment that carries object
-data of any other group or variation, such as device attributes (group 0) or
-the obsolete delta counters, is reported as `malformed`: without the object's
-size, the next header cannot be found.
+113), device attributes (group 0), and any object sent with a size prefix. A
+device attribute is read by the length octet it states, and its octets are the
+header's `data`. A fragment that carries object data of any other group or
+variation, such as the obsolete delta counters, is reported as `malformed`:
+without the object's size, the next header cannot be found.
 
 ## Validating
 

@@ -191,8 +191,10 @@ class TestTheRealTables:
     def test_they_resolve_for_a_der_with_equipment(self):
         composition = Composition(meters=2, der_units=1, inverters=3, batteries=2)
         resolved = load.load(REAL_TABLES, composition)
+        # The profile defines no double-bit inputs.
         for kind in Kind:
-            assert any(True for _ in resolved.of(kind)), f"no {kind.value} points"
+            if kind is not Kind.DBI:
+                assert any(True for _ in resolved.of(kind)), f"no {kind.value} points"
 
     def test_every_supports_input_pairs_with_one_enable_output(self):
         resolved = load.load(REAL_TABLES)

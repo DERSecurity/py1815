@@ -36,6 +36,7 @@ interpreter instead of waiting for a wheel.
 Floating-point analog inputs are not Level 2 objects, and per the rules of DNP3 any device
 supporting them must support the integer variations as well. *Trade-off:* both representations
 are implemented rather than one, against a default the profile does not permit.
+**D112** replaces the floating-point half: the floating-point variations are Level 4 objects.
 
 **D3 -- A value that does not fit its variation saturates and sets `OVER_RANGE`,** keeping the
 other quality bits. *Trade-off:* the master reads a clipped number, against either failing an
@@ -309,9 +310,13 @@ included, as the paragraph above says: the line is between a master that reads a
 not, not between one that reads events and one that reads static data. A master that never reads at
 all has nothing to retire, and nothing it would do with the answer.
 
-**D24 -- `ASSIGN_CLASS` stays refused.** A class is assigned when the caller records the event, and
-under **D6** this library holds no point map for a master to reassign. Accepting the request would
-mean either ignoring it or inventing the map the design exists to keep out.
+**D24 -- `ASSIGN_CLASS` is accepted from Subset Level 3.** TB2016-003b Table 12-49 and the
+group tables require it of Levels 3 and 4, so an outstation held to either answers it
+(**D110**, **D111**). The earlier decision refused it because the library held no point map
+for a master to reassign. `DerOutstation` now loads a map the caller supplies, and the map gives
+each point its starting class, so the assignment has a place to live. **D6** still holds: the
+library embeds no map. A session built without a class provider, and so a Level 2 or default
+outstation, keeps refusing function code 22 with `IIN2.0`.
 
 **D25 -- A repeated request is replayed, not rebuilt, and a repeat is one that matches octet for
 octet.** A master that did not receive a response repeats the request. The outstation holds the
@@ -645,6 +650,7 @@ change events are never buffered, and reading that group is answered with nothin
 buffers nothing changes: the header reaches the provider as it always did.
 *Trade-off:* a read crossing classes has no order to offer but the classes' own;
 **D52** later gave events an order of their own and uses it.
+From Level 3, counter change events are buffered and read by group as well (**D124**).
 
 **D47 -- The analog event variation and reporting mode are the caller's to choose.** The
 default stays timed, and stays every change, for the reasons **D17** gives. IEEE 1815.2
@@ -749,14 +755,14 @@ function is not answered. Before this the link layer acknowledged anything well 
 which a master retrying over a poor link could turn into a duplicated request.
 *Trade-off:* state per association in a layer that had none.
 
-**D55 -- A DER outstation can be held to Subset Level 2 exactly.** `DerOutstation(level2=True)`
+**D55 -- A DER outstation can be held to Subset Level 2 exactly.** `DerOutstation(level=2)`
 answers a variation 0 read with the variations a Level 2 master is required to parse,
 reports no frozen counter events, clears counters on a freeze-and-clear, and substitutes
 the flagged variation for an unflagged one whenever a point's quality is not normal, so a
 master never reads a healthy-looking number from a point that is offline. IEEE 1815.2 asks
-for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared),
-so this is a mode for testing against the subset and for masters that implement only that,
-and not the default. A cold restart is supported when the session is given a
+for more than Level 2 offers in places (32-bit setpoints, counters that are never cleared;
+any level given clears on a freeze-and-clear, D107), so this is a mode for testing against
+the subset and for masters that implement only that, and not the default (D106, D107). A cold restart is supported when the session is given a
 `restart_handler`; without one the function is refused, because a library cannot restart a
 process it does not own. The property of the same name sets or removes the handler later,
 which turns the function on or off from the next request with no restart: a device whose
@@ -1289,18 +1295,28 @@ read more slowly than it could be; a reading service leaves an outstation saying
 restarted; and a connection that could not be made in the first place is still the
 caller's to retry.
 
-**D82 -- The master reads named points as start-stop ranges.** A read of named points
-sends one range header (qualifier 0x00 or 0x01) for each run of consecutive indices,
-in ascending order. A Subset Level 2 outstation must accept ranges in a read. The
-index-list qualifiers (0x17 and 0x28) are optional at that level, and opendnp3
-rejects them: the master used them at first, and the first run against an
-independent outstation returned nothing for every such read. The master is tested
-against two outstations this project did not write on every pull request, because
-its tests against this library's own outstation could not have found this: that
-outstation accepts both forms.
-*Trade-off:* scattered indices cost one header each (5 or 7 octets) where an index
-list would cost 1 or 2 octets each, and the points come back in ascending order
-whatever order they were asked in.
+**D82 -- The master reads named points as start-stop ranges from a Level 3 or 4
+outstation, and reads the whole group from a Level 2 one.** A static read by start and
+stop is a Level 3 request: IEEE 1815-2012 Table 14-3 gives a Level 2 outstation reads of
+groups 1, 10, 20, 21, 30 and 40 with qualifier 0x06 only, Table 14-4 adds the start-stop
+qualifiers 0x00 and 0x01 at Level 3, and TB2016-003b Tables 12-3, 12-11, 12-19, 12-21,
+12-27 and 12-37 mark the same rows (0x06 from Level 2, or Level 1 for groups 10 and 40;
+0x00 and 0x01 from Level 3). So a read of named points to an outstation set to Level 3 or
+4 (D122) sends one range header for each run of consecutive indices, in ascending order,
+and a read to one set to Level 2, the master's default, asks for every point of each type
+named and returns only the points named; the store keeps every value received. The
+index-list qualifiers (0x17 and 0x28) are never used for named points: the subset tables
+list them for static reads only in the subset-independent column, so no level requires
+them, and opendnp3 rejects them. The master used them at first, and the first run against
+an independent outstation returned nothing for every such read. The master is tested
+against two outstations this project did not write on every pull request, because its
+tests against this library's own outstation could not have found this: that outstation
+accepts every form. This text corrects an earlier one that said a Level 2 outstation must
+accept ranges; the tables say it need not.
+*Trade-off:* a Level 2 read of one point costs the response of its whole group, which
+for a large group is several frames or fragments, and at Level 3 and 4 scattered indices
+cost one header each (5 or 7 octets) where an index list would cost 1 or 2 octets each.
+The points come back in ascending order whatever order they were asked in.
 
 **D83 -- The master tries again only a read, and a first connection when asked.** A read
 that times out with nothing received is sent again `read_retries` times, under its own
@@ -1472,7 +1488,8 @@ absent; a point returned that is not declared is undeclared; class 0 membership 
 checked against the class 0 read. An outstation may refuse a whole read for one range
 that holds no point it serves (D63), and a profile names many points an outstation may
 leave out, so a read of the profile that is refused whole is made again one range at a
-time. A read changes nothing, so making it again is not the repetition D80 forbids. A
+time, or one point type at a time to an outstation read a whole group at a time (D82). A
+read changes nothing, so making it again is not the repetition D80 forbids. A
 point's event class and deadband cannot be asked of an outstation, so they are listed
 as the document declares them. A document that declares a document type is refused
 before it is parsed: a Device Profile needs none, and an entity declared there is how an
@@ -1748,6 +1765,467 @@ field tells consumers which version they hold; a fragment carrying object data t
 cannot size, such as device attributes, is rejected as `malformed`, because the next header
 cannot be found.
 
+**D104 -- One catalog names every object group and variation, and the library is checked
+against it rather than built from it.** `py1815.catalog` lists every group and
+variation of IEEE 1815-2012 Annex A with name, object type and size, in code, because the
+library must not read `conformance/ieee-1815-2012.json` at run time (D1 keeps the runtime
+free of data files it cannot ship). `scripts/extract_conformance.py` reads Annex A from the
+standard, and `tests/test_conformance.py` diffs the catalog against the result. The existing
+`GROUP_*` constants, variation enums, `decode.LAYOUTS`, the event sizes and the control
+widths stay where they are and a test holds each to the catalog, so work that adds a group
+starts from the standard's numbers and cannot disagree with them unnoticed. Four places where
+a subclause contradicts itself are corrected by name in the extractor (see
+`conformance/README.md`), each with a check that fails when the text is fixed. Annex A
+defines no group 114 or 115, and no bulletin is read into the catalog. *Trade-off:* the table
+is written twice, in the JSON and in the module, and the test is what keeps them one.
+
+**D105 -- Coverage is read from the tables the code uses, and the subset level is read from
+the user's own copy of the subset tables.** `python -m py1815.object_coverage` marks each
+variation served, requested and parsed from the outstation's variation tables, the session's
+event tables, the device attributes a Level 4 outstation builds (D119), `decode.LAYOUTS`, the
+group 0 walk of `decode` (D121) and the control parser, so it cannot drift from the code.
+The DNP Users Group's subset tables may not be committed (the subset test reads them from
+`PY1815_SUBSET_TABLES` for that reason), so the level column is present only when the command
+is given a copy, as `--subset-tables` or that variable, and holds the lowest level whose
+tables list the object. *Trade-off:* the report reads private tables of the session and the
+outstation, so renaming one fails a test until the report follows.
+
+**D106 -- The outstation is held to a subset level of 2, 3 or 4, set by `level`.**
+`DerOutstation(level=...)`, the configuration's `level` and `--level` take a
+`SubsetLevel` or the integers 2, 3 and 4, and nothing else: other values, booleans
+and strings are refused with an error naming the setting. IEEE 1815-2012 clause 14.7
+requires an outstation to be restrictable to the level it claims. `level` is a property
+and `at_least(n)` answers whether a feature of level `n` applies, so each level-dependent
+feature asks one question. Level 2 behaves as D55 describes. Levels 3 and 4 serve what
+the default serves, with the additions and changes D108, D109 and D124 make. The Device
+Profile writes `level2`, `level3` or `level4` for the level claimed.
+*Trade-off:* a claim of Level 3 or 4 covers every object that level lists, and the library
+does not yet serve all of them; `python -m py1815.object_coverage` lists what it serves at
+any level.
+
+**D107 -- No level means Level 2 with the profile's additions, and `level2=True` is a
+deprecated alias.** The DER profile is built on Level 2 and adds to it (D55), so the
+default, `level=None`, claims Level 2 and keeps the additions; only an explicit
+`level=2` removes them. Making the default 4 would claim objects the library does not
+yet serve. `level2=True` (and the `level2` file key and `--level2`) means `level=2`; the
+keyword warns with `DeprecationWarning`, and combining it with another level is an
+error. `level2=False` changes nothing. The alias goes after one release.
+One of the profile's rules gives way to any level given, 2, 3 or 4: counters are never
+cleared under IEEE 1815.2 (D55), but TB2016-003b Table 12-19 requires freeze-and-clear
+(function codes 9 and 10) from Level 2, and IEEE 1815-2012 11.9.5.2 has it zero the counter
+after the copy. An outstation that claims a level clears; only the default, which claims
+the DER profile, keeps its counters. IED Certification Procedure 3.1 rev 1, 8.16.2.2.4 and
+8.16.2.2.6, check it.
+
+**D108 -- Level 3 and 4 add reads, each answered in a variation this outstation keeps.**
+At `at_least(3)` the outstation answers a read of group 1 variation 1 (in variation 2, which
+Table 12-3 footnote a allows, so D5 stands and no packed binary output is added), a read of
+group 23 variation 2 (in variation 1, for the reason D100 widens 16-bit counters: the counter
+has 32 bits), a read of the current time (group 50 variation 1, qualifier 0x07, a count of
+1; Table 12-45) and a read of the internal indications (group 80 variation 1, qualifiers 0x00
+and 0x01; Table 12-52). Level 2 and the default refuse all four as unknown objects, as they
+did. The time and the indications belong to the session, not to the point map, so `Session`
+takes `time_source` and `indications_read` and `DerOutstation.session` sets them from the
+level; a session built by hand serves neither unless asked. Index *n* of group 80 is bit *n* of
+the two indication octets (A.28.1); an index past 15 is a parameter error, since the standard
+names no private indications here. The answer is sent with qualifier 0x00 for either request
+qualifier. Reads of each static group by range with variation 0, and of each variation
+Table 12-3 to Table 12-37 list, were already answered at every level and are unchanged.
+*Trade-off:* a master that reads group 80 learns the indications of the moment before the
+response, not the ones the response itself carries, which differ only by the class bits of
+the events that response delivers.
+
+**D109 -- Level 3 reports frozen counters and their events without time.** Table 12-21
+and Table 12-25 list frozen counters and frozen counter events in the variations without time
+at Level 3 (the variations with time are Level 4), and procedure 8.16.2.2.3 of the IED
+Certification Procedure reads a Level 3 freeze back as variations 1, 2, 9 or 10. An outstation
+at exactly Level 3 therefore reports a frozen counter in variation 1 when a read names no
+variation, and a frozen counter event in variation 1 in class polls and unsolicited responses
+(`Session(frozen_counter_event_variation=1)`). Level 4 and the default keep the profile's
+variations with time. A freeze already buffered a frozen counter event at every level but an
+explicit Level 2 (D55), so Level 3 needed no new event generation.
+
+**D110 -- An assignment changes the class of events recorded after it, lasts until a
+restart, and leaves buffered events where they are.** The class a point reports in is held
+in the outstation, started from the point map and the event policy, and an ASSIGN_CLASS request
+changes it. Three questions have answers in the standard and the procedure, and the
+outstation follows them.
+
+- *Events already buffered.* An event takes its class when it is created, and a point that
+  is reassigned does not have to move events already buffered (IEEE 1815-2012 4.4.14).
+  IED Certification Procedure 3.1 rev 1, 8.26.1, allows either, provided each is reported in
+  the old or the new class. They stay in the class they were recorded in, so no event is
+  moved, reordered or lost by a request. A change the sources made before the request, which
+  the outstation has not yet scanned, is recorded first under the old class, so the request
+  does not move the point's last change into the new class.
+- *Class 0.* A point assigned to class 0 raises no new events (4.4.14; 8.26.1). It stays in
+  a class 0 read, because static data is always class 0 and cannot be reassigned. Events it
+  buffered earlier may be reported or deleted (8.26.1); they are reported. When the point is
+  assigned a class again, its next change is measured from its value at that moment, so a
+  change that happened while it reported nothing is not reported afterwards. Procedure steps
+  46 to 48 check this. Outputs follow the same rule: TB2016-003b Table 12-49 note b puts
+  the static data of every point assigned to class 0, 1, 2 or 3 in a class 0 response, so an
+  output assigned to class 0 stays in it, or joins it. Only an output with no class at all,
+  which note i lets an outstation leave out of class 0, is not there (D115).
+- *Outputs.* An output has one class, the class of its output events (D115), and only
+  groups 10 and 40 move it. Assigning its paired input does not.
+- *Counters.* A counter has one class, which its counter events (D124) and its frozen counter
+  events both use. Assigning it through group 20 or group 21 moves both kinds of event, and
+  class 0 stops both.
+- *Restart.* A device that does not keep assignments in non-volatile memory returns to its
+  default assignments after a restart (4.4.14). This outstation keeps none, so a cold restart
+  and a new process both start from the point map's classes. A master sends the assignments
+  again, as TB2016-003b expects of a master that assigns classes. The Device Profile does not
+  list assign class among the settings preserved through a restart.
+
+*Trade-off:* a master that reassigns a busy point sees its old events under the old class
+until it has read them. 4.4.14 advises polling all three event classes straight after an
+assign class request for that reason.
+
+**D111 -- The session parses the request and a provider applies it as one unit.**
+`Session` takes a `class_provider` beside its freeze and control providers, and keeps no
+point map. It reads each group 60 header (variation 1 to 4 for class 0 to 3, qualifier 0x06)
+and the point headers up to the next one, and hands every set of the request to the provider
+together. `DerOutstation` implements the provider and offers it from Level 3. The provider
+checks every set before it changes any point, so a refused request changes nothing, and
+the answer is a null response whose `IIN2` says why a refusal happened.
+
+- Level 3 takes groups 1, 20, 21 and 30, and Level 4 adds the output status groups 10 and
+  40 and the command groups 12 and 41, which name the output they command (Table 4-12;
+  TB2016-003b). Points are named by range, by "all" or by index list, as a read names them.
+  Level 4 also takes group 3, the double-bit inputs (Table 12-7; D117).
+- Any other group is an unknown object (`IIN2.1`). A point that is not there, or a range that
+  runs past the last point, is a parameter error (`IIN2.2`), as in a read.
+- A header before the first class header would assign points to no class. TB2021-001 makes that
+  optional and the outstation does not offer it, so it is a parameter error, as are a class
+  header with another qualifier and a group 60 variation that names no class.
+- A set that gives a class to a point that cannot report events leaves that point alone, so
+  that "all" can be used without naming the points the tables keep static. A set that gives it
+  class 0 is always accepted. An output's class is the class of its output events (D115). A
+  set through group 12 or 41 is checked the same way and changes no class, because it
+  assigns command events, which are not generated (D116).
+- Where sets overlap, the later one wins.
+
+**D112 -- Floating-point variations are Level 4 objects, and carry the value unscaled.**
+`level=4` serves group 30 variation 5, group 40 variation 3 and group 32 variations 5 and 7,
+which TB2016-003b's subset tables require at Level 4 and no lower level. This replaces the
+floating-point half of D2 and of the planning record's D39, which left them to an agreement the
+builder did not offer; the integer baseline of both stands. D6 says the library does not scale
+values, and the map's multiplier is the one place scaling happens, so the relation between a
+point's two forms is fixed here: an integer variation carries the transmitted value (the value
+after the multiplier and offset), and a floating-point variation carries the value as the
+binding gave it, in engineering units, as the setpoint of group 41 variation 3 already did. A
+voltage of 240.0 V with a multiplier of 0.1 is 2400 in variation 1 and 240.0 in variation 5.
+The flags are the integer form's, including `OVER_RANGE`, which is judged against the range the
+tables give for the transmitted value. Variation 0 and class 0 stay integer, since a master
+that names no variation has asked for the baseline that every level requires. A class poll is
+answered in the session's `analog_event_variation`, which may be a floating-point one at Level
+4 and is refused below it, so Table 12-49's class polls carry whichever variation the caller
+chose. Whether a change is an event is decided on the integer form, as before; the event keeps
+the unscaled value seen at that moment for the floating-point variations. *Trade-off:* an input
+that moves by less than one count of its multiplier is never an event, though a floating-point
+master could have seen the movement; the integer form's resolution is the one the tables state.
+
+**D113 -- A 16-bit frozen counter with time is answered in 32 bits at Level 4, and the timed
+integer analog events are answered at every level.** Group 21 variation 6 and group 23
+variation 6 are Level 4 requests. They are answered in variation 5 of their group, for the
+reason D100 gives for the other 16-bit counters: counters are kept in 32 bits and a 16-bit
+count of energy wraps within hours. TB2016-003b's response tables for both groups list
+variation 5 beside variation 6 at Level 4, so a Level 4 master parses the 32-bit answer, and
+DNP3 IED Certification Procedure 3.1 rev 1 accepts a 32-bit answer to a 16-bit read from a
+device that keeps only 32-bit values (8.24.2 for frozen counters, 8.25.2.4 step 9 for frozen
+counter events, which D108 follows at Level 3); neither section reads variation 6. Group 32
+variations 3 and 4 are Level 4 in the tables, and this outstation has always answered them when
+named by group, and uses variation 3 by default outside the profile. A lower level does not
+refuse them: D55 already lets a master name the fuller variations at Level 2, and refusing at
+Level 3 alone would make the levels disagree for no gain. Below Level 4, group 21 variation 6
+and group 23 variation 6 are unknown objects. *Trade-off:* a lower level answers objects its
+subset does not list, as it did before.
+
+**D114 -- A master reads and writes analog input deadbands at Level 4, and a written deadband
+decides the next event until the outstation restarts.** Group 34 variations 1 to 3 are read
+with qualifiers 0x06, 0x00 and 0x01 (and by index, as other static groups are) and written with
+0x00, 0x01, 0x17 and 0x28, per TB2016-003b Table 12-35. A write is answered with a null
+response. Variation 0 is answered in variation 2, the widest integer. Every served analog input
+has a deadband, and the configured one (the binding's, the policy's) is the starting value; a
+write replaces it, including for a point that reports no events, whose deadband then applies if
+it reports events later. The units follow D112 and the formal structures of IEEE 1815-2012
+A.18.1 to A.18.3: variations 1 and 2 are unsigned counts in transmitted units, which is where
+`EventPolicy` converts to (D66), and variation 3 is in engineering units, converted with the
+point's multiplier. A deadband read at or past what a
+variation holds is reported as the largest value it holds (IEEE 1815-2012 A.18). A write is all
+or nothing: an index that is not a served analog input, a negative or non-numeric float, a
+count that disagrees with the objects present or a header the fragment does not hold is a
+parameter error and changes nothing. IEEE 1815-2012 11.9.1.3 does not require a deadband to
+survive a restart and asks a device that keeps it to say so in the Device Profile. A written
+deadband is held in memory only; the restarted outstation uses the configured values, and the
+Device Profile lists no settings as kept through a restart. `Session.restart`, which a cold
+restart runs, puts them back through the provider's `reset_deadbands`, as it puts classes back. Group 34 is never in class 0. It
+holds analog input deadbands only: the deadband of a counter that reports value changes (D124)
+comes from the event policy and is not read or written over DNP3. *Trade-off:* a master that
+writes deadbands writes them again after each restart, in return for an outstation that holds
+no state outside the process.
+
+**D115 -- At Level 4 an output reports an event when its status changes, starting in the
+class of its paired input, and class 0 carries the status of every output that has a class.**
+Binary output events (g11) and analog output events (g42) are required of a Level 4
+outstation (TB2016-003b, Tables 12-13 and 12-41). `poll()` reads each output's status as a
+read of group 10 or 40 does and records a change of value or flags, whether a control, the
+device or a failing status reader caused it (IEEE 1815-2012, A.7.1.1). There is no
+deadband, and every change is kept, as for binary inputs; an analog output's change is judged
+on its integer form, as an analog input's is (D112). When one request commands an output
+again, the outstation polls before carrying out the later control, so a request that latches an
+output on and then off reports both changes, and the inputs mirroring it report both too
+(A.7.1.1 and A.21.1 describe an event for each control that changes an output). A request that
+commands each output once is polled once, after its last control.
+
+- *Class.* The tables give an output no event class, so it starts in the class of the input
+  paired with it, which reports the same change; an output whose paired input reports no
+  events starts with none, and an output with no paired input starts in class 3, as a frozen
+  counter does where the tables are silent. The event policy does not name outputs. The class
+  is held with the inputs' classes and follows D110. It is the output's own from then on:
+  IEEE 1815-2012 Table 4-12 gives an output status its own row, so an ASSIGN_CLASS naming
+  group 10 or 40 moves the output's events, and one naming the paired input moves the input's
+  only. A master that wants both moved names both. An assignment through group 12 or 41
+  sets the class of command events (Table 4-12), which are not generated (D116), so it is
+  accepted and moves nothing. TB2016-003b Tables 12-11 and 12-37 require ASSIGN_CLASS on
+  groups 10 and 40 at Level 4, so D111 already takes them.
+- *Class 0.* Table 12-49 note b puts the static data of every point assigned to class 0, 1,
+  2 or 3 in a class 0 response. Note i lets an outstation leave g10 and g40 out of class 0,
+  and then leave their events out of classes 1 to 3, and A.7.1.1 allows an output event only
+  for a point that class 0 reports. So at Level 4 class 0 carries g10v2 and g40v1 for each
+  output that has a class: one it reports events in, or class 0 by assignment. An output
+  that starts with no class, because its paired input reports no events, is left out under
+  note i until a master assigns it a class; assigning it class 0 puts it in the class 0
+  response without events. An output assigned to class 0 stops reporting events (4.4.14)
+  and stays in class 0, as an input does (D110). A restart returns each output to its
+  starting class and class 0 membership. Given a class again, an output reports from its
+  value at that moment. Levels 2 and 3 and the default answer class 0 as before.
+- *Variations.* A class poll and a variation 0 read answer g11v2 and g42v3, with time.
+  g42v3 is an integer, as D112 keeps variation 0 and class 0 of the analog groups; the
+  session's `analog_event_variation` applies to analog inputs only. A read by name takes any
+  variation of Tables 12-13 and 12-41 that Level 4 lists: g11v1 and v2, and g42v1 to v5 and
+  v7. The double-precision g42v6 and v8 are not required at any level and are refused, as
+  the double-precision analog input variations are. Floating-point variations carry
+  engineering units, as an analog output command and D112 do; class 0 sends g40v1, and
+  g40v3 is answered when a read names it (D112).
+
+The Device Profile lists the groups and each output's class.
+*Trade-off:* a mirrored status input reports the same change in the same class until one of
+the two is reassigned, so a master sees it twice, once as an input and once as an output. A
+class 0 read is larger. The absolute time of an event stamped before a master set the clock
+is sent as it is: g11 and g42 have no relative-time variation to say the clock was unset.
+
+**D116 -- Command events are not generated, and a read of g13 or g43 is answered with a
+null response.** Table 12-17 note a and Table 12-43 note a make generating g13 and g43
+optional, and note b has an outstation that reports them and has none return a null
+response. A command event reports that a control was attempted, by any master or by the
+device, with its status; it is a log entry, and an event is owed for every attempt,
+refused or not, once the control is complete (IEEE 1815-2012, A.9.1 and A.22.1). The
+outstation records no attempts, and recording them would put every refused control in a
+class a master polls. Reads at Level 4 are answered in each variation of the tables
+(g13v0 to v2, g43v0 to v5 and v7). The master decodes both groups.
+*Trade-off:* a master cannot learn from the outstation that another master commanded an
+output. It learns the result from the output event.
+
+**D117 -- A double-bit binary input is the point kind `DBI`, served from Level 4.** The
+IEEE 1815.2 tables define no double-bit points, so a tables document lists them under the key
+`DBI`, in the same row format as the other kinds, and the loader reads them beside the rest. A
+binding returns the point's state as 0, 1, 2 or 3 (INTERMEDIATE, DETERMINED_OFF,
+DETERMINED_ON, INDETERMINATE; IEEE 1815-2012 Table 11-14), alone or in a `Reading` with a
+quality. A value that is not a whole number from 0 to 3 is reported as INDETERMINATE with COMM_LOST
+and is logged, so a master is told the value cannot be trusted. Groups 3 and 4 are Level 4
+objects (TB2016-003b Tables 12-7 and 12-9): below Level 4 the outstation serves no `DBI` point, a
+read of either group is an unknown object, and the points are in no class 0 or class 1 to 3
+response and buffer no event. The class of a point's events comes from its row and the event policy
+like any other input's (`DBI` is a kind a policy `defaults` rule may name), and an ASSIGN_CLASS
+naming group 3 moves it as D110 describes for a binary input: class 0 stops the point's events
+and keeps it in a class 0 read, and a point given a class again reports from its state at that
+moment. *Trade-off:* a map
+holding `DBI` points at Level 3 or below carries points that nothing serves, and
+`coverage()` reports them as absent.
+
+**D118 -- Group 3 is answered with flags unless a point is online and the read names
+variation 1; group 4 follows the binary event rules.** Variation 0 is answered with flags,
+as it is for binary inputs. Variation 1 is packed, two bits a point with the first point in bits
+0 and 1 of the first octet and unused bits zero (IEEE 1815-2012 A.4.1), and it has no flags,
+so a point whose quality is anything but plain ONLINE is sent in variation 2 and splits the run
+(TB2016-003b Table 12-7, note a). The packed variation has only the range form
+(Table 12-8): a read of it by index is an unknown object. An event is generated when the state or
+any quality flag changes; one event covers both bits changing together (IEEE 1815-2012 11.9.6).
+Events are answered in variation 2 by default and in variation 3 behind group 51 when the clock
+had not been set, as binary events are, with the same rules for a run of relative times.
+A group 4 read by name is answered only when double-bit inputs are served, and with a null
+response when none is buffered (Table 12-9, note a). Packed ranges are split into blocks as if
+each point took one octet, which keeps a block inside its budget. *Trade-off:* a range of packed
+points near the block size is split earlier than the octets require.
+
+**D119 -- Level 4 serves every required device attribute from what the outstation has and
+does.** `DerOutstation` builds a `DeviceAttributes` store at Level 4 and hands it to each
+session it makes; below Level 4 group 0 is an unknown object, as it was. Each value is
+taken from where it lives: the counts and highest indices of points from the served
+points (a group with none reports no points and an index of zero, since IEEE 1815-2012
+A.1 states no value for it); "support for events" true for a kind when a served point of
+that kind reports in a class or may be given one by ASSIGN_CLASS (D110), which at Level 4
+covers binary, double-bit (D117) and analog inputs, counters (D124), frozen counters and
+the outputs (D115); "support for frozen analog inputs" false, since group 31 is not
+served; the manufacturer, product, versions and serial number from `DeviceInformation`, which the
+`identity` configuration fills; the subset attribute (variation 249) from the level, as
+`"4:"` with no test year because the library is not certified (A.1.40); the Secure
+Authentication version, the security statistics and the data set counts as zero, because
+none is implemented; variation 211 as text of no characters when there is no
+user-specific set, as TB2014-001 corrects A.1.3.2.3 to say (the standard names data type
+254, which is a list); the local timing accuracy (217) from
+`timing_accuracy_us`, one second by default, since only the host knows its clock; and the
+duration of timing accuracy (218) as zero, since nothing waits for a master to send the
+time again. The variations that belong to the session, the two fragment sizes and the
+limit on binary outputs in a request (variations 240, 241 and 216), come from the
+session. The limit is the most control relay output blocks that fit both a request and the
+echo that answers it, counted with two-octet indices and counts. The optional variations
+196 to 208 and 244 are not offered, so a read of one is an unknown object (TB2013-004b
+makes reporting them a configurable option). A response puts each attribute under
+qualifier 0x00 with its set as the range, as the example in 5.5.5 does, and the list of
+variations under 0x17 with a count of one, as 5.5.6.2 requires. Only set 0 exists: a
+read of another set, or with qualifier 0x06 for a variation other than 254 and 255, is a
+parameter error. Text is visible ASCII of at most 128 characters, which is what VSTR
+holds (TB2017-007a Table 11-4) and keeps one attribute inside the smallest fragment the
+outstation can be configured with. A.1 calls the event attributes support, a property of
+the device, so an assignment to class 0 leaves them true: the master that made it can
+assign a class again. No attribute of set 0 states a point's class or deadband, so nothing a
+master changes at run time other than the three names and the fragment size (D120) shows in
+the attributes. *Trade-off:* a master cannot learn from the attributes that every point of a
+kind has been assigned to class 0. The timing accuracy is a statement the operator makes and
+the library cannot check.
+
+**D120 -- A master may write the maximum transmit fragment size and three names, and a
+written value does not survive a restart.** Variations 240, 245, 246 and 247 are
+writable, as the Level 4 table has them, and a write is answered with a null response. A
+request is checked whole before any of it is stored, because 5.5.8 has an unacceptable
+value leave the attribute alone and set IIN2.2, and half a request stored would leave a
+master unsure which half. A write of a variation that is not writable is an unknown
+object; a text that is not visible ASCII, is too long or has another data type, a set
+other than 0, or a qualifier other than 0x00 and 0x01 is a parameter error. The
+transmit fragment size is the session's `max_response`, so a write changes how the
+session fragments its responses from the next response on. It has to be at least the
+largest block a read can need plus a response header, because the session refuses a read
+whose block is larger than a fragment: the largest static block (1028 octets with the
+default block budget), and with a small budget the list of variations or an attribute at
+its longest, a written name of 128 characters (139 octets). A session is not built with a
+`max_response` below that floor either, and
+at most the `max_response` the session was built with, which is the limit an operator
+sets under 4.3 rule 1; a master can lower the size and raise it back and no further.
+Nothing is stored beyond the process: 5.5.8 does not require a written attribute to
+survive a reset, `Session.restart` returns every attribute and the fragment size to the
+values they were given, and a new connection keeps them, as it keeps events.
+*Trade-off:* a master cannot shrink fragments below the block budget unless the operator
+lowers `block_octets`, and a restart forgets a rename a person made.
+
+**D121 -- The master reads a device attribute by the length it states.** `decode` walks
+group 0 apart from its layout table, since an attribute's size is in the octets that
+follow its header: the data type code, a length octet (256 more for an extended list)
+and the value, under a range or an index-prefixed qualifier. The decoded object keeps the
+attribute whole, with its data type code, in `attribute`; its `value` is set only where
+the attribute is a number, a time or a bit string, so that `value` is never a string or a
+list. A data type code this library has no name for is walked past by its length. The
+traffic walk reads group 0 the same way and keeps the octets after the header as the
+header's `data`; under a size prefix it walks each attribute by the prefix, as it walks any
+object that states its size. The Device Profile lists every attribute under its implementation table
+at Level 4, because the schema has no element for attributes beyond that.
+*Trade-off:* an attribute with a data type this library has no name for is kept as
+octets and not interpreted. The requests that read and write attributes are D122's.
+
+**D122 -- The master is told each outstation's subset level, holds to Level 2 until told, and
+refuses a request above it.** An outstation has a `level` of 2, 3 or 4 (`SubsetLevel`), given
+to `Outstation(level=...)` and `Loopback(level=...)`, as `level` in `add` and in the
+configuration, and with `--level`. IEEE 1815-2012 14.7.2 requires a master to be
+configurable to avoid the requests an outstation of a lower level cannot parse. The
+default is Level 2, the lowest level this library implements: a master that is not told
+what an outstation supports sends nothing the standard leaves out of Level 2, and a person
+who points it at real equipment chooses to send more. A request that needs more raises
+`AboveSubsetLevel` (a `ValueError`, so the service reports it as a `request` error) before
+anything is built or sent. The level of a request is read from TB2016-003b's request
+tables: a static group read by a variation or a range is Level 3, as are a variation of
+groups 22 and 32, group 23, the time, the internal indications and an ASSIGN_CLASS of
+binary inputs, counters, frozen counters and analog inputs (Tables 12-3, 12-19, 12-21,
+12-23, 12-25, 12-27, 12-31, 12-45 and 12-52); device attributes, deadbands, the groups only
+Level 4 defines, and an ASSIGN_CLASS of double-bit inputs or output status are Level 4
+(Tables 12-1, 12-7, 12-11, 12-35 and 12-37). A read by index list of a static group, and a
+group or variation the tables do not name (such as g10v1, g30v6 or g32v6), are listed at no
+level; they are taken to need Level 4, the highest this master knows, so that nothing is
+sent that a lower level might not parse. The same holds for a form of read the tables do not
+list for a variation: a range of event objects, or group 50 variation 1 asked for whole
+(qualifier 0x06), since Table 12-45 lists its read with qualifier 0x07 only. The master holds
+one table of the reads listed below Level 4, by group, variation and form, and every read
+not in it needs Level 4. A row the tables give from Level 1, such as the class data reads of
+group 60 (Table 12-49), needs Level 2. The requests that existed before the level are
+not held to it, except that `read` changes form with it (D82); `request` and `broadcast`
+send the octets they are given. Attributes are built with the outstation's own attribute
+encoding (D119), so both sides agree on it: a number takes the fewest octets of 1, 2 or 4,
+and text is visible ASCII of at most 255 characters, the most a length octet holds.
+*Trade-off:* the default refuses Level 3 and 4 requests until the level is set, which a
+person who knows the outstation is Level 4 has to do once. The level is the operator's
+statement and is not read from the outstation. An outstation that accepts index lists
+below Level 4 is still not sent one.
+
+**D123 -- The Level 3 and 4 checks apply from a level, and judge a response by what it
+decodes to.** A check has the lowest level it applies from, and is `not applicable` below
+the outstation's level, so that a run against a Level 2 outstation does not report a
+request it was never meant to take as a failure. The checks are interoperability checks in
+the style of the rest of the catalog and do not say an outstation conforms to a level. A
+check passes when the outstation answers and sets none of the indications for an
+unsupported function, an unknown object or a parameter error, and the response has the
+form the tables give. The time and the internal indications are compared octet for octet,
+since each has one form. Everything else is judged by the decoded objects: a response that
+cannot be decoded, or that carries a group the request did not ask for, fails, except that a
+relative-time event (g4v3) comes after its common time of occurrence, group 51 (TB2016-003b
+Table 12-7 footnote c). A response that stops before its final fragment fails, whatever its
+first fragments carried. The list of device attributes is read with no range, so it returns
+one list for each attribute set at the set's index (IEEE 1815-2012 A.1.44), and each
+attribute a list names is read from that index. The
+double-bit check is not applicable to an outstation that serves no double-bit input. The
+assignment check assigns a point the class the profile tables already give it, so it
+leaves an outstation as it found it. Ranges are only sent to an outstation set to Level 3
+or 4, so the checks of reads by variation and by range never reach a Level 2 one (D82).
+*Trade-off:* the reads of output events take the events the outstation holds, as an event
+poll does, and an empty response passes.
+
+**D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in its
+value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter
+events optional, and has a device that supports them raise one whenever any of a counter's
+flags change; reporting a change in value is left to the device. TB2016-003b Table 12-49
+footnote o says the same of class polls, and Table 12-23 lists reads of group 22 variations 1
+and 2 (qualifiers 0x06, 0x07, 0x08) from Level 3. At `at_least(3)` each poll of the inputs
+compares a counter's flags with the last reading and buffers a group 22 event holding the
+current count and the new flags, in the class the counter's frozen counter events use (the IEEE
+1815.2 tables give a counter no class of its own, and an event policy sets both). A counter
+with no class raises none. Every flag change is kept, as binary changes are, since the sequence
+is the information. Class polls, unsolicited responses and reads of group 22 variation 0, 1 or
+2 report it in variation 1, 32 bits with flag: the counters have 32 bits, and IED Certification
+Procedure 3.1 rev 1 section 8.25.2.3 step 9 takes variation 1 for a variation 2 read from such
+a device. The variations with time (5 and 6) are optional and stay refused. This replaces, from
+Level 3, the sentence of D46 that has counter change events never buffered. Level 2 and the
+default buffer none, as before; whether footnote o already binds Level 2 was settled by the
+maintainer in favor of leaving Level 2 unchanged.
+
+A change in value is an event, from Level 3, only for a counter whose event policy rule sets
+`value_changes` (a rule for the point outranks the rule for `CTR`). It is off by default,
+because a DER's energy counters change all the time and would fill the buffers with events
+a master did not ask for. Section 3.4 of the IED procedure defines a significant change of a
+numeric point as one greater than the point's threshold, and lets a running counter define
+none and report flag changes only; 11.9.5.2 gives a count moved past an amount since the
+last event as one example. So a counter that reports value changes takes the rule's
+`deadband`, in engineering units converted with the point's multiplier, as that amount:
+a count further than it from the count in the counter's last event (or its first reading) is
+an event, and with no deadband every change is. The decision uses that point's values only
+(3.4.1, rule 2). The Device Profile gives each counter's event class, a default counter event
+variation of 1 and all events reported. Its `reportValueChangeCounterEvents` offers `no`,
+`yes` and `basedOnPointIndex` and states which is in force, and each counter's
+`reportCounterValueChangeEvents` says `yes` or `no`. The schema has no place for a counter's
+deadband; this decision states the algorithm, as rule 3 of 3.4.1 asks.
+*Trade-off:* IED procedures 8.17 and 8.25.2.3 are written for counters whose events follow
+their value; a device whose counters report flag changes only cannot raise the events with
+normal flags they ask for, so the conformance device turns value changes on.
+
 ## Layering
 
 Each layer is testable without the ones above it, and the session does no I/O.
@@ -1765,6 +2243,9 @@ Each layer is testable without the ones above it, and the session does no I/O.
   every group and variation, which the map knows and this layer does not.
 - `session` holds what is true of a conversation rather than of a frame.
 - `decode` reads objects and knows nothing of who asked for them.
+- `attributes` encodes and decodes the device attributes of group 0 and holds the ones an
+  outstation reports; it knows nothing of where a value comes from, and the session
+  answers reads and writes from it.
 - `master.association` is the session's mirror: what is true of a conversation, from the end
   that asks. Like the session it does no I/O. `master.api` owns the socket, and
   `master.loopback` stands in for one by handing octets straight to a session.
@@ -1785,6 +2266,9 @@ Each layer is testable without the ones above it, and the session does no I/O.
   from that outstation and its session. `profile.device_profile_view` reads the XML of any
   Device Profile into facts, sections and tables, and writes them as a page. It knows a
   few element names and no schema, and nothing of points, sessions or the wire.
+- `catalog` names every object group and variation and knows nothing else. `object_coverage`
+  reports what the outstation, session and master do with each, and imports them to read
+  their tables.
 - `observers` defines the records the listener, the session and the master report to the
   host application, and knows nothing of sockets or frames.
 - `envelope` is a copy of a published message envelope, and knows nothing of DNP3 beyond
@@ -1868,7 +2352,8 @@ asking nothing of this outstation, with the reason.
   command. Time synchronization, counters with freezes, and event groups read by name came
   with it, because the profile's implementation table requires them. Still planned in
   [`planning/DER_PROFILE.md`](planning/DER_PROFILE.md): curves and schedules as objects, the
-  fleet layout, floating-point variations, and a published table for the predecessor profile.
+  fleet layout, and a published table for the predecessor profile. The floating-point
+  variations are served at Level 4 (D112).
 - Conformance testing.
 
 ## Open

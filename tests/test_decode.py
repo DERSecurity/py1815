@@ -219,6 +219,61 @@ class TestAnalogOutputs:
         assert decoded.event
 
 
+class TestAnalogDeadbands:
+    def test_each_width_is_unsigned(self):
+        assert _one("22 01 00 03 03  FF FF").value == 65535
+        assert _one("22 02 00 03 03  FF FF FF FF").value == 4294967295
+
+    def test_single_precision(self):
+        decoded = _one("22 03 00 03 03  00 00 A0 40")
+        assert decoded.value == 5.0 and isinstance(decoded.value, float)
+
+    def test_objects_carry_no_flags_and_are_not_points(self):
+        decoded = _one("22 01 00 03 03  0A 00")
+        assert (decoded.index, decoded.value, decoded.flags) == (3, 10, None)
+        assert decoded.point is None and not decoded.event and decoded.time_ms is None
+        assert decoded.raw == bytes.fromhex("0A 00")
+
+    def test_a_range_and_an_index_each(self):
+        first, second = _read("22 01 00 01 02  05 00  14 00")
+        assert [(first.index, first.value), (second.index, second.value)] == [(1, 5), (2, 20)]
+        first, second = _read("22 02 17 02  01  05 00 00 00  09  14 00 00 00")
+        assert [(first.index, first.value), (second.index, second.value)] == [(1, 5), (9, 20)]
+
+
+class TestCommandEvents:
+    """Group 13 and 43 report a command that was attempted, not what an output stands at."""
+
+    def test_binary_command_event_has_the_commanded_state_and_the_status(self):
+        # Octet 0x81: commanded state 1 in bit 7, control status 1 (TIMEOUT) in bits 0 to 6.
+        decoded = _one("0D 01 17 01  02  81")
+        assert (decoded.index, decoded.value, decoded.flags) == (2, True, 0x01)
+        assert decoded.event and decoded.point is None
+
+    def test_binary_command_event_with_time(self):
+        decoded = _one(f"0D 02 17 01  02  00 {TIME_OCTETS}")
+        assert (decoded.value, decoded.flags, decoded.time_ms) == (False, 0x00, TIME)
+
+    @pytest.mark.parametrize(
+        ("octets", "value", "time"),
+        [
+            ("2B 01 17 01 03  04 A0 86 01 00", 100000, None),
+            ("2B 02 17 01 03  04 64 00", 100, None),
+            (f"2B 03 17 01 03  04 A0 86 01 00 {TIME_OCTETS}", 100000, TIME),
+            (f"2B 04 17 01 03  04 64 00 {TIME_OCTETS}", 100, TIME),
+            ("2B 05 17 01 03  04 00 00 C8 42", 100.0, None),
+            ("2B 06 17 01 03  04 00 00 00 00 00 00 59 40", 100.0, None),
+            (f"2B 07 17 01 03  04 00 00 C8 42 {TIME_OCTETS}", 100.0, TIME),
+            (f"2B 08 17 01 03  04 00 00 00 00 00 00 59 40 {TIME_OCTETS}", 100.0, TIME),
+        ],
+    )
+    def test_analog_command_event_in_each_variation(self, octets, value, time):
+        # Control status 4 (NOT_SUPPORTED), then the commanded value.
+        decoded = _one(octets)
+        assert (decoded.index, decoded.flags, decoded.value, decoded.time_ms) == (3, 4, value, time)
+        assert decoded.event and decoded.point is None
+
+
 class TestObjectsThatAreNotPoints:
     def test_the_time_and_date(self):
         decoded = _one(f"32 01 07 01 {TIME_OCTETS}")
@@ -226,6 +281,27 @@ class TestObjectsThatAreNotPoints:
 
     def test_a_time_delay_in_milliseconds(self):
         assert _one("34 02 07 01  F4 01").value == 500
+
+    def test_the_internal_indications_are_one_bit_each_from_the_lowest_index(self):
+        # Indexes 0 to 15, with IIN1.7 (restart, index 7) and IIN2.1 (object unknown, index 9).
+        states = _read("50 01 00 00 0F  80 02")
+        assert [state.index for state in states] == list(range(16))
+        assert [state.index for state in states if state.value] == [7, 9]
+        assert all(state.point is None and state.flags is None for state in states)
+
+    def test_internal_indications_in_a_16_bit_range_that_ends_inside_an_octet(self):
+        # Indexes 6 to 8, the last octet padded with zeros: IIN1.7 is the second.
+        states = _read("50 01 01 06 00 08 00  02")
+        assert [(state.index, state.value) for state in states] == [
+            (6, False),
+            (7, True),
+            (8, False),
+        ]
+        assert states[1].raw == b""
+
+    def test_internal_indications_cannot_arrive_with_an_index_each(self):
+        decoded = decode_objects(bytes.fromhex("50 01 17 01 07 01"))
+        assert not decoded.complete and not decoded.objects
 
     def test_an_echoed_command_is_walked_past_and_what_follows_is_read(self):
         relay, analog = _read(
@@ -310,6 +386,106 @@ class TestSign:
         assert _one(octets).value == value
 
 
+class TestDeviceAttributes:
+    """Group 0 objects carry their own data type and length, so each is as long as it says."""
+
+    def test_the_maximum_receive_fragment_size_of_the_standards_example(self):
+        # IEEE 1815-2012 5.5.5, EX 5-10: unsigned integer, two octets, 1500.
+        decoded = _one("00 F1 00 00 00  02 02 DC 05")
+        assert (decoded.group, decoded.variation, decoded.index) == (0, 241, 0)
+        assert decoded.value == 1500
+        assert decoded.raw == bytes.fromhex("02 02 DC 05")
+        assert decoded.attribute is not None and decoded.attribute.code == 2
+        assert decoded.point is None and not decoded.event and decoded.flags is None
+
+    def test_text_is_the_attribute_and_not_a_number(self):
+        decoded = _one("00 FA 00 00 00  01 03 41 42 43")
+        assert decoded.value is None
+        assert decoded.attribute.value == "ABC"
+
+    def test_a_range_of_sets_gives_one_object_per_set_in_order(self):
+        first, second = _read("00 F2 00 00 01  01 01 41  01 02 42 43")
+        assert (first.index, first.attribute.value) == (0, "A")
+        assert (second.index, second.attribute.value) == (1, "BC")
+
+    def test_an_attribute_with_an_index_in_front_of_it_reads_that_index(self):
+        # Qualifier 0x17, one object, set 1; and qualifier 0x28 with two-octet fields.
+        (narrow,) = _read("00 FA 17 01 01  01 01 41")
+        (wide,) = _read("00 FA 28 01 00 02 00  01 01 42")
+        assert (narrow.index, narrow.attribute.value) == (1, "A")
+        assert (wide.index, wide.attribute.value) == (2, "B")
+
+    def test_the_list_of_variations_gives_each_variation_and_whether_it_is_writable(self):
+        # IEEE 1815-2012 5.5.6.3, EX 5-12: variations 240 and 246 to 249, read only.
+        decoded = _one("00 FF 17 01 01  FE 0A F0 00 F6 00 F7 00 F8 00 F9 01")
+        assert decoded.index == 1
+        assert decoded.attribute.value == (
+            (240, False),
+            (246, False),
+            (247, False),
+            (248, False),
+            (249, True),
+        )
+
+    def test_an_extended_list_is_256_octets_longer_than_its_length_octet_says(self):
+        decoded = _one("00 FF 17 01 00  FF 00" + " 01 00" * 128)
+        assert len(decoded.attribute.data) == 256
+        assert len(decoded.attribute.value) == 128
+        assert decoded.raw[:2] == bytes([255, 0])
+
+    def test_no_attribute_sets_is_text_of_no_characters(self):
+        # TB2014-001 corrects IEEE 1815-2012 A.1.3.2.3: data type VSTR, length 0.
+        decoded = _one("00 D3 00 00 00  01 00")
+        assert decoded.attribute.value == ""
+        assert _one("00 D3 00 00 00  FE 00").attribute.value == ()
+
+    def test_a_floating_point_attribute_with_no_number_is_a_not_a_number(self):
+        # TB2016-005: a quiet NaN marks floating-point data of poor quality.
+        decoded = _one("00 CB 00 00 00  04 04 00 00 C0 7F")
+        assert decoded.value != decoded.value
+        assert _one("00 CB 00 00 00  04 04 00 00 C8 42").value == 100.0
+        assert _one("00 CB 00 00 00  04 08 00 00 00 00 00 00 59 40").value == 100.0
+
+    def test_a_time_attribute_has_its_time(self):
+        decoded = _one(f"00 C6 00 00 00  07 06 {TIME_OCTETS}")
+        assert (decoded.value, decoded.time_ms) == (TIME, TIME)
+
+    def test_a_data_type_this_library_has_no_name_for_is_walked_past(self):
+        first, second = _read("00 F9 00 00 00  63 02 AA BB  00 D1 00 00 00  02 01 00")
+        assert first.attribute.code == 0x63 and first.attribute.value is None
+        assert second.variation == 209
+
+    def test_objects_of_other_groups_before_and_after_are_read(self):
+        before, attribute, after = _read(
+            "01 02 00 00 00  81  00 D1 00 00 00  02 01 00  01 02 00 01 01  01"
+        )
+        assert (before.group, attribute.group, after.group) == (1, 0, 1)
+
+    def test_a_response_ends_inside_an_attribute_is_reported_with_what_was_read(self):
+        decoded = decode_objects(
+            bytes.fromhex("00 D1 00 00 00  02 01 00  00 FA 00 00 00  01 05 41")
+        )
+        assert not decoded.complete
+        assert [obj.variation for obj in decoded.objects] == [209]
+        assert decoded.unread == bytes.fromhex("00 FA 00 00 00  01 05 41")
+        assert "cut short" in decoded.problem
+
+    @pytest.mark.parametrize(
+        "octets",
+        [
+            pytest.param("00 D1 06", id="all objects"),
+            pytest.param("00 D1 07 01 02 01 00", id="a count with no index"),
+            pytest.param("00 D1 00 00", id="a range cut short"),
+            pytest.param("00 D1 00 01 00 02 01 00", id="a range that runs backward"),
+            pytest.param("00 D1 17", id="a count cut short"),
+            pytest.param("00 D1 17 01", id="an index cut short"),
+        ],
+    )
+    def test_a_header_this_library_cannot_read_ends_the_walk(self, octets):
+        decoded = decode_objects(bytes.fromhex(octets))
+        assert not decoded.complete and decoded.objects == ()
+
+
 class TestTheTable:
     def test_it_agrees_with_the_sizes_the_certification_harness_was_written_with(self):
         """Two tables written separately, compared wherever both have an entry."""
@@ -325,12 +501,92 @@ class TestTheTable:
             ((21, 6), 9),
             ((22, 5), 11),
             ((30, 6), 9),
+            ((34, 1), 2),
+            ((34, 2), 4),
+            ((34, 3), 4),
             ((32, 8), 15),
             ((42, 7), 11),
+            ((13, 2), 7),
+            ((43, 5), 5),
+            ((43, 8), 15),
             ((50, 1), 6),
             ((51, 2), 6),
             ((52, 1), 2),
         ],
     )
+    def test_sizes_the_standard_gives(self, key, size):
+        assert LAYOUTS[key].size == size
+
+
+class TestDoubleBitInputs:
+    """Groups 3 and 4. The state is 0 INTERMEDIATE, 1 DETERMINED_OFF, 2 DETERMINED_ON or
+    3 INDETERMINATE, and with flags it sits in bits 6 and 7 above the six flag bits."""
+
+    def test_the_four_states_with_flags(self):
+        objects = _read("03 02 00 00 03  01 41 81 C1")
+        assert [(each.index, each.value, each.flags) for each in objects] == [
+            (0, 0, 0x01),
+            (1, 1, 0x01),
+            (2, 2, 0x01),
+            (3, 3, 0x01),
+        ]
+        assert all(each.point is PointType.DOUBLE_BIT_INPUT and not each.event for each in objects)
+        assert objects[2].raw == bytes([0x81])
+
+    def test_the_flags_are_kept_apart_from_the_state(self):
+        # COMM_LOST and CHATTER_FILTER set, state 3.
+        decoded = _one("03 02 00 05 05  E4")
+        assert (decoded.value, decoded.flags) == (3, 0x24)
+
+    def test_packed_two_bits_a_point_from_the_low_bits_up(self):
+        # 0xE4 is 0b11_10_01_00: points 4 to 7 are 0, 1, 2, 3.
+        objects = _read("03 01 00 04 07  E4")
+        assert [(each.index, each.value, each.flags) for each in objects] == [
+            (4, 0, None),
+            (5, 1, None),
+            (6, 2, None),
+            (7, 3, None),
+        ]
+        assert objects[3].raw == bytes([0xE4])
+
+    def test_packed_across_two_octets_ignores_the_padding(self):
+        # Six points: 0x1B is 3, 2, 1, 0 and 0x0E is 2, 3, then two unused pairs.
+        objects = _read("03 01 00 00 05  1B 0E")
+        assert [each.value for each in objects] == [3, 2, 1, 0, 2, 3]
+
+    def test_packed_in_a_16_bit_range(self):
+        objects = _read("03 01 01 E8 03 E9 03  09")
+        assert [(each.index, each.value) for each in objects] == [(1000, 1), (1001, 2)]
+
+    def test_a_packed_range_that_ends_inside_its_octets_is_reported(self):
+        decoded = decode_objects(bytes.fromhex("03 01 00 00 05  1B"))
+        assert not decoded.complete and not decoded.objects
+
+    def test_a_packed_object_cannot_come_with_an_index_each(self):
+        decoded = decode_objects(bytes.fromhex("03 01 17 01 02  01"))
+        assert not decoded.complete and "index" in decoded.problem
+
+    def test_events_without_time(self):
+        first, second = _read("04 01 17 02  09 41  0A 84")
+        assert (first.index, first.value, first.flags, first.time_ms) == (9, 1, 0x01, None)
+        assert (second.index, second.value, second.flags) == (10, 2, 0x04)
+        assert first.event and first.point is PointType.DOUBLE_BIT_INPUT
+
+    def test_events_with_absolute_time(self):
+        decoded = _one(f"04 02 17 01  03 C1  {TIME_OCTETS}")
+        assert (decoded.index, decoded.value, decoded.flags, decoded.time_ms) == (3, 3, 0x01, TIME)
+
+    def test_events_with_relative_time_count_from_the_common_time(self):
+        first, second = _read(f"33 01 07 01  {TIME_OCTETS}  04 03 17 02  00 41 00 00  01 81 E8 03")[
+            1:
+        ]
+        assert (first.value, first.time_ms, first.synchronized) == (1, TIME, True)
+        assert (second.value, second.time_ms) == (2, TIME + 1000)
+
+    def test_events_with_relative_time_after_an_unsynchronized_common_time_say_so(self):
+        decoded = _read(f"33 02 07 01  {TIME_OCTETS}  04 03 17 01  00 81 10 00")[1]
+        assert (decoded.time_ms, decoded.synchronized) == (TIME + 16, False)
+
+    @pytest.mark.parametrize(("key", "size"), [((3, 2), 1), ((4, 1), 1), ((4, 2), 7), ((4, 3), 3)])
     def test_sizes_the_standard_gives(self, key, size):
         assert LAYOUTS[key].size == size

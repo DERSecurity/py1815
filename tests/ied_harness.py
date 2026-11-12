@@ -550,7 +550,7 @@ class Dut:
     def __init__(
         self,
         *,
-        level2: bool = True,
+        level: int | None = 2,
         binary_outputs: bool = True,
         analog_outputs: bool = True,
         counters: bool = True,
@@ -560,8 +560,17 @@ class Dut:
         capacity: int = 50,
         extra_analogs: int = 0,
         block_octets: int = 1024,
+        event_policy: Any = None,
+        output_status: bool = False,
+        information: Any = None,
         **session_options: Any,
     ) -> None:
+        """
+        Args:
+            output_status: Give each output a status reader that reports the
+                last value written to it with the quality in ``quality``, so a
+                test can change an output's flags.
+        """
         self.clock = Clock()
         self.binary = dict.fromkeys(BINARY_INPUTS, False)
         self.analog = dict.fromkeys(range(len(ANALOG_INPUTS) + extra_analogs), 100.0)
@@ -583,12 +592,22 @@ class Dut:
         if counters:
             for index in COUNTERS:
                 binding.read(Kind.CTR, index, self._reader(Kind.CTR, self.counts, index))
+        #: What each output stands at, for the status readers ``output_status`` adds.
+        self.outputs: dict[tuple[Kind, int], Any] = {}
         if binary_outputs:
             for index in BINARY_OUTPUTS:
-                binding.output(Kind.BO, index, self._writer("BO", index), initial=False)
+                self.outputs[(Kind.BO, index)] = False
         if analog_outputs:
             for index in ANALOG_OUTPUTS:
-                binding.output(Kind.AO, index, self._writer("AO", index), initial=0.0)
+                self.outputs[(Kind.AO, index)] = 0.0
+        for (kind, index), initial in self.outputs.items():
+            binding.output(
+                kind,
+                index,
+                self._writer(kind.value, index),
+                initial=initial,
+                status=self._status(kind, index) if output_status else None,
+            )
 
         self.outstation = DerOutstation(
             load.resolve(_tables(extra_analogs, frozen_counters=frozen_counters), Composition()),
@@ -597,7 +616,9 @@ class Dut:
             event_capacity=capacity,
             block_octets=block_octets,
             clock_ms=self.clock.ms,
-            level2=level2,
+            level=level,
+            event_policy=event_policy,
+            information=information,
         )
         session_options.setdefault("need_time", False)
         session_options.setdefault("clock", self.clock)
@@ -614,9 +635,18 @@ class Dut:
     def _writer(self, kind: str, index: int) -> Any:
         def write(value: float) -> CommandStatus | None:
             self.operated.append((kind, index, value))
+            self.outputs[(Kind(kind), index)] = value
             return None
 
         return write
+
+    def _status(self, kind: Kind, index: int) -> Any:
+        def status() -> Reading:
+            return Reading(
+                self.outputs[(kind, index)], self.quality.get((kind, index), Quality.GOOD)
+            )
+
+        return status
 
     # ------------------------------------------------------------ stimulus
 

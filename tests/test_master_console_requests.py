@@ -209,7 +209,7 @@ class TestSending:
         assert page.errors == []
 
     @pytest.mark.asyncio
-    async def test_an_answer_with_no_objects_shows_only_the_facts(self, console):
+    async def test_an_answer_with_no_points_shows_the_facts_and_its_other_objects(self, console):
         page = console.page
         await page.evaluate(_save("Delay", "DELAY_MEASURE", ""))
         assert await page.evaluate(f"{_row('Delay')}.cells[2].textContent") == "none"
@@ -218,7 +218,16 @@ class TestSending:
 
         await page.wait_for("document.querySelector('#request-result .outcome') !== null")
         assert "DELAY_MEASURE" in await page.text("#request-result .facts")
-        assert await page.evaluate("document.querySelector('#request-result').children.length") == 1
+        # The facts, and the time delay (g52v2) in the table of objects that are not
+        # points. No table of points is shown.
+        assert await page.evaluate("document.querySelector('#request-result').children.length") == 2
+        cells = await page.evaluate(
+            "[...document.querySelectorAll('#request-result .other-objects tbody tr')]"
+            ".map((row) => [...row.cells].map((cell) => cell.textContent))"
+        )
+        ((object_, index, delay, data_type),) = cells
+        assert (object_, index, data_type) == ("g52v2", "", "")
+        assert delay.isdigit()
         assert "null" not in await page.text("#request-result")
 
     @pytest.mark.asyncio

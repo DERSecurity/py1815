@@ -15,7 +15,8 @@ What the profile fixes, and this module therefore does not ask about:
   out of class 0.
 - A "supports" input is static only. It never produces an event.
 - A binary output behaves as latched whatever operation commanded it.
-- A freeze does not clear the counters it freezes.
+- A freeze does not clear the counters it freezes, unless a subset level is
+  claimed: the subset tables then have a freeze-and-clear clear them.
 
 Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0.
 """
@@ -24,16 +25,28 @@ from __future__ import annotations
 
 import logging
 import math
+import warnings
 import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from py1815.application import CLASS_GROUP, RESPONSE_HEADER_SIZE, ObjectHeader, QualifierCode
 from py1815.application import object_header as range_header
+from py1815.attributes import (
+    Attribute,
+    DeviceAttributes,
+    DeviceInformation,
+    Variation,
+)
 from py1815.control import (
     GROUP_ANALOG_OUTPUT_COMMAND,
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT,
+    GROUP_ANALOG_OUTPUT_EVENT,
     GROUP_ANALOG_OUTPUT_STATUS,
     GROUP_BINARY_OUTPUT_COMMAND,
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT,
+    GROUP_BINARY_OUTPUT_EVENT,
     GROUP_BINARY_OUTPUT_STATUS,
     AnalogOutput,
     CommandStatus,
@@ -47,22 +60,31 @@ from py1815.events import EventBuffers, EventClass
 from py1815.events import now_ms as wall_clock_ms
 from py1815.objects import (
     COUNTER_VARIATION,
+    GROUP_ANALOG_DEADBAND,
     GROUP_ANALOG_INPUT,
     GROUP_BINARY_INPUT,
     GROUP_COUNTER,
+    GROUP_DOUBLE_BIT_INPUT,
     GROUP_FROZEN_COUNTER,
     AnalogEventVariation,
     AnalogPoint,
     AnalogQuality,
     AnalogVariation,
     BinaryPoint,
+    BinaryQuality,
     BinaryVariation,
     CounterPoint,
     CounterQuality,
+    DoubleBitPoint,
+    DoubleBitState,
+    DoubleBitVariation,
     FrozenCounterVariation,
     encode_analog,
     encode_binary,
     encode_counter,
+    encode_deadband,
+    encode_double_bit,
+    encode_double_bit_packed,
     encode_frozen_counter,
     indexed_block,
 )
@@ -70,7 +92,8 @@ from py1815.profile.binding import Binding, Output, Quality, Reader, Reading
 from py1815.profile.coverage import Coverage, Entry, Source
 from py1815.profile.model import Address, Kind, MapError, Point, PointMap
 from py1815.profile.policy import EventPolicy, EventRule
-from py1815.session import Control, ParameterError, Session, UnknownObject
+from py1815.session import ClassAssignment, Control, ParameterError, Session, UnknownObject
+from py1815.subset import SubsetLevel
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +116,8 @@ _LEVEL_2_VARIATIONS = {
     GROUP_ANALOG_OUTPUT_STATUS: 2,
 }
 
-#: The variations a master may also name outright. Integers only: the
-#: floating-point variations exceed DNP3 Level 2, and the profile makes them a
-#: matter of agreement this builder does not yet offer (D39).
+#: The variations a master may also name outright, below Level 4. Integers
+#: only: the floating-point variations are Level 4 objects (D112).
 _SERVED_VARIATIONS = {
     GROUP_BINARY_INPUT: {2},
     GROUP_BINARY_OUTPUT_STATUS: {2},
@@ -118,6 +140,35 @@ _WIDENED_VARIATIONS = {
     },
 }
 
+#: Reads a Level 3 outstation answers in another variation. A binary input
+#: read in the packed variation is answered with flags, which Table 12-3
+#: footnote a allows (D5).
+_LEVEL_3_WIDENED = {GROUP_BINARY_INPUT: {1: int(BinaryVariation.WITH_FLAGS)}}
+
+#: What a Level 4 outstation serves in addition: the double-bit inputs
+#: (TB2016-003b Table 12-7), the floating-point static variations (D112) and the
+#: analog input deadbands (D114).
+_LEVEL_4_VARIATIONS = {
+    GROUP_DOUBLE_BIT_INPUT: {int(DoubleBitVariation.PACKED), int(DoubleBitVariation.WITH_FLAGS)},
+    GROUP_ANALOG_INPUT: {int(AnalogVariation.FLOAT32_WITH_FLAG)},
+    GROUP_ANALOG_OUTPUT_STATUS: {3},
+    GROUP_ANALOG_DEADBAND: {1, 2, 3},
+}
+
+#: What a Level 4 outstation also answers in a variation it keeps: a 16-bit
+#: frozen counter with time is answered in the 32-bit one (D113).
+_LEVEL_4_WIDENED = {
+    GROUP_FROZEN_COUNTER: {6: int(FrozenCounterVariation.INT32_WITH_FLAG_AND_TIME)},
+}
+
+#: The variation a read of variation 0 or a class is answered in, for the groups
+#: only a Level 4 outstation serves. A double-bit input is reported with its
+#: flags, as a binary input is. The 32-bit deadband holds the most.
+_LEVEL_4_DEFAULTS = {
+    GROUP_DOUBLE_BIT_INPUT: int(DoubleBitVariation.WITH_FLAGS),
+    GROUP_ANALOG_DEADBAND: 2,
+}
+
 #: The analog input variation that carries the same value with its flags.
 _FLAGGED_ANALOG = {
     int(AnalogVariation.INT32): int(AnalogVariation.INT32_WITH_FLAG),
@@ -126,17 +177,112 @@ _FLAGGED_ANALOG = {
 
 _GROUP_KINDS = {
     GROUP_BINARY_INPUT: Kind.BI,
+    GROUP_DOUBLE_BIT_INPUT: Kind.DBI,
     GROUP_BINARY_OUTPUT_STATUS: Kind.BO,
     GROUP_COUNTER: Kind.CTR,
     GROUP_FROZEN_COUNTER: Kind.CTR,
     GROUP_ANALOG_INPUT: Kind.AI,
     GROUP_ANALOG_OUTPUT_STATUS: Kind.AO,
+    GROUP_ANALOG_DEADBAND: Kind.AI,
 }
+
+#: The groups an ASSIGN_CLASS request may name, each with the group whose points
+#: it selects and the subset level that requires it. IEEE 1815-2012 Table 4-12
+#: names the static group of the points whose events move, and TB2016-003b
+#: ticks groups 1, 20, 21 and 30 for Level 3, and group 3 (Table 12-7) and the
+#: output groups for Level 4. A command group selects the output it commands.
+_ASSIGNABLE_GROUPS = {
+    GROUP_BINARY_INPUT: (GROUP_BINARY_INPUT, SubsetLevel.LEVEL_3),
+    GROUP_DOUBLE_BIT_INPUT: (GROUP_DOUBLE_BIT_INPUT, SubsetLevel.LEVEL_4),
+    GROUP_COUNTER: (GROUP_COUNTER, SubsetLevel.LEVEL_3),
+    GROUP_FROZEN_COUNTER: (GROUP_FROZEN_COUNTER, SubsetLevel.LEVEL_3),
+    GROUP_ANALOG_INPUT: (GROUP_ANALOG_INPUT, SubsetLevel.LEVEL_3),
+    GROUP_BINARY_OUTPUT_STATUS: (GROUP_BINARY_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+    GROUP_BINARY_OUTPUT_COMMAND: (GROUP_BINARY_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+    GROUP_ANALOG_OUTPUT_STATUS: (GROUP_ANALOG_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+    GROUP_ANALOG_OUTPUT_COMMAND: (GROUP_ANALOG_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
+}
+
+#: The command groups. An assignment through one of them sets the class of the
+#: output's command events (IEEE 1815-2012 Table 4-12: group 12 for group 13,
+#: group 41 for group 43), not of its output events. No command events are
+#: generated (D116), so the points are checked and no class changes.
+_COMMAND_EVENT_ASSIGNMENTS = frozenset({GROUP_BINARY_OUTPUT_COMMAND, GROUP_ANALOG_OUTPUT_COMMAND})
 
 #: The groups a class 0 read is answered with, in the order they are sent.
 _CLASS_0_GROUPS = (GROUP_BINARY_INPUT, GROUP_COUNTER, GROUP_FROZEN_COUNTER, GROUP_ANALOG_INPUT)
 
+#: The same at Level 4, which adds the double-bit inputs (D117) and the output
+#: status of the outputs that have a class, class 0 included: a master learns an
+#: output's value from class 0 before the events that change it (IEEE 1815-2012,
+#: A.7.1.1; TB2016-003b, Table 12-49 notes b and i).
+_CLASS_0_GROUPS_L4 = (
+    GROUP_BINARY_INPUT,
+    GROUP_DOUBLE_BIT_INPUT,
+    GROUP_BINARY_OUTPUT_STATUS,
+    GROUP_COUNTER,
+    GROUP_FROZEN_COUNTER,
+    GROUP_ANALOG_INPUT,
+    GROUP_ANALOG_OUTPUT_STATUS,
+)
+
+#: The class an output's events report in when neither the tables nor a paired
+#: input give one, as for a frozen counter.
+_DEFAULT_OUTPUT_CLASS = EventClass.CLASS_3
+
+#: The output event groups each kind of output is read in at Level 4.
+_OUTPUT_EVENT_GROUPS = {
+    Kind.BO: (GROUP_BINARY_OUTPUT_EVENT, GROUP_BINARY_OUTPUT_COMMAND_EVENT),
+    Kind.AO: (GROUP_ANALOG_OUTPUT_EVENT, GROUP_ANALOG_OUTPUT_COMMAND_EVENT),
+}
+
 _RANGES = (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
+
+#: The point groups whose highest index and number of points a device attribute
+#: reports: the variation of each, then the group.
+_POINT_ATTRIBUTES = (
+    (Variation.MAXIMUM_BINARY_INPUT_INDEX, Variation.BINARY_INPUT_COUNT, GROUP_BINARY_INPUT),
+    (
+        Variation.MAXIMUM_DOUBLE_BIT_INPUT_INDEX,
+        Variation.DOUBLE_BIT_INPUT_COUNT,
+        GROUP_DOUBLE_BIT_INPUT,
+    ),
+    (Variation.MAXIMUM_ANALOG_INPUT_INDEX, Variation.ANALOG_INPUT_COUNT, GROUP_ANALOG_INPUT),
+    (Variation.MAXIMUM_COUNTER_INDEX, Variation.COUNTER_COUNT, GROUP_COUNTER),
+    (
+        Variation.MAXIMUM_BINARY_OUTPUT_INDEX,
+        Variation.BINARY_OUTPUT_COUNT,
+        GROUP_BINARY_OUTPUT_STATUS,
+    ),
+    (
+        Variation.MAXIMUM_ANALOG_OUTPUT_INDEX,
+        Variation.ANALOG_OUTPUT_COUNT,
+        GROUP_ANALOG_OUTPUT_STATUS,
+    ),
+)
+
+#: The "support for events" variation of each kind of event, with the static
+#: group of the points that raise it. At Level 4, the only level that serves
+#: device attributes, :meth:`DerOutstation.poll` records every one of them:
+#: binary, double-bit and analog input events, counter events (D124), frozen
+#: counter events, and binary and analog output events (D115).
+_EVENT_SUPPORT = (
+    (Variation.BINARY_INPUT_EVENTS, GROUP_BINARY_INPUT),
+    (Variation.DOUBLE_BIT_INPUT_EVENTS, GROUP_DOUBLE_BIT_INPUT),
+    (Variation.ANALOG_INPUT_EVENTS, GROUP_ANALOG_INPUT),
+    (Variation.COUNTER_EVENTS, GROUP_COUNTER),
+    (Variation.FROZEN_COUNTER_EVENTS, GROUP_FROZEN_COUNTER),
+    (Variation.BINARY_OUTPUT_EVENTS, GROUP_BINARY_OUTPUT_STATUS),
+    (Variation.ANALOG_OUTPUT_EVENTS, GROUP_ANALOG_OUTPUT_STATUS),
+)
+
+#: The attributes a master may write, besides the maximum transmit fragment size
+#: that the session owns.
+_WRITABLE_ATTRIBUTES = (
+    Variation.LOCATION_NAME,
+    Variation.DEVICE_ID,
+    Variation.DEVICE_NAME,
+)
 
 #: The qualifiers that name points one at a time, and the octets each spends
 #: on a count and on an index.
@@ -177,11 +323,13 @@ class DerOutstation:
         event_capacity: int = 2000,
         block_octets: int = 1024,
         clock_ms: Callable[[], int] = wall_clock_ms,
-        level2: bool = False,
+        level: SubsetLevel | int | None = None,
+        level2: bool | None = None,
         disabled_offline: bool = True,
         event_policy: EventPolicy | Mapping[str, Any] | None = None,
         read_only: bool = False,
         read_only_status: CommandStatus = CommandStatus.NOT_AUTHORIZED,
+        information: DeviceInformation | None = None,
     ) -> None:
         """
         Args:
@@ -196,13 +344,29 @@ class DerOutstation:
                 fragment a master can receive.
             clock_ms: Wall-clock milliseconds, UTC. Event and freeze times are
                 taken from it, corrected by whatever time a master has written.
-            level2: Answer as a DNP3 Subset Level 2 outstation and nothing
-                more. The DER profile is built on Level 2 and adds to it;
-                IEEE 1815.2 has every such addition be one an outstation can
-                turn off, and this turns them off. Frozen counters are
-                reported without their time, analog output status in 16
-                bits, a freeze buffers no event, and freeze-and-clear clears.
-                A master may still name the fuller variations outright.
+            level: The DNP3 subset level to claim and answer at: 2, 3 or 4,
+                as a :class:`~py1815.subset.SubsetLevel` or its integer.
+                Anything else raises ``ValueError``. Level 2 answers as a
+                Level 2 outstation and nothing more. The DER profile is
+                built on Level 2 and adds to it; IEEE 1815.2 has every such
+                addition be one an outstation can turn off, and Level 2
+                turns them off. Frozen counters are reported without their
+                time, analog output status in 16 bits, a freeze buffers no
+                event, and freeze-and-clear clears. A master may still name
+                the fuller variations outright. Levels 3 and 4 serve the
+                profile's additions, as the default does, accept ASSIGN_CLASS
+                (D110), and the Device Profile claims the level. Level 4 also
+                serves the floating-point variations, which carry the value
+                unscaled (D112), the time-stamped 16-bit frozen counters,
+                answered in 32 bits (D113), and analog input deadbands that a
+                master reads and writes (D114). At any level given,
+                freeze-and-clear clears. None, the default, claims Level 2 and
+                serves the profile's additions, which is what the DER profile
+                asks for when no level is chosen, and its counters are never
+                cleared.
+            level2: Deprecated; use ``level=2``. True means ``level=2`` and
+                warns. False changes nothing. True with a ``level`` other
+                than 2 raises ``ValueError``.
             disabled_offline: Report the inputs of a function that is
                 disabled with the ONLINE flag clear, as IEEE 1815.2
                 clause 6.1.1 requires: the value is still sent, marked
@@ -228,6 +392,11 @@ class DerOutstation:
                 default says this master may not command here. A caller that
                 knows another master holds the point may prefer
                 ``BLOCKED_OTHER_MASTER``.
+            information: What the device attributes say about the device, at
+                Level 4: the manufacturer, product, versions and serial number,
+                and the initial location name, ID and name a master may
+                rewrite. None uses the defaults of
+                :class:`~py1815.attributes.DeviceInformation`.
         """
         if block_octets < 32:
             raise ValueError(f"block_octets is {block_octets}; too small to hold an object range")
@@ -242,10 +411,22 @@ class DerOutstation:
         self._sessions: weakref.WeakSet[Session] = weakref.WeakSet()
         self._block_octets = block_octets
         self._clock_ms = clock_ms
-        self._level2 = level2
-        self._defaults = dict(_DEFAULT_VARIATIONS)
         if level2:
-            self._defaults.update(_LEVEL_2_VARIATIONS)
+            warnings.warn(
+                "level2=True is deprecated; use level=2",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if level is not None and SubsetLevel.parse(level) != SubsetLevel.LEVEL_2:
+                raise ValueError(f"level2=True conflicts with level={level!r}")
+            level = SubsetLevel.LEVEL_2
+        #: The level claimed. An outstation given no level claims Level 2 and
+        #: keeps the profile's additions.
+        self._level = SubsetLevel.LEVEL_2 if level is None else SubsetLevel.parse(level)
+        #: Held to Level 2 and nothing more, as opposed to answering with the
+        #: profile's additions.
+        self._level2 = level is not None and self._level == SubsetLevel.LEVEL_2
+        self._defaults, self._served_variations, self._widened = self._variations_at_level()
         #: What each counter read when it was last cleared, so that a
         #: counter bound to a running total can be cleared without the
         #: source being asked to forget.
@@ -274,8 +455,16 @@ class DerOutstation:
         self._sources = self._resolve_sources()
         #: For each input of a function, the output that enables the function.
         self._gates: dict[Address, Address] = self._function_gates() if disabled_offline else {}
+        # Double-bit inputs are a Level 4 object (TB2016-003b Table 12-7): below it
+        # a read of group 3 or 4 names an unknown object, and the points are in no
+        # class 0 or class poll response.
         self._served: dict[Kind, list[Point]] = {
-            kind: [p for p in point_map.of(kind) if self._is_served(p)] for kind in Kind
+            kind: (
+                [p for p in point_map.of(kind) if self._is_served(p)]
+                if kind is not Kind.DBI or self.at_least(SubsetLevel.LEVEL_4)
+                else []
+            )
+            for kind in Kind
         }
         self._by_index: dict[Kind, dict[int, Point]] = {
             kind: {p.index: p for p in points} for kind, points in self._served.items()
@@ -288,27 +477,135 @@ class DerOutstation:
         elif not isinstance(event_policy, EventPolicy):
             event_policy = EventPolicy.from_mapping(event_policy)
         #: The event class each input reports in, and 0 for one that reports
-        #: none. For a counter it is the class its freezes are logged in.
+        #: none. For a counter it is the class its freezes are logged in, and
+        #: from Level 3 the class of its counter events as well. From Level 4
+        #: it holds the class of each output that has one, class 0 included;
+        #: an output with no class is absent (D115).
         self._classes: dict[Address, int] = {}
         #: Each event-reporting analog input's deadband, in transmitted units.
         #: One absent from here reports every change of its transmitted value.
         self._deadbands: dict[int, float] = {}
+        #: Each counter whose value changes raise events, with how far its
+        #: count has to move, in transmitted counts. One absent from here
+        #: raises events on flag changes only (D124).
+        self._counter_deadbands: dict[int, float] = {}
+        self._event_policy = event_policy
         self._apply_policy(event_policy)
+        #: The class each point had at startup, which a restart or a reset
+        #: returns every assignment to.
+        self._initial_classes = dict(self._classes)
+        #: The deadbands in force at startup, which a restart returns to (D114).
+        self._initial_deadbands = dict(self._deadbands)
 
         if strict:
-            missing = sorted(
-                (p for p in point_map.points.values() if p.mandatory and not self._is_served(p)),
-                key=lambda p: (p.kind.value, p.index),
-            )
-            if missing:
-                listed = ", ".join(f"{p.kind.value}{p.index}" for p in missing[:20])
-                more = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
-                raise MapError(
-                    f"{len(missing)} point(s) the profile makes mandatory are not bound: "
-                    f"{listed}{more}"
-                )
+            self._require_mandatory()
+        #: The device attributes served at Level 4, or None below it (D119).
+        self._attributes = (
+            self._device_attributes(information or DeviceInformation())
+            if self.at_least(SubsetLevel.LEVEL_4)
+            else None
+        )
 
     # ------------------------------------------------------------ assembly
+
+    def _require_mandatory(self) -> None:
+        """Raise MapError when a point the profile makes mandatory is not served."""
+        missing = sorted(
+            (p for p in self._map.points.values() if p.mandatory and not self._is_served(p)),
+            key=lambda p: (p.kind.value, p.index),
+        )
+        if missing:
+            listed = ", ".join(f"{p.kind.value}{p.index}" for p in missing[:20])
+            more = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
+            raise MapError(
+                f"{len(missing)} point(s) the profile makes mandatory are not bound: {listed}{more}"
+            )
+
+    def _variations_at_level(
+        self,
+    ) -> tuple[dict[int, int], dict[int, set[int]], dict[int, dict[int, int]]]:
+        """Return the variations at the claimed level, by group.
+
+        Three tables: the variation a read of variation 0 is answered in, the
+        variations a master may name, and those answered in another one. Level
+        3 answers a packed binary input read with flags (D5). Level 4
+        adds the double-bit inputs (D117), the floating-point variations, the
+        deadbands and the time-stamped 16-bit frozen counter (D112, D113, D114).
+        """
+        defaults = {**_DEFAULT_VARIATIONS, **self._level_variations()}
+        served = {group: set(each) for group, each in _SERVED_VARIATIONS.items()}
+        widened = {group: dict(each) for group, each in _WIDENED_VARIATIONS.items()}
+        if self.at_least(SubsetLevel.LEVEL_3):
+            for group, extra_widened in _LEVEL_3_WIDENED.items():
+                widened.setdefault(group, {}).update(extra_widened)
+        if self.at_least(SubsetLevel.LEVEL_4):
+            for group, extra in _LEVEL_4_VARIATIONS.items():
+                served.setdefault(group, set()).update(extra)
+            for group, extra_widened in _LEVEL_4_WIDENED.items():
+                widened.setdefault(group, {}).update(extra_widened)
+            defaults.update(_LEVEL_4_DEFAULTS)
+        return defaults, served, widened
+
+    def _device_attributes(self, information: DeviceInformation) -> DeviceAttributes:
+        """Build the device attributes from what this outstation serves and does (D119).
+
+        Counts, highest indices and event support come from the served points and
+        the classes they can report in. An attribute for a group this outstation does
+        not serve reports no points and a highest index of zero.
+        """
+        frozen = self._points(GROUP_FROZEN_COUNTER)
+        values: dict[int, Attribute] = {
+            Variation.SECURE_AUTHENTICATION_VERSION: Attribute.unsigned(0),
+            Variation.SECURITY_STATISTICS_PER_ASSOCIATION: Attribute.unsigned(0),
+            # No attribute sets beyond the standard one: text of no characters
+            # (TB2014-001, which corrects the data type of IEEE 1815-2012 A.1.3.2.3).
+            Variation.USER_SPECIFIC_ATTRIBUTE_SETS: Attribute.text(""),
+            Variation.MASTER_DATA_SET_PROTOTYPES: Attribute.unsigned(0),
+            Variation.OUTSTATION_DATA_SET_PROTOTYPES: Attribute.unsigned(0),
+            Variation.MASTER_DATA_SETS: Attribute.unsigned(0),
+            Variation.OUTSTATION_DATA_SETS: Attribute.unsigned(0),
+            Variation.LOCAL_TIMING_ACCURACY: Attribute.unsigned(information.timing_accuracy_us),
+            # Time comes from this host's clock, and nothing depends on a master
+            # sending it again (IEEE 1815-2012 A.1.10.2).
+            Variation.DURATION_OF_TIMING_ACCURACY: Attribute.unsigned(0),
+            Variation.SOFTWARE_VERSION: Attribute.text(information.software()),
+            Variation.HARDWARE_VERSION: Attribute.text(information.hardware_version),
+            Variation.LOCATION_NAME: Attribute.text(information.location_name),
+            Variation.DEVICE_ID: Attribute.text(information.device_id),
+            Variation.DEVICE_NAME: Attribute.text(information.device_name),
+            Variation.SERIAL_NUMBER: Attribute.text(information.serial_number),
+            # The level, a colon, and no test procedure year: not certified.
+            Variation.SUBSET_AND_CONFORMANCE: Attribute.text(f"{int(self._level)}:"),
+            Variation.PRODUCT_NAME_AND_MODEL: Attribute.text(information.product),
+            Variation.MANUFACTURER_NAME: Attribute.text(information.manufacturer),
+            Variation.FROZEN_COUNTERS: Attribute.flag(bool(frozen)),
+            # Frozen analog inputs (group 31) are not served.
+            Variation.FROZEN_ANALOG_INPUTS: Attribute.flag(bool(_SERVED_VARIATIONS.get(31))),
+        }
+        values.update(self._point_attributes())
+        return DeviceAttributes(
+            values,
+            writable=_WRITABLE_ATTRIBUTES,
+            min_fragment=self._block_octets + RESPONSE_HEADER_SIZE,
+        )
+
+    def _point_attributes(self) -> dict[int, Attribute]:
+        """Return the attributes that count the points served and say which report events.
+
+        A kind of event is supported when a served point can report it in a
+        class: one that reports in a class now, or one an ASSIGN_CLASS may give
+        a class (D110, D119). An assignment therefore leaves these attributes
+        as they were.
+        """
+        values: dict[int, Attribute] = {}
+        for variation, group in _EVENT_SUPPORT:
+            reports = any(self._can_report(p) for p in self._points(group))
+            values[variation] = Attribute.flag(reports)
+        for highest, count, group in _POINT_ATTRIBUTES:
+            points = self._points(group)
+            values[highest] = Attribute.unsigned(max((p.index for p in points), default=0))
+            values[count] = Attribute.unsigned(len(points))
+        return values
 
     def _resolve_sources(self) -> dict[Address, Reader]:
         """Where each input's value comes from, the caller's word first.
@@ -405,6 +702,8 @@ class DerOutstation:
             own = policy.points.get(point.address)
             reported = _class_in_force(point, default, own)
             self._classes[point.address] = reported
+            if point.kind is Kind.CTR:
+                self._settle_counter(point, default, own, reported)
             if point.kind is not Kind.AI:
                 continue
             if not reported:
@@ -420,6 +719,64 @@ class DerOutstation:
                 self._deadbands[point.index] = self._binding.deadbands[point.index]
             elif default is not None and default.deadband is not None:
                 self._deadbands[point.index] = _transmitted(point, default.deadband)
+        if self.at_least(SubsetLevel.LEVEL_4):
+            self._apply_output_classes()
+
+    def _apply_output_classes(self) -> None:
+        """Settle the class each served output reports its events in (D115).
+
+        The class the tables give the output, if they give one. Otherwise the
+        class of the input paired with it, since that input reports the same
+        change and a master polling one class hears of both together; an output
+        whose paired input reports no events reports none. An output with
+        neither is given the class a frozen counter defaults to.
+
+        This is only the starting class. From then on the output's class is its
+        own: an ASSIGN_CLASS naming group 10 or 40 changes it, and one naming
+        the paired input does not (IEEE 1815-2012 Table 4-12).
+        """
+        for kind in (Kind.BO, Kind.AO):
+            for point in self._served[kind]:
+                own = point.event_class
+                if own in (1, 2, 3):
+                    self._classes[point.address] = own
+                    continue
+                paired = None if point.associated is None else self._map.get(*point.associated)
+                if paired is None:
+                    self._classes[point.address] = int(_DEFAULT_OUTPUT_CLASS)
+                elif self._classes.get(paired.address, 0):
+                    self._classes[point.address] = self._classes[paired.address]
+                # Otherwise the output has no class: it reports no events and is
+                # out of the class 0 response until a master assigns it one.
+
+    def _settle_counter(
+        self, point: Point, default: EventRule | None, own: EventRule | None, reported: int
+    ) -> None:
+        """Note whether a counter's value changes raise events, and past what deadband.
+
+        The point's rule outranks the rule for its kind. A deadband is how far
+        the count has to move from the count in the counter's last event,
+        which IEEE 1815-2012 11.9.5.2 gives as one way to decide that a count
+        is significant; none reports every change.
+        """
+        chosen = own.value_changes if own is not None else None
+        if chosen is None and default is not None:
+            chosen = default.value_changes
+        deadband = own.deadband if own is not None else None
+        if deadband is None and default is not None:
+            deadband = default.deadband
+        if chosen and reported:
+            self._counter_deadbands[point.index] = _transmitted(point, deadband or 0.0)
+        elif own is not None and own.value_changes:
+            raise MapError(
+                f"the event policy has {_name(point.address)} report value changes, "
+                "and the counter reports no events"
+            )
+        elif own is not None and own.deadband is not None:
+            raise MapError(
+                f"the event policy gives {_name(point.address)} a deadband, "
+                "and its value changes raise no events"
+            )
 
     def _mirror(self, output: Address) -> Reader:
         # The input paired with an output says what the output stands at,
@@ -491,8 +848,25 @@ class DerOutstation:
         return self._map
 
     @property
+    def level(self) -> SubsetLevel:
+        """The subset level this outstation claims."""
+        return self._level
+
+    def at_least(self, level: SubsetLevel | int) -> bool:
+        """Return whether the claimed level is ``level`` or higher.
+
+        A feature that Level 3 introduces asks ``at_least(SubsetLevel.LEVEL_3)``.
+        """
+        return self._level >= SubsetLevel.parse(level)
+
+    @property
+    def attributes(self) -> DeviceAttributes | None:
+        """The device attributes this outstation serves, or None below Level 4."""
+        return self._attributes
+
+    @property
     def level2(self) -> bool:
-        """Whether this outstation is held to Subset Level 2."""
+        """Whether this outstation is held to Subset Level 2 and nothing more."""
         return self._level2
 
     def default_variation(self, group: int) -> int:
@@ -507,17 +881,58 @@ class DerOutstation:
         """The class a point's events are reported in: 1, 2 or 3, or 0 for none.
 
         What is in force, after the event policy and the tables have both had
-        their say. For a counter it is the class its freezes are logged in.
+        their say. For a counter it is the class its freezes are logged in,
+        and from Level 3 the class of its counter events as well. For an
+        output it is the class of its output events, which only Level 4 reports.
         """
         return self._classes.get(self._map.point(kind, index).address, 0)
+
+    def counter_deadband(self, index: int) -> float | None:
+        """How far a counter's count has to move to raise an event, in counts.
+
+        None for a counter whose value changes raise no event, which is every
+        counter an event policy does not turn them on for.
+        """
+        return self._counter_deadbands.get(self._map.point(Kind.CTR, index).index)
 
     def deadband(self, index: int) -> float:
         """An analog input's event deadband in force, in transmitted units.
 
-        Zero reports every change of the transmitted value, and is also the
-        answer for a point that reports no events at all.
+        The configured one until a master writes another (D114). Zero reports
+        every change of the transmitted value, and is also the answer for a
+        point with no deadband.
         """
         return self._deadbands.get(self._map.point(Kind.AI, index).index, 0.0)
+
+    def write_deadbands(self, deadbands: Sequence[tuple[int, int, float]]) -> None:
+        """Take the deadbands a master wrote, all or none (D114).
+
+        Each item is ``(variation, index, value)`` as group 34 carries it.
+        Variations 1 and 2 are in transmitted units, the integers a point's
+        integer variations carry. Variation 3 is in engineering units, as the
+        floating-point variations of the analog input are (D112), and is
+        converted with the point's scaling. A write for the same point twice
+        leaves the later one. Raises ``ParameterError``, with nothing changed,
+        for an index that is not a served analog input.
+        """
+        chosen: dict[int, float] = {}
+        for variation, index, value in deadbands:
+            point = self._by_index[Kind.AI].get(index)
+            if point is None:
+                raise ParameterError(f"analog input {index} is not served")
+            chosen[index] = _transmitted(point, value) if variation == 3 else float(value)
+        self._deadbands.update(chosen)
+
+    def reset_deadbands(self) -> None:
+        """Discard every written deadband and use the configured ones again (D114)."""
+        self._deadbands = dict(self._initial_deadbands)
+
+    def _deadband_in(self, point: Point, variation: int) -> float:
+        """The deadband in force for a point, in the units a variation carries."""
+        span = self._deadbands.get(point.index, 0.0)
+        if variation == 3 and point.multiplier is not None:
+            return span * abs(point.multiplier)
+        return span
 
     def value(self, kind: Kind, index: int) -> float | bool | None:
         """The last value an output accepted, or None if it has none yet."""
@@ -543,7 +958,13 @@ class DerOutstation:
         entries: list[Entry] = []
         for kind in Kind:
             for point in self._map.of(kind):
-                source = self._origins.get(point.address, Source.ABSENT)
+                # A point the claimed level does not serve is absent, however it
+                # is bound: a double-bit input below Level 4 (D117).
+                source = (
+                    self._origins.get(point.address, Source.ABSENT)
+                    if point.index in self._by_index[kind]
+                    else Source.ABSENT
+                )
                 if source is Source.ABSENT:
                     entries.append(Entry(point, source))
                     continue
@@ -566,6 +987,10 @@ class DerOutstation:
                 online = not math.isnan(point.to_wire(float(value)))
             return quality, online
         reading = self._reading(point)
+        if point.kind is Kind.DBI:
+            # A value that is not a state goes out with ONLINE clear (D117).
+            flags = self._double_bit_of(point, reading).flags
+            return reading.quality, bool(flags & BinaryQuality.ONLINE)
         online = reading.quality is Quality.GOOD
         if online and point.kind is Kind.AI:
             online = not math.isnan(point.to_wire(float(reading.value)))
@@ -648,8 +1073,34 @@ class DerOutstation:
                 flags |= AnalogQuality.OVER_RANGE
         return AnalogPoint(raw, flags)
 
+    def _double_bit(self, point: Point) -> DoubleBitPoint:
+        return self._double_bit_of(point, self._reading(point))
+
+    @staticmethod
+    def _double_bit_of(point: Point, reading: Reading) -> DoubleBitPoint:
+        """Return a reading as a double-bit point.
+
+        A value that is not a whole number from 0 to 3 is not a state. It is
+        reported as INDETERMINATE with the source marked as not reachable, so a
+        master is told the value cannot be trusted.
+        """
+        state = reading.value
+        if isinstance(state, bool) or not 0 <= state <= 3 or state != int(state):
+            logger.error(
+                "profile: %s%d has the value %r, which is not a double-bit state",
+                point.kind.value,
+                point.index,
+                state,
+            )
+            return DoubleBitPoint(
+                int(DoubleBitState.INDETERMINATE), _QUALITY_FLAGS[Quality.COMM_LOST]
+            )
+        return DoubleBitPoint(int(state), _QUALITY_FLAGS[reading.quality])
+
     def _counter(self, point: Point) -> CounterPoint:
-        reading = self._reading(point)
+        return self._counter_of(point, self._reading(point))
+
+    def _counter_of(self, point: Point, reading: Reading) -> CounterPoint:
         flags = {
             Quality.GOOD: CounterQuality.ONLINE,
             Quality.COMM_LOST: CounterQuality.COMM_LOST,
@@ -670,12 +1121,21 @@ class DerOutstation:
         blocks: list[bytes] = []
         for header in headers:
             if header.group == CLASS_GROUP and header.event_class == 0:
-                for group in _CLASS_0_GROUPS:
-                    points = [p for p in self._points(group) if p.in_class_0]
+                for group in self._class_0_groups:
+                    points = [p for p in self._points(group) if self._in_class_0(p)]
                     blocks += self._ranges(group, self._defaults[group], points)
                 continue
             variation = self._variation(header)
             if header.qualifier in _INDEXED:
+                if (
+                    header.group == GROUP_DOUBLE_BIT_INPUT
+                    and variation == DoubleBitVariation.PACKED
+                ):
+                    # The packed variation has only a range form (TB2016-003b Table 12-8).
+                    raise UnknownObject(
+                        f"qualifier 0x{int(header.qualifier):02X} does not select "
+                        f"group {header.group} variation {variation}"
+                    )
                 blocks += self._indexed(
                     header.group, variation, self._named(header), header.qualifier
                 )
@@ -683,13 +1143,34 @@ class DerOutstation:
                 blocks += self._ranges(header.group, variation, self._selected(header))
         return blocks
 
+    @property
+    def _class_0_groups(self) -> tuple[int, ...]:
+        return _CLASS_0_GROUPS_L4 if self.at_least(SubsetLevel.LEVEL_4) else _CLASS_0_GROUPS
+
+    def in_class_0(self, kind: Kind, index: int) -> bool:
+        """Return whether a class 0 read carries a point.
+
+        An output is carried when it has a class: one it reports events in, or
+        class 0 by assignment, which stops its events and keeps it in class 0
+        (TB2016-003b Table 12-49 note b). An output with no class is left out,
+        as note i allows, so an outstation that reports no output events
+        answers class 0 as it always has (D115).
+        """
+        return self._in_class_0(self._map.point(kind, index))
+
+    def _in_class_0(self, point: Point) -> bool:
+        if point.kind.is_output:
+            # An output in the classes has a class, class 0 included.
+            return point.address in self._classes
+        return point.in_class_0
+
     def _variation(self, header: ObjectHeader) -> int:
-        served = _SERVED_VARIATIONS.get(header.group)
+        served = self._served_variations.get(header.group)
         if served is None:
             raise UnknownObject(f"group {header.group} is not served")
         if header.variation == 0:
             return self._defaults[header.group]
-        widened = _WIDENED_VARIATIONS.get(header.group, {}).get(header.variation)
+        widened = self._widened.get(header.group, {}).get(header.variation)
         if widened is not None:
             return widened
         if header.variation not in served:
@@ -758,11 +1239,18 @@ class DerOutstation:
         with flags, so that asking for the compact form never hides that
         a value is not to be trusted.
         """
-        if group == GROUP_BINARY_INPUT:
-            return variation, encode_binary(self._binary(point))
+        if group in (GROUP_BINARY_INPUT, GROUP_DOUBLE_BIT_INPUT):
+            return self._encode_two_state(group, variation, point)
+        if group == GROUP_ANALOG_DEADBAND:
+            return variation, encode_deadband(self._deadband_in(point, variation), variation)
         if group == GROUP_ANALOG_INPUT:
-            analog = self._analog(point)
-            if analog.flags != AnalogQuality.ONLINE:
+            reading = self._reading(point)
+            analog = self._analog_of(point, reading)
+            if variation == AnalogVariation.FLOAT32_WITH_FLAG:
+                # The value as the source gave it: a floating-point variation
+                # is not scaled (D112). The flags are the integer form's.
+                analog = AnalogPoint(float(reading.value), analog.flags)
+            elif analog.flags != AnalogQuality.ONLINE:
                 variation = _FLAGGED_ANALOG.get(variation, variation)
             return variation, encode_analog(analog, AnalogVariation(variation))
         if group == GROUP_COUNTER:
@@ -787,6 +1275,8 @@ class DerOutstation:
         value, flags = self._output_status(point)
         if group == GROUP_BINARY_OUTPUT_STATUS:
             return variation, encode_binary_output_status(state=bool(value), flags=flags)
+        if variation == 3:
+            return variation, encode_analog_output_status(float(value or 0), 3, flags=flags)
         raw = point.to_wire(float(value or 0))
         if math.isfinite(raw):
             # Rounded to the integer the variation carries. A value with no
@@ -794,6 +1284,20 @@ class DerOutstation:
             # instead of the read failing on it.
             raw = float(round(raw))
         return variation, encode_analog_output_status(raw, variation, flags=flags)
+
+    def _encode_two_state(self, group: int, variation: int, point: Point) -> tuple[int, bytes]:
+        """Encode a binary or double-bit input as one object, and return the variation it took."""
+        if group == GROUP_BINARY_INPUT:
+            return variation, encode_binary(self._binary(point))
+        double_bit = self._double_bit(point)
+        if double_bit.flags != BinaryQuality.ONLINE:
+            # The packed variation has no flags. A point in an exception
+            # condition is reported with them (TB2016-003b Table 12-7, note a).
+            variation = int(DoubleBitVariation.WITH_FLAGS)
+        if variation == DoubleBitVariation.PACKED:
+            # One state, packed with its neighbors by the range that holds it.
+            return variation, bytes([double_bit.state])
+        return variation, encode_double_bit(double_bit)
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""
@@ -865,7 +1369,10 @@ class DerOutstation:
             nonlocal objects, size
             if objects:
                 header = range_header(group, current, start=start, stop=previous)
-                blocks.append(header + b"".join(objects))
+                if group == GROUP_DOUBLE_BIT_INPUT and current == DoubleBitVariation.PACKED:
+                    blocks.append(header + encode_double_bit_packed([o[0] for o in objects]))
+                else:
+                    blocks.append(header + b"".join(objects))
             objects, size = [], 0
 
         for point in points:
@@ -906,6 +1413,8 @@ class DerOutstation:
         """
         now = self.now_ms()
         buffered = 0
+        # Only a Level 4 outstation has a floating-point event to report.
+        floats = self.at_least(SubsetLevel.LEVEL_4)
         for point in self._served[Kind.BI]:
             reported = self._classes[point.address]
             if not reported:
@@ -921,6 +1430,7 @@ class DerOutstation:
                 timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
+        buffered += self._poll_double_bits(now)
         for point in self._served[Kind.AI]:
             reported = self._classes[point.address]
             if not reported:
@@ -935,10 +1445,215 @@ class DerOutstation:
                 event_class=EventClass(reported),
                 deadband=self._deadbands.get(point.index, 0.0),
                 timestamp_ms=self._event_time(reading, now),
+                unscaled=float(reading.value) if floats else None,
             ):
                 buffered += 1
+        if self.at_least(SubsetLevel.LEVEL_3):
+            buffered += self._poll_counters(now)
+        if self.at_least(SubsetLevel.LEVEL_4):
+            buffered += self._poll_outputs(now)
         self._primed = True
         return buffered
+
+    def _poll_double_bits(self, now: int) -> int:
+        """Buffer a double-bit event for each change of state or flags (D118).
+
+        Only a Level 4 outstation serves double-bit inputs, so below it there
+        is nothing to read.
+        """
+        buffered = 0
+        for point in self._served[Kind.DBI]:
+            reported = self._classes[point.address]
+            if not reported:
+                continue
+            reading = self._reading(point)
+            double_bit = self._double_bit_of(point, reading)
+            if not self._primed:
+                self.events.prime_double_bit(point.index, double_bit)
+            elif self.events.record_double_bit(
+                point.index,
+                double_bit,
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        return buffered
+
+    def _poll_counters(self, now: int) -> int:
+        """Buffer a counter event for each counter whose flags changed (D124).
+
+        A counter reports in the class its frozen counter events use. A
+        change in value raises an event only for a counter whose event policy
+        turns value changes on, once it moves past the deadband.
+        """
+        buffered = 0
+        for point in self._served[Kind.CTR]:
+            reported = self._classes[point.address]
+            if not reported:
+                continue
+            reading = self._reading(point)
+            counter = self._counter_of(point, reading)
+            if not self._primed:
+                self.events.prime_counter(point.index, counter)
+            elif self.events.record_counter(
+                point.index,
+                counter,
+                event_class=EventClass(reported),
+                value_deadband=self._counter_deadbands.get(point.index),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        return buffered
+
+    def _poll_outputs(self, now: int) -> int:
+        """Buffer the changes of the outputs that report events, from Level 4 up.
+
+        An output's value or flags change when a control is carried out, when
+        its status reader reports a change the device made, and when the
+        reader stops answering. The first pass only records where each stands,
+        as it does for the inputs.
+        """
+        buffered = 0
+        for point in self._served[Kind.BO]:
+            reported = self._classes.get(point.address, 0)
+            if not reported:
+                continue
+            reading = self._standing(point.address)
+            binary = self._binary_of(reading)
+            if not self._primed:
+                self.events.prime_binary_output(point.index, binary)
+            elif self.events.record_binary_output(
+                point.index,
+                binary,
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        for point in self._served[Kind.AO]:
+            reported = self._classes.get(point.address, 0)
+            if not reported:
+                continue
+            reading = self._standing(point.address)
+            analog = self._analog_of(point, reading)
+            if not self._primed:
+                self.events.prime_analog_output(point.index, analog)
+            elif self.events.record_analog_output(
+                point.index,
+                analog,
+                float(reading.value),
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
+        return buffered
+
+    # ----------------------------------------------------- class assignment
+
+    def assign_class(self, assignments: Sequence[ClassAssignment]) -> None:
+        """Move points between event classes, or turn their events off (D110).
+
+        Every set is checked before any is applied, so a request that names
+        something unassignable changes nothing. A set applies to the points its
+        headers select; where sets overlap, the later one wins. A point that
+        cannot report events, such as a "supports" input, is left as it is by a
+        set that gives it a class, so a range or an "all" header can be used
+        without naming the points that never had events.
+
+        Events already buffered keep the class they were recorded in and are
+        reported there. Changes the sources made before the request are
+        recorded first, under the classes they had. Only changes after the
+        request use the new class (IEEE 1815-2012 4.4.14).
+
+        Raises:
+            UnknownObject: A header names a group this level does not assign.
+            ParameterError: A header names a point that is not there.
+        """
+        chosen: dict[Address, int] = {}
+        for assignment in assignments:
+            for header in assignment.headers:
+                points = self._assignable(header)
+                if header.group in _COMMAND_EVENT_ASSIGNMENTS:
+                    continue
+                for point in points:
+                    if assignment.event_class and not self._can_report(point):
+                        continue
+                    chosen[point.address] = assignment.event_class
+        self._set_classes(chosen)
+
+    def reset_classes(self) -> None:
+        """Return every point to the class it had at startup."""
+        self._set_classes(
+            {address: self._initial_classes.get(address, 0) for address in self._classes}
+        )
+        # An output that started with no class has none again, and leaves the
+        # class 0 response (D115).
+        for address in self._classes.keys() - self._initial_classes.keys():
+            del self._classes[address]
+
+    def assignable_groups(self) -> list[int]:
+        """The groups an ASSIGN_CLASS request may name at this level, in order."""
+        return sorted(
+            group
+            for group, (selecting, level) in _ASSIGNABLE_GROUPS.items()
+            if self.at_least(level) and self._points(selecting)
+        )
+
+    def _assignable(self, header: ObjectHeader) -> list[Point]:
+        """The served points an ASSIGN_CLASS header names."""
+        group, level = _ASSIGNABLE_GROUPS.get(header.group, (None, None))
+        if group is None or level is None or not self.at_least(level):
+            raise UnknownObject(f"group {header.group} cannot be assigned a class")
+        selecting = replace(header, group=group)
+        if header.qualifier in _INDEXED:
+            return self._named(selecting)
+        return self._selected(selecting)
+
+    def _can_report(self, point: Point) -> bool:
+        """Whether a point may be given a class that reports events."""
+        if point.kind.is_output:
+            return True
+        if self._initial_classes.get(point.address, 0):
+            return True
+        if point.kind is Kind.CTR:
+            return point.frozen and point.in_class_0
+        return point.event_class in (1, 2, 3)
+
+    def _set_classes(self, chosen: Mapping[Address, int]) -> None:
+        """Apply new classes, giving a point that starts reporting a fresh baseline."""
+        if self._primed:
+            self.poll()
+        for address, event_class in chosen.items():
+            if self._classes.get(address) == event_class:
+                continue
+            self._classes[address] = event_class
+            if event_class and self._primed:
+                self._rebaseline(self._map.points[address])
+        logger.info("profile: %d point(s) changed event class", len(chosen))
+
+    def _rebaseline(self, point: Point) -> None:
+        """Measure a point's next change from its value now, not from when it last reported."""
+        if point.kind is Kind.BI:
+            self.events.prime_binary(point.index, self._binary(point))
+        elif point.kind is Kind.DBI:
+            self.events.prime_double_bit(point.index, self._double_bit(point))
+        elif point.kind is Kind.AI:
+            self.events.prime_analog(point.index, self._analog(point))
+            if point.index not in self._deadbands:
+                default = self._event_policy.defaults.get(point.kind)
+                if point.index in self._binding.deadbands:
+                    self._deadbands[point.index] = self._binding.deadbands[point.index]
+                elif default is not None and default.deadband is not None:
+                    self._deadbands[point.index] = _transmitted(point, default.deadband)
+        elif point.kind is Kind.CTR and self.at_least(SubsetLevel.LEVEL_3):
+            self.events.prime_counter(point.index, self._counter(point))
+        elif point.kind is Kind.BO:
+            self.events.prime_binary_output(
+                point.index, self._binary_of(self._standing(point.address))
+            )
+        elif point.kind is Kind.AO:
+            self.events.prime_analog_output(
+                point.index, self._analog_of(point, self._standing(point.address))
+            )
 
     # -------------------------------------------------------------- freezes
 
@@ -948,15 +1663,17 @@ class DerOutstation:
         Under the DER profile the counters are not cleared, whichever freeze
         was asked for: the profile has a controlling station compute an
         interval's energy by subtracting two frozen values, which a counter
-        that restarted from zero would break. Held to Subset Level 2, a
-        freeze-and-clear clears, as the base standard has it.
+        that restarted from zero would break. Held to a subset level, 2, 3 or
+        4, a freeze-and-clear clears, as TB2016-003b Table 12-19 and IEEE
+        1815-2012 11.9.5.2 have it (D107).
         """
         named: list[Point] = []
         for header in headers:
             if header.group != GROUP_COUNTER:
                 raise UnknownObject(f"group {header.group} cannot be frozen")
             named += self._selected(header)
-        if clear and self._level2:
+        if clear and (self._level2 or self._level > SubsetLevel.LEVEL_2):
+            # A level was given, so the subset tables apply (D107).
             self._freeze(named, clear=True)
             return
         if clear:
@@ -996,7 +1713,21 @@ class DerOutstation:
 
     def operate(self, controls: Sequence[Control]) -> Sequence[CommandStatus]:
         """Execute each control through its binding, and say how each went."""
-        statuses = [self._command(control, execute=True) for control in controls]
+        statuses: list[CommandStatus] = []
+        commanded: set[tuple[int, int]] = set()
+        for control in controls:
+            named = (control.group, control.index)
+            if named in commanded and self._primed and self.at_least(SubsetLevel.LEVEL_4):
+                # The request commands this output again. Record the change the
+                # earlier control made before this one can undo it: each change
+                # of an output's status is an event (IEEE 1815-2012 A.7.1.1,
+                # A.21.1; D115).
+                self.poll()
+                commanded.clear()
+            status = self._command(control, execute=True)
+            statuses.append(status)
+            if status is CommandStatus.SUCCESS:
+                commanded.add(named)
         if self._primed and CommandStatus.SUCCESS in statuses:
             # So the inputs mirroring what just changed report it in the
             # indications of this very response, not on the next cadence.
@@ -1052,6 +1783,44 @@ class DerOutstation:
 
     # -------------------------------------------------------------- session
 
+    def _level_variations(self) -> dict[int, int]:
+        """Return the variations the claimed level reports instead of the profile's own."""
+        if self._level2:
+            return _LEVEL_2_VARIATIONS
+        if self._level == SubsetLevel.LEVEL_3:
+            # Level 3 lists frozen counters in the Level 2 variations only
+            # (Table 12-21); the variation with time is Level 4.
+            return {GROUP_FROZEN_COUNTER: _LEVEL_2_VARIATIONS[GROUP_FROZEN_COUNTER]}
+        return {}
+
+    def _level_options(self) -> dict[str, Any]:
+        """Return the session options the claimed level sets."""
+        options: dict[str, Any] = {}
+        if self.at_least(SubsetLevel.LEVEL_3):
+            # Reads that Level 3 adds (Tables 12-25, 12-45 and 12-52).
+            options["frozen_counter_event_16_bit"] = True
+            options["time_source"] = self.now_ms
+            options["indications_read"] = True
+        if self._level == SubsetLevel.LEVEL_3:
+            # Class polls carry frozen counter events without time (Table 12-49).
+            options["frozen_counter_event_variation"] = 1
+        if self.at_least(SubsetLevel.LEVEL_4):
+            # Writes of analog input deadbands (D114), and reads of the
+            # floating-point and 16-bit frozen counter events (D112, D113).
+            options["deadband_provider"] = self
+            options["extended_events"] = True
+            # The output event groups of each kind of output served (D115,
+            # D116). The others are objects this device lacks.
+            options["output_events"] = [
+                group
+                for kind, groups in _OUTPUT_EVENT_GROUPS.items()
+                if self._served[kind]
+                for group in groups
+            ]
+            # Reads and writes of device attributes (D119, D120).
+            options["attributes"] = self._attributes
+        return options
+
     def session(self, *, max_response: int = 2048, **options: Any) -> Session:
         """A session wired to this outstation, with the profile's options set.
 
@@ -1074,7 +1843,12 @@ class DerOutstation:
                 f"{max_response}-octet response"
             )
         options.setdefault("need_time", True)
+        # Group 4 is read by name only where double-bit inputs are served, which
+        # is Level 4.
+        options.setdefault("double_bit_events", bool(self._served[Kind.DBI]))
         options.setdefault("analog_event_variation", AnalogEventVariation.INT32)
+        for name, value in self._level_options().items():
+            options.setdefault(name, value)
         session = Session(
             self,
             control_provider=self if self._binding.outputs else None,
@@ -1082,6 +1856,8 @@ class DerOutstation:
             # A freeze is offered only where a counter freezes. One accepted by a device
             # whose counters do not would store nothing a read can return (D100).
             freeze_provider=self if any(p.frozen for p in self._served[Kind.CTR]) else None,
+            # ASSIGN_CLASS is required from Level 3 (TB2016-003b Table 12-49) and refused below it.
+            class_provider=self if self.at_least(SubsetLevel.LEVEL_3) else None,
             time_sink=self.set_time,
             max_response=max_response,
             **options,

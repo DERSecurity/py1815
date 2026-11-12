@@ -27,19 +27,28 @@ from dataclasses import dataclass, field, fields
 from typing import Any
 
 from py1815 import settings
+from py1815.attributes import Attribute, DeviceInformation
 from py1815.profile.model import Composition
 from py1815.profile.policy import EventPolicy
 from py1815.server import DEFAULT_PORT, IDLE_TIMEOUT
 from py1815.session import DEFAULT_CONFIRM_TIMEOUT, DEFAULT_SELECT_TIMEOUT
 from py1815.settings import ConfigError
+from py1815.subset import SubsetLevel
 
 _COMPOSITION = ("meters", "der_units", "inverters", "batteries")
 _SIMULATION = ("seed", "tick")
 _MAX_COUNT = 1000
 
+#: The whole-number settings, each with the least and the most it may be.
+_INTEGERS = {
+    "event_capacity": (1, 1_000_000),
+    "max_response": (249, 65535),
+    "timing_accuracy_us": (0, 0xFFFFFFFF),
+}
+
 
 @dataclass(frozen=True)
-class Identity:
+class Identity:  # pylint: disable=too-many-instance-attributes
     """What the DNP3 Device Profile document says about the device."""
 
     vendor: str = "Not stated"
@@ -48,9 +57,35 @@ class Identity:
     #: Empty means this library's version.
     software_version: str = ""
     author: str = "py1815"
+    #: At Level 4, the serial number, and the initial location name, ID and
+    #: name that a master may rewrite.
+    serial_number: str = ""
+    location_name: str = ""
+    device_id: str = ""
+    device_name: str = ""
 
 
 _IDENTITY = tuple(each.name for each in fields(Identity))
+
+#: The identity settings that device attributes carry as text.
+_ATTRIBUTE_TEXT = (
+    "vendor",
+    "device",
+    "hardware_version",
+    "software_version",
+    "serial_number",
+    "location_name",
+    "device_id",
+    "device_name",
+)
+
+
+def _level(value: Any, where: str) -> int:
+    """Return a subset level as an integer, or raise ConfigError."""
+    try:
+        return int(SubsetLevel.parse(value, where))
+    except ValueError as error:
+        raise ConfigError(str(error)) from None
 
 
 @dataclass(frozen=True)
@@ -70,9 +105,9 @@ class DerConfig:
     unsolicited: bool = False
     #: Refuse every control, so a master can read and cannot command.
     read_only: bool = False
-    #: Answer as a DNP3 Subset Level 2 outstation, without the profile's
-    #: additions.
-    level2: bool = False
+    #: The DNP3 subset level to claim and answer at: 2, 3 or 4. None claims
+    #: Level 2 and serves the profile's additions.
+    level: int | None = None
     #: Clear the ONLINE flag on the inputs of a disabled function
     #: (IEEE 1815.2 clause 6.1.1).
     disabled_offline: bool = True
@@ -80,6 +115,9 @@ class DerConfig:
     event_capacity: int = 2000
     #: Largest response fragment to send, in octets.
     max_response: int = 2048
+    #: At Level 4, the worst-case error in microseconds of the time given to
+    #: events, which the device attributes report.
+    timing_accuracy_us: int = 1_000_000
     #: Seconds a select stays valid.
     select_timeout: float = DEFAULT_SELECT_TIMEOUT
     #: Seconds to wait for a master to confirm a response, or None to wait
@@ -107,7 +145,8 @@ class DerConfig:
         a value of the wrong type.
         """
         top_level = [each.name for each in fields(cls) if each.name not in ("seed", "tick")] + [
-            "simulation"
+            "simulation",
+            "level2",
         ]
         settings.section(given, "configuration", top_level)
         values: dict[str, Any] = {}
@@ -122,12 +161,19 @@ class DerConfig:
                 values[key] = (
                     None if value is None else settings.integer(value, key, 0, settings.MAX_ADDRESS)
                 )
-            elif key in ("unsolicited", "read_only", "level2", "disabled_offline"):
+            elif key in ("unsolicited", "read_only", "disabled_offline"):
                 values[key] = settings.boolean(value, key)
-            elif key == "event_capacity":
-                values[key] = settings.integer(value, key, 1, 1_000_000)
-            elif key == "max_response":
-                values[key] = settings.integer(value, key, 249, 65535)
+            elif key == "level":
+                # A null level keeps the level a "level2" key sets, in either key order.
+                values[key] = values.get(key) if value is None else _level(value, key)
+            elif key == "level2":
+                # The earlier spelling of "level": 2.
+                if settings.boolean(value, key) and given.get("level") in (None, 2):
+                    values["level"] = 2
+                elif value and given.get("level") is not None:
+                    raise ConfigError("level2 conflicts with level")
+            elif key in _INTEGERS:
+                values[key] = settings.integer(value, key, *_INTEGERS[key])
             elif key in ("select_timeout", "idle_timeout"):
                 values[key] = settings.seconds(value, key)
             elif key == "confirm_timeout":
@@ -157,6 +203,7 @@ class DerConfig:
                         raise ConfigError(f"{key}.{name} must be a string")
                 values[key] = Identity(**identity)
         config = cls(**values)
+        config._check_attribute_texts()
         if config.master_address == config.outstation_address:
             raise ConfigError("outstation_address and master_address must be different")
         if config.unsolicited and config.confirm_timeout is None:
@@ -185,14 +232,49 @@ class DerConfig:
         """Read a configuration from a JSON file."""
         return cls.from_mapping(settings.read(path))
 
+    def _check_attribute_texts(self) -> None:
+        """Raise ConfigError when Level 4 has to report an identity setting it cannot.
+
+        The device attributes carry these settings as visible ASCII.
+        """
+        if self.level != SubsetLevel.LEVEL_4:
+            return
+        for name, entry in zip(_ATTRIBUTE_TEXT, self.device_information_texts(), strict=True):
+            try:
+                Attribute.text(entry)
+            except ValueError as error:
+                raise ConfigError(f"identity.{name}: {error}") from None
+
+    def device_information_texts(self) -> tuple[str, ...]:
+        """Return the identity settings that device attributes carry as text."""
+        return tuple(getattr(self.identity, name) for name in _ATTRIBUTE_TEXT)
+
+    def device_information(self) -> DeviceInformation:
+        """Return what the device attributes say about the device."""
+        identity = self.identity
+        return DeviceInformation(
+            manufacturer=identity.vendor,
+            product=identity.device,
+            software_version=identity.software_version,
+            hardware_version=identity.hardware_version,
+            serial_number=identity.serial_number,
+            location_name=identity.location_name,
+            device_id=identity.device_id,
+            device_name=identity.device_name,
+            timing_accuracy_us=self.timing_accuracy_us,
+        )
+
     def outstation_options(self) -> dict[str, Any]:
         """Return the keyword arguments for :class:`~py1815.profile.outstation.DerOutstation`."""
         return {
             "event_capacity": self.event_capacity,
-            "level2": self.level2,
+            "level": self.level,
             "disabled_offline": self.disabled_offline,
             "read_only": self.read_only,
             "event_policy": self.event_policy,
+            # Only Level 4 serves device attributes, and only it holds the
+            # identity to visible ASCII.
+            "information": self.device_information() if self.level == 4 else None,
         }
 
     def session_options(self) -> dict[str, Any]:

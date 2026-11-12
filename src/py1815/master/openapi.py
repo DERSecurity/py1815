@@ -42,7 +42,7 @@ DOCUMENT = pathlib.Path(__file__).parent / "console" / "openapi.json"
 
 API_VERSION = "1"
 
-_POINT_TYPES = ["bi", "bo", "counter", "frozen", "ai", "ao"]
+_POINT_TYPES = ["bi", "dbi", "bo", "counter", "frozen", "ai", "ao"]
 _OUTCOMES = ["complete", "timeout", "sent", "abandoned"]
 
 Schema = dict[str, Any]
@@ -80,6 +80,7 @@ _VALUE: Schema = {
     'the string "NaN", "Infinity" or "-Infinity".',
     "oneOf": [_BOOLEAN, _NUMBER, _STRING, {"type": "null"}],
 }
+_LEVEL: Schema = {"type": "integer", "enum": [2, 3, 4]}
 _PER_TYPE_COUNTS = _object(dict.fromkeys(_POINT_TYPES, _INTEGER))
 _OUTSTATION_NAME: Schema = {
     "type": "string",
@@ -90,8 +91,8 @@ SCHEMAS: dict[str, Schema] = {
     "PointType": {
         "type": "string",
         "enum": _POINT_TYPES,
-        "description": "Binary input, binary output status, counter, frozen counter, analog "
-        "input, analog output status.",
+        "description": "Binary input, double-bit binary input, binary output status, counter, "
+        "frozen counter, analog input, analog output status.",
     },
     "Tasks": _object(
         {
@@ -180,6 +181,7 @@ SCHEMAS: dict[str, Schema] = {
                 "type": "integer",
                 "description": "Times a read that times out is sent again.",
             },
+            "level": {**_LEVEL, "description": "The subset level the master treats it as."},
             "tls": {
                 **_nullable(_ref("Tls")),
                 "description": "The TLS settings, or null for plain TCP.",
@@ -243,6 +245,7 @@ SCHEMAS: dict[str, Schema] = {
             "outstation_address",
             "master_address",
             "read_retries",
+            "level",
             "tls",
             "connected",
             "indications",
@@ -271,9 +274,44 @@ SCHEMAS: dict[str, Schema] = {
             ),
             "synchronized": _nullable(_BOOLEAN),
             "event": _BOOLEAN,
+            "attribute": _nullable(_ref("Attribute")),
         },
         required=["group", "variation", "index", "value", "flags", "event"],
-        description="One object out of a response, decoded.",
+        description="One object out of a response, decoded. A device attribute (group 0) "
+        "carries its data type and value in `attribute`.",
+    ),
+    "Attribute": _object(
+        {
+            "data_type": {
+                "type": "string",
+                "description": "The attribute data type: VSTR, UINT, INT, FLT, OSTR, BSTR, "
+                "DNP3TIME, UNCD, U8BS8LIST or U8BS8EXLIST, or the code as a number for "
+                "any other.",
+            },
+            "value": {
+                "description": "Text, a number, an octet string in hexadecimal, or for a "
+                "list of variations each variation and whether it can be written. Null "
+                "where the data type or the length does not decode.",
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "string"},
+                    {"type": "number"},
+                    {
+                        "type": "array",
+                        "items": _object(
+                            {"variation": _INTEGER, "writable": _BOOLEAN},
+                            required=["variation", "writable"],
+                        ),
+                    },
+                ],
+            },
+            "octets": {
+                "type": "string",
+                "description": "The attribute's value octets as received, in hexadecimal.",
+            },
+        },
+        required=["data_type", "value", "octets"],
+        description="A device attribute as the outstation sent it.",
     ),
     "ControlStatus": _object(
         {
@@ -502,8 +540,13 @@ SCHEMAS: dict[str, Schema] = {
                 "type": "boolean",
                 "description": "Whether the check has the master break a protocol rule.",
             },
+            "level": {
+                **_LEVEL,
+                "description": "The lowest subset level the outstation has to be set to for "
+                "the check to apply. Below it the check is not applicable.",
+            },
         },
-        required=["id", "title", "set", "writes", "deviates"],
+        required=["id", "title", "set", "writes", "deviates", "level"],
         description="One check `evaluate` can run.",
     ),
     "CheckResult": _object(
@@ -879,6 +922,16 @@ OPERATIONS: dict[str, dict[str, Any]] = {
                     "other request is ever sent again.",
                 },
                 "connect_timeout": {**_INTERVAL, "default": 5},
+                "level": {
+                    **_LEVEL,
+                    "default": 2,
+                    "description": "The DNP3 subset level of the outstation. A request that "
+                    "only a higher level is required to parse is refused before it is sent "
+                    "(IEEE 1815-2012 14.7.2). Level 3 allows reads by variation or range, of "
+                    "the time and of the internal indications, and ASSIGN_CLASS. Level 4 "
+                    "adds device attributes, analog deadbands and the groups only Level 4 "
+                    "defines.",
+                },
                 "tls": {
                     **_nullable(_ref("Tls")),
                     "description": "Connect over TLS with these files. Plain TCP when left out.",
@@ -1078,6 +1131,10 @@ OPERATIONS: dict[str, dict[str, Any]] = {
     },
     "read": {
         "summary": "Read named points, in one request",
+        "description": "An outstation set to Level 3 or 4 is asked for the points by ranges "
+        "of indices. One set to Level 2 is asked for every point of each type named, the only "
+        "read of present values Level 2 requires, and the result holds the points named and "
+        "no others.",
         "tag": "Reading",
         "params": _outstation(
             {
@@ -1092,6 +1149,80 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         ),
         "result": _ref("Exchange"),
         "example": {"outstation": "lab", "points": {"ai": [4, 6, 8], "bi": "all"}},
+    },
+    "read_group": {
+        "summary": "Read one group, in one variation",
+        "description": "Every object of the group, a range of points (`start` and `stop`) or "
+        "the points named (`indices`). Variation 0 is whichever the outstation sends by "
+        "default. A read by variation or by range needs an outstation set to Level 3. A read "
+        "of a group that only Level 4 defines needs Level 4, and so does a read by index, "
+        "which no level requires an outstation to accept, and so does a variation or a form "
+        "of read the subset tables do not list below Level 4; a request "
+        "above the outstation's level is refused as `request`. Analog input deadbands are "
+        "group 34 and device attributes group 0.",
+        "tag": "Reading",
+        "params": _outstation(
+            {
+                "group": {"type": "integer", "minimum": 0, "maximum": 255},
+                "variation": {"type": "integer", "minimum": 0, "maximum": 255, "default": 0},
+                "start": {
+                    **_INDEX,
+                    "description": "The first point of a range. Needs `stop`.",
+                },
+                "stop": {**_INDEX, "description": "The last point of a range."},
+                "indices": {
+                    "type": "array",
+                    "items": _INDEX,
+                    "minItems": 1,
+                    "description": "The points to read, in the order asked. Not with a range.",
+                },
+            },
+            required=["group"],
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "group": 30, "variation": 1, "start": 4, "stop": 8},
+    },
+    "read_time": {
+        "summary": "Read an outstation's clock",
+        "description": "One object of group 50 variation 1. Needs an outstation set to Level 3.",
+        "tag": "Reading",
+        "params": _outstation(),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab"},
+    },
+    "read_indications": {
+        "summary": "Read an outstation's internal indications by index",
+        "description": "Group 80 variation 1. Index 0 to 15 are the 16 bits of the two "
+        "indication octets, IIN1.0 to IIN2.7 in order (IEEE 1815-2012 annex A.28). Needs an "
+        "outstation set to Level 3.",
+        "tag": "Reading",
+        "params": _outstation(
+            {
+                "start": {**_INDEX, "default": 0},
+                "stop": {**_INDEX, "default": 15},
+            }
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "start": 0, "stop": 15},
+    },
+    "read_attributes": {
+        "summary": "Read device attributes",
+        "description": "Variation 254 reads every attribute, 255 the list of the variations "
+        "the outstation holds, and any other variation that one attribute. Needs an "
+        "outstation set to Level 4.",
+        "tag": "Reading",
+        "params": _outstation(
+            {
+                "variation": {"type": "integer", "minimum": 1, "maximum": 255, "default": 254},
+                "attribute_set": {
+                    **_INDEX,
+                    "description": "The attribute set, 0 for the outstation's own. Sent with "
+                    "254 and 255 only when given.",
+                },
+            }
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "variation": 255},
     },
     "values": {
         "summary": "What the store holds, with no traffic",
@@ -1229,6 +1360,70 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         ),
         "result": _ref("Exchange"),
         "example": {"outstation": "lab"},
+    },
+    "assign_class": {
+        "summary": "Assign the events of points to an event class",
+        "description": "ASSIGN_CLASS: a class object, then the points whose events go to "
+        "that class (IEEE 1815-2012 4.1.5.3). The outstation answers with no objects. Needs "
+        "an outstation set to Level 3, or Level 4 for double-bit inputs and binary or analog "
+        "output status. Sent once.",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "event_class": {
+                    "type": "integer",
+                    "enum": [0, 1, 2, 3],
+                    "description": "The class the events go to, or 0 to turn them off.",
+                },
+                "points": _object(
+                    dict.fromkeys(_POINT_TYPES, _INDICES),
+                    minProperties=1,
+                    additionalProperties=False,
+                    description="By point type.",
+                ),
+            },
+            required=["event_class", "points"],
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "event_class": 1, "points": {"ai": [4, 6, 8]}},
+    },
+    "write_deadbands": {
+        "summary": "Write analog input deadbands",
+        "description": "Group 34, by point index. Variation 1 and 2 take whole numbers of 16 "
+        "and 32 bits, in counts, and variation 3 a number of zero or more, in engineering "
+        "units. Needs an outstation set to Level 4.",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "variation": {"type": "integer", "enum": [1, 2, 3]},
+                "values": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "additionalProperties": _NUMBER,
+                    "description": "The deadband of each point, by index.",
+                },
+            },
+            required=["variation", "values"],
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "variation": 1, "values": {"4": 100, "5": 100}},
+    },
+    "write_attribute": {
+        "summary": "Write a device attribute",
+        "description": "The attributes that can be written are 240 (maximum transmit "
+        "fragment size, a number) and 245, 246 and 247 (location name, ID code or number and "
+        "device name, visible ASCII text). Needs an outstation set to Level 4.",
+        "tag": "Commanding",
+        "params": _outstation(
+            {
+                "variation": {"type": "integer", "enum": [240, 245, 246, 247]},
+                "value": {"oneOf": [{"type": "integer", "minimum": 0}, _STRING]},
+                "attribute_set": {**_INDEX, "default": 0},
+            },
+            required=["variation", "value"],
+        ),
+        "result": _ref("Exchange"),
+        "example": {"outstation": "lab", "variation": 247, "value": "Feeder 4 inverter"},
     },
     "synchronize_time": {
         "summary": "Set an outstation's clock by a procedure of IEEE 1815-2012",

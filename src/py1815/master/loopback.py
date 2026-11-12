@@ -25,15 +25,16 @@ from typing import Any
 
 from py1815 import link
 from py1815.application import FunctionCode
-from py1815.master import deviations
+from py1815.master import deviations, requests
 from py1815.master.association import Exchange, MasterAssociation, Unsolicited
 from py1815.master.controls import Operated, Plan
 from py1815.master.deviations import Deviations
-from py1815.master.operations import Operations, Steps
+from py1815.master.operations import Keep, Operations, Steps, kept
 from py1815.master.store import Store
 from py1815.master.tasks import Housekeeper, Tasks
 from py1815.master.timesync import Synchronized, TimeSync
 from py1815.session import Session
+from py1815.subset import SubsetLevel
 
 #: Passes of octets between the two before something is assumed to be looping.
 _MAX_PASSES = 10_000
@@ -51,6 +52,7 @@ class Loopback(Operations[Exchange, Operated, Synchronized]):
         clock: Callable[[], float] = time.monotonic,
         tasks: Tasks | None = None,
         time_ms: Callable[[], int] | None = None,
+        level: SubsetLevel | int = requests.DEFAULT_LEVEL,
     ) -> None:
         """
         Args:
@@ -63,6 +65,8 @@ class Loopback(Operations[Exchange, Operated, Synchronized]):
             tasks: The automatic tasks to run. Defaults to none.
             time_ms: Clock for automatic time writes, in milliseconds since
                 the epoch. Defaults to the wall clock.
+            level: The subset level of the outstation: 2, 3 or 4. A request
+                that only a higher level is required to parse is refused.
         """
         if association is None:
             facts = session.facts
@@ -71,6 +75,7 @@ class Loopback(Operations[Exchange, Operated, Synchronized]):
                 master_address=1 if facts.master_address is None else facts.master_address,
                 clock=clock,
             )
+        self.level = SubsetLevel.parse(level, "level")
         self.session = session
         self.association = association
         self.store = Store() if store is None else store
@@ -94,11 +99,16 @@ class Loopback(Operations[Exchange, Operated, Synchronized]):
         return self._keep_house()
 
     def _exchange(
-        self, function: FunctionCode, body: bytes, *, broadcast: link.Broadcast | None = None
+        self,
+        function: FunctionCode,
+        body: bytes,
+        *,
+        broadcast: link.Broadcast | None = None,
+        keep: Keep | None = None,
     ) -> Exchange:
         exchange = self._one(function, body, broadcast=broadcast)
         self._keep_house()
-        return exchange
+        return kept(exchange, keep)
 
     def _one(
         self,

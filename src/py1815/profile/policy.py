@@ -26,7 +26,7 @@ from typing import Any
 from py1815.profile.model import Address, Kind
 
 #: The keys a rule may carry in its mapping form.
-_RULE_KEYS = ("class", "events", "deadband")
+_RULE_KEYS = ("class", "events", "deadband", "value_changes")
 _POLICY_KEYS = ("defaults", "points")
 
 _POINT_NAME = re.compile(r"([A-Za-z]+)(\d+)")
@@ -47,9 +47,14 @@ class EventRule:
     #: stays in a class 0 response exactly as before. True turns them back on
     #: for one point of a kind whose rule turned them off.
     events: bool | None = None
-    #: How far an analog input has to move before the change is an event, in
-    #: engineering units. The builder converts it with the point's scaling.
+    #: How far an analog input, or a counter that reports value changes, has
+    #: to move before the change is an event, in engineering units. The
+    #: builder converts it with the point's scaling.
     deadband: float | None = None
+    #: True has a counter raise an event when its count changes, beside the
+    #: events its flag changes raise (from Level 3, D124). Off unless a rule
+    #: turns it on, since a DER's energy counters change all the time.
+    value_changes: bool | None = None
 
     def __post_init__(self) -> None:
         chosen = self.event_class
@@ -61,6 +66,8 @@ class EventRule:
             raise ValueError(f"an event class is 1, 2 or 3, not {chosen!r}")
         if self.events is not None and not isinstance(self.events, bool):
             raise ValueError(f"events is true or false, not {self.events!r}")
+        if self.value_changes is not None and not isinstance(self.value_changes, bool):
+            raise ValueError(f"value_changes is true or false, not {self.value_changes!r}")
         if self.events is False and chosen is not None:
             raise ValueError(f"events are turned off and given class {chosen} in one rule")
         deadband = self.deadband
@@ -78,7 +85,7 @@ class EventRule:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> EventRule:
-        """A rule from its plain form: ``class``, ``events`` and ``deadband``."""
+        """A rule from its plain form: ``class``, ``events``, ``deadband`` and ``value_changes``."""
         if not isinstance(data, Mapping):
             raise ValueError(f"an event rule is a mapping, not {data!r}")
         stray = sorted(str(key) for key in data if key not in _RULE_KEYS)
@@ -90,6 +97,7 @@ class EventRule:
             event_class=data.get("class"),
             events=data.get("events"),
             deadband=data.get("deadband"),
+            value_changes=data.get("value_changes"),
         )
 
 
@@ -98,8 +106,9 @@ class EventPolicy:
     """A deployment's event reporting: a rule per kind, and exceptions per point.
 
     Three kinds report events and may be named: binary inputs, analog inputs,
-    and counters, whose rule governs the event each freeze logs. A deadband
-    belongs to an analog input and to nothing else.
+    and counters, whose rule governs the event each freeze logs and, from
+    Level 3, the events of the counter itself. A deadband belongs to an
+    analog input or a counter, and ``value_changes`` to a counter.
 
     What can be checked without a map is checked here, so a policy that
     cannot be right is refused when it is made. Whether the points it names
@@ -165,8 +174,10 @@ def _check(kind: object, rule: object, name: str) -> None:
         raise ValueError(f"{name}: {rule!r} is not an event rule")
     if kind.is_output:
         raise ValueError(f"{name}: an output reports no events")
-    if rule.deadband is not None and kind is not Kind.AI:
-        raise ValueError(f"{name}: only an analog input has a deadband")
+    if rule.deadband is not None and kind not in (Kind.AI, Kind.CTR):
+        raise ValueError(f"{name}: only an analog input or a counter has a deadband")
+    if rule.value_changes is not None and kind is not Kind.CTR:
+        raise ValueError(f"{name}: only a counter reports value changes")
 
 
 def _section(data: Mapping[str, Any], key: str) -> Mapping[Any, Any]:

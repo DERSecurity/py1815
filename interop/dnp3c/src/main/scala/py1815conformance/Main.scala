@@ -92,6 +92,7 @@ object Main {
       port = channel.port,
       outstation = options.get(LinkOptions.destination),
       master = options.get(LinkOptions.source),
+      level = revision.subsetLevel(options),
       log = output.resolve("outstation.log")
     )
     val harness = new Harness(options, new Py1815Plugin(PluginSettings(command)), revision)

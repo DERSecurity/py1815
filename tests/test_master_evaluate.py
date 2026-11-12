@@ -36,6 +36,8 @@ from py1815.master.checks import (
     DEVIATION_CHECKS,
     MODES,
     SAMPLE_CURVES,
+    SUBSET,
+    SUBSET_CHECKS,
     select,
     valid_values,
 )
@@ -49,6 +51,7 @@ from py1815.profile.binding import Binding
 from py1815.profile.model import Composition, Kind, Point, PointMap
 from py1815.profile.outstation import DerOutstation
 from py1815.server import OutstationServer
+from py1815.subset import SubsetLevel
 
 PASSED, FAILED = Verdict.PASSED, Verdict.FAILED
 NOT_RUN, NOT_APPLICABLE_ = Verdict.NOT_RUN, Verdict.NOT_APPLICABLE
@@ -100,6 +103,11 @@ class TestAgainstTheSimulatedDer:
         # to, and have tests of their own.
         for check in DEVIATION_CHECKS:
             assert ended.pop(check.id)[0] is NOT_RUN
+        # An outstation that is not told its subset level is held to Level 2,
+        # so the checks of what Level 3 and Level 4 answer do not apply.
+        for check in SUBSET_CHECKS:
+            verdict, detail = ended.pop(check.id)
+            assert verdict is NOT_APPLICABLE_ and "set to Level 2" in detail
         assert set(ended.values()) == {(PASSED, "")}, ended
         assert not report.failed
 
@@ -177,6 +185,9 @@ class TestOverASocket:
 
     async def test_each_check_names_its_frames_in_the_trace(self, served, points):
         _simulation, outstation, _server = served
+        # Level 3, so each read is of the points named and its response fits one
+        # frame. Below Level 3 a read asks for the whole group (D82).
+        outstation.level = SubsetLevel.LEVEL_3
         report = await evaluate(outstation, points, checks=select(["MON-001", "OP-001"]))
         first, second = (result.frames for result in report.results)
         assert first is not None and second is not None
@@ -250,7 +261,7 @@ class TestReadOnly:
         reading = [
             result
             for check, result in zip(CATALOG, report.results, strict=True)
-            if not check.commands and not check.deviates
+            if not check.commands and not check.deviates and check.group != SUBSET
         ]
         assert [result.id for result in reading] == [
             "PROFILE-001",
@@ -259,11 +270,18 @@ class TestReadOnly:
             "OP-001",
         ]
         assert [result.verdict for result in reading[1:]] == [PASSED] * 3
-        assert report.count(NOT_RUN) == len(CATALOG) - 4
+        reads_above_level = sum(1 for check in SUBSET_CHECKS if not check.commands)
+        assert report.count(NOT_APPLICABLE_) == 1 + reads_above_level
+        assert report.count(NOT_RUN) == len(CATALOG) - 4 - reads_above_level
 
     def test_every_check_but_the_four_that_read_is_marked_as_writing(self):
         assert not any(check.commands for check in DEVIATION_CHECKS)
-        assert {check.id for check in CATALOG if not check.commands and not check.deviates} == {
+        reading = {
+            check.id
+            for check in CATALOG
+            if not check.commands and not check.deviates and check.group != SUBSET
+        }
+        assert reading == {
             "PROFILE-001",
             "MON-001",
             "ALARM-001",
@@ -933,7 +951,8 @@ class TestSelecting:
     def test_a_check_is_named_by_its_identifier_in_any_case_or_by_its_set(self):
         assert [check.id for check in select(["op-001", "MON-001"])] == ["MON-001", "OP-001"]
         assert [check.id for check in select(["device-profile"])] == ["PROFILE-001"]
-        assert len(select(["der"])) == len(CATALOG) - 1 - len(DEVIATION_CHECKS)
+        assert len(select(["der"])) == len(CATALOG) - 1 - len(DEVIATION_CHECKS) - len(SUBSET_CHECKS)
+        assert select(["subset"]) == SUBSET_CHECKS
         assert select(["deviation"]) == DEVIATION_CHECKS
 
     def test_an_unknown_name_is_refused(self):
@@ -1119,9 +1138,10 @@ class TestTheCommand:
         printed = capsys.readouterr().out.splitlines()
         assert printed[0].startswith(f"lab at 127.0.0.1:{port}, outstation 1024, ")
         assert printed[0].endswith(", read only")
-        waiting = len(CATALOG) - 4
+        above = sum(1 for check in SUBSET_CHECKS if not check.commands)
+        waiting = len(CATALOG) - 4 - above
         assert printed[-1] == (
-            f"{len(CATALOG)} checks: 3 passed, 1 not applicable, {waiting} not run"
+            f"{len(CATALOG)} checks: 3 passed, {1 + above} not applicable, {waiting} not run"
         )
 
     def test_only_a_run_allowed_to_write_clears_the_restart_indication(self, capsys):

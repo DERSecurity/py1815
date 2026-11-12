@@ -23,10 +23,11 @@ DEFAULTS = {
     "master_address": 1,
     "unsolicited": False,
     "read_only": False,
-    "level2": False,
+    "level": None,
     "disabled_offline": True,
     "event_capacity": 2000,
     "max_response": 2048,
+    "timing_accuracy_us": 1000000,
     "select_timeout": 10.0,
     "confirm_timeout": 10.0,
     "idle_timeout": 300.0,
@@ -39,6 +40,10 @@ DEFAULTS = {
         "hardware_version": "Not applicable (software)",
         "software_version": "",
         "author": "py1815",
+        "serial_number": "",
+        "location_name": "",
+        "device_id": "",
+        "device_name": "",
     },
 }
 
@@ -158,6 +163,59 @@ class TestErrors:
             DerConfig.load(tmp_path / "none.json")
 
 
+class TestDeviceAttributes:
+    def test_level_4_reports_the_identity_and_accuracy_as_device_attributes(self):
+        config = DerConfig.from_mapping(
+            {
+                "level": 4,
+                "timing_accuracy_us": 2000,
+                "identity": {
+                    "vendor": "Acme",
+                    "device": "Widget 9",
+                    "software_version": "1.2.3",
+                    "hardware_version": "Rev D",
+                    "serial_number": "SN-1",
+                    "location_name": "Plant 4",
+                },
+            }
+        )
+        point_map = load.resolve(for_reference_der(), config.composition)
+        built = der.build(point_map, **config.outstation_options())
+        view = built.outstation.attributes.snapshot()
+        values = {number: attribute.value for number, attribute in view.items()}
+        assert {
+            number: values[number] for number in (252, 250, 242, 243, 248, 245, 246, 217, 249)
+        } == {
+            252: "Acme",
+            250: "Widget 9",
+            242: "1.2.3",
+            243: "Rev D",
+            248: "SN-1",
+            245: "Plant 4",
+            246: "",
+            217: 2000,
+            249: "4:",
+        }
+
+    def test_below_level_4_the_identity_is_not_held_to_ascii(self):
+        config = DerConfig.from_mapping({"level": 3, "identity": {"vendor": "Müller"}})
+        assert config.outstation_options()["information"] is None
+        simulation = der.build(
+            load.resolve(for_reference_der(), config.composition), **config.outstation_options()
+        )
+        assert simulation.outstation.attributes is None
+
+    @pytest.mark.parametrize("name", ["vendor", "device", "serial_number", "device_name"])
+    def test_at_level_4_a_text_that_is_not_visible_ascii_names_its_setting(self, name):
+        with pytest.raises(ConfigError, match=rf"identity\.{name}: text of at most 128"):
+            DerConfig.from_mapping({"level": 4, "identity": {name: "café"}})
+
+    @pytest.mark.parametrize("value", [-1, 2**32, 1.5, "1", True])
+    def test_the_timing_accuracy_is_an_unsigned_32_bit_whole_number(self, value):
+        with pytest.raises(ConfigError, match="timing_accuracy_us must be a whole number from 0"):
+            DerConfig.from_mapping({"timing_accuracy_us": value})
+
+
 class TestCommandLine:
     def test_flags_alone_build_the_configuration(self):
         config = cli.configuration(
@@ -171,7 +229,8 @@ class TestCommandLine:
                 "3",
                 "--unsolicited",
                 "--read-only",
-                "--level2",
+                "--level",
+                "3",
                 "--event-capacity",
                 "500",
                 "--max-response",
@@ -196,7 +255,7 @@ class TestCommandLine:
             "master_address": 3,
             "unsolicited": True,
             "read_only": True,
-            "level2": True,
+            "level": 3,
             "event_capacity": 500,
             "max_response": 4096,
             "select_timeout": 5.0,
@@ -204,6 +263,35 @@ class TestCommandLine:
             "composition": DEFAULTS["composition"] | {"meters": 1, "inverters": 2},
             "simulation": {"seed": 9, "tick": 0.5},
         }
+
+    def test_the_device_attribute_flags_set_the_identity_and_the_timing_accuracy(self):
+        config = cli.configuration(
+            _args(
+                "run",
+                "--level",
+                "4",
+                "--vendor",
+                "Acme",
+                "--serial-number",
+                "SN-1",
+                "--location-name",
+                "Plant 4",
+                "--device-id",
+                "ID-7",
+                "--device-name",
+                "Unit A",
+                "--timing-accuracy-us",
+                "2000",
+            )
+        )
+        assert config.identity == Identity(
+            vendor="Acme",
+            serial_number="SN-1",
+            location_name="Plant 4",
+            device_id="ID-7",
+            device_name="Unit A",
+        )
+        assert config.timing_accuracy_us == 2000
 
     def test_any_master_clears_the_master_address(self):
         assert cli.configuration(_args("run", "--any-master")).master_address is None
@@ -318,21 +406,54 @@ class TestAppliedToTheOutstation:
         events = master.scan("events")
         assert not any(decoded.point.value == "ai" for decoded in events.objects)
 
-    @pytest.mark.parametrize("level2, variation", [(False, 1), (True, 2)])
-    def test_level2_reaches_the_outstation(self, level2, variation):
+    @pytest.mark.parametrize("level, variation", [(None, 1), (2, 2), (3, 1), (4, 1)])
+    def test_level_reaches_the_outstation(self, level, variation):
         """Level 2 sends analog output status in 16 bits (group 40 variation 2)."""
-        config, simulation = self._simulation({"level2": level2})
+        config, simulation = self._simulation({"level": level})
         outstation = simulation.outstation
-        assert outstation.level2 is level2
+        assert outstation.level == (level or 2)
         master = Loopback(outstation.session(**config.session_options()))
         outputs = master.scan("outputs")
         analog = [o for o in outputs.objects if o.point is PointType.ANALOG_OUTPUT]
         assert analog and {o.variation for o in analog} == {variation}
 
-    def test_level2_flag_reaches_the_outstation_through_the_command_line(self, tables):
-        config = cli.configuration(_args("run", "--level2"))
+    @pytest.mark.parametrize("flags, level", [(("--level", "4"), 4), (("--level2",), 2), ((), 2)])
+    def test_level_flag_reaches_the_outstation_through_the_command_line(self, tables, flags, level):
+        config = cli.configuration(_args("run", *flags))
         simulation = cli._build(config, cli._load_map(config))
-        assert simulation.outstation.level2 is True
+        assert simulation.outstation.level == level
+        assert simulation.outstation.level2 is (flags == ("--level2",))
+
+    @pytest.mark.parametrize("value", [1, 5, 0, "2", 2.0, True, [2]])
+    def test_level_outside_2_3_4_is_refused(self, value):
+        with pytest.raises(ConfigError, match="level must be 2, 3 or 4"):
+            DerConfig.from_mapping({"level": value})
+
+    def test_command_line_refuses_a_level_outside_2_3_4(self, capsys):
+        with pytest.raises(SystemExit):
+            _args("run", "--level", "5")
+        assert "invalid choice" in capsys.readouterr().err
+
+    def test_level2_true_in_a_file_means_level_2(self):
+        assert DerConfig.from_mapping({"level2": True}).level == 2
+        assert DerConfig.from_mapping({"level2": False}).level is None
+
+    @pytest.mark.parametrize(
+        "document",
+        [{"level2": True, "level": None}, {"level": None, "level2": True}],
+    )
+    def test_a_null_level_keeps_level2_in_either_key_order(self, document):
+        assert DerConfig.from_mapping(document).level == 2
+
+    @pytest.mark.parametrize("level", [3, 4])
+    def test_level_flag_overrides_level2_in_the_file(self, tmp_path, level):
+        path = _file(tmp_path, {"level2": True})
+        config = cli.configuration(_args("run", "--config", path, "--level", str(level)))
+        assert config.level == level
+
+    def test_level2_true_with_another_level_is_refused(self):
+        with pytest.raises(ConfigError, match="level2 conflicts with level"):
+            DerConfig.from_mapping({"level2": True, "level": 3})
 
     def test_tables_and_composition_reach_the_map_loader(self, monkeypatch):
         seen = []

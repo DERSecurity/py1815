@@ -4,7 +4,10 @@ Binary inputs and their events, counters and frozen counters, analog inputs
 and their events, requests for several objects at once, point ranges, specific
 variations, and class assignment. The device is tested as a subset level 2
 outstation; where the procedures let a level 2 device either do what level 3
-requires or refuse it, the tests say which this one does.
+requires or refuse it, the tests say which this one does. The sections level 3
+requires are carried out at level 3 as well: frozen counter events, point
+ranges, specific static and event variations, and class assignment. Counter
+events exist only from level 3, so their sections are carried out at level 3.
 """
 
 from __future__ import annotations
@@ -22,6 +25,9 @@ from ied_harness import (
     FREEZE_CLEAR,
     FREEZE_CLEAR_NR,
     FREEZE_NR,
+    IIN1_CLASS_1,
+    IIN1_CLASS_2,
+    IIN1_CLASS_3,
     IIN1_NEED_TIME,
     IIN2_BAD_FUNCTION,
     IIN2_OBJECT_UNKNOWN,
@@ -46,6 +52,12 @@ RANGES = {Q_RANGE_8, Q_RANGE_16}
 INDEXED = {Q_INDEX_8, Q_INDEX_16}
 NO_POINTS = IIN2_OBJECT_UNKNOWN | IIN2_PARAMETER
 COUNTS = pytest.mark.parametrize("qualifier", [Q_COUNT_8, Q_COUNT_16], ids=["07", "08"])
+#: A procedure whose steps are the same at levels 2 and 3, carried out at both.
+LEVELS = pytest.mark.parametrize("level", [2, 3], ids=["level_2", "level_3"])
+
+
+def _hex(octets: bytes) -> str:
+    return octets.hex(" ").upper()
 
 
 def _toggles(dut: Dut, indices: list[int]) -> list[int]:
@@ -453,8 +465,9 @@ class TestFrozenCounters:
             pytest.param(FREEZE_NR, False, id="8_16_2_2_5_freeze_no_acknowledge"),
         ],
     )
-    def test_8_16_2_2_3_and_5_freeze(self, function, answered):
-        dut = Dut()
+    @LEVELS
+    def test_8_16_2_2_3_and_5_freeze(self, function, answered, level):
+        dut = Dut(level=level)
 
         def freeze() -> None:
             reply = dut.master.request(function, header(20, 0))
@@ -478,8 +491,10 @@ class TestFrozenCounters:
             pytest.param(FREEZE_CLEAR_NR, False, id="8_16_2_2_6_freeze_and_clear_no_acknowledge"),
         ],
     )
-    def test_8_16_2_2_4_and_6_freeze_and_clear(self, function, answered):
-        dut = Dut()
+    @LEVELS
+    def test_8_16_2_2_4_and_6_freeze_and_clear(self, function, answered, level):
+        """A device claiming a subset level clears on a freeze-and-clear (D107)."""
+        dut = Dut(level=level)
         dut.count(6)
 
         def freeze() -> None:
@@ -503,9 +518,10 @@ class TestFrozenCounters:
         assert dut.master.read(classes(1, 2, 3)).fragment.is_null
         assert dut.master.read(header(23, 0)).fragment.is_null
 
-    def test_8_16_2_2_3_with_frozen_counter_events_enabled(self):
-        """The branch for a device that supports frozen counter events, as the DER profile does."""
-        dut = Dut(level2=False)
+    @pytest.mark.parametrize("level", [None, 3], ids=["default", "level_3"])
+    def test_8_16_2_2_3_with_frozen_counter_events_enabled(self, level):
+        """The branch for a device with frozen counter events: the DER profile's, and level 3's."""
+        dut = Dut(level=level)
         dut.master.empty_events()
         assert dut.master.request(FREEZE, header(20, 0)).fragment.is_null
         fragment = dut.master.read(header(23, 0), header(21, 0)).fragment
@@ -528,6 +544,76 @@ class TestBinaryCounterEvents:
         dut.outstation.poll()
         fragment = dut.master.read(header(22, 0)).fragment
         assert fragment.is_null
+
+    # From Level 3 a counter event is raised when a counter's flags change (D124), so these
+    # sections generate events by taking counters offline and back.
+
+    def test_8_17_2_3_counter_events_qualifier_06(self):
+        dut = Dut(level=3)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+        _counter_quality(dut, [0, 1], Quality.COMM_LOST)
+        fragment = dut.master.read(header(22, 0)).fragment
+        assert fragment.con, "not confirmed"
+        events = fragment.objects
+        assert [(o.variation, o.index, o.flags, o.value) for o in events] == [
+            (1, 0, 0x04, 5),
+            (1, 1, 0x04, 5),
+        ]
+        assert {o.qualifier for o in events} <= INDEXED
+        _counter_quality(dut, [0], Quality.GOOD)
+        again = dut.master.read(header(22, 0)).fragment.objects
+        assert [(o.index, o.flags) for o in again] == [(0, 0x04), (1, 0x04), (0, FLAG_ONLINE)]
+
+    @COUNTS
+    def test_8_17_2_4_and_5_counter_events_limited_quantity(self, qualifier):
+        dut = Dut(level=3)
+        _counter_quality(dut, [0, 1, 2], Quality.COMM_LOST)
+        first = dut.master.read(header(22, 0, qualifier, 2)).fragment
+        assert [o.index for o in first.objects] == [0, 1] and first.con
+        dut.master.confirm(first)
+        rest = dut.master.read(header(22, 0, qualifier, 5)).fragment
+        assert [o.index for o in rest.objects] == [2] and rest.con
+        dut.master.confirm(rest)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+
+    def test_8_17_2_6_counter_events_without_confirm(self):
+        dut = Dut(level=3)
+        _counter_quality(dut, [0], Quality.COMM_LOST)
+        unconfirmed = dut.master.read(header(22, 0)).fragment
+        assert unconfirmed.con
+        assert dut.master.listen().silent, "not sent again"
+        _counter_quality(dut, [0], Quality.GOOD)
+        _counter_quality(dut, [2], Quality.COMM_LOST)
+        fragment = dut.master.read(header(22, 0)).fragment
+        assert [(o.index, o.flags) for o in fragment.objects] == [
+            (0, 0x04),
+            (0, FLAG_ONLINE),
+            (2, 0x04),
+        ]
+        dut.master.confirm(fragment)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+
+
+def _assigned(dut: Dut, body: str) -> None:
+    """Send an ASSIGN_CLASS request written as hexadecimal octets, and require a null response."""
+    fragment = dut.master.request(ASSIGN_CLASS, bytes.fromhex(body)).fragment
+    assert fragment.is_null and not fragment.iin2, f"IIN2 0x{fragment.iin2:02X}"
+
+
+def _waiting(fragment) -> int:
+    """Return the class bits of a response's IIN1."""
+    return fragment.iin1 & (IIN1_CLASS_1 | IIN1_CLASS_2 | IIN1_CLASS_3)
+
+
+def _indices(fragment, group: int) -> list[int]:
+    """Return the indices of a response's objects of one group."""
+    return [obj.index for obj in fragment.of(group)]
+
+
+def _counter_quality(dut: Dut, indices: list[int], quality: Quality) -> None:
+    for index in indices:
+        dut.quality[(Kind.CTR, index)] = quality
+    dut.outstation.poll()
 
 
 class TestAnalogInputs:
@@ -649,19 +735,25 @@ RANGED = [
 
 
 class TestSpecificPointRanges:
+    """Section 8.23, which level 3 requires and this device also answers at level 2."""
+
+    @LEVELS
     @pytest.mark.parametrize(("group", "count", "without"), RANGED)
     @pytest.mark.parametrize("qualifier", [Q_RANGE_8, Q_RANGE_16], ids=["00", "01"])
-    def test_8_23_2_x_1_a_device_without_the_point_type(self, group, count, without, qualifier):
-        dut = Dut(**without)
+    def test_8_23_2_x_1_a_device_without_the_point_type(
+        self, group, count, without, qualifier, level
+    ):
+        dut = Dut(level=level, **without)
         fragment = dut.master.read(header(group, 0, qualifier, 0, 0)).fragment
         assert not fragment.body and fragment.is_error
 
+    @LEVELS
     @pytest.mark.parametrize(("group", "count", "without"), RANGED)
     @pytest.mark.parametrize("qualifier", [Q_RANGE_8, Q_RANGE_16], ids=["00", "01"])
     def test_8_23_2_x_2_a_valid_range_returns_those_points_and_no_others(
-        self, group, count, without, qualifier
+        self, group, count, without, qualifier, level
     ):
-        dut = Dut()
+        dut = Dut(level=level)
         dut.master.request(FREEZE, header(20, 0))
         fragment = dut.master.read(header(group, 0, qualifier, 1, 2)).fragment
         objects = fragment.objects
@@ -669,9 +761,10 @@ class TestSpecificPointRanges:
         assert {o.qualifier for o in objects} <= RANGES
         assert not fragment.is_error
 
+    @LEVELS
     @pytest.mark.parametrize(("group", "count", "without"), RANGED)
-    def test_8_23_2_x_3_a_range_running_past_the_last_point(self, group, count, without):
-        dut = Dut()
+    def test_8_23_2_x_3_a_range_running_past_the_last_point(self, group, count, without, level):
+        dut = Dut(level=level)
         dut.master.request(FREEZE, header(20, 0))
         fragment = dut.master.read(header(group, 0, Q_RANGE_8, count - 1, count)).fragment
         assert fragment.iin2 & IIN2_PARAMETER
@@ -695,35 +788,50 @@ class TestSpecificStaticVariations:
         assert flagged[0].variation == 2 and flagged[0].flags & 0x7F == 0x04
         assert all(o.flags & 0x7F == FLAG_ONLINE for o in flagged[1:])
 
-    def test_8_24_2_2_double_bit_inputs(self):
-        dut = Dut()
+    def test_8_24_2_1_binary_inputs_at_level_3(self):
+        """Level 3 answers a packed-format read with flags (TB2016-003b Table 12-3, note a)."""
+        dut = Dut(level=3)
+        packed = dut.master.read(header(1, 1)).fragment
+        # Group 1 variation 2, qualifier 0x00, points 0 to 3, each ONLINE and off.
+        assert _hex(packed.body) == "01 02 00 00 03 01 01 01 01"
+        dut.quality[(Kind.BI, 0)] = Quality.COMM_LOST
+        flagged = dut.master.read(header(1, 1)).fragment
+        assert _hex(flagged.body) == "01 02 00 00 03 04 01 01 01"
+
+    @LEVELS
+    def test_8_24_2_2_double_bit_inputs(self, level):
+        dut = Dut(level=level)
         assert self._refused(dut.master.read(header(3, 1)).fragment)
 
-    def test_8_24_2_3_binary_output_status(self):
-        dut = Dut()
+    @LEVELS
+    def test_8_24_2_3_binary_output_status(self, level):
+        dut = Dut(level=level)
         objects = dut.master.read(header(10, 2)).fragment.of(10)
         assert {o.variation for o in objects} == {2} and {o.qualifier for o in objects} <= RANGES
         assert all(o.flags == FLAG_ONLINE for o in objects)
 
+    @LEVELS
     @pytest.mark.parametrize("variation", [1, 2, 5, 6])
-    def test_8_24_2_4_counters_are_answered_at_32_bits(self, variation):
+    def test_8_24_2_4_counters_are_answered_at_32_bits(self, variation, level):
         """Counters are kept in 32 bits: a 16-bit request gets a 32-bit answer (steps 10-11)."""
-        dut = Dut()
+        dut = Dut(level=level)
         objects = dut.master.read(header(20, variation)).fragment.of(20)
         assert len(objects) == len(dut.counts)
         assert {o.variation for o in objects} <= {1, 5} and {o.qualifier for o in objects} <= RANGES
         assert all(o.flags in (None, FLAG_ONLINE) for o in objects)
 
+    @LEVELS
     @pytest.mark.parametrize("variation", [1, 2, 5, 6])
-    def test_8_24_2_4_a_counter_with_an_abnormal_flag_comes_back_with_flags(self, variation):
-        dut = Dut()
+    def test_8_24_2_4_a_counter_with_an_abnormal_flag_comes_back_with_flags(self, variation, level):
+        dut = Dut(level=level)
         dut.quality[(Kind.CTR, 0)] = Quality.COMM_LOST
         flagged = dut.master.read(header(20, variation)).fragment.of(20)
         assert flagged[0].variation == 1 and flagged[0].flags == 0x04
         assert all(o.flags in (None, FLAG_ONLINE) for o in flagged[1:])
 
-    def test_8_24_2_5_frozen_counters(self):
-        dut = Dut()
+    @LEVELS
+    def test_8_24_2_5_frozen_counters(self, level):
+        dut = Dut(level=level)
         dut.master.request(FREEZE, header(20, 0))
         # Frozen counters are kept in 32 bits: a 16-bit request gets a 32-bit answer.
         for variation in (1, 2, 9, 10):
@@ -743,8 +851,9 @@ class TestSpecificStaticVariations:
         ("variation", "allowed"),
         [(1, {1, 3}), (2, {2, 4}), (3, {1, 3}), (4, {2, 4})],
     )
-    def test_8_24_2_6_analog_inputs(self, variation, allowed):
-        dut = Dut()
+    @LEVELS
+    def test_8_24_2_6_analog_inputs(self, variation, allowed, level):
+        dut = Dut(level=level)
         objects = dut.master.read(header(30, variation)).fragment.of(30)
         assert {o.variation for o in objects} <= allowed
         assert {o.qualifier for o in objects} <= RANGES
@@ -758,8 +867,9 @@ class TestSpecificStaticVariations:
         assert {o.variation for o in flagged[1:]} <= allowed
         assert [o.index for o in flagged] == [0, 1, 2, 3]
 
-    def test_8_24_2_7_analog_output_status(self):
-        dut = Dut()
+    @LEVELS
+    def test_8_24_2_7_analog_output_status(self, level):
+        dut = Dut(level=level)
         sixteen = dut.master.read(header(40, 2)).fragment.of(40)
         assert {o.variation for o in sixteen} == {2} and {o.qualifier for o in sixteen} <= RANGES
         assert all(o.flags == FLAG_ONLINE for o in sixteen)
@@ -775,14 +885,35 @@ class TestSpecificEventVariations:
             assert not fragment.body, "none are generated, so none are returned"
             assert not fragment.iin2 & IIN2_BAD_FUNCTION
 
+    def test_8_25_2_3_counter_events_at_level_3(self):
+        # Steps 1 and 7 generate two events with normal flags: two counters are taken
+        # offline, those events are read and confirmed, and the counters are restored.
+        dut = Dut(level=3)
+        for variation, confirm in ((1, True), (2, False)):
+            _counter_quality(dut, [0, 1], Quality.COMM_LOST)
+            dut.master.empty_events()
+            _counter_quality(dut, [0, 1], Quality.GOOD)
+            fragment = dut.master.read(header(22, variation)).fragment
+            # A read of variation 2 is answered in variation 1: the counters have 32 bits.
+            assert _hex(fragment.body) == "16 01 17 02 00 01 05 00 00 00 01 01 05 00 00 00"
+            assert fragment.con
+            if confirm:
+                dut.master.confirm(fragment)
+        assert dut.master.listen().silent, "not sent again"
+        again = dut.master.read(header(22, 2)).fragment
+        assert len(again.of(22)) == 2
+        dut.master.confirm(again)
+        assert dut.master.read(header(22, 0)).fragment.is_null
+
     def test_8_25_2_4_frozen_counter_events(self):
         dut = Dut()
         dut.master.request(FREEZE, header(20, 0))
         fragment = dut.master.read(header(23, 1)).fragment
         assert not fragment.body and not fragment.iin2 & IIN2_BAD_FUNCTION
 
-    def test_8_25_2_4_frozen_counter_events_where_they_are_enabled(self):
-        dut = Dut(level2=False)
+    @pytest.mark.parametrize("level", [None, 3], ids=["default", "level_3"])
+    def test_8_25_2_4_frozen_counter_events_where_they_are_enabled(self, level):
+        dut = Dut(level=level)
         dut.master.empty_events()
         dut.master.request(FREEZE, header(20, 0))
         fragment = dut.master.read(header(23, 1)).fragment
@@ -791,8 +922,9 @@ class TestSpecificEventVariations:
         assert [o.value for o in events] == [5, 5, 5]
         assert {o.qualifier for o in events} <= INDEXED and fragment.con
 
-    def test_8_25_2_5_analog_input_events(self):
-        dut = Dut()
+    @LEVELS
+    def test_8_25_2_5_analog_input_events(self, level):
+        dut = Dut(level=level)
         dut.master.empty_events()
         dut.set_analog(0, 40000)
         dut.set_analog(1, -40000)
@@ -819,8 +951,91 @@ class TestSpecificEventVariations:
 
 
 class TestAssignClass:
-    def test_8_26_2_assign_class_is_not_implemented(self):
-        """A level 2 device passes by refusing the function code."""
+    """Section 8.26. Binary inputs 0 and 1 start in class 1, 2 in class 2 and 3 in class 3.
+
+    Each class header is group 60 with qualifier 0x06, and variation 1 to 4 means
+    class 0 to 3 (``3C 02 06`` is class 1). The headers after it name the points.
+    """
+
+    def test_8_26_2_steps_1_to_58_at_level_3(self):
+        """A level 3 device carries out the whole procedure."""
+        dut = Dut(level=3)
+        # Steps 1 to 5: a poll of every class.
+        dut.master.empty_events()
+        # Steps 6 to 17: one event in class 1 and one in class 2.
+        dut.toggle(0)
+        dut.toggle(2)
+        three = dut.master.read(classes(3)).fragment
+        assert not three.body
+        assert _waiting(three) == IIN1_CLASS_1 | IIN1_CLASS_2
+        one = dut.master.read(classes(1)).fragment
+        assert _indices(one, 2) == [0] and one.con
+        assert _waiting(one) == IIN1_CLASS_2
+        dut.master.confirm(one)
+        two = dut.master.read(classes(2)).fragment
+        assert _indices(two, 2) == [2] and two.con
+        assert _waiting(two) == 0
+        dut.master.confirm(two)
+        # Step 18: the class 2 point (binary input 2) to class 3, the class 1
+        # points (binary inputs 0 and 1) to class 2.
+        _assigned(dut, "3C 04 06 01 00 00 02 02  3C 03 06 01 00 00 00 01")
+        # Steps 20 and 21.
+        everything = dut.master.read(classes(1, 2, 3)).fragment
+        assert not everything.body and _waiting(everything) == 0
+        # Steps 22 to 25: an event for a point now in class 2.
+        dut.toggle(0)
+        one = dut.master.read(classes(1)).fragment
+        assert not one.body
+        assert _waiting(one) == IIN1_CLASS_2
+        # Steps 26 to 30: an event for a point now in class 3.
+        dut.toggle(2)
+        two = dut.master.read(classes(2)).fragment
+        assert _indices(two, 2) == [0] and two.con
+        assert _waiting(two) == IIN1_CLASS_3
+        dut.master.confirm(two)
+        # Steps 31 to 34: the class 2 points to class 0.
+        _assigned(dut, "3C 01 06 01 00 00 00 01")
+        one = dut.master.read(classes(1)).fragment
+        assert not one.body
+        assert _waiting(one) == IIN1_CLASS_3
+        # Steps 35 to 39: another class 3 point, and a change to a point in class 0.
+        dut.toggle(3)
+        dut.toggle(0)
+        one = dut.master.read(classes(1)).fragment
+        assert not one.body
+        assert _waiting(one) == IIN1_CLASS_3
+        # Steps 40 to 43: the two class 3 events and nothing else.
+        three = dut.master.read(classes(1, 2, 3)).fragment
+        assert _indices(three, 2) == [2, 3] and three.con
+        assert _waiting(three) == 0
+        dut.master.confirm(three)
+        # Steps 44 and 45.
+        again = dut.master.read(classes(1, 2, 3)).fragment
+        assert not again.body and _waiting(again) == 0
+        # Steps 46 to 48: back to the startup assignment. The change made
+        # while binary input 0 was in class 0 is not reported now.
+        _assigned(
+            dut,
+            "3C 02 06 01 00 00 00 01  3C 03 06 01 00 00 02 02  3C 04 06 01 00 00 03 03",
+        )
+        again = dut.master.read(classes(1, 2, 3)).fragment
+        assert not again.body and _waiting(again) == 0
+        # Steps 49 to 52.
+        dut.toggle(0)
+        dut.toggle(2)
+        three = dut.master.read(classes(3)).fragment
+        assert not three.body
+        assert _waiting(three) == IIN1_CLASS_1 | IIN1_CLASS_2
+        # Steps 53 to 58.
+        both = dut.master.read(classes(1, 2, 3)).fragment
+        assert _indices(both, 2) == [0, 2] and both.con
+        assert _waiting(both) == 0
+        dut.master.confirm(both)
+        last = dut.master.read(classes(1, 2, 3)).fragment
+        assert not last.body and _waiting(last) == 0
+
+    def test_8_26_2_a_level_2_device_refuses_assign_class(self):
+        """A level 2 device passes by refusing the function code at step 19."""
         dut = Dut()
         body = classes(2) + header(1, 0)
         fragment = dut.master.request(ASSIGN_CLASS, body).fragment

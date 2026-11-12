@@ -18,6 +18,7 @@ import java.util.concurrent.{ CompletableFuture, TimeUnit, TimeoutException }
  * @param port the port the outstation listens on
  * @param outstation the outstation's link address
  * @param master the link address of the master the outstation serves
+ * @param level the subset level the outstation is held to
  * @param log the file the device's own log is appended to
  */
 final case class FixtureCommand(
@@ -27,6 +28,7 @@ final case class FixtureCommand(
     port: Int,
     outstation: Int,
     master: Int,
+    level: Int,
     log: Path)
 
 /** A request the control channel refused, or a device that could not be started or reached. */
@@ -59,7 +61,9 @@ final class Fixture(command: FixtureCommand) extends AutoCloseable {
       "--outstation-address",
       command.outstation.toString,
       "--master-address",
-      command.master.toString
+      command.master.toString,
+      "--level",
+      command.level.toString
     )
     builder.redirectError(ProcessBuilder.Redirect.appendTo(command.log.toFile))
     try builder.start()

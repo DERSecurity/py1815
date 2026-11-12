@@ -529,8 +529,8 @@
       "warnings": []
     },
     "8.6.6.2.3": {
-      "outcome": "skipped",
-      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "outcome": "passed",
+      "detail": "",
       "notes": [],
       "warnings": []
     },
@@ -626,7 +626,7 @@
     },
     "8.13.2a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -650,7 +650,7 @@
     },
     "8.14.2a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -758,7 +758,7 @@
     },
     "8.16.1.2.1": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -782,7 +782,7 @@
     },
     "8.16.2.2.1": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -818,43 +818,43 @@
     },
     "8.17.2a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
     "8.17.2b": {
+      "outcome": "skipped",
+      "detail": "disabled because it needs not (supports.counter == true and supports.counterChangeEvents == true)",
+      "notes": [],
+      "warnings": []
+    },
+    "8.17.2c": {
       "outcome": "passed",
       "detail": "",
       "notes": [],
       "warnings": []
     },
-    "8.17.2c": {
-      "outcome": "skipped",
-      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
-      "notes": [],
-      "warnings": []
-    },
     "8.17.2d": {
-      "outcome": "skipped",
-      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "outcome": "passed",
+      "detail": "",
       "notes": [],
       "warnings": []
     },
     "8.17.2e": {
-      "outcome": "skipped",
-      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "outcome": "passed",
+      "detail": "",
       "notes": [],
       "warnings": []
     },
     "8.17.2f": {
-      "outcome": "skipped",
-      "detail": "disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?",
+      "outcome": "passed",
+      "detail": "",
       "notes": [],
       "warnings": []
     },
     "8.18.2a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -872,7 +872,7 @@
     },
     "8.19.2a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -896,7 +896,7 @@
     },
     "8.20.2a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -914,7 +914,7 @@
     },
     "8.21a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -944,7 +944,7 @@
     },
     "8.22a": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 2",
+      "detail": "not applicable: it applies to subset level(s) 1, and the device is configured for level 3",
       "notes": [],
       "warnings": []
     },
@@ -1150,7 +1150,7 @@
       "outcome": "passed",
       "detail": "",
       "notes": [
-        "the DUT answers a read of g1v1 with IIN2.1 or IIN2.2, as a subset level 1 or 2 device may"
+        "with one of its flags set abnormal, binary input 0 came back with flags 0x04"
       ],
       "warnings": []
     },
@@ -1213,17 +1213,13 @@
     "8.25.2c": {
       "outcome": "passed",
       "detail": "",
-      "notes": [
-        "the DUT answers a read of g22v1 with a Null Response, having no such events"
-      ],
+      "notes": [],
       "warnings": []
     },
     "8.25.2d": {
       "outcome": "passed",
       "detail": "",
-      "notes": [
-        "the DUT answers a read of g23v1 with a Null Response, having no such events"
-      ],
+      "notes": [],
       "warnings": []
     },
     "8.25.2e": {
@@ -1235,14 +1231,12 @@
     "8.26.2": {
       "outcome": "passed",
       "detail": "",
-      "notes": [
-        "the DUT answers Assign Class with IIN2.0, as a subset level 1 or 2 device may"
-      ],
+      "notes": [],
       "warnings": []
     },
     "8.26.3": {
       "outcome": "skipped",
-      "detail": "not applicable: it applies to subset level(s) 3, and the device is configured for level 2",
+      "detail": "disabled because supports.assignNoClass != true: Does the DUT assign points to no class with an Assign Class request whose point headers come before any class object (TB2021-001)? 3.1r1's 8.26.3 tests it where the DUT claims it",
       "notes": [],
       "warnings": []
     },
@@ -1250,7 +1244,7 @@
       "outcome": "passed",
       "detail": "",
       "notes": [
-        "connected from source port 55612"
+        "connected from source port 53447"
       ],
       "warnings": []
     },

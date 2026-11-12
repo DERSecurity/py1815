@@ -65,3 +65,10 @@ class TestReadPoints:
     def test_a_read_that_cannot_be_built_is_refused(self, points, says):
         with pytest.raises(ValueError, match=says):
             requests.read_points(points)
+
+
+class TestDoubleBitInputs:
+    def test_a_read_names_group_3_in_the_default_variation(self):
+        dbi = PointType.DOUBLE_BIT_INPUT
+        assert requests.read_points({dbi: [2, 3, 4]}) == bytes.fromhex("03 00 00 02 04")
+        assert requests.read_points({dbi: None}) == bytes.fromhex("03 00 06")

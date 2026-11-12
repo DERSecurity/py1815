@@ -17,13 +17,20 @@ from types import MappingProxyType
 
 
 class Kind(StrEnum):
-    """The five kinds of point the profile defines, by the tables' own names."""
+    """The kinds of point a map holds, by the tables' own names.
+
+    The profile defines the first five. ``DBI``, the double-bit binary input,
+    is not in the profile's tables: a table document lists such points under
+    the key ``DBI`` where a device has them, and they are served from Subset
+    Level 4 (IEEE 1815-2012, Annex A, groups 3 and 4).
+    """
 
     BO = "BO"
     BI = "BI"
     AO = "AO"
     AI = "AI"
     CTR = "CTR"
+    DBI = "DBI"
 
     @property
     def is_output(self) -> bool:

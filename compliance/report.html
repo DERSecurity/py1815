@@ -15,17 +15,17 @@
           DNP3 Conformance Report
         </h1>
         <p class="revision">
-          DNP3 IED Certification Procedure, Subset Levels 1, 2 and 3, revision 3.1r1 (2022-09-13), subset level 2
+          DNP3 IED Certification Procedure, Subset Levels 1, 2 and 3, revision 3.1r1 (2022-09-13), subset level 3
         </p>
         <p>
-          Generated 2026-10-16 10:35 MDT
+          Generated 2026-11-11 15:05 MST
         </p>
         <p class="dut">
-          Device under test: <strong>py1815 Subset Level 2 outstation</strong>
+          Device under test: <strong>py1815 Subset Level 3 outstation</strong>
         </p>
         <div class="context">
           <span class="total pass">
-            158 passed
+            162 passed
           </span>
           <span class="total warning">
             0 passed with warnings
@@ -34,7 +34,7 @@
             0 failed
           </span>
           <span class="total skip">
-            70 skipped
+            66 skipped
           </span>
           <span class="total excluded">
             0 excluded
@@ -1675,14 +1675,14 @@
           <td>
             <a href="./8.6.6.2.3/log.html">8.6.6.2.3</a>
           </td>
-          <td class="skip">
-            <a href="./8.6.6.2.3/log.html">SKIP</a>
+          <td class="pass">
+            <a href="./8.6.6.2.3/log.html">PASS</a>
           </td>
           <td>
             ----
           </td>
           <td>
-            Buffer Overflow, Binary Counter Change Event Buffers<br><span class="reason">Skipped: disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?</span>
+            Buffer Overflow, Binary Counter Change Event Buffers
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2026,7 +2026,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a read for binary input object group<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a read for binary input object group<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2106,7 +2106,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a read for binary change events object group<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a read for binary change events object group<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2394,7 +2394,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a read for binary counters<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a read for binary counters<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2462,7 +2462,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a read for frozen counters<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a read for frozen counters<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2570,77 +2570,77 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a Read for Binary Counter Events<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a Read for Binary Counter Events<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
           <td>
             <a href="./8.17.2b/log.html">8.17.2b</a>
           </td>
-          <td class="pass">
-            <a href="./8.17.2b/log.html">PASS</a>
+          <td class="skip">
+            <a href="./8.17.2b/log.html">SKIP</a>
           </td>
           <td>
             ----
           </td>
           <td>
-            Device does not support Binary Counter Events
+            Device does not support Binary Counter Events<br><span class="reason">Skipped: disabled because it needs not (supports.counter == true and supports.counterChangeEvents == true)</span>
           </td>
         </tr>
         <tr class="procedure level3">
           <td>
             <a href="./8.17.2c/log.html">8.17.2c</a>
           </td>
-          <td class="skip">
-            <a href="./8.17.2c/log.html">SKIP</a>
+          <td class="pass">
+            <a href="./8.17.2c/log.html">PASS</a>
           </td>
           <td>
             ----
           </td>
           <td>
-            Binary Counters, Event, 0x06<br><span class="reason">Skipped: disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?</span>
+            Binary Counters, Event, 0x06
           </td>
         </tr>
         <tr class="procedure level3">
           <td>
             <a href="./8.17.2d/log.html">8.17.2d</a>
           </td>
-          <td class="skip">
-            <a href="./8.17.2d/log.html">SKIP</a>
+          <td class="pass">
+            <a href="./8.17.2d/log.html">PASS</a>
           </td>
           <td>
             ----
           </td>
           <td>
-            Binary Counters, Event, 0x07<br><span class="reason">Skipped: disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?</span>
+            Binary Counters, Event, 0x07
           </td>
         </tr>
         <tr class="procedure level3">
           <td>
             <a href="./8.17.2e/log.html">8.17.2e</a>
           </td>
-          <td class="skip">
-            <a href="./8.17.2e/log.html">SKIP</a>
+          <td class="pass">
+            <a href="./8.17.2e/log.html">PASS</a>
           </td>
           <td>
             ----
           </td>
           <td>
-            Binary Counters, Event, 0x08<br><span class="reason">Skipped: disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?</span>
+            Binary Counters, Event, 0x08
           </td>
         </tr>
         <tr class="procedure level3">
           <td>
             <a href="./8.17.2f/log.html">8.17.2f</a>
           </td>
-          <td class="skip">
-            <a href="./8.17.2f/log.html">SKIP</a>
+          <td class="pass">
+            <a href="./8.17.2f/log.html">PASS</a>
           </td>
           <td>
             ----
           </td>
           <td>
-            Binary Counters, Event Without Confirm<br><span class="reason">Skipped: disabled because supports.counterChangeEvents != true: Does the DUT support Counter change events?</span>
+            Binary Counters, Event Without Confirm
           </td>
         </tr>
         <tr class="section level1">
@@ -2678,7 +2678,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 Device that does not support a Read for Analog Inputs<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 Device that does not support a Read for Analog Inputs<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2744,7 +2744,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 Device that does not support a Read for Analog Input Events<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 Device that does not support a Read for Analog Input Events<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2824,7 +2824,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 Device that does not support a Read for Individual Object Types<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 Device that does not support a Read for Individual Object Types<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -2878,7 +2878,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a read for the double-bit input object group (as 8.13.2a)<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a read for the double-bit input object group (as 8.13.2a)<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level2">
@@ -2960,7 +2960,7 @@
             ----
           </td>
           <td>
-            Subset Level 1 device that does not support a read for the double-bit change events object group (as 8.14.2a)<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 2</span>
+            Subset Level 1 device that does not support a read for the double-bit change events object group (as 8.14.2a)<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 1, and the device is configured for level 3</span>
           </td>
         </tr>
         <tr class="procedure level2">
@@ -3556,7 +3556,7 @@
             ----
           </td>
           <td>
-            Binary Inputs<br><span class="note">Note: the DUT answers a read of g1v1 with IIN2.1 or IIN2.2, as a subset level 1 or 2 device may</span>
+            Binary Inputs<br><span class="note">Note: with one of its flags set abnormal, binary input 0 came back with flags 0x04</span>
           </td>
         </tr>
         <tr class="procedure level3">
@@ -3706,7 +3706,7 @@
             ----
           </td>
           <td>
-            Counter Events<br><span class="note">Note: the DUT answers a read of g22v1 with a Null Response, having no such events</span>
+            Counter Events
           </td>
         </tr>
         <tr class="procedure level3">
@@ -3720,7 +3720,7 @@
             ----
           </td>
           <td>
-            Frozen Counters<br><span class="note">Note: the DUT answers a read of g23v1 with a Null Response, having no such events</span>
+            Frozen Counters
           </td>
         </tr>
         <tr class="procedure level3">
@@ -3760,7 +3760,7 @@
             ----
           </td>
           <td>
-            Test Procedures<br><span class="note">Note: the DUT answers Assign Class with IIN2.0, as a subset level 1 or 2 device may</span>
+            Test Procedures
           </td>
         </tr>
         <tr class="procedure level2">
@@ -3774,7 +3774,7 @@
             ----
           </td>
           <td>
-            No-Class Assignment Test Procedures<br><span class="reason">Skipped: not applicable: it applies to subset level(s) 3, and the device is configured for level 2</span>
+            No-Class Assignment Test Procedures<br><span class="reason">Skipped: disabled because supports.assignNoClass != true: Does the DUT assign points to no class with an Assign Class request whose point headers come before any class object (TB2021-001)? 3.1r1's 8.26.3 tests it where the DUT claims it</span>
           </td>
         </tr>
         <tr class="section level0">
@@ -3824,7 +3824,7 @@
             ----
           </td>
           <td>
-            Port 20000<br><span class="note">Note: connected from source port 55612</span>
+            Port 20000<br><span class="note">Note: connected from source port 53447</span>
           </td>
         </tr>
         <tr class="procedure level3">

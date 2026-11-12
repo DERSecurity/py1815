@@ -55,7 +55,7 @@ on:
 #   dnp3c-conformance    dnp3c (https://github.com/stepfunc/dnp3c), the
 #                        conformance test harness from Step Function I/O, runs
 #                        the outstation certification procedures of revision
-#                        3.1 rev 1 at Subset Level 2 against this outstation.
+#                        3.1 rev 1 at Subset Level 3 against this outstation.
 #                        It fails when a procedure ends other than as recorded.
 #                        docs/conformance.md says how each procedure ends.
 
@@ -208,7 +208,9 @@ jobs:
 
   parsers:
     name: independent dissectors read the sweep and the master
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: on the 26.04 image, tshark refuses to read the capture
+    # this job writes ("You don't have permission to read the file").
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The sweep walks the function code space and writes the exchange to a
     # capture. Then this library's master reads a second outstation and writes
@@ -546,9 +548,11 @@ jobs:
     # dnp3c (https://github.com/stepfunc/dnp3c) is Step Function I/O's
     # conformance test harness. It acts as a master and runs the outstation
     # test procedures of the DNP3 IED Certification Procedure, revision 3.1
-    # rev 1, at Subset Level 2. The unit suite carries
-    # the same procedures out from this project's own reading of them; this is
-    # a reading by people who did not write this library.
+    # rev 1, at Subset Level 3, the level interop/dnp3c/device.ini sets. The
+    # unit suite carries the same procedures out from this project's own
+    # reading of them, at Levels 2 and 3; this is a reading by people who did
+    # not write this library. Level 2 is not run here as well: the unit suite
+    # covers it, and a second run would double the job's time.
     #
     # The steps a master cannot perform over DNP3 (cycle power, change an
     # input, check that an output operated) are done by the plugin in
@@ -668,7 +672,7 @@ jobs:
               mvn --batch-mode --no-transfer-progress -q \
               "-Dmaven.repo.local=$HOME/.m2/repository" \
               scala:run -Dlauncher=conformance "-DaddArgs=-rev|3.1r1|-config|probe.ini|-run|6.3.2"; then
-            size=$(sudo stat -c %s capture-probe/3.1r1/L2/6.3.2/dump.pcap 2>/dev/null || echo 0)
+            size=$(sudo stat -c %s capture-probe/3.1r1/L3/6.3.2/dump.pcap 2>/dev/null || echo 0)
             if [ "$size" -gt 24 ]; then works=true; fi
           fi
           sudo rm -rf capture-probe
@@ -706,7 +710,7 @@ jobs:
 
       - name: Every procedure that sent a frame captured packets
         if: always() && steps.scope.outputs.run == 'true' && steps.capture.outputs.works == 'true'
-        working-directory: interop/dnp3c/results/3.1r1/L2
+        working-directory: interop/dnp3c/results/3.1r1/L3
         # A capture that silently recorded nothing looks like a capture. Each
         # procedure whose log shows a frame sent ("--P->") has to have one with
         # packets in it.
@@ -747,7 +751,7 @@ jobs:
 
       - name: Device log
         if: always() && steps.scope.outputs.run == 'true'
-        run: tail -n 200 interop/dnp3c/results/3.1r1/L2/outstation.log || true
+        run: tail -n 200 interop/dnp3c/results/3.1r1/L3/outstation.log || true
 
       - name: Keep the report, the logs and the captures
         if: always() && steps.scope.outputs.run == 'true'

@@ -42,6 +42,7 @@ from py1815.objects import (
     BinaryPoint,
     BinaryQuality,
     CounterPoint,
+    DoubleBitPoint,
 )
 
 #: Events a class buffer holds before the oldest is dropped. A master polling on
@@ -74,6 +75,11 @@ class AnalogEvent:
     #: Not part of what the event says, so two events are still equal
     #: without it; it is what puts a response in the order things happened.
     order: int = field(default=0, compare=False)
+    #: The value as the source gave it, for the floating-point variations.
+    #: ``point`` carries the value after scaling and rounding to the integer
+    #: that decides whether a change is an event. None means the floating-point
+    #: variations carry ``point``'s value.
+    unscaled: float | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -94,6 +100,21 @@ class BinaryEvent:
 
 
 @dataclass(frozen=True)
+class DoubleBitEvent:
+    """One double-bit binary input change."""
+
+    index: int
+    point: DoubleBitPoint
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+    #: Whether the clock that stamped it had been set. An event stamped
+    #: by a clock that had not is reported with relative time, behind a
+    #: common time that says so.
+    synchronized: bool = field(default=True, compare=False)
+
+
+@dataclass(frozen=True)
 class FrozenCounterEvent:
     """One counter, as it stood at one freeze."""
 
@@ -106,10 +127,55 @@ class FrozenCounterEvent:
     order: int = field(default=0, compare=False)
 
 
+@dataclass(frozen=True)
+class CounterEvent:
+    """One change in a counter's flags, with the count it held at the change."""
+
+    index: int
+    point: CounterPoint
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+
+
+@dataclass(frozen=True)
+class BinaryOutputEvent:
+    """One binary output change: its state or its flags."""
+
+    index: int
+    point: BinaryPoint
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+
+
+@dataclass(frozen=True)
+class AnalogOutputEvent:
+    """One analog output change: its value or its flags."""
+
+    index: int
+    #: The value as the integer variations carry it, with its flags.
+    point: AnalogPoint
+    #: The same value in engineering units, which the floating-point
+    #: variations carry unscaled.
+    value: float
+    timestamp_ms: int
+    #: Where this event falls among every event recorded, across classes.
+    order: int = field(default=0, compare=False)
+
+
 #: Any kind of event. The buffers hold them together, because a class is a
 #: reporting priority rather than a data type -- a master asking for class 1
 #: wants everything assigned to class 1.
-Event = AnalogEvent | BinaryEvent | FrozenCounterEvent
+Event = (
+    AnalogEvent
+    | BinaryEvent
+    | DoubleBitEvent
+    | FrozenCounterEvent
+    | CounterEvent
+    | BinaryOutputEvent
+    | AnalogOutputEvent
+)
 
 #: The largest index an event block can prefix an object with, the wider of the
 #: two qualifiers this outstation accepts being sixteen bits.
@@ -146,7 +212,9 @@ class _ClassBuffer:
         return evicted
 
 
-class EventBuffers:
+# Each kind of point has its own prime and record method, which puts the class
+# over pylint's limit on public methods.
+class EventBuffers:  # pylint: disable=too-many-public-methods
     """Per-class event storage, and the deadband rules that fill it.
 
     Holds the last reported value per point so a deadband can be applied against
@@ -178,6 +246,12 @@ class EventBuffers:
         self._buffers = {cls: _ClassBuffer(capacity) for cls in EventClass}
         self._last_analog: dict[int, AnalogPoint] = {}
         self._last_binary: dict[int, BinaryPoint] = {}
+        self._last_double_bit: dict[int, DoubleBitPoint] = {}
+        self._last_counter: dict[int, CounterPoint] = {}
+        #: The count in each counter's last event, or its first reading.
+        self._counter_reported: dict[int, int] = {}
+        self._last_binary_output: dict[int, BinaryPoint] = {}
+        self._last_analog_output: dict[int, AnalogPoint] = {}
         self._overflow_generation = 0
         self._recorded = 0
         self._analog_latest_only = analog_latest_only
@@ -199,7 +273,7 @@ class EventBuffers:
 
     def _forget(self, event: Event) -> None:
         """Stop counting an event that has left the buffers."""
-        if isinstance(event, BinaryEvent) and not event.synchronized:
+        if isinstance(event, BinaryEvent | DoubleBitEvent) and not event.synchronized:
             self._unsynchronized -= 1
 
     def count(self, event_class: EventClass) -> int:
@@ -353,7 +427,7 @@ class EventBuffers:
             )
         return index
 
-    def record_analog(
+    def record_analog(  # pylint: disable=too-many-arguments
         self,
         index: int,
         point: AnalogPoint,
@@ -361,8 +435,13 @@ class EventBuffers:
         event_class: EventClass,
         deadband: float = 0.0,
         timestamp_ms: int | None = None,
+        unscaled: float | None = None,
     ) -> AnalogEvent | None:
-        """Record an analog reading, returning the event it generated, if any."""
+        """Record an analog reading, returning the event it generated, if any.
+
+        ``unscaled`` is the value a floating-point variation reports for the
+        event. It plays no part in deciding whether the change is an event.
+        """
         self._checked_index(index)
         previous = self._last_analog.get(index)
         if previous is not None and not self._analog_changed(previous, point, deadband):
@@ -373,6 +452,7 @@ class EventBuffers:
             point,
             timestamp_ms if timestamp_ms is not None else now_ms(),
             order=self._next_order(),
+            unscaled=unscaled,
         )
         self._last_analog[index] = point
         if self._analog_latest_only:
@@ -409,6 +489,119 @@ class EventBuffers:
     def prime_binary(self, index: int, point: BinaryPoint) -> None:
         """Note where a binary point stands, without reporting it."""
         self._last_binary[self._checked_index(index)] = point
+
+    def prime_double_bit(self, index: int, point: DoubleBitPoint) -> None:
+        """Note where a double-bit point stands, without reporting it."""
+        self._last_double_bit[self._checked_index(index)] = point
+
+    def prime_counter(self, index: int, point: CounterPoint) -> None:
+        """Note a counter's flags and count, without reporting them."""
+        self._last_counter[self._checked_index(index)] = point
+        self._counter_reported[index] = point.value
+
+    def record_counter(
+        self,
+        index: int,
+        point: CounterPoint,
+        *,
+        event_class: EventClass,
+        value_deadband: float | None = None,
+        timestamp_ms: int | None = None,
+    ) -> CounterEvent | None:
+        """Record a counter reading, returning the event it generated, if any.
+
+        A change in the flags is always an event: IEEE 1815-2012 11.9.5.2 has
+        a device that supports counter events generate one whenever a flag
+        changes. A change in value is optional there, and is an event only
+        when *value_deadband* is given and the count has moved further than
+        it from the count in the counter's last event (or its first reading).
+        Each event is kept, as binary changes are, because the sequence is
+        the information.
+        """
+        self._checked_index(index)
+        previous = self._last_counter.get(index)
+        self._last_counter[index] = point
+        if previous is None:
+            self._counter_reported[index] = point.value
+            return None
+        reported = self._counter_reported.get(index, previous.value)
+        moved = value_deadband is not None and abs(point.value - reported) > value_deadband
+        if previous.flags == point.flags and not moved:
+            return None
+        self._counter_reported[index] = point.value
+        event = CounterEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
+        self._buffer(event_class, event)
+        return event
+
+    def prime_binary_output(self, index: int, point: BinaryPoint) -> None:
+        """Note where a binary output stands, without reporting it."""
+        self._last_binary_output[self._checked_index(index)] = point
+
+    def prime_analog_output(self, index: int, point: AnalogPoint) -> None:
+        """Note where an analog output stands, without reporting it."""
+        self._last_analog_output[self._checked_index(index)] = point
+
+    def record_binary_output(
+        self,
+        index: int,
+        point: BinaryPoint,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+    ) -> BinaryOutputEvent | None:
+        """Record a binary output's status, returning the event it generated, if any.
+
+        Any change of state or of a quality flag is an event, and a repeat of
+        what the master was last told is not (IEEE 1815-2012, A.7.1.1).
+        """
+        self._checked_index(index)
+        previous = self._last_binary_output.get(index)
+        if previous is not None and not self._binary_changed(previous, point):
+            return None
+        event = BinaryOutputEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
+        self._last_binary_output[index] = point
+        self._buffer(event_class, event)
+        return event
+
+    def record_analog_output(
+        self,
+        index: int,
+        point: AnalogPoint,
+        value: float,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+    ) -> AnalogOutputEvent | None:
+        """Record an analog output's status, returning the event it generated, if any.
+
+        Any change of the transmitted value or of a quality flag is an event.
+        Every one is kept: each is a setpoint taking effect, and a master
+        reading the sequence is owed all of them.
+        """
+        self._checked_index(index)
+        previous = self._last_analog_output.get(index)
+        if previous is not None and not self._analog_changed(previous, point, 0.0):
+            return None
+        event = AnalogOutputEvent(
+            index,
+            point,
+            value,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+        )
+        self._last_analog_output[index] = point
+        self._buffer(event_class, event)
+        return event
 
     def record_frozen_counter(
         self,
@@ -494,6 +687,42 @@ class EventBuffers:
         self._last_binary[index] = point
         self._buffer(event_class, event)
         return event
+
+    def record_double_bit(
+        self,
+        index: int,
+        point: DoubleBitPoint,
+        *,
+        event_class: EventClass,
+        timestamp_ms: int | None = None,
+        synchronized: bool | None = None,
+    ) -> DoubleBitEvent | None:
+        """Record a double-bit reading, returning the event it generated, if any.
+
+        A change of state or of any quality flag is an event, and one event
+        covers both bits of the state changing together (IEEE 1815-2012 11.9.6).
+        """
+        self._checked_index(index)
+        previous = self._last_double_bit.get(index)
+        if previous is not None and not self._double_bit_changed(previous, point):
+            return None
+
+        event = DoubleBitEvent(
+            index,
+            point,
+            timestamp_ms if timestamp_ms is not None else now_ms(),
+            order=self._next_order(),
+            synchronized=self.synchronized if synchronized is None else synchronized,
+        )
+        if not event.synchronized:
+            self._unsynchronized += 1
+        self._last_double_bit[index] = point
+        self._buffer(event_class, event)
+        return event
+
+    @staticmethod
+    def _double_bit_changed(previous: DoubleBitPoint, current: DoubleBitPoint) -> bool:
+        return previous.state != current.state or previous.flags != current.flags
 
     @staticmethod
     def _analog_changed(previous: AnalogPoint, current: AnalogPoint, deadband: float) -> bool:

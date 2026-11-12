@@ -84,6 +84,8 @@ nav:
       - Session: reference/session.md
       - Listener: reference/server.md
       - Objects: reference/objects.md
+      - Object catalog: reference/catalog.md
+      - Device attributes: reference/attributes.md
       - Controls: reference/control.md
       - Events: reference/events.md
       - DER profile: reference/profile.md

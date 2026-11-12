@@ -308,6 +308,1463 @@
         91,
         107
       ]
+    },
+    "A": {
+      "title": "DNP3 data object library",
+      "groups": {
+        "0": {
+          "name": "device attributes",
+          "variations": {
+            "209": {
+              "name": "Device attributes - secure authentication version",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "210": {
+              "name": "Device attributes - number of security statistics per association",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "211": {
+              "name": "Device attributes - identification of support for user-specific attributes",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "212": {
+              "name": "Device attributes - number of master-defined data set prototypes",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "213": {
+              "name": "Device attributes - number of outstation-defined data set prototypes",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "214": {
+              "name": "Device attributes - number of master-defined data sets",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "215": {
+              "name": "Device attributes - number of outstation-defined data sets",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "216": {
+              "name": "Device attributes - maximum number of binary output objects per request",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "217": {
+              "name": "Device attributes - local timing accuracy",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "218": {
+              "name": "Device attributes - duration of time accuracy",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "219": {
+              "name": "Device attributes - support for analog output events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "220": {
+              "name": "Device attributes - maximum analog output index",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "221": {
+              "name": "Device attributes - number of analog outputs",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "222": {
+              "name": "Device attributes - support for binary output events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "223": {
+              "name": "Device attributes - maximum binary output index",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "224": {
+              "name": "Device attributes - number of binary outputs",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "225": {
+              "name": "Device attributes - support for frozen counter events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "226": {
+              "name": "Device attributes - support for frozen counters",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "227": {
+              "name": "Device attributes - support for counter events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "228": {
+              "name": "Device attributes - maximum counter index",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "229": {
+              "name": "Device attributes - number of counter points",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "230": {
+              "name": "Device attributes - support for frozen analog inputs",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "231": {
+              "name": "Device attributes - support for analog input events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "232": {
+              "name": "Device attributes - maximum analog input index",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "233": {
+              "name": "Device attributes - number of analog input points",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "234": {
+              "name": "Device attributes - support for double-bit binary input events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "235": {
+              "name": "Device attributes - maximum double-bit binary index",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "236": {
+              "name": "Device attributes - number of double-bit binary input points",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "237": {
+              "name": "Device attributes - support for binary input events",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "238": {
+              "name": "Device attributes - maximum binary input index",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "239": {
+              "name": "Device attributes - number of binary input points",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "240": {
+              "name": "Device attributes - maximum transmit fragment size",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "241": {
+              "name": "Device attributes - maximum receive fragment size",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "242": {
+              "name": "Device attributes - device manufacturer's software version",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "243": {
+              "name": "Device attributes - device manufacturer's hardware version",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "245": {
+              "name": "Device attributes - user-assigned location name",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "246": {
+              "name": "Device attributes - user-assigned ID code/number",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "247": {
+              "name": "Device attributes - user-assigned device name",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "248": {
+              "name": "Device attributes - device serial number",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "249": {
+              "name": "Device attributes - DNP3 subset and conformance",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "250": {
+              "name": "Device attributes - device manufacturer's product name and model",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "252": {
+              "name": "Device attributes - device manufacturer's name",
+              "type": "Attrib",
+              "size": "variable"
+            },
+            "254": {
+              "name": "Device attributes - non-specific all attributes request",
+              "type": "Attrib",
+              "size": "fixed",
+              "octets": 0
+            },
+            "255": {
+              "name": "Device attributes - list of attribute variations",
+              "type": "Attrib",
+              "size": "variable"
+            }
+          }
+        },
+        "1": {
+          "name": "binary inputs",
+          "variations": {
+            "1": {
+              "name": "Binary input - packed format",
+              "type": "Static",
+              "size": "packed",
+              "bits": 1
+            },
+            "2": {
+              "name": "Binary input - with flags",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 1
+            }
+          }
+        },
+        "2": {
+          "name": "binary input events",
+          "variations": {
+            "1": {
+              "name": "Binary input event - without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 1
+            },
+            "2": {
+              "name": "Binary input event - with absolute time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 7
+            },
+            "3": {
+              "name": "Binary input event - with relative time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            }
+          }
+        },
+        "3": {
+          "name": "double-bit binary inputs",
+          "variations": {
+            "1": {
+              "name": "Double-bit binary input - packed format",
+              "type": "Static",
+              "size": "packed",
+              "bits": 2
+            },
+            "2": {
+              "name": "Double-bit binary input - with flags",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 1
+            }
+          }
+        },
+        "4": {
+          "name": "double-bit binary input events",
+          "variations": {
+            "1": {
+              "name": "Double-bit binary input event - without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 1
+            },
+            "2": {
+              "name": "Double-bit binary input event - with absolute time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 7
+            },
+            "3": {
+              "name": "Double-bit binary input event - with relative time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            }
+          }
+        },
+        "10": {
+          "name": "binary outputs",
+          "variations": {
+            "1": {
+              "name": "Binary output - packed format",
+              "type": "Static",
+              "size": "packed",
+              "bits": 1
+            },
+            "2": {
+              "name": "Binary output - output status with flags",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 1
+            }
+          }
+        },
+        "11": {
+          "name": "binary output events",
+          "variations": {
+            "1": {
+              "name": "Binary output event - status without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 1
+            },
+            "2": {
+              "name": "Binary output event - status with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 7
+            }
+          }
+        },
+        "12": {
+          "name": "binary output commands",
+          "variations": {
+            "1": {
+              "name": "Binary output command - control relay output block - also known as CROB",
+              "type": "Cmnd",
+              "size": "fixed",
+              "octets": 11
+            },
+            "2": {
+              "name": "Binary output command - pattern control block - also known as PCB",
+              "type": "Cmnd",
+              "size": "fixed",
+              "octets": 11
+            },
+            "3": {
+              "name": "Binary output command - pattern mask",
+              "type": "Cmnd",
+              "size": "packed",
+              "bits": 1
+            }
+          }
+        },
+        "13": {
+          "name": "binary output command events",
+          "variations": {
+            "1": {
+              "name": "Binary output command event - command status without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 1
+            },
+            "2": {
+              "name": "Binary output command event - command status with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 7
+            }
+          }
+        },
+        "20": {
+          "name": "counters",
+          "variations": {
+            "1": {
+              "name": "Counter - 32-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Counter - 16-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Counter - 32-bit with flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "4": {
+              "name": "Counter - 16-bit with flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "5": {
+              "name": "Counter - 32-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "6": {
+              "name": "Counter - 16-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            },
+            "7": {
+              "name": "Counter - 32-bit without flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "8": {
+              "name": "Counter - 16-bit without flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            }
+          }
+        },
+        "21": {
+          "name": "frozen counters",
+          "variations": {
+            "1": {
+              "name": "Frozen counter - 32-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Frozen counter - 16-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Frozen counter - 32-bit with flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "4": {
+              "name": "Frozen counter - 16-bit with flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "5": {
+              "name": "Frozen counter - 32-bit with flag and time",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 11
+            },
+            "6": {
+              "name": "Frozen counter - 16-bit with flag and time",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Frozen counter - 32-bit with flag and time, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Frozen counter - 16-bit with flag and time, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 9
+            },
+            "9": {
+              "name": "Frozen counter - 32-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "10": {
+              "name": "Frozen counter - 16-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            },
+            "11": {
+              "name": "Frozen counter - 32-bit without flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "12": {
+              "name": "Frozen counter - 16-bit without flag, delta",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            }
+          }
+        },
+        "22": {
+          "name": "counter events",
+          "variations": {
+            "1": {
+              "name": "Counter event - 32-bit with flag",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Counter event - 16-bit with flag",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Counter event - 32-bit with flag, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "4": {
+              "name": "Counter event - 16-bit with flag, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "5": {
+              "name": "Counter event - 32-bit with flag and time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "6": {
+              "name": "Counter event - 16-bit with flag and time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Counter event - 32-bit with flag and time, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Counter event - 16-bit with flag and time, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            }
+          }
+        },
+        "23": {
+          "name": "frozen counter events",
+          "variations": {
+            "1": {
+              "name": "Frozen counter event - 32-bit with flag",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Frozen counter event - 16-bit with flag",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Frozen counter event - 32-bit with flag, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "4": {
+              "name": "Frozen counter event - 16-bit with flag, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "5": {
+              "name": "Frozen counter event - 32-bit with flag and time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "6": {
+              "name": "Frozen counter event - 16-bit with flag and time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Frozen counter event - 32-bit with flag and time, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Frozen counter event - 16-bit with flag and time, delta",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            }
+          }
+        },
+        "30": {
+          "name": "analog inputs",
+          "variations": {
+            "1": {
+              "name": "Analog input - 32-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Analog input - 16-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Analog input - 32-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "4": {
+              "name": "Analog input - 16-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            },
+            "5": {
+              "name": "Analog input - single-precision, floating-point with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "6": {
+              "name": "Analog input - double-precision, floating-point with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 9
+            }
+          }
+        },
+        "31": {
+          "name": "frozen analog inputs",
+          "variations": {
+            "1": {
+              "name": "Frozen analog input - 32-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Frozen analog input - 16-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Frozen analog input - 32-bit with time-of-freeze",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 11
+            },
+            "4": {
+              "name": "Frozen analog input - 16-bit with time-of-freeze",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 9
+            },
+            "5": {
+              "name": "Frozen analog input - 32-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "6": {
+              "name": "Frozen analog input - 16-bit without flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            },
+            "7": {
+              "name": "Frozen analog input - single-precision, floating-point with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "8": {
+              "name": "Frozen analog input - double-precision, floating-point with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 9
+            }
+          }
+        },
+        "32": {
+          "name": "analog input events",
+          "variations": {
+            "1": {
+              "name": "Analog input event - 32-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Analog input event - 16-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Analog input event - 32-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "4": {
+              "name": "Analog input event - 16-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "5": {
+              "name": "Analog input event - single-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "6": {
+              "name": "Analog input event - double-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Analog input event - single-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Analog input event - double-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 15
+            }
+          }
+        },
+        "33": {
+          "name": "frozen analog input events",
+          "variations": {
+            "1": {
+              "name": "Frozen analog input event - 32-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Frozen analog input event - 16-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Frozen analog input event - 32-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "4": {
+              "name": "Frozen analog input event - 16-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "5": {
+              "name": "Frozen analog input event - single-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "6": {
+              "name": "Frozen analog input event - double-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Frozen analog input event - single-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Frozen analog input event - double-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 15
+            }
+          }
+        },
+        "34": {
+          "name": "analog input reporting deadbands",
+          "variations": {
+            "1": {
+              "name": "Analog input reporting deadband - 16-bit",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            },
+            "2": {
+              "name": "Analog input reporting deadband - 32-bit",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "3": {
+              "name": "Analog input reporting deadband - single-precision, floating-point",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            }
+          }
+        },
+        "40": {
+          "name": "analog output status",
+          "variations": {
+            "1": {
+              "name": "Analog output status - 32-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Analog output status - 16-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Analog output status - single-precision, floating-point with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 5
+            },
+            "4": {
+              "name": "Analog output status - double-precision, floating-point with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 9
+            }
+          }
+        },
+        "41": {
+          "name": "analog outputs",
+          "variations": {
+            "1": {
+              "name": "Analog output - 32-bit",
+              "type": "Cmnd",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Analog output - 16-bit",
+              "type": "Cmnd",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Analog output - single-precision, floating-point",
+              "type": "Cmnd",
+              "size": "fixed",
+              "octets": 5
+            },
+            "4": {
+              "name": "Analog output - double-precision, floating-point",
+              "type": "Cmnd",
+              "size": "fixed",
+              "octets": 9
+            }
+          }
+        },
+        "42": {
+          "name": "analog output events",
+          "variations": {
+            "1": {
+              "name": "Analog output event - 32-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Analog output event - 16-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Analog output event - 32-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "4": {
+              "name": "Analog output event - 16-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "5": {
+              "name": "Analog output event - single-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "6": {
+              "name": "Analog output event - double-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Analog output event - single-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Analog output event - double-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 15
+            }
+          }
+        },
+        "43": {
+          "name": "analog output command events",
+          "variations": {
+            "1": {
+              "name": "Analog output command event - 32-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "2": {
+              "name": "Analog output command event - 16-bit without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 3
+            },
+            "3": {
+              "name": "Analog output command event - 32-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "4": {
+              "name": "Analog output command event - 16-bit with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "5": {
+              "name": "Analog output command event - single-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 5
+            },
+            "6": {
+              "name": "Analog output command event - double-precision, floating-point without time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 9
+            },
+            "7": {
+              "name": "Analog output command event - single-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 11
+            },
+            "8": {
+              "name": "Analog output command event - double-precision, floating-point with time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 15
+            }
+          }
+        },
+        "50": {
+          "name": "time and date",
+          "variations": {
+            "1": {
+              "name": "Time and date - absolute time",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 6
+            },
+            "2": {
+              "name": "Time and date - absolute time and interval",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 10
+            },
+            "3": {
+              "name": "Time and date - absolute time at last recorded time",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 6
+            },
+            "4": {
+              "name": "Time and date - indexed absolute time and long interval",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 11
+            }
+          }
+        },
+        "51": {
+          "name": "time and date common time-of-occurrences",
+          "variations": {
+            "1": {
+              "name": "Time and date common time-of-occurrence - absolute time, synchronized",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 6
+            },
+            "2": {
+              "name": "Time and date common time-of-occurrence - absolute time, unsynchronized",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 6
+            }
+          }
+        },
+        "52": {
+          "name": "time delays",
+          "variations": {
+            "1": {
+              "name": "Time delay - coarse",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 2
+            },
+            "2": {
+              "name": "Time delay - fine",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 2
+            }
+          }
+        },
+        "60": {
+          "name": "class objects",
+          "variations": {
+            "1": {
+              "name": "Class objects - Class 0 data",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 0
+            },
+            "2": {
+              "name": "Class objects - Class 1 data",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 0
+            },
+            "3": {
+              "name": "Class objects - Class 2 data",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 0
+            },
+            "4": {
+              "name": "Class objects - Class 3 data",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 0
+            }
+          }
+        },
+        "70": {
+          "name": "file-control",
+          "variations": {
+            "1": {
+              "name": "File-control - file identifier - superseded",
+              "type": "Info",
+              "size": "variable"
+            },
+            "2": {
+              "name": "File-control - authentication",
+              "type": "Info",
+              "size": "variable"
+            },
+            "3": {
+              "name": "File-control - file command",
+              "type": "Info",
+              "size": "variable"
+            },
+            "4": {
+              "name": "File-control - file command status",
+              "type": "Info/Event",
+              "size": "variable"
+            },
+            "5": {
+              "name": "File-control - file transport",
+              "type": "Info/Event",
+              "size": "variable"
+            },
+            "6": {
+              "name": "File-control - file transport status",
+              "type": "Info/Event",
+              "size": "variable"
+            },
+            "7": {
+              "name": "File-control - file descriptor",
+              "type": "Info/Event",
+              "size": "variable"
+            },
+            "8": {
+              "name": "File-control - file specification string",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "80": {
+          "name": "internal indications",
+          "variations": {
+            "1": {
+              "name": "Internal indications - packed format",
+              "type": "Static",
+              "size": "packed",
+              "bits": 1
+            }
+          }
+        },
+        "81": {
+          "name": "device storage",
+          "variations": {
+            "1": {
+              "name": "Device storage - buffer fill status",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 3
+            }
+          }
+        },
+        "82": {
+          "name": "Device Profiles",
+          "variations": {
+            "1": {
+              "name": "Device Profile - functions and indexes",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "83": {
+          "name": "data sets",
+          "variations": {
+            "1": {
+              "name": "Data set - private registration object",
+              "type": "Any",
+              "size": "variable"
+            },
+            "2": {
+              "name": "Data set - private registration object descriptor",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "85": {
+          "name": "data set prototypes",
+          "variations": {
+            "1": {
+              "name": "Data set prototype - with UUID",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "86": {
+          "name": "data set descriptors",
+          "variations": {
+            "1": {
+              "name": "Data set descriptor - data set contents",
+              "type": "Info",
+              "size": "variable"
+            },
+            "2": {
+              "name": "Data set descriptor - characteristics",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 1
+            },
+            "3": {
+              "name": "Data set descriptor - point index attributes",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "87": {
+          "name": "data sets",
+          "variations": {
+            "1": {
+              "name": "Data set - present value",
+              "type": "Static",
+              "size": "variable"
+            }
+          }
+        },
+        "88": {
+          "name": "data set events",
+          "variations": {
+            "1": {
+              "name": "Data set event - snapshot",
+              "type": "Event",
+              "size": "variable"
+            }
+          }
+        },
+        "90": {
+          "name": "applications",
+          "variations": {
+            "1": {
+              "name": "Application - identifier",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "91": {
+          "name": "status of requested operations",
+          "variations": {
+            "1": {
+              "name": "Status of requested operation - active configuration",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "100": {
+          "name": "floating-point",
+          "variations": {
+            "all": {
+              "name": "Floating-point - none - general description common to all variations",
+              "type": "Static",
+              "size": "variable"
+            }
+          }
+        },
+        "101": {
+          "name": "binary-coded decimal integers",
+          "variations": {
+            "1": {
+              "name": "Binary-coded decimal integer - small",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 2
+            },
+            "2": {
+              "name": "Binary-coded decimal integer - medium",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 4
+            },
+            "3": {
+              "name": "Binary-coded decimal integer - large",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 8
+            }
+          }
+        },
+        "102": {
+          "name": "unsigned integers",
+          "variations": {
+            "1": {
+              "name": "Unsigned integer - 8-bit",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 1
+            }
+          }
+        },
+        "110": {
+          "name": "octet strings",
+          "variations": {
+            "all": {
+              "name": "Octet string - none - general description common to all variations",
+              "type": "Static",
+              "size": "variable"
+            }
+          }
+        },
+        "111": {
+          "name": "octet string events",
+          "variations": {
+            "all": {
+              "name": "Octet string event - none - general description common to all variations",
+              "type": "Event",
+              "size": "variable"
+            }
+          }
+        },
+        "112": {
+          "name": "virtual terminal output blocks",
+          "variations": {
+            "all": {
+              "name": "Virtual terminal output block - none - general description common to all variations",
+              "type": "Static",
+              "size": "variable"
+            }
+          }
+        },
+        "113": {
+          "name": "virtual terminal event data",
+          "variations": {
+            "all": {
+              "name": "Virtual terminal event data - none - general description common to all variations",
+              "type": "Event",
+              "size": "variable"
+            }
+          }
+        },
+        "120": {
+          "name": "authentication",
+          "variations": {
+            "1": {
+              "name": "Authentication - challenge",
+              "type": "Info",
+              "size": "variable"
+            },
+            "2": {
+              "name": "Authentication - reply",
+              "type": "Info",
+              "size": "variable"
+            },
+            "3": {
+              "name": "Authentication - Aggressive Mode request",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 6
+            },
+            "4": {
+              "name": "Authentication - session key status request",
+              "type": "Info",
+              "size": "fixed",
+              "octets": 2
+            },
+            "5": {
+              "name": "Authentication - session key status",
+              "type": "Info",
+              "size": "variable"
+            },
+            "6": {
+              "name": "Authentication - session key change",
+              "type": "Info",
+              "size": "variable"
+            },
+            "7": {
+              "name": "Authentication - error",
+              "type": "Event",
+              "size": "variable"
+            },
+            "8": {
+              "name": "Authentication - user certificate",
+              "type": "Info",
+              "size": "variable"
+            },
+            "9": {
+              "name": "Authentication - message authentication code (MAC)",
+              "type": "Info",
+              "size": "variable"
+            },
+            "10": {
+              "name": "Authentication - user status change",
+              "type": "Info",
+              "size": "variable"
+            },
+            "11": {
+              "name": "Authentication - update key change request",
+              "type": "Info",
+              "size": "variable"
+            },
+            "12": {
+              "name": "Authentication - update key change reply",
+              "type": "Info",
+              "size": "variable"
+            },
+            "13": {
+              "name": "Authentication - update key change",
+              "type": "Info",
+              "size": "variable"
+            },
+            "14": {
+              "name": "Authentication - update key change signature",
+              "type": "Info",
+              "size": "variable"
+            },
+            "15": {
+              "name": "Authentication - update key change confirmation",
+              "type": "Info",
+              "size": "variable"
+            }
+          }
+        },
+        "121": {
+          "name": "security statistics",
+          "variations": {
+            "1": {
+              "name": "Security statistic - 32-bit with flag",
+              "type": "Static",
+              "size": "fixed",
+              "octets": 7
+            }
+          }
+        },
+        "122": {
+          "name": "security statistic events",
+          "variations": {
+            "1": {
+              "name": "Security statistic event - 32-bit with flag",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 7
+            },
+            "2": {
+              "name": "Security statistic event - 32-bit with flag and time",
+              "type": "Event",
+              "size": "fixed",
+              "octets": 13
+            }
+          }
+        }
+      }
     }
   }
 }

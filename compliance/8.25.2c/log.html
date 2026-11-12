@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8"/>
     <title>
-      8.25.2c Counter Events (revision 3.1r1, subset level 2) | Step Function I/O
+      8.25.2c Counter Events (revision 3.1r1, subset level 3) | Step Function I/O
     </title>
     <link rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Poppins:wght@300;600&display=swap"/>
     <link rel="stylesheet" type="text/css" href="../report.css"/>
@@ -12,10 +12,10 @@
     <header>
       <div class="heading">
         <h1>
-          8.25.2c Counter Events (revision 3.1r1, subset level 2)
+          8.25.2c Counter Events (revision 3.1r1, subset level 3)
         </h1>
         <p class="dut">
-          Device under test: <strong>py1815 Subset Level 2 outstation</strong>
+          Device under test: <strong>py1815 Subset Level 3 outstation</strong>
         </p>
         <div class="context">
           <a href="../report.html">
@@ -31,7 +31,7 @@
       <table class="log">
         <tr class="info">
           <td>
-            10:34:43.907
+            15:03:03.151
           </td>
           <td>
                  
@@ -42,29 +42,29 @@
         </tr>
         <tr class="plugin">
           <td>
-            10:34:44.089
+            15:03:04.512
           </td>
           <td>
             [PLG]
           </td>
           <td>
-            Started the outstation on port 20000
+            Started the Subset Level 3 outstation on port 20000
           </td>
         </tr>
         <tr class="plugin">
           <td>
-            10:34:44.089
+            15:03:04.515
           </td>
           <td>
             [PLG]
           </td>
           <td>
-            Froze the device's counters: 4 frozen
+            Froze the device's counters: 4 frozen, 4 event(s)
           </td>
         </tr>
         <tr class="note">
           <td>
-            10:34:44.091
+            15:03:04.523
           </td>
           <td>
                  
@@ -75,18 +75,73 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.523
           </td>
           <td>
                  
           </td>
           <td>
-               - The DUT has no counter events
+               - Set every counter point's flags normal: ONLINE set, all others clear
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.523
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Generate 2 Counter Change Event(s)
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.524
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            Every CTR already reports ONLINE and no other flag
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.530
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            Changed {&quot;kind&quot;:&quot;CTR&quot;,&quot;index&quot;:0,&quot;value&quot;:1,&quot;time_ms&quot;:1794434584527,&quot;events&quot;:1}
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.530
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            Changed {&quot;kind&quot;:&quot;CTR&quot;,&quot;index&quot;:0,&quot;value&quot;:2,&quot;time_ms&quot;:1794434584529,&quot;events&quot;:1}
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.530
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            The device buffered 2 event(s)
           </td>
         </tr>
         <tr class="note">
           <td>
-            10:34:44.091
+            15:03:04.531
           </td>
           <td>
                  
@@ -97,7 +152,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.531
           </td>
           <td>
                  
@@ -108,7 +163,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.531
           </td>
           <td>
                  
@@ -119,7 +174,7 @@
         </tr>
         <tr class="transmit data-level-4">
           <td>
-            10:34:44.091
+            15:03:04.532
           </td>
           <td>
             --A-&gt;
@@ -130,7 +185,7 @@
         </tr>
         <tr class="detail-level-0 transmit data-level-4">
           <td>
-            10:34:44.091
+            15:03:04.532
           </td>
           <td>
                  
@@ -141,7 +196,7 @@
         </tr>
         <tr class="transmit data-level-3">
           <td>
-            10:34:44.091
+            15:03:04.532
           </td>
           <td>
             --T-&gt;
@@ -152,7 +207,7 @@
         </tr>
         <tr class="transmit data-level-2">
           <td>
-            10:34:44.091
+            15:03:04.532
           </td>
           <td>
             --L-&gt;
@@ -163,7 +218,7 @@
         </tr>
         <tr class="transmit data-level-1">
           <td>
-            10:34:44.091
+            15:03:04.532
           </td>
           <td>
             --P-&gt;
@@ -174,7 +229,7 @@
         </tr>
         <tr class="detail-level-0 transmit data-level-1">
           <td>
-            10:34:44.091
+            15:03:04.532
           </td>
           <td>
                  
@@ -185,7 +240,7 @@
         </tr>
         <tr class="note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -196,7 +251,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -207,7 +262,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -218,7 +273,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -229,7 +284,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -240,7 +295,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -251,7 +306,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -262,7 +317,7 @@
         </tr>
         <tr class="detail-level-0 note">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
@@ -273,40 +328,51 @@
         </tr>
         <tr class="receive data-level-1">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
             &lt;-P--
           </td>
           <td>
-            05 64 0A 44 01 00 00 04 67 88
+            05 64 1A 44 01 00 00 04 A6 F0
           </td>
         </tr>
         <tr class="detail-level-0 receive data-level-1">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
                  
           </td>
           <td>
-            C0 C1 81 90 00 73 EE
+            C0 E1 81 98 00 16 01 17 02 00 01 01 00 00 00 00 76 E9
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-1">
+          <td>
+            15:03:04.533
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            01 02 00 00 00 50 14
           </td>
         </tr>
         <tr class="receive data-level-2">
           <td>
-            10:34:44.091
+            15:03:04.533
           </td>
           <td>
             &lt;-L--
           </td>
           <td>
-            master: 0 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0x44 length: 10 dest: 1 src: 1024
+            master: 0 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0x44 length: 26 dest: 1 src: 1024
           </td>
         </tr>
         <tr class="receive data-level-3">
           <td>
-            10:34:44.091
+            15:03:04.534
           </td>
           <td>
             &lt;-T--
@@ -317,40 +383,810 @@
         </tr>
         <tr class="receive data-level-4">
           <td>
-            10:34:44.091
+            15:03:04.538
           </td>
           <td>
             &lt;-A--
           </td>
           <td>
-            Response(0x81) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x01 IIN(DeviceRestart, NeedTime)
+            Response(0x81) fir: 1 fin: 1 con: 1 uns: 0 seq: 0x01 IIN(DeviceRestart, NeedTime, Class3Events)
           </td>
         </tr>
-        <tr class="info">
+        <tr class="detail-level-0 receive data-level-4">
           <td>
-            10:34:44.092
+            15:03:04.538
           </td>
           <td>
                  
           </td>
           <td>
-            Note on the result: the DUT answers a read of g22v1 with a Null Response, having no such events
+            g22v1, 1-Byte Count and Index, count: 2
           </td>
         </tr>
-        <tr class="info">
+        <tr class="detail-level-1 receive data-level-4">
           <td>
-            10:34:44.092
+            15:03:04.538
           </td>
           <td>
                  
           </td>
           <td>
-            The procedure ends early, its remaining steps skipped: the DUT answered the first read as the test allows, without events
+            [0] - flags: 0x01 count: 1
+          </td>
+        </tr>
+        <tr class="detail-level-1 receive data-level-4">
+          <td>
+            15:03:04.538
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            [0] - flags: 0x01 count: 2
+          </td>
+        </tr>
+        <tr class="transmit data-level-4">
+          <td>
+            15:03:04.539
+          </td>
+          <td>
+            --A-&gt;
+          </td>
+          <td>
+            Confirm(0x00) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x01
+          </td>
+        </tr>
+        <tr class="transmit data-level-3">
+          <td>
+            15:03:04.539
+          </td>
+          <td>
+            --T-&gt;
+          </td>
+          <td>
+            fir: 1 fin: 1 seq: 0
+          </td>
+        </tr>
+        <tr class="transmit data-level-2">
+          <td>
+            15:03:04.539
+          </td>
+          <td>
+            --L-&gt;
+          </td>
+          <td>
+            master: 1 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0xC4 length: 8 dest: 1024 src: 1
+          </td>
+        </tr>
+        <tr class="transmit data-level-1">
+          <td>
+            15:03:04.539
+          </td>
+          <td>
+            --P-&gt;
+          </td>
+          <td>
+            05 64 08 C4 00 04 01 00 9A 19
+          </td>
+        </tr>
+        <tr class="detail-level-0 transmit data-level-1">
+          <td>
+            15:03:04.539
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            C0 C1 00 7D 3D
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.551
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            The response holds the 2 counter event(s) expected (LatestBatch), in order
+          </td>
+        </tr>
+        <tr class="note">
+          <td>
+            15:03:04.551
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            step: 7
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.551
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Generate 2 Counter Change Event(s)
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            Changed {&quot;kind&quot;:&quot;CTR&quot;,&quot;index&quot;:0,&quot;value&quot;:3,&quot;time_ms&quot;:1794434584554,&quot;events&quot;:1}
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            Changed {&quot;kind&quot;:&quot;CTR&quot;,&quot;index&quot;:0,&quot;value&quot;:4,&quot;time_ms&quot;:1794434584555,&quot;events&quot;:1}
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            The device buffered 2 event(s)
+          </td>
+        </tr>
+        <tr class="note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            step: 8
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Read(0x01) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x02
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+                  - g22v2, All Objects
+          </td>
+        </tr>
+        <tr class="transmit data-level-4">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            --A-&gt;
+          </td>
+          <td>
+            Read(0x01) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x02
+          </td>
+        </tr>
+        <tr class="detail-level-0 transmit data-level-4">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            g22v2, All Objects
+          </td>
+        </tr>
+        <tr class="transmit data-level-3">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            --T-&gt;
+          </td>
+          <td>
+            fir: 1 fin: 1 seq: 0
+          </td>
+        </tr>
+        <tr class="transmit data-level-2">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            --L-&gt;
+          </td>
+          <td>
+            master: 1 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0xC4 length: 11 dest: 1024 src: 1
+          </td>
+        </tr>
+        <tr class="transmit data-level-1">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+            --P-&gt;
+          </td>
+          <td>
+            05 64 0B C4 00 04 01 00 CA 8A
+          </td>
+        </tr>
+        <tr class="detail-level-0 transmit data-level-1">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            C0 C2 01 16 02 06 63 B8
+          </td>
+        </tr>
+        <tr class="note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            steps: 9 to 10
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Read a single fragment response w/ sequence(0x02)
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that each event comes back in g22v2, or in the other width for a point the DUT keeps only in that one, with 1-octet (0x17) or 2-octet (0x28) indexes
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that every event reports its flags normal (ONLINE set, all others clear)
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that the response holds every counter event generated
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that an application layer confirmation is requested.
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.556
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Record the events
+          </td>
+        </tr>
+        <tr class="receive data-level-1">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+            &lt;-P--
+          </td>
+          <td>
+            05 64 1A 44 01 00 00 04 A6 F0
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-1">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            C0 E2 81 98 00 16 01 17 02 00 01 03 00 00 00 00 52 1D
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-1">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            01 04 00 00 00 D2 00
+          </td>
+        </tr>
+        <tr class="receive data-level-2">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+            &lt;-L--
+          </td>
+          <td>
+            master: 0 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0x44 length: 26 dest: 1 src: 1024
+          </td>
+        </tr>
+        <tr class="receive data-level-3">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+            &lt;-T--
+          </td>
+          <td>
+            fir: 1 fin: 1 seq: 0
+          </td>
+        </tr>
+        <tr class="receive data-level-4">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+            &lt;-A--
+          </td>
+          <td>
+            Response(0x81) fir: 1 fin: 1 con: 1 uns: 0 seq: 0x02 IIN(DeviceRestart, NeedTime, Class3Events)
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-4">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            g22v1, 1-Byte Count and Index, count: 2
+          </td>
+        </tr>
+        <tr class="detail-level-1 receive data-level-4">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            [0] - flags: 0x01 count: 3
+          </td>
+        </tr>
+        <tr class="detail-level-1 receive data-level-4">
+          <td>
+            15:03:04.558
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            [0] - flags: 0x01 count: 4
+          </td>
+        </tr>
+        <tr class="plugin">
+          <td>
+            15:03:04.560
+          </td>
+          <td>
+            [PLG]
+          </td>
+          <td>
+            The response holds the 2 counter event(s) expected (LatestBatch), in order
+          </td>
+        </tr>
+        <tr class="note">
+          <td>
+            15:03:04.563
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            step: 10.5
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:04.563
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Expect no response within 30000 ms.
+          </td>
+        </tr>
+        <tr class="note">
+          <td>
+            15:03:34.575
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            step: 10.6
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.575
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Read(0x01) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x03
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.575
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+                  - g22v2, All Objects
+          </td>
+        </tr>
+        <tr class="transmit data-level-4">
+          <td>
+            15:03:34.575
+          </td>
+          <td>
+            --A-&gt;
+          </td>
+          <td>
+            Read(0x01) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x03
+          </td>
+        </tr>
+        <tr class="detail-level-0 transmit data-level-4">
+          <td>
+            15:03:34.575
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            g22v2, All Objects
+          </td>
+        </tr>
+        <tr class="transmit data-level-3">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+            --T-&gt;
+          </td>
+          <td>
+            fir: 1 fin: 1 seq: 0
+          </td>
+        </tr>
+        <tr class="transmit data-level-2">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+            --L-&gt;
+          </td>
+          <td>
+            master: 1 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0xC4 length: 11 dest: 1024 src: 1
+          </td>
+        </tr>
+        <tr class="transmit data-level-1">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+            --P-&gt;
+          </td>
+          <td>
+            05 64 0B C4 00 04 01 00 CA 8A
+          </td>
+        </tr>
+        <tr class="detail-level-0 transmit data-level-1">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            C0 C3 01 16 02 06 65 9B
+          </td>
+        </tr>
+        <tr class="note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            steps: 10.7 to 10.8
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Read a single fragment response w/ sequence(0x03)
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that each event comes back in g22v2, or in the other width for a point the DUT keeps only in that one, with 1-octet (0x17) or 2-octet (0x28) indexes
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that every event reports its flags normal (ONLINE set, all others clear)
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that an application layer confirmation is requested.
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Verify that the response reports the same events as the one before
+          </td>
+        </tr>
+        <tr class="detail-level-0 note">
+          <td>
+            15:03:34.576
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+               - Confirm each response that asks for a confirmation
+          </td>
+        </tr>
+        <tr class="receive data-level-1">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+            &lt;-P--
+          </td>
+          <td>
+            05 64 1A 44 01 00 00 04 A6 F0
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-1">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            C0 E3 81 98 00 16 01 17 02 00 01 03 00 00 00 00 4A 73
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-1">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            01 04 00 00 00 D2 00
+          </td>
+        </tr>
+        <tr class="receive data-level-2">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+            &lt;-L--
+          </td>
+          <td>
+            master: 0 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0x44 length: 26 dest: 1 src: 1024
+          </td>
+        </tr>
+        <tr class="receive data-level-3">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+            &lt;-T--
+          </td>
+          <td>
+            fir: 1 fin: 1 seq: 0
+          </td>
+        </tr>
+        <tr class="receive data-level-4">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+            &lt;-A--
+          </td>
+          <td>
+            Response(0x81) fir: 1 fin: 1 con: 1 uns: 0 seq: 0x03 IIN(DeviceRestart, NeedTime, Class3Events)
+          </td>
+        </tr>
+        <tr class="detail-level-0 receive data-level-4">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            g22v1, 1-Byte Count and Index, count: 2
+          </td>
+        </tr>
+        <tr class="detail-level-1 receive data-level-4">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            [0] - flags: 0x01 count: 3
+          </td>
+        </tr>
+        <tr class="detail-level-1 receive data-level-4">
+          <td>
+            15:03:34.578
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            [0] - flags: 0x01 count: 4
+          </td>
+        </tr>
+        <tr class="transmit data-level-4">
+          <td>
+            15:03:34.579
+          </td>
+          <td>
+            --A-&gt;
+          </td>
+          <td>
+            Confirm(0x00) fir: 1 fin: 1 con: 0 uns: 0 seq: 0x03
+          </td>
+        </tr>
+        <tr class="transmit data-level-3">
+          <td>
+            15:03:34.579
+          </td>
+          <td>
+            --T-&gt;
+          </td>
+          <td>
+            fir: 1 fin: 1 seq: 0
+          </td>
+        </tr>
+        <tr class="transmit data-level-2">
+          <td>
+            15:03:34.579
+          </td>
+          <td>
+            --L-&gt;
+          </td>
+          <td>
+            master: 1 pri: 1 fcb: 0 fcv: 0 func: UNCONFIRMED_USER_DATA(0x04) 0xC4 length: 8 dest: 1024 src: 1
+          </td>
+        </tr>
+        <tr class="transmit data-level-1">
+          <td>
+            15:03:34.579
+          </td>
+          <td>
+            --P-&gt;
+          </td>
+          <td>
+            05 64 08 C4 00 04 01 00 9A 19
+          </td>
+        </tr>
+        <tr class="detail-level-0 transmit data-level-1">
+          <td>
+            15:03:34.579
+          </td>
+          <td>
+                 
+          </td>
+          <td>
+            C0 C3 00 98 26
           </td>
         </tr>
         <tr class="info">
           <td>
-            10:34:44.092
+            15:03:34.580
           </td>
           <td>
                  

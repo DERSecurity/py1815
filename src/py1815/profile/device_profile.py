@@ -29,17 +29,19 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import datetime
-import importlib.metadata
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 from xml.etree import ElementTree
 
 from py1815 import link
+from py1815.attributes import SESSION_VARIATIONS, DeviceAttributes, Variation, software_version
+from py1815.attributes import describe as describe_attribute
 from py1815.control import CommandStatus
 from py1815.profile.model import Kind, Point
 from py1815.profile.outstation import DerOutstation
 from py1815.session import Session, SessionFacts
+from py1815.subset import SubsetLevel
 
 #: The schema edition this module writes, and the names its files ship under.
 SCHEMA_VERSION = "2.12.00"
@@ -57,14 +59,60 @@ _INDEXED = [0x17, 0x28]
 
 READ, WRITE, SELECT, OPERATE, DIRECT, DIRECT_NR = 1, 2, 3, 4, 5, 6
 FREEZE, FREEZE_NR, FREEZE_CLEAR, FREEZE_CLEAR_NR = 7, 8, 9, 10
-ENABLE_UNSOLICITED, DISABLE_UNSOLICITED = 20, 21
+ENABLE_UNSOLICITED, DISABLE_UNSOLICITED, ASSIGN_CLASS = 20, 21, 22
 RECORD_CURRENT_TIME = 24
 RESPONSE = 129
 UNSOLICITED_RESPONSE = 130
 
+#: The groups an ASSIGN_CLASS request may name, as the implementation table words them.
+_ASSIGNABLE_NAMES = {
+    1: "Binary Input",
+    3: "Double-bit Binary Input",
+    10: "Binary Output",
+    12: "Binary Output Command",
+    20: "Counter",
+    21: "Frozen Counter",
+    30: "Analog Input",
+    40: "Analog Output Status",
+    41: "Analog Output",
+}
+
 #: The schema spells variation numbers out.
-_NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 9: "nine"}
+_NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 7: "seven", 9: "nine"}
 _CLASS_WORDS = {0: "none", 1: "one", 2: "two", 3: "three", None: "none"}
+
+#: What a Level 4 outstation lists beyond the rows below it, by group and variation:
+#: the floating-point static and event variations, the time-stamped 16-bit frozen
+#: counters, which are read and answered in 32 bits (D113), and the deadbands (D114).
+_LEVEL_4_STATIC = {
+    30: {5: "Analog Input - single-precision floating point with flag"},
+    40: {3: "Analog Output Status - single-precision floating point with flag"},
+}
+_LEVEL_4_EVENTS = {
+    32: {
+        5: "Analog Input Event - single-precision floating point without time",
+        7: "Analog Input Event - single-precision floating point with time",
+    }
+}
+_LEVEL_4_WIDENED = {
+    21: {6: "Frozen Counter - 16-bit with flag and time"},
+    23: {6: "Frozen Counter Event - 16-bit with flag and time"},
+}
+_DEADBANDS = {
+    1: "Analog Input Reporting Deadband - 16-bit",
+    2: "Analog Input Reporting Deadband - 32-bit",
+    3: "Analog Input Reporting Deadband - single-precision floating point",
+}
+
+#: The analog output event variations an outstation reports, by variation.
+_ANALOG_OUTPUT_EVENT_NAMES = {
+    1: "Analog Output Event - 32-bit without time",
+    2: "Analog Output Event - 16-bit without time",
+    3: "Analog Output Event - 32-bit with time",
+    4: "Analog Output Event - 16-bit with time",
+    5: "Analog Output Event - single-precision floating point without time",
+    7: "Analog Output Event - single-precision floating point with time",
+}
 
 #: A nested description of child elements: a bare name is an empty element, a
 #: pair is a name with either text or children of its own.
@@ -87,12 +135,7 @@ class Identity:
 
     def software(self) -> str:
         """The stated software version, or this library's own."""
-        if self.software_version:
-            return self.software_version
-        try:
-            return f"py1815 {importlib.metadata.version('py1815')}"
-        except importlib.metadata.PackageNotFoundError:
-            return "py1815"
+        return software_version(self.software_version)
 
 
 @dataclass(frozen=True)
@@ -116,8 +159,77 @@ class Implementation:
     function_codes: tuple[int, ...] = field(default=())
 
 
+def _assign_class_rows(outstation: DerOutstation) -> list[Row]:
+    """Return the rows of an ASSIGN_CLASS request: the class headers and the groups they move."""
+    # A class header with variation 1 turns events off. The groups named
+    # after it are the points whose events move (IEEE 1815-2012 Table 4-12).
+    rows = [
+        Row(
+            60,
+            variation,
+            f"Class Objects - class {variation - 1} data",
+            request=(ASSIGN_CLASS, tuple(_ALL)),
+        )
+        for variation in (1, 2, 3, 4)
+    ]
+    select = tuple(_ALL + _RANGE + _INDEXED)
+    for group in outstation.assignable_groups():
+        name = _ASSIGNABLE_NAMES[group]
+        rows.append(Row(group, 0, f"{name} - any variation", request=(ASSIGN_CLASS, select)))
+    return rows
+
+
+def _value_change_reporting(
+    outstation: DerOutstation, counters: list[Point]
+) -> tuple[str, list[Any]]:
+    """Return whether counters report value changes: none, all, or the ones the list names."""
+    if not outstation.at_least(SubsetLevel.LEVEL_3):
+        return _both("reportValueChangeCounterEvents", ["no"])
+    reporting = [outstation.counter_deadband(point.index) is not None for point in counters]
+    current = "yes" if all(reporting) else "basedOnPointIndex" if any(reporting) else "no"
+    return _setting("reportValueChangeCounterEvents", ["no", "yes", "basedOnPointIndex"], [current])
+
+
 def _served(outstation: DerOutstation) -> dict[Kind, list[Point]]:
     return {kind: outstation.served(kind) for kind in Kind}
+
+
+def _added(
+    outstation: DerOutstation, table: dict[int, dict[int, str]], group: int
+) -> dict[int, str]:
+    """Return the variations a group gains at Level 4, and none below it."""
+    return table.get(group, {}) if outstation.at_least(SubsetLevel.LEVEL_4) else {}
+
+
+def _attribute_rows(store: DeviceAttributes) -> list[Row]:
+    """Return the rows for group 0: each attribute read, and each writable one written."""
+    writable = {*store.writable, Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE}
+    rows: list[Row] = []
+    for variation in sorted({*store.snapshot(), *SESSION_VARIATIONS}):
+        description = f"Device attribute - {describe_attribute(variation).lower()}"
+        rows.append(
+            Row(0, variation, description, request=(READ, tuple(_RANGE)), response=(RESPONSE, (0,)))
+        )
+        if variation in writable:
+            rows.append(Row(0, variation, description, request=(WRITE, tuple(_RANGE))))
+    rows.append(
+        Row(
+            0,
+            Variation.ALL_ATTRIBUTES,
+            "Device attribute - non-specific all attributes request",
+            request=(READ, tuple(_RANGE + _ALL)),
+        )
+    )
+    rows.append(
+        Row(
+            0,
+            Variation.LIST_OF_VARIATIONS,
+            "Device attribute - list of attribute variations",
+            request=(READ, tuple(_RANGE + _ALL)),
+            response=(RESPONSE, (0x17,)),
+        )
+    )
+    return rows
 
 
 def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementation:
@@ -133,10 +245,13 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         # may usefully send: it is left off the list of what is supported.
         facts = replace(facts, controls=False)
     rows: list[Row] = []
+    if facts.attributes and outstation.attributes is not None:
+        rows += _attribute_rows(outstation.attributes)
 
     def static(group: int, default: str, variations: dict[int, str]) -> None:
         # A read by index is answered by index, and every other read by range.
         select = tuple(_RANGE + _ALL + _INDEXED)
+        variations = variations | _added(outstation, _LEVEL_4_STATIC, group)
         rows.append(Row(group, 0, f"{default} - any variation", request=(READ, select)))
         for variation, description in variations.items():
             rows.append(
@@ -151,28 +266,33 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
 
     def widened(group: int, variations: dict[int, str]) -> None:
         # Read and answered in a 32-bit variation with flags, so the row lists
-        # the request and no response of its own.
+        # the request and no response of its own. Frozen counter events are read
+        # by class or count, and everything else by range, all or index.
         select = tuple(_RANGE + _ALL + _INDEXED)
+        variations = variations | _added(outstation, _LEVEL_4_WIDENED, group)
+        if group == 23:
+            if not facts.events:
+                return
+            select = tuple(_ALL + _COUNT)
         for variation, description in variations.items():
             rows.append(Row(group, variation, description, request=(READ, select)))
 
-    def events(group: int, name: str, variations: dict[int, str]) -> None:
+    def events(
+        group: int, name: str, variations: dict[int, str], *, generated: bool = True
+    ) -> None:
         if not facts.events:
             return
         if group == 23 and outstation.level2:
             # Read, and answered with nothing: a Level 2 outstation buffers none.
             variations = {}
         select = tuple(_ALL + _COUNT)
+        variations = variations | _added(outstation, _LEVEL_4_EVENTS, group)
         rows.append(Row(group, 0, f"{name} - any variation", request=(READ, select)))
         for variation, description in variations.items():
+            # A group that is read and never generated lists no response.
+            response = (RESPONSE, tuple(_INDEXED)) if generated else None
             rows.append(
-                Row(
-                    group,
-                    variation,
-                    description,
-                    request=(READ, select),
-                    response=(RESPONSE, tuple(_INDEXED)),
-                )
+                Row(group, variation, description, request=(READ, select), response=response)
             )
 
     def controls(group: int, variations: dict[int, str]) -> None:
@@ -191,6 +311,9 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
 
     if served[Kind.BI]:
         static(1, "Binary Input", {2: "Binary Input - with flags"})
+        if outstation.at_least(SubsetLevel.LEVEL_3):
+            # Read in the packed variation and answered with flags.
+            widened(1, {1: "Binary Input - packed format"})
         events(
             2,
             "Binary Input Event",
@@ -200,8 +323,68 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 3: "Binary Input Event - with relative time",
             },
         )
+    if served[Kind.DBI]:
+        # The packed variation has a range form only, and the variation with
+        # flags is also read and answered by index.
+        rows.append(
+            Row(
+                3,
+                0,
+                "Double-bit Binary Input - any variation",
+                request=(READ, tuple(_RANGE + _ALL + _INDEXED)),
+            )
+        )
+        rows.append(
+            Row(
+                3,
+                1,
+                "Double-bit Binary Input - packed format",
+                request=(READ, tuple(_RANGE + _ALL)),
+                response=(RESPONSE, tuple(_RANGE)),
+            )
+        )
+        rows.append(
+            Row(
+                3,
+                2,
+                "Double-bit Binary Input - with flags",
+                request=(READ, tuple(_RANGE + _ALL + _INDEXED)),
+                response=(RESPONSE, tuple(_RANGE + _INDEXED)),
+            )
+        )
+        if facts.double_bit_events:
+            events(
+                4,
+                "Double-bit Binary Input Event",
+                {
+                    1: "Double-bit Binary Input Event - without time",
+                    2: "Double-bit Binary Input Event - with absolute time",
+                    3: "Double-bit Binary Input Event - with relative time",
+                },
+            )
     if served[Kind.BO]:
         static(10, "Binary Output", {2: "Binary Output - output status with flags"})
+        if 11 in facts.output_events:
+            events(
+                11,
+                "Binary Output Event",
+                {
+                    1: "Binary Output Event - status without time",
+                    2: "Binary Output Event - status with time",
+                },
+            )
+        # Each output event group is read by name only where the session serves
+        # it, independently of the others.
+        if 13 in facts.output_events:
+            events(
+                13,
+                "Binary Output Command Event",
+                {
+                    1: "Binary Output Command Event - command status without time",
+                    2: "Binary Output Command Event - command status with time",
+                },
+                generated=False,
+            )
         if facts.controls:
             controls(12, {1: "Binary Output Command - control relay output block"})
     if served[Kind.CTR]:
@@ -238,7 +421,14 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     10: "Frozen Counter - 16-bit without flag",
                 },
             )
-        if facts.events:
+        if facts.events and outstation.at_least(SubsetLevel.LEVEL_3):
+            # A flag change raises a counter event (D124). Variation 2 is read
+            # and answered in variation 1.
+            events(22, "Counter Event", {1: "Counter Event - 32-bit with flag"})
+            rows.append(
+                Row(22, 2, "Counter Event - 16-bit with flag", request=(READ, tuple(_ALL + _COUNT)))
+            )
+        elif facts.events:
             for variation, description in (
                 (0, "Counter Event - any variation"),
                 (1, "Counter Event - 32-bit with flag"),
@@ -253,6 +443,14 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 1: "Frozen Counter Event - 32-bit with flag",
                 5: "Frozen Counter Event - 32-bit with flag and time",
             },
+        )
+        widened(
+            23,
+            (
+                {2: "Frozen Counter Event - 16-bit with flag"}
+                if facts.frozen_counter_event_16_bit
+                else {}
+            ),
         )
     if served[Kind.AI]:
         static(
@@ -275,6 +473,13 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 4: "Analog Input Event - 16-bit with time",
             },
         )
+        if outstation.at_least(SubsetLevel.LEVEL_4):
+            # Read like any static object, and written by range or by index.
+            static(34, "Analog Input Reporting Deadband", _DEADBANDS)
+            rows += [
+                Row(34, variation, text, request=(WRITE, tuple(_RANGE + _INDEXED)))
+                for variation, text in _DEADBANDS.items()
+            ]
     if served[Kind.AO]:
         static(
             40,
@@ -284,6 +489,18 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 2: "Analog Output Status - 16-bit with flag",
             },
         )
+        if 42 in facts.output_events:
+            events(42, "Analog Output Event", _ANALOG_OUTPUT_EVENT_NAMES)
+        if 43 in facts.output_events:
+            events(
+                43,
+                "Analog Output Command Event",
+                {
+                    variation: description.replace("Event", "Command Event", 1)
+                    for variation, description in _ANALOG_OUTPUT_EVENT_NAMES.items()
+                },
+                generated=False,
+            )
         if facts.controls:
             controls(
                 41,
@@ -294,6 +511,16 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     4: "Analog Output - double-precision floating point",
                 },
             )
+    if facts.time_read:
+        rows.append(
+            Row(
+                50,
+                1,
+                "Time and Date - absolute time",
+                request=(READ, (0x07,)),
+                response=(RESPONSE, (0x07,)),
+            )
+        )
     if facts.time_write:
         rows.append(Row(50, 1, "Time and Date - absolute time", request=(WRITE, (0x07,))))
         rows.append(
@@ -304,7 +531,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                 request=(WRITE, (0x07,)),
             )
         )
-    if facts.events and served[Kind.BI]:
+    if facts.events and (served[Kind.BI] or served[Kind.DBI]):
         # What a binary event with relative time counts from, and whether the
         # clock that gave it had been set.
         rows.append(
@@ -344,6 +571,9 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         if served[Kind.BI]:
             rows.append(Row(2, 2, "Binary Input Event - with absolute time", response=unsolicited))
             rows.append(Row(2, 3, "Binary Input Event - with relative time", response=unsolicited))
+        if served[Kind.BI] or served[Kind.DBI]:
+            # Both kinds of binary event travel with relative time behind a
+            # common time (D118).
             for variation, clock in ((1, "synchronized"), (2, "unsynchronized")):
                 rows.append(
                     Row(
@@ -353,10 +583,32 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                         response=(UNSOLICITED_RESPONSE, (0x07,)),
                     )
                 )
+        if served[Kind.DBI]:
+            rows += [
+                Row(
+                    4,
+                    variation,
+                    f"Double-bit Binary Input Event - with {when} time",
+                    response=unsolicited,
+                )
+                for variation, when in ((2, "absolute"), (3, "relative"))
+            ]
+        if served[Kind.CTR] and outstation.at_least(SubsetLevel.LEVEL_3):
+            rows.append(Row(22, 1, "Counter Event - 32-bit with flag", response=unsolicited))
         if served[Kind.CTR] and not outstation.level2:
             rows.append(
-                Row(23, 5, "Frozen Counter Event - 32-bit with flag and time", response=unsolicited)
+                Row(
+                    23,
+                    facts.frozen_counter_event_variation,
+                    "Frozen Counter Event - 32-bit with flag"
+                    + (" and time" if facts.frozen_counter_event_variation == 5 else ""),
+                    response=unsolicited,
+                )
             )
+        if 11 in facts.output_events:
+            rows.append(Row(11, 2, "Binary Output Event - status with time", response=unsolicited))
+        if 42 in facts.output_events:
+            rows.append(Row(42, 3, _ANALOG_OUTPUT_EVENT_NAMES[3], response=unsolicited))
         if served[Kind.AI]:
             rows.append(
                 Row(
@@ -380,6 +632,18 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                         request=(function, tuple(_ALL)),
                     )
                 )
+    if facts.indications_read:
+        rows.append(
+            Row(
+                80,
+                1,
+                "Internal Indications - packed format",
+                request=(READ, tuple(_RANGE)),
+                response=(RESPONSE, (0x00,)),
+            )
+        )
+    if facts.assign_class:
+        rows += _assign_class_rows(outstation)
     rows.append(Row(80, 1, "Internal Indications - packed format", request=(WRITE, tuple(_RANGE))))
     # Function codes that carry no object: confirm, delay measurement, and the
     # two that depend on how the session was built. Enable and disable
@@ -447,7 +711,7 @@ def _value(name: str, value: Any) -> tuple[str, list[Any]]:
     return _setting(name, current=[("value", value)])
 
 
-def _device(identity: Identity, facts: SessionFacts) -> Items:
+def _device(identity: Identity, facts: SessionFacts, level: int) -> Items:
     additions = [
         "Analog output commands in 32-bit (g41v1) and floating point (g41v3, g41v4)",
         "Frozen counters with time (g21v5) and frozen counter events (g23v5)",
@@ -465,7 +729,7 @@ def _device(identity: Identity, facts: SessionFacts) -> Items:
         _value("hardwareVersion", identity.hardware_version),
         _value("softwareVersion", identity.software()),
         _value("documentVersionNumber", identity.document_version),
-        _both("dnpLevelSupported", [("outStation", ["level2"])]),
+        _both("dnpLevelSupported", [("outStation", [f"level{level}"])]),
         # No function block beyond the level is implemented; the element is
         # one the schema requires, so it is present and empty.
         _both("supportedFunctionBlocks", []),
@@ -579,7 +843,7 @@ def _application(facts: SessionFacts, statuses: Sequence[int]) -> Items:
     ]
 
 
-def _outstation(facts: SessionFacts) -> Items:
+def _outstation(facts: SessionFacts, level: SubsetLevel) -> Items:
     capacity = facts.event_capacity
     return [
         (
@@ -645,6 +909,12 @@ def _outstation(facts: SessionFacts) -> Items:
                 )
             ],
         ),
+        # A deadband a master writes lasts until the outstation restarts. The
+        # element is stated where a master can write deadbands, so that an empty
+        # list is read as "none" and not as "not stated".
+        _setting("settingsPreservedThroughDeviceRestart", [], [])
+        if level >= SubsetLevel.LEVEL_4
+        else None,
         _both("configurationSignatureSupported", ["notSupported"]),
         _both(
             "requestsApplicationConfirmation",
@@ -719,6 +989,16 @@ def _class_0(points: Sequence[Point]) -> list[str]:
     return ["basedOnPointIndex"]
 
 
+def _output_class_0(outstation: DerOutstation, points: Sequence[Point]) -> list[str]:
+    """How an output group answers class 0: the outputs that have a class are in it."""
+    reporting = {outstation.in_class_0(point.kind, point.index) for point in points}
+    if reporting == {True}:
+        return ["always"]
+    if reporting == {False}:
+        return ["never"]
+    return ["basedOnPointIndex"]
+
+
 def _select_timeout(facts: SessionFacts) -> tuple[str, list[Any]]:
     return _setting(
         "maxTimeBetweenSelectAndOperate",
@@ -733,6 +1013,13 @@ def _database(
     groups: list[Any] = []
     level2 = outstation.level2
     frozen = outstation.default_variation(21)
+    reports = {Kind.BO: 11 in facts.output_events, Kind.AO: 42 in facts.output_events}
+
+    def output_class_0(kind: Kind) -> list[str]:
+        # Class 0 membership is the outstation's, whichever event groups a read
+        # may name (D115).
+        return _output_class_0(outstation, served[kind])
+
     if served[Kind.BI]:
         groups.append(
             (
@@ -747,6 +1034,25 @@ def _database(
                             ),
                             _both("eventReportingMode", ["allEvents"]),
                             _both("class0ResponseMode", _class_0(served[Kind.BI])),
+                        ],
+                    )
+                ],
+            )
+        )
+    if served[Kind.DBI]:
+        groups.append(
+            (
+                "doubleBitInputGroup",
+                [
+                    (
+                        "configuration",
+                        [
+                            _both("defaultStaticVariation", _variation(2)),
+                            _both(
+                                "defaultEventVariation", _variation(facts.binary_event_variation)
+                            ),
+                            _both("eventReportingMode", ["allEvents"]),
+                            _both("class0ResponseMode", _class_0(served[Kind.DBI])),
                         ],
                     )
                 ],
@@ -771,9 +1077,17 @@ def _database(
                                 [("note", ignored), ("fixed", 65535)],
                                 [("fixed", 65535)],
                             ),
-                            _both("class0ResponseMode", ["never"]),
+                            _both("class0ResponseMode", output_class_0(Kind.BO)),
                             _both("outputCommandEventObjects", ["never"]),
                             _both("defaultStaticVariation", _variation(2)),
+                            *(
+                                [
+                                    _both("defaultEventVariation", _variation(2)),
+                                    _both("changeEventReportingMode", ["allEvents"]),
+                                ]
+                                if reports[Kind.BO]
+                                else []
+                            ),
                             _select_timeout(facts),
                         ],
                     )
@@ -781,6 +1095,17 @@ def _database(
             )
         )
     if served[Kind.CTR]:
+        # A flag change raises a counter event from Level 3, and a value change
+        # does only for a counter whose event policy turns it on (D124).
+        value_events = _value_change_reporting(outstation, served[Kind.CTR])
+        counter_events = (
+            [
+                _both("defaultCounterEventVariation", _variation(1)),
+                _both("counterEventReportingMode", ["allEvents"]),
+            ]
+            if outstation.at_least(SubsetLevel.LEVEL_3)
+            else []
+        )
         groups.append(
             (
                 "counterGroup",
@@ -789,12 +1114,19 @@ def _database(
                         "configuration",
                         [
                             _both("defaultCounterStaticVariation", _variation(1)),
+                            *counter_events[:1],
                             _both("counterClass0ResponseMode", ["always"]),
+                            *counter_events[1:],
                             _both("defaultFrozenCounterStaticVariation", _variation(frozen)),
                             *(
                                 []
                                 if level2
-                                else [_both("defaultFrozenCounterEventVariation", _variation(5))]
+                                else [
+                                    _both(
+                                        "defaultFrozenCounterEventVariation",
+                                        _variation(facts.frozen_counter_event_variation),
+                                    )
+                                ]
                             ),
                             _both("frozenCounterClass0ResponseMode", ["always"]),
                             *(
@@ -811,7 +1143,7 @@ def _database(
                                 ],
                                 ["localFreezeWithoutTimeOfDay"],
                             ),
-                            _both("reportValueChangeCounterEvents", ["no"]),
+                            value_events,
                         ],
                     )
                 ],
@@ -838,7 +1170,16 @@ def _database(
                                 ],
                             ),
                             _both("analogInputClass0ResponseMode", _class_0(served[Kind.AI])),
-                            _both("analogDeadbandAssignments", ["configurableViaOtherMeans"]),
+                            _setting(
+                                "analogDeadbandAssignments",
+                                (["configurableViaDNP3"] if outstation.at_least(4) else [])
+                                + ["configurableViaOtherMeans"],
+                                (
+                                    ["configurableViaDNP3"]
+                                    if outstation.at_least(4)
+                                    else ["configurableViaOtherMeans"]
+                                ),
+                            ),
                             _both("analogDeadbandAlgorithm", ["simple"]),
                         ],
                     )
@@ -857,8 +1198,16 @@ def _database(
                                 "defaultStaticVariation",
                                 _variation(outstation.default_variation(40)),
                             ),
-                            _both("class0ResponseMode", ["never"]),
+                            _both("class0ResponseMode", output_class_0(Kind.AO)),
                             _both("outputCommandEventObjects", ["never"]),
+                            *(
+                                [
+                                    _both("defaultChangeEventVariation", _variation(3)),
+                                    _both("changeEventReportingMode", ["allEvents"]),
+                                ]
+                                if reports[Kind.AO]
+                                else []
+                            ),
                             _select_timeout(facts),
                         ],
                     )
@@ -943,12 +1292,23 @@ def _points(
         # the tables' default for the point.
         return _CLASS_WORDS[outstation.event_class(point.kind, point.index)]
 
+    def output_class_0(point: Point) -> str:
+        # An output is in class 0 where it has a class, class 0 included (D115).
+        return "always" if outstation.in_class_0(point.kind, point.index) else "never"
+
     def binary_input(point: Point) -> list[Any]:
         return [
             *_names(point),
             ("changeEventClass", event_class(point)),
             ("includedInClass0Response", _included(point)),
             *_states(point),
+        ]
+
+    def double_bit_input(point: Point) -> list[Any]:
+        return [
+            *_names(point),
+            ("changeEventClass", event_class(point)),
+            ("includedInClass0Response", _included(point)),
         ]
 
     def binary_output(point: Point) -> list[Any]:
@@ -969,9 +1329,9 @@ def _points(
         )
         return [
             *_names(point),
-            ("changeEventClass", "none"),
+            ("changeEventClass", event_class(point)),
             ("commandEventClass", "none"),
-            ("includedInClass0Response", "never"),
+            ("includedInClass0Response", output_class_0(point)),
             ("supportedControlOperations", operations),
             *_states(point),
         ]
@@ -980,7 +1340,10 @@ def _points(
         items: list[Any] = [
             *_names(point),
             ("countersIncludedInClass0", _included(point)),
-            ("counterEventClass", "none"),
+            (
+                "counterEventClass",
+                event_class(point) if outstation.at_least(SubsetLevel.LEVEL_3) else "none",
+            ),
             ("frozenCounterExists", point.frozen),
         ]
         if point.frozen:
@@ -988,6 +1351,9 @@ def _points(
                 ("frozenCountersIncludedInClass0", _included(point)),
                 ("frozenCounterEventClass", event_class(point)),
             ]
+        if outstation.at_least(SubsetLevel.LEVEL_3):
+            reports = outstation.counter_deadband(point.index) is not None
+            items.append(("reportCounterValueChangeEvents", ["yes" if reports else "no"]))
         return items
 
     def analog_input(point: Point) -> list[Any]:
@@ -1016,9 +1382,9 @@ def _points(
         )
         items: list[Any] = [
             *_names(point),
-            ("changeEventClass", "none"),
+            ("changeEventClass", event_class(point)),
             ("commandEventClass", "none"),
-            ("includedInClass0Response", "never"),
+            ("includedInClass0Response", output_class_0(point)),
             ("supportedControlOperations", operations),
         ]
         if point.minimum is not None:
@@ -1028,6 +1394,7 @@ def _points(
         return items + _scaling(point)
 
     section("binaryInputPoints", "binaryInput", Kind.BI, binary_input)
+    section("doubleBitInputPoints", "doubleBitInput", Kind.DBI, double_bit_input)
     section("binaryOutputPoints", "binaryOutput", Kind.BO, binary_output)
     section("counterPoints", "counter", Kind.CTR, counter)
     section("analogInputPoints", "analogInput", Kind.AI, analog_input)
@@ -1118,11 +1485,11 @@ def build(
             (
                 "configuration",
                 [
-                    ("deviceConfig", _device(identity, facts)),
+                    ("deviceConfig", _device(identity, facts, int(outstation.level))),
                     ("networkConfig", _network(identity, facts)),
                     ("linkConfig", _link(facts)),
                     ("applConfig", _application(facts, codes)),
-                    ("outstationConfig", _outstation(facts)),
+                    ("outstationConfig", _outstation(facts, outstation.level)),
                     ("unsolicitedConfig", _unsolicited(facts)),
                     ("outstationPerformance", _performance(facts)),
                 ],

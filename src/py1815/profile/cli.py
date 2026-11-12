@@ -130,14 +130,25 @@ _TOP_LEVEL_FLAGS = (
     "master_address",
     "unsolicited",
     "read_only",
-    "level2",
+    "level",
     "event_capacity",
     "max_response",
+    "timing_accuracy_us",
     "select_timeout",
     "idle_timeout",
 )
 _COMPOSITION_FLAGS = ("meters", "der_units", "inverters", "batteries")
-_IDENTITY_FLAGS = ("vendor", "device", "hardware_version", "software_version", "author")
+_IDENTITY_FLAGS = (
+    "vendor",
+    "device",
+    "hardware_version",
+    "software_version",
+    "author",
+    "serial_number",
+    "location_name",
+    "device_id",
+    "device_name",
+)
 
 
 def configuration(args: argparse.Namespace) -> DerConfig:
@@ -160,6 +171,9 @@ def configuration(args: argparse.Namespace) -> DerConfig:
     for name in _TOP_LEVEL_FLAGS:
         if given(name) is not None:
             document[name] = given(name)
+    if given("level") is not None:
+        # The level flag replaces the file's level in either spelling.
+        document.pop("level2", None)
     if given("tables") is not None:
         document["tables"] = str(given("tables"))
     if given("any_master"):
@@ -527,10 +541,19 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         help="refuse every control, so a master can read and cannot command",
     )
     parser.add_argument(
-        "--level2",
-        action="store_true",
+        "--level",
+        type=int,
         default=None,
-        help="answer as a DNP3 Subset Level 2 outstation, without the profile's additions",
+        choices=(2, 3, 4),
+        help="claim and answer at this DNP3 subset level (default: Level 2 with the "
+        "profile's additions)",
+    )
+    parser.add_argument(
+        "--level2",
+        action="store_const",
+        const=2,
+        dest="level",
+        help="same as --level 2",
     )
     parser.add_argument(
         "--event-capacity",
@@ -545,6 +568,13 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="OCTETS",
         help="largest response fragment to send (default: 2048)",
+    )
+    parser.add_argument(
+        "--timing-accuracy-us",
+        type=int,
+        default=None,
+        metavar="MICROSECONDS",
+        help="worst-case error of the time given to events, reported at Level 4 (default: 1000000)",
     )
     parser.add_argument(
         "--select-timeout",
@@ -563,12 +593,22 @@ def _add_outstation_options(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_identity_options(parser: argparse.ArgumentParser) -> None:
-    """Add the options that fill in the Device Profile document's identity."""
+    """Add the options that name the device, in its Device Profile and its device attributes."""
     parser.add_argument("--vendor", default=None, help="default: Not stated")
     parser.add_argument("--device", default=None, help="the device's name")
     parser.add_argument("--hardware-version", default=None)
     parser.add_argument("--software-version", default=None, help="default: this library's version")
     parser.add_argument("--author", default=None, help="default: py1815")
+    parser.add_argument("--serial-number", default=None, help="reported at Level 4")
+    parser.add_argument(
+        "--location-name", default=None, help="reported at Level 4; a master may rewrite it"
+    )
+    parser.add_argument(
+        "--device-id", default=None, help="reported at Level 4; a master may rewrite it"
+    )
+    parser.add_argument(
+        "--device-name", default=None, help="reported at Level 4; a master may rewrite it"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -592,6 +632,7 @@ def _parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="serve a simulated DER")
     _add_map_options(run)
     _add_outstation_options(run)
+    _add_identity_options(run)
     run.add_argument(
         "--tick",
         type=_interval,

@@ -24,12 +24,20 @@ declares nearly all of them. The `kind` fields are one-word categories derived
 from the tables (`index_range`, `count`, `reserved`), not quotations of them.
 
 Tables covered: 4-2 (function codes), 4-3 (IIN bits), 4-4 (object prefix codes),
-4-5 (range specifier codes), 4-6 (valid qualifier codes).
+4-5 (range specifier codes), 4-6 (valid qualifier codes), and Annex A, the object
+library: every object group and variation with its canonical name, its object
+type (static, event, command, information, attribute) and its size. A size is a
+whole number of octets, a number of bits for the packed formats, or marked
+variable where the sender sets it. The variation of groups 110 to 113 is the
+length of the string and the standard describes it once, so those groups carry a
+single entry keyed `all`. Annex A defines no objects for groups 114 and 115;
+nothing from a technical bulletin is added to the file.
 
 ## Regenerating it
 
-You need your own copy of the standard and `pypdf`, which is not a dependency of
-this package:
+You need your own copy of the standard, `pypdf`, and `pdftotext` from poppler-utils
+(Annex A only: pypdf cannot read those pages). Neither is a dependency of this
+package:
 
 ```bash
 pip install pypdf
@@ -65,6 +73,19 @@ reason. There are three:
 - Two indication-bit names, for the same reason.
 - IIN2.6 and IIN2.7, which are reserved and always zero, so there is nothing to
   set and no name worth having.
+
+Annex A is read by the same script, with four corrections for places where a
+subclause contradicts itself. Each is named in `scripts/extract_conformance.py`
+with its reason, and fails if a later edition fixes the text:
+
+- Group 32 variation 8 and group 33 variation 8 type the value as single
+  precision under a double-precision heading; the size is 15 octets.
+- Group 86 variation 2 types its characteristics as four bits and draws one octet;
+  the size is one octet.
+- Group 23 variation 8 is headed as a static object and is an event.
+
+`src/py1815/catalog.py` declares the same objects in code and
+`tests/test_catalog.py` and `tests/test_conformance.py` diff it against this file.
 
 Anything not on that list is a failure. An undocumented divergence cannot pass
 quietly, which is the only property here that matters.

@@ -52,6 +52,7 @@ Copyright 2026 DER Security Corp. Licensed under the Apache License, Version 2.0
 from __future__ import annotations
 
 import logging
+import math
 import struct
 import time
 from collections import deque
@@ -81,19 +82,43 @@ from py1815.application import (
     RequestError,
     build_response,
     null_response,
+    parse_data_blocks,
     parse_header_list,
     parse_object_blocks,
     parse_request,
 )
+from py1815.attributes import (
+    GROUP_DEVICE_ATTRIBUTES,
+    Attribute,
+    BadParameter,
+    DataType,
+    DeviceAttributes,
+    UnknownVariation,
+    Variation,
+    parse_writes,
+    read_blocks,
+)
 from py1815.control import (
+    ANALOG_OUTPUT_EVENT_SIZES,
+    CROB_SIZE,
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT,
+    GROUP_ANALOG_OUTPUT_EVENT,
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT,
+    GROUP_BINARY_OUTPUT_EVENT,
     AnalogOutput,
     CommandStatus,
     ControlError,
     ControlRelayOutputBlock,
+    encode_analog_output_event,
+    encode_binary_output_event,
 )
 from py1815.events import (
     AnalogEvent,
+    AnalogOutputEvent,
     BinaryEvent,
+    BinaryOutputEvent,
+    CounterEvent,
+    DoubleBitEvent,
     Event,
     EventBuffers,
     EventClass,
@@ -101,21 +126,29 @@ from py1815.events import (
 )
 from py1815.objects import (
     ANALOG_EVENT_SIZES,
+    DEADBAND_SIZES,
     FROZEN_COUNTER_EVENT_VARIATION,
+    GROUP_ANALOG_DEADBAND,
     GROUP_ANALOG_INPUT_EVENT,
     GROUP_BINARY_INPUT_EVENT,
     GROUP_COUNTER_EVENT,
+    GROUP_DOUBLE_BIT_INPUT_EVENT,
     GROUP_FROZEN_COUNTER_EVENT,
     MAX_RELATIVE_MS,
     TIME_SIZE,
     AnalogEventVariation,
+    AnalogPoint,
     BinaryEventVariation,
     common_time,
+    decode_deadband,
     encode_analog_event,
     encode_binary_event,
     encode_binary_event_relative,
     encode_counter,
+    encode_double_bit_event,
+    encode_double_bit_event_relative,
     encode_frozen_counter_event,
+    encode_time,
 )
 
 # Controls echo in the same shape events do -- a count with an index in front of
@@ -143,6 +176,8 @@ logger = logging.getLogger(__name__)
 RESTART_GROUP = 80
 RESTART_VARIATION = 1
 RESTART_INDEX = 7
+#: The last of the sixteen standard internal indications, IIN2.7 (A.28.1).
+_LAST_INDICATION = 15
 
 #: Group 50 variation 1: the absolute time a master writes to set the clock.
 TIME_GROUP = 50
@@ -154,6 +189,11 @@ LAST_RECORDED_TIME_VARIATION = 3
 #: restart are answered with, in milliseconds.
 TIME_DELAY_GROUP = 52
 TIME_DELAY_FINE_VARIATION = 2
+
+#: The objects a session answers a read of itself, rather than its provider,
+#: when it is given what they need: the current time and the internal
+#: indications (D108).
+_OWN_OBJECTS = frozenset({(TIME_GROUP, TIME_VARIATION), (RESTART_GROUP, RESTART_VARIATION)})
 
 #: Controls that carry objects and are answered.
 #:
@@ -237,13 +277,44 @@ _CLEARING_FREEZES = frozenset({FunctionCode.FREEZE_CLEAR, FunctionCode.FREEZE_CL
 DEFAULT_CONFIRM_TIMEOUT = 10.0
 
 #: The variations an event group may be read in by name (D46). Zero asks for
-#: this session's default. Group 22, counter change events, is never
-#: buffered, so its entries are variations that are answered with nothing.
+#: this session's default. Group 22, counter change events, holds events
+#: only when the outstation records them (D124).
 _EVENT_VARIATIONS: dict[int, frozenset[int]] = {
     GROUP_BINARY_INPUT_EVENT: frozenset({0, 1, 2, 3}),
+    GROUP_DOUBLE_BIT_INPUT_EVENT: frozenset({0, 1, 2, 3}),
     GROUP_ANALOG_INPUT_EVENT: frozenset({0, 1, 2, 3, 4}),
     GROUP_FROZEN_COUNTER_EVENT: frozenset({0, 1, 5}),
     GROUP_COUNTER_EVENT: frozenset({0, 1, 2}),
+}
+
+#: Event reads a master may name that are answered in another variation, by
+#: group: the variation named, and the variation sent. Counters are kept in 32
+#: bits, so a read of a 16-bit counter or frozen counter event is answered in
+#: the 32-bit variation, which IED Certification Procedure 3.1 rev 1 sections
+#: 8.25.2.3 and 8.25.2.4, step 9, accept from such a device (D108, D113, D124).
+#: A frozen counter event read in variation 2 is accepted only when the session
+#: is built with ``frozen_counter_event_16_bit``, and one in variation 6 only
+#: when it is built with ``extended_events``.
+_WIDENED_EVENT_VARIATIONS: dict[int, dict[int, int]] = {
+    GROUP_FROZEN_COUNTER_EVENT: {2: 1, 6: FROZEN_COUNTER_EVENT_VARIATION},
+    GROUP_COUNTER_EVENT: {2: 1},
+}
+
+#: The event variations a session reads by name only when it is built to serve
+#: the Level 4 objects: floating-point analog events, and 16-bit frozen counter
+#: events with time, which are answered in 32 bits (D113).
+_EXTENDED_EVENT_VARIATIONS: dict[int, frozenset[int]] = {
+    GROUP_ANALOG_INPUT_EVENT: frozenset({5, 7}),
+    GROUP_FROZEN_COUNTER_EVENT: frozenset({6}),
+}
+
+#: The variations the output event groups may be read in by name. Variations 6
+#: and 8 of groups 42 and 43 are double precision, which is not offered.
+_OUTPUT_EVENT_VARIATIONS: dict[int, frozenset[int]] = {
+    GROUP_BINARY_OUTPUT_EVENT: frozenset({0, 1, 2}),
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT: frozenset({0, 1, 2}),
+    GROUP_ANALOG_OUTPUT_EVENT: frozenset({0, 1, 2, 3, 4, 5, 7}),
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT: frozenset({0, 1, 2, 3, 4, 5, 7}),
 }
 
 #: Requests whose repetition, octet for octet, is a retry and not a second
@@ -304,18 +375,60 @@ _ANALOG_EVENT_VARIATION = AnalogEventVariation.INT32_WITH_TIME
 _BINARY_EVENT_VARIATION = BinaryEventVariation.WITH_TIME
 
 _TIMED_ANALOG_EVENTS = frozenset(
-    {AnalogEventVariation.INT32_WITH_TIME, AnalogEventVariation.INT16_WITH_TIME}
+    {
+        AnalogEventVariation.INT32_WITH_TIME,
+        AnalogEventVariation.INT16_WITH_TIME,
+        AnalogEventVariation.FLOAT32_WITH_TIME,
+    }
 )
 
+#: The analog event variations that carry the value as the source gave it.
+_FLOAT_ANALOG_EVENTS = frozenset(
+    {AnalogEventVariation.FLOAT32, AnalogEventVariation.FLOAT32_WITH_TIME}
+)
+
+#: The variations output events are reported in when a class or variation 0
+#: asks for the default: binary output status with time (g11v2) and a 32-bit
+#: analog output with time (g42v3), for the reason the input events are timed.
+_BINARY_OUTPUT_EVENT_VARIATION = 2
+_ANALOG_OUTPUT_EVENT_VARIATION = 3
+#: The analog output event variations that carry a time of occurrence, and the
+#: ones that carry a single-precision float instead of an integer.
+_TIMED_ANALOG_OUTPUT_EVENTS = frozenset({3, 4, 7})
+_FLOAT_ANALOG_OUTPUT_EVENTS = frozenset({5, 7})
+
 #: The event groups a master may read by name instead of by class, and the
-#: kind of event each one selects (D46). Group 22 is the counter change event,
-#: which this outstation never buffers: reading it is answered, with nothing,
-#: because an empty answer is what a group with no events in it holds.
+#: kind of event each one selects (D46). Group 22 is the counter change event.
+#: An outstation that records none answers a read of it with nothing, because
+#: an empty answer is what a group with no events in it holds.
 _EVENT_GROUPS: dict[int, type | None] = {
     GROUP_BINARY_INPUT_EVENT: BinaryEvent,
+    GROUP_DOUBLE_BIT_INPUT_EVENT: DoubleBitEvent,
     GROUP_ANALOG_INPUT_EVENT: AnalogEvent,
     GROUP_FROZEN_COUNTER_EVENT: FrozenCounterEvent,
-    GROUP_COUNTER_EVENT: None,
+    GROUP_COUNTER_EVENT: CounterEvent,
+}
+
+#: The output event groups, added to the groups above for a session that reports
+#: output events (D115). Groups 13 and 43, the command events, are read and
+#: answered with nothing, because none is generated (D116).
+_OUTPUT_EVENT_GROUPS: dict[int, type | None] = {
+    GROUP_BINARY_OUTPUT_EVENT: BinaryOutputEvent,
+    GROUP_ANALOG_OUTPUT_EVENT: AnalogOutputEvent,
+    GROUP_BINARY_OUTPUT_COMMAND_EVENT: None,
+    GROUP_ANALOG_OUTPUT_COMMAND_EVENT: None,
+}
+
+#: For each kind of two-state event (a binary input and a double-bit input), its
+#: group and the encoders for its absolute-time and relative-time variations. Their
+#: events are timed, grouped and put behind a common time of occurrence alike.
+_TWO_STATE_EVENTS: dict[type, tuple[int, Callable[..., bytes], Callable[..., bytes]]] = {
+    BinaryEvent: (GROUP_BINARY_INPUT_EVENT, encode_binary_event, encode_binary_event_relative),
+    DoubleBitEvent: (
+        GROUP_DOUBLE_BIT_INPUT_EVENT,
+        encode_double_bit_event,
+        encode_double_bit_event_relative,
+    ),
 }
 
 #: The qualifiers a class read may carry. ``ALL_OBJECTS`` asks for everything
@@ -332,13 +445,25 @@ _EVENT_GROUPS: dict[int, type | None] = {
 #: and a bound that can be taken before anything is encoded.
 _MIN_EVENT_OCTETS = 8
 
-#: Octets one event occupies without its index, by group and variation.
+#: Octets one event occupies without its index, by group and the variation
+#: sent. A variation that is read but answered in another is in
+#: ``_WIDENED_EVENT_VARIATIONS`` and not here.
 _EVENT_SIZES: dict[tuple[int, int], int] = {
     (GROUP_BINARY_INPUT_EVENT, 1): 1,
     (GROUP_BINARY_INPUT_EVENT, 2): 1 + TIME_SIZE,
     (GROUP_BINARY_INPUT_EVENT, 3): 3,
+    (GROUP_DOUBLE_BIT_INPUT_EVENT, 1): 1,
+    (GROUP_DOUBLE_BIT_INPUT_EVENT, 2): 1 + TIME_SIZE,
+    (GROUP_DOUBLE_BIT_INPUT_EVENT, 3): 3,
     (GROUP_FROZEN_COUNTER_EVENT, 1): 5,
     (GROUP_FROZEN_COUNTER_EVENT, 5): 5 + TIME_SIZE,
+    (GROUP_COUNTER_EVENT, 1): 5,
+    (GROUP_BINARY_OUTPUT_EVENT, 1): 1,
+    (GROUP_BINARY_OUTPUT_EVENT, 2): 1 + TIME_SIZE,
+    **{
+        (GROUP_ANALOG_OUTPUT_EVENT, variation): size
+        for variation, size in ANALOG_OUTPUT_EVENT_SIZES.items()
+    },
     **{
         (GROUP_ANALOG_INPUT_EVENT, int(variation)): size
         for variation, size in ANALOG_EVENT_SIZES.items()
@@ -406,6 +531,11 @@ def _well_formed(fragment: bytes) -> bool:
     if control & (FIR_MASK | FIN_MASK) != FIR_MASK | FIN_MASK:
         return False
     return not (control & UNS_MASK and function != FunctionCode.CONFIRM)
+
+
+def _answered_in(group: int, variation: int) -> int:
+    """Return the variation sent for a read of an event group in ``variation``."""
+    return _WIDENED_EVENT_VARIATIONS.get(group, {}).get(variation, variation)
 
 
 class ParameterError(Exception):
@@ -505,9 +635,13 @@ class SessionFacts:
     analog_latest_only: bool
     binary_event_variation: int
     analog_event_variation: int
+    #: Whether group 4, double-bit binary input events, is read by name.
+    double_bit_events: bool = False
     #: Seconds a fragment waits to be confirmed, or None for no limit.
     confirm_timeout: float | None = None
     cold_restart: bool = False
+    #: Whether ASSIGN_CLASS moves points between event classes.
+    assign_class: bool = False
     #: Whether a control sent to a broadcast address is operated.
     broadcast_controls: bool = False
     #: Function codes turned off by configuration, and refused as unsupported.
@@ -524,6 +658,20 @@ class SessionFacts:
     #: Seconds after the retries are spent before reporting starts again
     #: unprompted, or None for never.
     unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME
+    #: The variation frozen counter events are reported in when a master reads
+    #: by class, or by group with variation 0.
+    frozen_counter_event_variation: int = FROZEN_COUNTER_EVENT_VARIATION
+    #: Whether a read of frozen counter events in variation 2 is answered, in
+    #: variation 1.
+    frozen_counter_event_16_bit: bool = False
+    #: Whether the current time can be read (group 50 variation 1).
+    time_read: bool = False
+    #: Whether the internal indications can be read (group 80 variation 1).
+    indications_read: bool = False
+    #: The output event groups (11, 13, 42, 43) read from the event buffers.
+    output_events: frozenset[int] = frozenset()
+    #: Whether group 0, device attributes, is answered.
+    attributes: bool = False
 
 
 class FreezeProvider(Protocol):
@@ -537,6 +685,62 @@ class FreezeProvider(Protocol):
 
     def freeze(self, headers: Sequence[ObjectHeader], *, clear: bool) -> None:
         """Freeze what *headers* name, or raise :class:`UnknownObject`."""
+        ...
+
+
+@dataclass(frozen=True)
+class ClassAssignment:
+    """One set of an ASSIGN_CLASS request: a class and the points that move to it."""
+
+    #: The class the points' events are reported in, 1 to 3. 0 turns their
+    #: events off: the class 0 header names no class, it only has the same
+    #: object format (IEEE 1815-2012 4.4.14).
+    event_class: int
+    #: The headers that follow the class header, up to the next one. Each names
+    #: points by an object group, as a read does.
+    headers: tuple[ObjectHeader, ...]
+
+
+class ClassProvider(Protocol):
+    """Which event class each point reports in, and the means to change it.
+
+    Synchronous, like the other providers. The session hands over every set of
+    one request together, so the provider can accept all of them or none: the
+    answer to an ASSIGN_CLASS is a null response, and a master that is told it
+    succeeded has to be able to rely on all of it (D110).
+    """
+
+    def assign_class(self, assignments: Sequence[ClassAssignment]) -> None:
+        """Apply every set of one request, or raise and change nothing.
+
+        Raises :class:`UnknownObject` for a group that cannot be assigned and
+        :class:`ParameterError` for a point that is not there.
+        """
+        ...
+
+    def reset_classes(self) -> None:
+        """Return every point to the class it had at startup."""
+        ...
+
+
+class DeadbandProvider(Protocol):
+    """Where a written analog input deadband goes (IEEE 1815-2012 Table 12-18).
+
+    The session decodes each object of a write of group 34 and hands the provider
+    every one of the write together, so that a write naming a point that does
+    not exist changes none of them.
+    """
+
+    def write_deadbands(self, deadbands: Sequence[tuple[int, int, float]]) -> None:
+        """Apply ``(variation, index, value)`` for each deadband written.
+
+        The value is as the variation carries it. Raises :class:`ParameterError`,
+        having changed nothing, when an index names no analog input.
+        """
+        ...
+
+    def reset_deadbands(self) -> None:
+        """Discard every written deadband and use the configured ones again (D114)."""
         ...
 
 
@@ -764,9 +968,14 @@ class Session:
         select_timeout: float = DEFAULT_SELECT_TIMEOUT,
         clock: Callable[[], float] = time.monotonic,
         freeze_provider: FreezeProvider | None = None,
+        class_provider: ClassProvider | None = None,
         time_sink: Callable[[int], None] | None = None,
         need_time: bool = False,
         analog_event_variation: AnalogEventVariation = _ANALOG_EVENT_VARIATION,
+        frozen_counter_event_variation: int = FROZEN_COUNTER_EVENT_VARIATION,
+        frozen_counter_event_16_bit: bool = False,
+        time_source: Callable[[], int] | None = None,
+        indications_read: bool = False,
         confirm_timeout: float | None = DEFAULT_CONFIRM_TIMEOUT,
         restart_handler: Callable[[], int] | None = None,
         broadcast_controls: bool = False,
@@ -777,6 +986,11 @@ class Session:
         unsolicited_resume: float | None = DEFAULT_UNSOLICITED_RESUME,
         anomaly_observer: AnomalyObserver | None = None,
         request_observer: RequestObserver | None = None,
+        deadband_provider: DeadbandProvider | None = None,
+        extended_events: bool = False,
+        output_events: Iterable[int] = (),
+        double_bit_events: bool = False,
+        attributes: DeviceAttributes | None = None,
     ) -> None:
         """
         Args:
@@ -834,6 +1048,9 @@ class Session:
             freeze_provider: Freezes counters. Without one the freeze functions
                 are refused as unsupported, which for an outstation holding no
                 counters is the truthful answer (D45).
+            class_provider: Reassigns the event class of points. Without one
+                ASSIGN_CLASS is refused as an unsupported function, as a
+                device whose classes are fixed does (D110).
             time_sink: Receives the time a master writes, in milliseconds since
                 the Unix epoch, UTC. Without one a time write is refused as an
                 unknown object. What the caller does with the time is its own:
@@ -848,6 +1065,31 @@ class Session:
                 of what a master reads events for; a profile that fixes
                 another -- IEEE 1815.2 selects the 32-bit variation without
                 time -- names it here.
+            frozen_counter_event_variation: The variation frozen counter
+                events are reported in when a master reads by class, or by
+                group with variation 0: 5 (with time) or 1 (without).
+            frozen_counter_event_16_bit: Whether a read naming the 16-bit
+                frozen counter event variation (2) is answered. Counters are
+                32 bits wide, so the answer is variation 1, as for a read of
+                the 16-bit counter variations (D108).
+            time_source: Returns the current time in milliseconds since the
+                epoch. Given, a master may read the time (group 50 variation 1);
+                without it that read is refused as an unknown object.
+            indications_read: Whether a master may read the internal
+                indications as object group 80 variation 1. Without it the
+                read is refused as an unknown object.
+            deadband_provider: Takes a write of analog input deadbands (group
+                34, variations 1 to 3, with a range or an index for each
+                object). Without one the write is refused as an unknown
+                object. Reading deadbands is the read provider's. A restart
+                puts the configured deadbands back.
+            extended_events: Whether the event variations of subset Level 4
+                that this session can write are read by name and may be
+                chosen as ``analog_event_variation``: floating-point analog
+                events, and 16-bit frozen counter events with time, which are
+                answered in 32 bits (D113). Off, they are unknown objects, and
+                choosing a floating-point ``analog_event_variation`` raises
+                ``ValueError``.
             confirm_timeout: Seconds a fragment that asked for confirmation
                 waits for it, or None to wait indefinitely. A confirmation
                 arriving later retires nothing and continues nothing.
@@ -909,7 +1151,31 @@ class Session:
                 built, and for each unsolicited response it sends. Settable
                 later through the attribute of the same name. See
                 :mod:`py1815.observers`.
+            output_events: The output event groups to read from the buffers:
+                any of 11, 13, 42 and 43. A group left out is answered as an
+                object this outstation does not have. Groups 13 and 43 are
+                answered with nothing, because command events are not
+                generated (D116). Needs ``events``.
+            double_bit_events: Whether group 4, double-bit binary input events,
+                is read by name. Off, a read of group 4 is answered as an unknown
+                object. Events already in the buffers are reported in any case.
+            attributes: The device attributes this session answers reads of
+                group 0 from, and takes writes of. The session adds the three
+                that are its own: the largest fragment it sends and the
+                largest it receives, and how many binary outputs a control
+                request may carry. A master may write the first of these, to
+                any size from ``attributes.min_fragment`` up to the
+                ``max_response`` this session was built with, and the session
+                fragments its responses to the size written. Without a store,
+                group 0 is answered as an object this outstation does not
+                have.
+
+        Raises:
+            ValueError: An option is out of range, such as a ``max_response``
+                smaller than a response header or than ``attributes.min_fragment``.
         """
+        #: Whether a read may name group 4.
+        self._double_bit_events = double_bit_events
         #: Called with each protocol anomaly, or None.
         self.anomaly_observer = anomaly_observer
         #: The connection the session is serving, set by the listener that
@@ -932,6 +1198,18 @@ class Session:
         self._provider = provider
         self._controls = control_provider
         self._events = events
+        self._output_events = frozenset(output_events)
+        stray = sorted(self._output_events - _OUTPUT_EVENT_GROUPS.keys())
+        if stray:
+            raise ValueError(
+                f"output_events names group {stray[0]}; the output event groups are "
+                f"{', '.join(map(str, sorted(_OUTPUT_EVENT_GROUPS)))}"
+            )
+        #: The event groups a read may name, and the kind of event each selects.
+        self._event_groups = {
+            **_EVENT_GROUPS,
+            **{g: k for g, k in _OUTPUT_EVENT_GROUPS.items() if g in self._output_events},
+        }
         self._select_timeout = select_timeout
         self._clock = clock
         self._select: _ArmedSelect | None = None
@@ -975,10 +1253,22 @@ class Session:
                 f"{RESPONSE_HEADER_SIZE} octets"
             )
         self._max_response = max_response
+        #: The ceiling a write of the transmit fragment size is held to, and the
+        #: size this session returns to when it restarts.
+        self._configured_response = max_response
+        if attributes is not None and max_response < attributes.min_fragment:
+            # A read of an attribute is refused when its block does not fit a
+            # fragment, so a smaller ceiling leaves an attribute unreadable (D120).
+            raise ValueError(
+                f"max_response is {max_response}; the device attributes need "
+                f"{attributes.min_fragment} octets"
+            )
+        self._attributes = attributes
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
         self._restart = True
         self._freezer = freeze_provider
+        self._classifier = class_provider
         self._time_sink = time_sink
         if need_time and time_sink is None:
             # An outstation that asks for the time has to be able to take
@@ -986,6 +1276,28 @@ class Session:
             raise ValueError("need_time asks a master for the time and no time_sink is given")
         self._need_time = need_time
         self._analog_event_variation = AnalogEventVariation(analog_event_variation)
+        if frozen_counter_event_variation not in (1, FROZEN_COUNTER_EVENT_VARIATION):
+            raise ValueError(
+                f"frozen_counter_event_variation is {frozen_counter_event_variation}; it is 1 or 5"
+            )
+        self._frozen_event_variation = frozen_counter_event_variation
+        self._frozen_event_16_bit = frozen_counter_event_16_bit
+        self._time_source = time_source
+        self._indications_read = indications_read
+        #: The variations an event group may be read in by name.
+        self._event_variations = dict(_EVENT_VARIATIONS)
+        if frozen_counter_event_16_bit:
+            self._event_variations[GROUP_FROZEN_COUNTER_EVENT] |= frozenset({2})
+        if extended_events:
+            for group, extra in _EXTENDED_EVENT_VARIATIONS.items():
+                self._event_variations[group] |= extra
+        elif self._analog_event_variation in _FLOAT_ANALOG_EVENTS:
+            raise ValueError(
+                "analog_event_variation is a floating-point variation and extended_events is off"
+            )
+        for group in self._output_events:
+            self._event_variations[group] = _OUTPUT_EVENT_VARIATIONS[group]
+        self._deadbands = deadband_provider
         self._confirm_timeout = confirm_timeout
         self._restart_handler = restart_handler
         self._broadcast_controls = broadcast_controls
@@ -1108,8 +1420,19 @@ class Session:
         self._need_time = self._need_time_at_start
         self._broadcast = None
         self._recorded_at = None
+        if self._classifier is not None:
+            # An outstation that does not keep class assignments across a
+            # restart returns to its defaults (IEEE 1815-2012 4.4.14).
+            self._classifier.reset_classes()
         if self._need_time and self._events is not None:
             self._events.synchronized = False
+        # A written attribute is not kept across a restart (IEEE 1815-2012 5.5.8).
+        self._max_response = self._configured_response
+        if self._attributes is not None:
+            self._attributes.reset()
+        # A written deadband is held in memory only (IEEE 1815-2012 11.9.1.3; D114).
+        if self._deadbands is not None:
+            self._deadbands.reset_deadbands()
 
     def abandon_select(self) -> None:
         """Forget an armed select, so the operate it was granted for finds none.
@@ -1143,14 +1466,22 @@ class Session:
             analog_latest_only=events is not None and events.analog_latest_only,
             binary_event_variation=int(_BINARY_EVENT_VARIATION),
             analog_event_variation=int(self._analog_event_variation),
+            double_bit_events=self._double_bit_events,
             confirm_timeout=self._confirm_timeout,
             cold_restart=self._restart_handler is not None,
+            assign_class=self._classifier is not None,
             broadcast_controls=self._broadcast_controls,
             disabled_functions=self._disabled,
             unsolicited=self._unsolicited,
             unsolicited_confirm_timeout=self._unsolicited_timeout,
             unsolicited_retries=self._unsolicited_retries,
             unsolicited_resume=self._unsolicited_resume,
+            frozen_counter_event_variation=self._frozen_event_variation,
+            frozen_counter_event_16_bit=self._frozen_event_16_bit,
+            time_read=self._time_source is not None,
+            indications_read=self._indications_read,
+            output_events=self._output_events,
+            attributes=self._attributes is not None,
         )
 
     @property
@@ -1926,6 +2257,16 @@ class Session:
             )
         return bytes(out)
 
+    def _provided(self, function: FunctionCode | None) -> bool:
+        """Whether the session was given what a function outside the base set needs."""
+        return (
+            (function in _FREEZE_FUNCTIONS and self._freezer is not None)
+            or (function is FunctionCode.ASSIGN_CLASS and self._classifier is not None)
+            or (function is FunctionCode.COLD_RESTART and self._restart_handler is not None)
+            or (function is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
+            or (function in _UNSOLICITED_FUNCTIONS and self._unsolicited)
+        )
+
     def _indications(self, extra: IIN | None = None, reporting: Sequence[Event] = ()) -> IIN:
         first = int(IINBit.DEVICE_RESTART) if self._restart else 0
         if self._need_time:
@@ -2219,13 +2560,7 @@ class Session:
                 iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
             )
 
-        if (
-            known not in _SUPPORTED_FUNCTIONS
-            and not (known in _FREEZE_FUNCTIONS and self._freezer is not None)
-            and not (known is FunctionCode.COLD_RESTART and self._restart_handler is not None)
-            and not (known is FunctionCode.RECORD_CURRENT_TIME and self._time_sink is not None)
-            and not (known in _UNSOLICITED_FUNCTIONS and self._unsolicited)
-        ):
+        if known not in _SUPPORTED_FUNCTIONS and not self._provided(known):
             # Same indication either way; the log is where the two differ. A
             # named function is one the standard assigns and this outstation
             # does not implement, and an unrecognized code is one the standard
@@ -2253,6 +2588,9 @@ class Session:
 
         if known in _FREEZE_FUNCTIONS:
             return self._acting(fragment, known, self._handle_freeze(request, known))
+
+        if known is FunctionCode.ASSIGN_CLASS:
+            return self._handle_assign_class(request)
 
         if known is FunctionCode.DELAY_MEASURE:
             return self._delay_measure(request, started)
@@ -2389,6 +2727,51 @@ class Session:
             return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
         logger.info("dnp3: %s executed (%d header(s))", known.name, len(headers))
         return null_response(sequence=sequence, iin=self._indications())
+
+    def _handle_assign_class(self, request: Request) -> bytes:
+        """Move points between event classes, and answer with a null response (D110).
+
+        The request is a run of sets. Each starts with a group 60 header whose
+        variation names the class (variation 1 is class 0, which turns events
+        off) and is followed by the headers of the points it applies to
+        (IEEE 1815-2012 4.4.14). The sets are checked here and applied by the
+        provider as one unit, so a request that fails changes nothing.
+        """
+        assert self._classifier is not None
+        sequence = request.control.sequence
+        assignments: list[ClassAssignment] = []
+        named: list[ObjectHeader] = []
+        event_class: int | None = None
+        for header in request.headers:
+            if header.group == CLASS_GROUP:
+                if header.qualifier is not QualifierCode.ALL_OBJECTS or header.event_class is None:
+                    return self._assign_refused(sequence, IIN2Bit.PARAM_ERROR, "bad class header")
+                if event_class is not None:
+                    assignments.append(ClassAssignment(event_class, tuple(named)))
+                event_class, named = header.event_class, []
+            elif event_class is None:
+                # Points ahead of the first class header would be assigned to
+                # no class, which is optional (TB2021-001) and not offered.
+                return self._assign_refused(
+                    sequence, IIN2Bit.PARAM_ERROR, "points named before a class header"
+                )
+            else:
+                named.append(header)
+        if event_class is None:
+            return self._assign_refused(sequence, IIN2Bit.PARAM_ERROR, "no class header")
+        assignments.append(ClassAssignment(event_class, tuple(named)))
+        try:
+            self._classifier.assign_class(assignments)
+        except UnknownObject as exc:
+            return self._assign_refused(sequence, IIN2Bit.OBJECT_UNKNOWN, str(exc))
+        except ParameterError as exc:
+            return self._assign_refused(sequence, IIN2Bit.PARAM_ERROR, str(exc))
+        logger.info("dnp3: ASSIGN_CLASS applied %d set(s)", len(assignments))
+        return null_response(sequence=sequence, iin=self._indications())
+
+    def _assign_refused(self, sequence: int, bit: IIN2Bit, reason: str) -> bytes:
+        logger.info("dnp3: ASSIGN_CLASS refused: %s", reason)
+        return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
 
     def _freeze_unacknowledged(self, fragment: bytes) -> None:
         """Execute a freeze that asks for no response, and tell nobody."""
@@ -2816,11 +3199,138 @@ class Session:
         implements ``read_blocks``, which is how a point map too large for one
         fragment reaches a master at all (D35).
         """
+        blocks: list[bytes] = []
+        waiting: list[ObjectHeader] = []
+        for header in headers:
+            own = self._own_blocks(header)
+            if own is None:
+                waiting.append(header)
+                continue
+            if waiting:
+                blocks += self._provider_blocks(waiting)
+                waiting = []
+            blocks += own
+        if waiting or not headers:
+            blocks += self._provider_blocks(waiting)
+        return blocks
+
+    def _provider_blocks(self, headers: Sequence[ObjectHeader]) -> list[bytes]:
+        """What the provider answers the given headers with."""
         provider = self._provider
         if isinstance(provider, BlockReadProvider):
             return [bytes(block) for block in provider.read_blocks(headers) if block]
         body = provider.read(headers)
         return [body] if body else []
+
+    def _own_blocks(self, header: ObjectHeader) -> list[bytes] | None:
+        """The session's own answer to a read, or None for the provider to answer.
+
+        Device attributes, the time and the internal indications belong to the
+        session. Raises as :meth:`_own_object` does, and as an attribute read the
+        store refuses.
+        """
+        store = self._attributes
+        if store is not None and header.group == GROUP_DEVICE_ATTRIBUTES:
+            view, writable = self._attribute_view(store)
+            try:
+                return read_blocks([header], view, writable)
+            except UnknownVariation as exc:
+                raise UnknownObject(str(exc)) from None
+            except BadParameter as exc:
+                raise ParameterError(str(exc)) from None
+        own = self._own_object(header)
+        return None if own is None else [own]
+
+    def _own_object(self, header: ObjectHeader) -> bytes | None:
+        """The answer to a read of the time or of the internal indications.
+
+        These objects belong to the session, not the provider: the time is the
+        clock the session was given and the indications are its own state.
+        Returns None for any other read, and for these when the session was
+        not given what they need, so the provider refuses them as it refuses
+        any object it does not serve.
+
+        Raises:
+            UnknownObject: The qualifier selects nothing of this object.
+            ParameterError: The count or the range names more than the object holds.
+        """
+        if header.event_class is not None or (header.group, header.variation) not in _OWN_OBJECTS:
+            return None
+        if header.group == TIME_GROUP and self._time_source is not None:
+            # Table 12-45: a read of the time takes qualifier 0x07 and a count of 1.
+            if header.qualifier is not QualifierCode.UINT8_COUNT:
+                raise UnknownObject(
+                    f"qualifier 0x{int(header.qualifier):02X} does not select the current time"
+                )
+            if header.count != 1:
+                raise ParameterError(f"the current time is one object, not {header.count}")
+            # A clock written near the top of the 48-bit range runs past it; the
+            # time is clamped as every other time this outstation sends is.
+            return bytes([TIME_GROUP, TIME_VARIATION, int(header.qualifier), 1]) + encode_time(
+                self._time_source()
+            )
+        if header.group == RESTART_GROUP and self._indications_read:
+            return self._indications_object(header)
+        return None
+
+    def _indications_object(self, header: ObjectHeader) -> bytes:
+        """Group 80 variation 1 for the indexes a read names (Table 12-52).
+
+        Index n is bit n of the two indication octets, first octet first (A.28.1).
+        The answer is packed with the first index in bit 0 of the first octet
+        and the rest of the last octet zero.
+        """
+        if (
+            header.qualifier
+            not in (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
+            or header.start is None
+            or header.stop is None
+        ):
+            raise UnknownObject(
+                f"qualifier 0x{int(header.qualifier):02X} does not select internal indications"
+            )
+        if header.stop > _LAST_INDICATION:
+            raise ParameterError(
+                f"there are internal indications 0..{_LAST_INDICATION}, not {header.stop}"
+            )
+        iin = self._indications()
+        states = iin.first | iin.second << 8
+        count = header.stop - header.start + 1
+        packed = (states >> header.start) & ((1 << count) - 1)
+        prefix = bytes([RESTART_GROUP, RESTART_VARIATION, int(QualifierCode.UINT8_START_STOP)])
+        return (
+            prefix
+            + bytes([header.start, header.stop])
+            + packed.to_bytes((count + 7) // 8, "little")
+        )
+
+    def _attribute_view(self, store: DeviceAttributes) -> tuple[dict[int, Attribute], set[int]]:
+        """Every attribute of set 0 now, and the variations a master may write.
+
+        The store's, and the three that belong to this session.
+        """
+        view = store.snapshot()
+        view[Variation.MAXIMUM_BINARY_OUTPUT_OBJECTS] = Attribute.unsigned(self._max_controls())
+        view[Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE] = Attribute.unsigned(self._max_response)
+        view[Variation.MAXIMUM_RECEIVE_FRAGMENT_SIZE] = Attribute.unsigned(self._max_fragment)
+        return view, {*store.writable, Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE}
+
+    def _max_controls(self) -> int:
+        """How many binary outputs one control request may carry; zero without controls.
+
+        The most that both the request and the echo that answers it fit in a
+        fragment, counted with the widest index and count a request may use, so
+        that a master sending this many is never refused for size.
+        """
+        if self._controls is None:
+            return 0
+        # Per object an index of two octets and the block; per request the
+        # widest header (group, variation, qualifier, a two-octet count).
+        per_object = 2 + CROB_SIZE
+        header = 3 + 2
+        request = (self._max_fragment - REQUEST_HEADER_SIZE - header) // per_object
+        echo = (self._max_response - RESPONSE_HEADER_SIZE - header) // per_object
+        return max(0, min(request, echo))
 
     def _abandon(self) -> None:
         """Forget the response in flight, because the master has moved on.
@@ -2983,14 +3493,16 @@ class Session:
             return True
         if header.event_class is not None:
             return False
-        return header.variation in _EVENT_VARIATIONS.get(header.group, ())
+        if header.group == GROUP_DOUBLE_BIT_INPUT_EVENT and not self._double_bit_events:
+            return False
+        return header.variation in self._event_variations.get(header.group, ())
 
     def _held(self, header: ObjectHeader, limit: int) -> list[Event]:
         """The oldest events a header selects, without removing them."""
         assert self._events is not None
         if header.event_class is not None:
             return self._events.peek(EventClass(header.event_class), limit=limit)
-        kind = _EVENT_GROUPS[header.group]
+        kind = self._event_groups[header.group]
         return [] if kind is None else self._events.peek_kind(kind, limit=limit)
 
     def _event_body(
@@ -3129,16 +3641,41 @@ class Session:
             _MIN_EVENT_OCTETS,
             1 + _EVENT_SIZES[(GROUP_ANALOG_INPUT_EVENT, int(self._analog_event_variation))],
         )
+        defaults = min(
+            defaults,
+            1 + _EVENT_SIZES[(GROUP_FROZEN_COUNTER_EVENT, self._frozen_event_variation)],
+            1 + _EVENT_SIZES[(GROUP_COUNTER_EVENT, 1)],
+        )
         if self._events is not None and self._events.holds_unsynchronized:
             # Those travel with relative time, which is smaller than the default.
             defaults = min(defaults, 1 + _EVENT_SIZES[(GROUP_BINARY_INPUT_EVENT, 3)])
         smallest = defaults
         for header in headers:
             if header.event_class is None and header.variation:
-                named = _EVENT_SIZES.get((header.group, header.variation))
+                named = _EVENT_SIZES.get(
+                    (header.group, _answered_in(header.group, header.variation))
+                )
                 if named is not None:
                     smallest = min(smallest, 1 + named)
         return smallest
+
+    def _encoded_analog_event(self, event: AnalogEvent, named: int) -> tuple[int, bytes]:
+        """Return the variation an analog event is sent in, and the event encoded in it.
+
+        ``named`` is the variation the read named, or 0 for this session's
+        default. A floating-point variation carries the unscaled value the
+        event kept, where it kept one (D112).
+        """
+        analog = AnalogEventVariation(named) if named else self._analog_event_variation
+        reported = event.point
+        if analog in _FLOAT_ANALOG_EVENTS and event.unscaled is not None:
+            reported = AnalogPoint(event.unscaled, reported.flags)
+        encoded = encode_analog_event(
+            reported,
+            variation=analog,
+            timestamp_ms=event.timestamp_ms if analog in _TIMED_ANALOG_EVENTS else None,
+        )
+        return int(analog), encoded
 
     def _event_blocks(
         self, chosen: Sequence[tuple[Event, int]], headers: Sequence[ObjectHeader]
@@ -3172,23 +3709,19 @@ class Session:
             synchronized = True
             if isinstance(event, AnalogEvent):
                 group = GROUP_ANALOG_INPUT_EVENT
-                analog = AnalogEventVariation(named) if named else self._analog_event_variation
-                variation = int(analog)
-                encoded = encode_analog_event(
-                    event.point,
-                    variation=analog,
-                    timestamp_ms=event.timestamp_ms if analog in _TIMED_ANALOG_EVENTS else None,
-                )
+                variation, encoded = self._encoded_analog_event(event, named)
             elif isinstance(event, FrozenCounterEvent):
                 group = GROUP_FROZEN_COUNTER_EVENT
-                variation = named or FROZEN_COUNTER_EVENT_VARIATION
+                variation = _answered_in(group, named) or self._frozen_event_variation
                 encoded = (
                     encode_frozen_counter_event(event.point, timestamp_ms=event.timestamp_ms)
                     if variation == FROZEN_COUNTER_EVENT_VARIATION
                     else encode_counter(event.point)
                 )
+            elif isinstance(event, (CounterEvent, BinaryOutputEvent, AnalogOutputEvent)):
+                group, variation, encoded = _encode_change_event(event, named)
             else:
-                group = GROUP_BINARY_INPUT_EVENT
+                group, encode_event, encode_relative = _TWO_STATE_EVENTS[type(event)]
                 variation = named or int(_BINARY_EVENT_VARIATION)
                 synchronized = event.synchronized
                 if variation == BinaryEventVariation.WITH_TIME and not synchronized:
@@ -3207,10 +3740,10 @@ class Session:
                     else:
                         base = event.timestamp_ms
                         prefix = common_time(base, synchronized=synchronized)
-                    encoded = encode_binary_event_relative(event.point, event.timestamp_ms - base)
+                    encoded = encode_relative(event.point, event.timestamp_ms - base)
                 else:
                     timed = variation == BinaryEventVariation.WITH_TIME
-                    encoded = encode_binary_event(
+                    encoded = encode_event(
                         event.point,
                         with_time=timed,
                         timestamp_ms=event.timestamp_ms if timed else None,
@@ -3230,7 +3763,7 @@ class Session:
                 )
         return blocks
 
-    def _handle_write(self, request: Request) -> bytes:
+    def _handle_write(self, request: Request) -> bytes:  # pylint: disable=too-many-return-statements
         """The only write a monitor outstation honors: clearing the restart bit.
 
         Everything else is refused as an unknown object rather than as an
@@ -3272,10 +3805,108 @@ class Session:
             logger.info("dnp3: time written by master, %d ms after it was recorded", elapsed_ms)
             return null_response(sequence=sequence, iin=self._indications())
 
+        if (
+            self._deadbands is not None
+            and request.headers
+            and request.headers[0].group == GROUP_ANALOG_DEADBAND
+            and request.headers[0].variation in DEADBAND_SIZES
+        ):
+            return self._write_deadbands(request, self._deadbands)
+
+        if (
+            self._attributes is not None
+            and request.headers
+            and request.headers[0].group == GROUP_DEVICE_ATTRIBUTES
+        ):
+            return self._write_attributes(request, self._attributes)
+
         # A write naming nothing is malformed; one naming an object this
         # outstation does not take a write of is an unknown object.
         bit = IIN2Bit.OBJECT_UNKNOWN if request.headers else IIN2Bit.PARAM_ERROR
         return null_response(sequence=sequence, iin=self._indications(IIN(second=bit)))
+
+    def _write_deadbands(self, request: Request, provider: DeadbandProvider) -> bytes:
+        """Apply a write of analog input deadbands, all of it or none of it.
+
+        A value no deadband can have, or an object the fragment does not hold,
+        is a parameter error and changes nothing.
+        """
+        sequence = request.control.sequence
+        try:
+            written: list[tuple[int, int, float]] = []
+            blocks = parse_data_blocks(
+                request,
+                lambda group, variation: (
+                    DEADBAND_SIZES.get(variation) if group == GROUP_ANALOG_DEADBAND else None
+                ),
+            )
+            for block in blocks:
+                header = block.header
+                for index, data in block.items:
+                    value = decode_deadband(data, header.variation)
+                    if not math.isfinite(value) or value < 0:
+                        raise RequestError(f"{value} is not a deadband")
+                    written.append((header.variation, index, value))
+            provider.write_deadbands(written)
+        except (RequestError, ParameterError) as exc:
+            logger.info("dnp3: write of deadbands refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        logger.info("dnp3: %d deadband(s) written by master", len(written))
+        return null_response(sequence=sequence, iin=self._indications())
+
+    def _write_attributes(self, request: Request, store: DeviceAttributes) -> bytes:
+        """Take a write of device attributes, all of it or none of it.
+
+        The values are checked before any is stored: IEEE 1815-2012 5.5.8 has an
+        unacceptable value leave the attribute as it was and set IIN2.2, and a
+        fragment that stored half of what it carried would leave a master
+        unsure which half.
+        """
+        sequence = request.control.sequence
+        size: int | None = None
+        try:
+            writes = parse_writes(request.headers[0], request.body)
+            for variation, attribute in writes:
+                if variation == Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE:
+                    size = self._checked_fragment_size(store, attribute)
+                else:
+                    store.check(variation, attribute)
+        except UnknownVariation as exc:
+            logger.info("dnp3: attribute write refused: %s", exc)
+            return null_response(
+                sequence=sequence,
+                iin=self._indications(IIN(second=IIN2Bit.OBJECT_UNKNOWN)),
+            )
+        except (BadParameter, RequestError) as exc:
+            logger.info("dnp3: attribute write refused: %s", exc)
+            return null_response(
+                sequence=sequence, iin=self._indications(IIN(second=IIN2Bit.PARAM_ERROR))
+            )
+        if size is not None:
+            self._max_response = size
+            logger.info("dnp3: maximum transmit fragment size set to %d", size)
+        store.write([(v, a) for v, a in writes if v != Variation.MAXIMUM_TRANSMIT_FRAGMENT_SIZE])
+        return null_response(sequence=sequence, iin=self._indications())
+
+    def _checked_fragment_size(self, store: DeviceAttributes, attribute: Attribute) -> int:
+        """Return the maximum transmit fragment size an attribute states, or raise.
+
+        It may be lowered to what the outstation's largest response block needs
+        and raised back to the size the outstation was configured with, and no
+        higher: the configured size is the most this device was set up to send,
+        which is the limit IEEE 1815-2012 4.3 rule 1 has an operator able to set.
+        """
+        if attribute.code != DataType.UINT or not attribute.data:
+            raise BadParameter("the maximum transmit fragment size is an unsigned integer")
+        size = int.from_bytes(attribute.data, "little")
+        if not store.min_fragment <= size <= self._configured_response:
+            raise BadParameter(
+                f"the maximum transmit fragment size is {store.min_fragment} to "
+                f"{self._configured_response} octets, not {size}"
+            )
+        return size
 
     def _time_was_set(self) -> None:
         """A master has written the time: stop asking, and trust the clock from here."""
@@ -3309,6 +3940,42 @@ class Session:
             and header.start == RESTART_INDEX
             and header.stop == RESTART_INDEX
         )
+
+
+def _encode_change_event(
+    event: CounterEvent | BinaryOutputEvent | AnalogOutputEvent, named: int
+) -> tuple[int, int, bytes]:
+    """Return the group, variation and octets of a counter or output event.
+
+    ``named`` is the variation the read asked for, or 0 for the default.
+    """
+    if isinstance(event, CounterEvent):
+        # A class read and variation 0 are answered in variation 1, 32 bits
+        # with flag (D124).
+        variation = _answered_in(GROUP_COUNTER_EVENT, named) or 1
+        return GROUP_COUNTER_EVENT, variation, encode_counter(event.point)
+    if isinstance(event, BinaryOutputEvent):
+        variation = named or _BINARY_OUTPUT_EVENT_VARIATION
+        return (
+            GROUP_BINARY_OUTPUT_EVENT,
+            variation,
+            encode_binary_output_event(
+                state=event.point.state,
+                flags=event.point.flags,
+                timestamp_ms=event.timestamp_ms if variation == 2 else None,
+            ),
+        )
+    variation = named or _ANALOG_OUTPUT_EVENT_VARIATION
+    return (
+        GROUP_ANALOG_OUTPUT_EVENT,
+        variation,
+        encode_analog_output_event(
+            event.value if variation in _FLOAT_ANALOG_OUTPUT_EVENTS else event.point.value,
+            variation,
+            flags=event.point.flags,
+            timestamp_ms=event.timestamp_ms if variation in _TIMED_ANALOG_OUTPUT_EVENTS else None,
+        ),
+    )
 
 
 def _checked(statuses: Sequence[CommandStatus], controls: Sequence[Control]) -> list[CommandStatus]:

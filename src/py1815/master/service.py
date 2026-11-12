@@ -28,11 +28,12 @@ import re
 import secrets
 import ssl
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from py1815.application import FunctionCode, IIN2Bit, IINBit
+from py1815.attributes import Attribute, DataType, Variation
 from py1815.control import AnalogOutput
 from py1815.decode import DecodedObject, PointType
 from py1815.master import requests
@@ -69,6 +70,7 @@ from py1815.master.trace import Entry, Recorder, iin_names
 from py1815.objects import AnalogQuality, BinaryQuality, CounterQuality
 from py1815.profile import device_profile_view
 from py1815.profile.model import Kind, Point, PointMap
+from py1815.subset import SubsetLevel
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,7 @@ _MAX_HEADER = 16 << 10
 
 _FLAGS: dict[PointType, type[BinaryQuality] | type[AnalogQuality] | type[CounterQuality]] = {
     PointType.BINARY_INPUT: BinaryQuality,
+    PointType.DOUBLE_BIT_INPUT: BinaryQuality,
     PointType.BINARY_OUTPUT: BinaryQuality,
     PointType.COUNTER: CounterQuality,
     PointType.FROZEN_COUNTER: CounterQuality,
@@ -96,9 +99,22 @@ _FLAGS: dict[PointType, type[BinaryQuality] | type[AnalogQuality] | type[Counter
 
 _POINT_TYPES = {point.value: point for point in PointType}
 
+#: The point types of a read or an assignment, by the short name a message uses
+#: and the argument of the operation that takes it.
+_POINT_ARGUMENTS = {
+    "bi": "binary_inputs",
+    "dbi": "double_bit_inputs",
+    "bo": "binary_outputs",
+    "counter": "counters",
+    "frozen": "frozen_counters",
+    "ai": "analog_inputs",
+    "ao": "analog_outputs",
+}
+
 #: The point types each kind of profile point is read as.
 _KIND_TYPES: dict[Kind, tuple[PointType, ...]] = {
     Kind.BI: (PointType.BINARY_INPUT,),
+    Kind.DBI: (PointType.DOUBLE_BIT_INPUT,),
     Kind.BO: (PointType.BINARY_OUTPUT,),
     Kind.AI: (PointType.ANALOG_INPUT,),
     Kind.AO: (PointType.ANALOG_OUTPUT,),
@@ -331,6 +347,34 @@ def _number(value: bool | int | float | None) -> bool | int | float | str | None
     return value
 
 
+def describe_attribute(attribute: Attribute) -> dict[str, Any]:
+    """Describe a device attribute: its data type, its value and its octets.
+
+    The value is text, a number, the octets of an octet string in hexadecimal,
+    or for a list of variations each variation and whether it can be written.
+    It is None where the data type or the length does not decode.
+    """
+    value = attribute.value
+    shown: Any
+    if isinstance(value, bytes):
+        shown = value.hex()
+    elif isinstance(value, tuple):
+        shown = [{"variation": variation, "writable": writable} for variation, writable in value]
+    elif isinstance(value, str):
+        shown = value
+    else:
+        shown = _number(value)
+    try:
+        data_type = DataType(attribute.code).name
+    except ValueError:
+        data_type = str(attribute.code)
+    return {
+        "data_type": data_type,
+        "value": shown,
+        "octets": attribute.data.hex(),
+    }
+
+
 def describe_object(decoded: DecodedObject, name: str | None = None) -> dict[str, Any]:
     return {
         "type": decoded.point.value if decoded.point is not None else None,
@@ -343,6 +387,7 @@ def describe_object(decoded: DecodedObject, name: str | None = None) -> dict[str
         "time_ms": decoded.time_ms,
         "synchronized": decoded.synchronized,
         "event": decoded.event,
+        "attribute": None if decoded.attribute is None else describe_attribute(decoded.attribute),
     }
 
 
@@ -436,6 +481,7 @@ def describe_check(check: Check) -> dict[str, Any]:
         "set": check.group,
         "writes": check.commands,
         "deviates": check.deviates,
+        "level": int(check.level),
     }
 
 
@@ -503,11 +549,18 @@ class Service:
             "wait_for": self._wait_for,
             "scan": self._scan,
             "read": self._read,
+            "read_group": self._read_group,
+            "read_time": self._read_time,
+            "read_indications": self._read_indications,
+            "read_attributes": self._read_attributes,
             "values": self._values,
             "events": self._events,
             "request": self._request,
             "operate": self._operate,
             "write_time": self._write_time,
+            "assign_class": self._assign_class,
+            "write_deadbands": self._write_deadbands,
+            "write_attribute": self._write_attribute,
             "synchronize_time": self._synchronize_time,
             "clear_restart": self._clear_restart,
             "freeze": self._freeze,
@@ -709,6 +762,7 @@ class Service:
             "outstation_address": outstation.association.outstation_address,
             "master_address": outstation.association.master_address,
             "read_retries": outstation.association.read_retries,
+            "level": int(outstation.level),
             "tls": self._tls[outstation.name].describe() if outstation.name in self._tls else None,
             "connected": outstation.connected,
             "indications": iin_names(last.iin) if last is not None and last.iin else [],
@@ -856,6 +910,8 @@ class Service:
             if isinstance(retries, bool) or not isinstance(retries, int) or retries < 0:
                 raise BadRequest("read_retries is a count of retries, zero or more")
             options["read_retries"] = retries
+        if params.get("level") is not None:
+            options["level"] = SubsetLevel.parse(params["level"], "level")
         if params.get("confirm") is not None:
             options["confirm"] = bool(params["confirm"])
         if "reconnect" in params:
@@ -1039,27 +1095,85 @@ class Service:
         exchange = await outstation.scan(str(params.get("kind", "integrity")))
         return self._describe_exchange(outstation, exchange)
 
-    async def _read(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        outstation = self._outstation(params)
+    def _named_points(self, params: Mapping[str, Any], what: str) -> dict[str, Any]:
+        """Return the points a message names, as the arguments of an operation."""
         points = params.get("points")
         if not isinstance(points, Mapping) or not points:
-            raise BadRequest("a read names points, by type")
-        arguments = {
-            "bi": "binary_inputs",
-            "bo": "binary_outputs",
-            "counter": "counters",
-            "frozen": "frozen_counters",
-            "ai": "analog_inputs",
-            "ao": "analog_outputs",
-        }
+            raise BadRequest(f"{what} names points, by type")
         named: dict[str, Any] = {}
         for kind, indices in points.items():
-            if kind not in arguments:
-                raise BadRequest(f"{kind!r} is not a point type; one of {', '.join(arguments)}")
-            named[arguments[kind]] = (
-                indices if isinstance(indices, str) else [int(index) for index in indices]
+            if kind not in _POINT_ARGUMENTS:
+                raise BadRequest(
+                    f"{kind!r} is not a point type; one of {', '.join(_POINT_ARGUMENTS)}"
+                )
+            named[_POINT_ARGUMENTS[kind]] = (
+                indices if isinstance(indices, str) else self._indices(indices, f"points.{kind}")
             )
-        exchange = await outstation.read(**named)
+        return named
+
+    @staticmethod
+    def _indices(indices: Any, key: str) -> list[int]:
+        """Return a list of point indices a message gives, each a whole number."""
+        if (
+            isinstance(indices, (str, bytes))
+            or not isinstance(indices, Sequence)
+            or any(isinstance(index, bool) or not isinstance(index, int) for index in indices)
+        ):
+            raise BadRequest(f"{key} is a list of point indices, each a whole number")
+        return list(indices)
+
+    async def _read(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        exchange = await outstation.read(**self._named_points(params, "a read"))
+        return self._describe_exchange(outstation, exchange)
+
+    @staticmethod
+    def _whole(params: Mapping[str, Any], key: str) -> int | None:
+        """Return a whole number a message gives, or None when it leaves it out."""
+        value = params.get(key)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise BadRequest(f"{key} is a whole number")
+        return value
+
+    async def _read_group(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        group = self._whole(params, "group")
+        if group is None:
+            raise BadRequest("a read of a group names the group")
+        indices = params.get("indices")
+        if indices is not None:
+            indices = self._indices(indices, "indices")
+        variation = self._whole(params, "variation")
+        exchange = await outstation.read_group(
+            group,
+            requests.DEFAULT_VARIATION if variation is None else variation,
+            start=self._whole(params, "start"),
+            stop=self._whole(params, "stop"),
+            indices=indices,
+        )
+        return self._describe_exchange(outstation, exchange)
+
+    async def _read_time(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        return self._describe_exchange(outstation, await outstation.read_time())
+
+    async def _read_indications(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        start, stop = self._whole(params, "start"), self._whole(params, "stop")
+        exchange = await outstation.read_indications(
+            0 if start is None else start, 15 if stop is None else stop
+        )
+        return self._describe_exchange(outstation, exchange)
+
+    async def _read_attributes(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        variation = self._whole(params, "variation")
+        exchange = await outstation.read_attributes(
+            Variation.ALL_ATTRIBUTES if variation is None else variation,
+            self._whole(params, "attribute_set"),
+        )
         return self._describe_exchange(outstation, exchange)
 
     async def _values(self, params: Mapping[str, Any]) -> dict[str, Any]:
@@ -1190,6 +1304,45 @@ class Service:
             raise BadRequest("time_ms is milliseconds since the epoch, a whole number")
         self._commanding("a time write")
         return self._describe_exchange(outstation, await outstation.write_time(when))
+
+    async def _assign_class(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        event_class = self._whole(params, "event_class")
+        if event_class is None:
+            raise BadRequest("an assignment names an event class: 1 to 3, or 0 for none")
+        named = self._named_points(params, "an assignment")
+        # Refused for what is wrong with it before it is refused for not being allowed.
+        wanted = {
+            _POINT_TYPES[kind]: None if isinstance(indices, str) else list(indices)
+            for kind, indices in params["points"].items()
+        }
+        requests.assign_class([(event_class, wanted)])
+        self._commanding("an ASSIGN_CLASS")
+        exchange = await outstation.assign_class(event_class, **named)
+        return self._describe_exchange(outstation, exchange)
+
+    async def _write_deadbands(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        variation = self._whole(params, "variation")
+        values = params.get("values")
+        if variation is None or not isinstance(values, Mapping):
+            raise BadRequest("a write of deadbands names a variation and values by point index")
+        by_index = {int(index): value for index, value in values.items()}
+        requests.write_deadbands(variation, by_index)
+        self._commanding("a write of analog deadbands")
+        exchange = await outstation.write_deadbands(variation, by_index)
+        return self._describe_exchange(outstation, exchange)
+
+    async def _write_attribute(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        outstation = self._outstation(params)
+        variation = self._whole(params, "variation")
+        if variation is None or "value" not in params:
+            raise BadRequest("a write of an attribute names its variation and its value")
+        attribute_set = self._whole(params, "attribute_set") or 0
+        requests.write_attribute(variation, params["value"], attribute_set)
+        self._commanding("a write of a device attribute")
+        exchange = await outstation.write_attribute(variation, params["value"], attribute_set)
+        return self._describe_exchange(outstation, exchange)
 
     async def _synchronize_time(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)

@@ -132,3 +132,25 @@ class TestEventsSinceAMark:
         store.apply([self._event(3)], now=2.0)
         assert [each.index for each in store.events_since(mark)] == [3]
         assert store.events_received == 3
+
+
+class TestDoubleBitInputs:
+    def test_a_point_keeps_its_state_flags_and_time(self):
+        store = Store()
+        store.apply(_objects(f"04 02 17 01  05 84  {TIME_OCTETS}"), now=3.0)
+        value = store.double_bit_input(5)
+        assert (value.value, value.flags, value.time_ms, value.from_event) == (
+            2,
+            0x04,
+            10_000_000_000,
+            True,
+        )
+        assert store.points(PointType.DOUBLE_BIT_INPUT) == {5: value}
+        assert store.binary_input(5) is None
+
+    def test_a_static_value_replaces_an_event_and_an_event_is_kept_in_the_log(self):
+        store = Store()
+        store.apply(_objects("04 01 17 01  05 41"), now=1.0)
+        store.apply(_objects("03 02 00 05 05  81"), now=2.0)
+        assert store.double_bit_input(5).value == 2 and not store.double_bit_input(5).from_event
+        assert len(store.events) == 1

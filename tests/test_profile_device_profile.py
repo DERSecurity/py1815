@@ -20,8 +20,9 @@ import pytest
 from profile_fixtures import REAL_TABLES, for_reference_der, small, units
 
 from py1815 import link
-from py1815.application import FunctionCode, IIN2Bit
+from py1815.application import FunctionCode, IIN2Bit, ObjectHeader, QualifierCode
 from py1815.control import CommandStatus, ControlRelayOutputBlock, OperationType, encode_crob
+from py1815.decode import decode_objects
 from py1815.objects import AnalogEventVariation
 from py1815.profile import cli, der, device_profile, load
 from py1815.profile.binding import Binding
@@ -29,7 +30,7 @@ from py1815.profile.device_profile import NAMESPACE, Identity, Row
 from py1815.profile.model import Composition, Kind
 from py1815.profile.outstation import DerOutstation
 from py1815.profile.probe import parse_objects
-from py1815.session import Session
+from py1815.session import ClassAssignment, Session
 from py1815.transport import Reassembler
 
 SCHEMA = pathlib.Path(__file__).resolve().parent.parent / "schema" / device_profile.SCHEMA_FILE
@@ -451,7 +452,7 @@ class TestTheTableFollowsTheConfiguration:
         """Frozen counters without time, analog output status in 16 bits, no frozen events."""
         point_map = load.resolve(for_reference_der(), Composition())
         device = der.ReferenceDer()
-        outstation = DerOutstation(point_map, device.bind(point_map), level2=True)
+        outstation = DerOutstation(point_map, device.bind(point_map), level=2)
         outstation.freeze_all()
         session = outstation.session()
         table = device_profile.implementation(outstation, session.facts)
@@ -556,13 +557,15 @@ class TestConfigurationIsReadFromTheSession:
 class TestThePointLists:
     PATHS: ClassVar[dict[Kind, str]] = {
         Kind.BI: "d:binaryInputPoints/d:dataPoints/d:binaryInput",
+        Kind.DBI: "d:doubleBitInputPoints/d:dataPoints/d:doubleBitInput",
         Kind.BO: "d:binaryOutputPoints/d:dataPoints/d:binaryOutput",
         Kind.CTR: "d:counterPoints/d:dataPoints/d:counter",
         Kind.AI: "d:analogInputPoints/d:dataPoints/d:analogInput",
         Kind.AO: "d:analogOutputPoints/d:dataPoints/d:analogOutput",
     }
 
-    @pytest.mark.parametrize("kind", list(Kind))
+    # The simulated DER has no double-bit inputs, which the profile does not define.
+    @pytest.mark.parametrize("kind", [kind for kind in Kind if kind is not Kind.DBI])
     def test_every_served_point_is_listed_and_no_other(self, simulation, kind):
         root = _document(simulation)
         listed = [
@@ -803,13 +806,19 @@ class TestWhatIsNotClaimed:
         assert not any("nsolicited" in text for text in additions())
         assert any("nsolicited" in text for text in additions(unsolicited=True))
 
-    def test_the_level_claimed_is_two(self, simulation):
-        level = _document(simulation).find(
-            "d:referenceDevice/d:configuration/d:deviceConfig/d:dnpLevelSupported/"
-            "d:currentValue/d:outStation",
-            NS,
-        )
-        assert [child.tag.split("}")[1] for child in level] == ["level2"]
+    @pytest.mark.parametrize(
+        "level, claimed", [(None, "level2"), (2, "level2"), (3, "level3"), (4, "level4")]
+    )
+    def test_the_level_claimed_is_the_configured_level(self, level, claimed):
+        point_map = load.resolve(for_reference_der(), Composition())
+        built = der.build(point_map, level=level)
+        for part in ("currentValue", "capabilities"):
+            found = _document(built).find(
+                "d:referenceDevice/d:configuration/d:deviceConfig/d:dnpLevelSupported/"
+                f"d:{part}/d:outStation",
+                NS,
+            )
+            assert [child.tag.split("}")[1] for child in found] == [claimed]
 
 
 class TestTheDocumentItself:
@@ -861,6 +870,18 @@ class TestAgainstTheSchema:
         root = _document(simulation, unsolicited=True, unsolicited_retries=retries)
         assert _validate(root) == []
 
+    @pytest.mark.parametrize("level", [3, 4])
+    def test_it_validates_at_levels_3_and_4(self, level):
+        built = der.build(load.resolve(for_reference_der(), Composition()), level=level)
+        root = device_profile.build(built.outstation, built.outstation.session(unsolicited=True))
+        assert _validate(root) == []
+
+    @pytest.mark.parametrize("level", [3, 4])
+    def test_the_simulated_der_validates_at_each_level_above_two(self, level):
+        built = der.build(load.resolve(for_reference_der(), Composition()), level=level)
+        built.advance(5.0)
+        assert _validate(_document(built, unsolicited=True)) == []
+
     def test_a_monitor_validates(self):
         outstation, _ = _monitor()
         assert _validate(device_profile.build(outstation, outstation.session())) == []
@@ -890,6 +911,12 @@ class TestAgainstTheSchema:
     @pytest.mark.skipif(not REAL_TABLES.is_file(), reason="the IEEE tables are generated locally")
     def test_the_profile_for_the_real_point_map_validates(self):
         built = der.build(load.load(REAL_TABLES, Composition(meters=1, inverters=1)))
+        root = device_profile.build(built.outstation, built.outstation.session())
+        assert _validate(root) == []
+
+    @pytest.mark.skipif(not REAL_TABLES.is_file(), reason="the IEEE tables are generated locally")
+    def test_the_profile_for_the_real_point_map_validates_at_level_4(self):
+        built = der.build(load.load(REAL_TABLES, Composition(meters=1, inverters=1)), level=4)
         root = device_profile.build(built.outstation, built.outstation.session())
         assert _validate(root) == []
 
@@ -1029,3 +1056,175 @@ class TestAReadOnlyOutstationIsDocumentedAsOne:
         simulation.outstation.read_only = True
         text = device_profile.render(_document(simulation))
         assert "controlStatusCodesSupported" not in text
+
+
+class TestOutputEventsAtLevel4:
+    """Level 4 reports output events, and the table and the points say so."""
+
+    OUTPUT_EVENT_ROWS: ClassVar[set[tuple[int, int]]] = {
+        *[(11, v) for v in (0, 1, 2)],
+        *[(13, v) for v in (0, 1, 2)],
+        *[(42, v) for v in (0, 1, 2, 3, 4, 5, 7)],
+        *[(43, v) for v in (0, 1, 2, 3, 4, 5, 7)],
+    }
+
+    @pytest.fixture
+    def level_4(self) -> der.Simulation:
+        built = der.build(load.resolve(for_reference_der(), Composition()), level=4)
+        built.advance(5.0)
+        return built
+
+    @staticmethod
+    def _controls(outstation: DerOutstation, sender: Sender) -> None:
+        """Operate one binary and one analog output, which gives each an event."""
+        # On and then off, so the output changes whichever way it began.
+        index = _index(outstation, 12)
+        for operation in (OperationType.LATCH_ON, OperationType.LATCH_OFF):
+            block = encode_crob(ControlRelayOutputBlock.build(operation))
+            sender.send(device_profile.DIRECT, bytes([12, 1, 0x17, 1, index]) + block)
+        sender.send(device_profile.DIRECT, _command(outstation, Row(41, 2, ""), 0x17))
+
+    def _rows(
+        self, built: der.Simulation, **options
+    ) -> tuple[Session, device_profile.Implementation]:
+        session = built.outstation.session(**options)
+        return session, device_profile.implementation(built.outstation, session.facts)
+
+    def test_the_table_lists_the_four_groups_at_level_4_and_not_below(self, level_4):
+        _, table = self._rows(level_4)
+        assert {(r.group, r.variation) for r in table.rows if r.group in (11, 13, 42, 43)} == (
+            self.OUTPUT_EVENT_ROWS
+        )
+        below = der.build(load.resolve(for_reference_der(), Composition()), level=3)
+        _, lower = self._rows(below)
+        assert not {r.group for r in lower.rows} & {11, 13, 42, 43}
+
+    @pytest.mark.parametrize("groups", [[11], [13], [42], [43], [11, 43], [13, 42], []])
+    def test_the_table_lists_each_output_event_group_the_session_serves(self, level_4, groups):
+        session, table = self._rows(level_4, output_events=groups)
+        listed = {r.group for r in table.rows if r.group in (11, 13, 42, 43)}
+        assert listed == set(groups)
+        # A group the table lists is answered, and one it leaves out is refused.
+        sender = Sender(session)
+        for group in (11, 13, 42, 43):
+            response = sender.send(1, bytes([group, 0, 0x06]))
+            assert bool(response[3] & IIN2Bit.OBJECT_UNKNOWN) is (group not in groups), group
+
+    def test_class_0_mode_follows_what_class_0_carries_without_output_event_groups(self, level_4):
+        root = _document(level_4, output_events=[])
+        base = "d:referenceDevice/d:database"
+        for group in ("binaryOutputGroup", "analogOutputGroup"):
+            class_0 = f"{base}/d:{group}/d:configuration/d:class0ResponseMode/d:currentValue"
+            assert root.find(f"{class_0}/d:always", NS) is not None, group
+        # The class 0 response carries the output status the document declares.
+        sender = Sender(level_4.outstation.session(output_events=[]))
+        groups = {each.group for each in decode_objects(sender.send(1, b"<")[4:]).objects}
+        assert {10, 40} <= groups
+
+    def test_every_listed_read_is_answered_in_each_qualifier(self, level_4):
+        session, table = self._rows(level_4)
+        sender = Sender(session)
+        rows = [r for r in table.rows if r.group in (11, 13, 42, 43) and r.request]
+        for row in rows:
+            for qualifier in row.request[1]:
+                response = sender.send(1, _read_header(level_4.outstation, row, qualifier))
+                assert not _refused(response), (row, hex(qualifier))
+
+    def test_a_named_variation_is_answered_in_that_variation(self, level_4):
+        session, table = self._rows(level_4)
+        sender = Sender(session)
+        self._controls(level_4.outstation, sender)
+        rows = [r for r in table.rows if r.group in (11, 42) and r.response]
+        assert len(rows) == 8
+        for row in rows:
+            body = sender.send(1, bytes([row.group, row.variation, 0x06]))[4:]
+            assert tuple(body[:2]) == (row.group, row.variation), row
+            assert body[2] in row.response[1], (row, "qualifier", hex(body[2]))
+
+    def test_the_command_event_groups_have_no_response_row_and_are_answered_with_nothing(
+        self, level_4
+    ):
+        session, table = self._rows(level_4)
+        sender = Sender(session)
+        self._controls(level_4.outstation, sender)
+        rows = [r for r in table.rows if r.group in (13, 43)]
+        assert rows and not any(r.response for r in rows)
+        for row in rows:
+            assert len(sender.send(1, bytes([row.group, row.variation, 0x06]))) == 4, row
+
+    def test_an_unsolicited_response_carries_only_listed_objects(self, level_4):
+        clock = [1000.0]
+        session, table = self._rows(level_4, unsolicited=True, clock=lambda: clock[0])
+        listed = {
+            (r.group, r.variation)
+            for r in table.rows
+            if r.response and r.response[0] == device_profile.UNSOLICITED_RESPONSE
+        }
+        assert {(11, 2), (42, 3)} <= listed
+        sender = Sender(session)
+        null = _unsolicited_fragments(session.initiate())[0]
+        session._handle_fragment(bytes([0xD0 | (null[0] & 0x0F), 0]))
+        sender.send(FunctionCode.ENABLE_UNSOLICITED, bytes([60, 4, 6]))
+        self._controls(level_4.outstation, sender)
+        (fragment,) = _unsolicited_fragments(session.initiate())
+        seen = {(each.group, each.variation) for each in decode_objects(fragment[4:]).objects}
+        assert {(11, 2), (42, 3)} <= seen <= listed, seen - listed
+
+    def test_the_output_groups_declare_their_event_configuration(self, level_4):
+        root = _document(level_4)
+        base = "d:referenceDevice/d:database"
+        for group, variation, tag in (
+            ("binaryOutputGroup", "defaultEventVariation", "two"),
+            ("analogOutputGroup", "defaultChangeEventVariation", "three"),
+        ):
+            path = f"{base}/d:{group}/d:configuration/d:{variation}/d:currentValue/d:{tag}"
+            assert root.find(path, NS) is not None, (group, variation)
+            mode = f"{base}/d:{group}/d:configuration/d:changeEventReportingMode/d:currentValue"
+            assert root.find(f"{mode}/d:allEvents", NS) is not None
+            class_0 = f"{base}/d:{group}/d:configuration/d:class0ResponseMode/d:currentValue"
+            assert root.find(f"{class_0}/d:always", NS) is not None
+            command = f"{base}/d:{group}/d:configuration/d:outputCommandEventObjects/d:currentValue"
+            assert root.find(f"{command}/d:never", NS) is not None
+
+    def test_each_output_point_lists_its_class_and_class_0_membership(self, level_4):
+        root = _document(level_4)
+        lists = "d:referenceDevice/d:dataPointsList"
+        for element in (
+            "binaryOutputPoints/d:dataPoints/d:binaryOutput",
+            "analogOutputPoints/d:dataPoints/d:analogOutput",
+        ):
+            points = root.findall(f"{lists}/d:{element}", NS)
+            assert points
+            for point in points:
+                assert _text(point, "d:changeEventClass") == "three"
+                assert _text(point, "d:includedInClass0Response") == "always"
+                assert _text(point, "d:commandEventClass") == "none"
+
+    def test_an_output_assigned_class_0_reports_no_events_and_stays_in_class_0(self, level_4):
+        headers = tuple(ObjectHeader(group, 0, QualifierCode.ALL_OBJECTS) for group in (10, 40))
+        level_4.outstation.assign_class([ClassAssignment(0, headers)])
+        root = _document(level_4)
+        lists = "d:referenceDevice/d:dataPointsList"
+        for element in (
+            "binaryOutputPoints/d:dataPoints/d:binaryOutput",
+            "analogOutputPoints/d:dataPoints/d:analogOutput",
+        ):
+            points = root.findall(f"{lists}/d:{element}", NS)
+            assert points
+            for point in points:
+                assert _text(point, "d:changeEventClass") == "none"
+                assert _text(point, "d:includedInClass0Response") == "always"
+
+    def test_below_level_4_the_points_report_no_output_events(self, simulation):
+        root = _document(simulation)
+        base = "d:referenceDevice/d:database"
+        points = root.findall(
+            "d:referenceDevice/d:dataPointsList/d:binaryOutputPoints/d:dataPoints/d:binaryOutput",
+            NS,
+        )
+        assert points
+        for point in points:
+            assert _text(point, "d:changeEventClass") == "none"
+            assert _text(point, "d:includedInClass0Response") == "never"
+        group = root.find(f"{base}/d:binaryOutputGroup/d:configuration", NS)
+        assert group.find("d:defaultEventVariation", NS) is None

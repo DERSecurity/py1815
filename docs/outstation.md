@@ -305,3 +305,33 @@ reply, which are dropped and logged rather than answered. See
 The one write this outstation honors is a master clearing the restart
 indication, at group 80 variation 1 index 7. An outstation that never cleared it
 would flag every response it ever sent.
+
+A session built with `deadband_provider` also takes a write of group 34, the
+analog input reporting deadbands, in variations 1 to 3, by range or by index, and
+hands every deadband of the write to the provider at once; a write naming an index
+the provider does not hold is refused as a parameter error and applies none of it.
+`extended_events=True` lets a master read floating-point analog events and 16-bit
+frozen counter events with time by group, and lets `analog_event_variation` be a
+floating-point variation. `DerOutstation.session()` sets both at Level 4; see
+[Level 4](der.md#level-4-floating-point-and-deadbands).
+
+A session built with a `DeviceAttributes` store, as a Level 4 `DerOutstation` builds one, also
+answers reads of group 0 and takes writes of the attributes the store marks writable and of
+the maximum transmit fragment size. Without a store, group 0 is an unknown object. See
+[Device attributes](der.md#device-attributes).
+
+### Reading the time and the internal indications
+
+A session built with `time_source` answers a read of the current time: group 50
+variation 1, qualifier 0x07, a count of 1. A count of any other number is a
+parameter error and any other qualifier an unknown object. A session built with
+`indications_read=True` answers a read of group 80 variation 1 with qualifier 0x00
+or 0x01. Index 0 is IIN1.0 and index 15 is IIN2.7, and the answer packs the
+requested indexes from bit 0 of the first octet, in a range that begins at 0x00.
+A range past index 15 is a parameter error. Without either option these reads are
+refused as unknown objects.
+
+A `DerOutstation` turns both on, and 16-bit frozen counter events with them, when it
+claims Level 3 or 4. Its `session` method sets them; the options override.
+`frozen_counter_event_variation` chooses between reporting frozen counter events
+with time (5, the default) and without (1), as Level 3 asks.

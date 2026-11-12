@@ -24,6 +24,7 @@ from py1815.application import (
     build_response,
     null_response,
     object_header,
+    parse_data_blocks,
     parse_request,
 )
 
@@ -356,3 +357,57 @@ class TestObjectHeaders:
         the encoder, and the map advertisement lives at the top of the space."""
         with pytest.raises(ValueError, match="16-bit index"):
             object_header(30, 1, start=start, stop=stop)
+
+
+def _data_blocks(octets: str):
+    """Walk a WRITE of objects 2 octets wide, which is what group 34 variation 1 is."""
+    request = parse_request(bytes.fromhex("C0 02" + octets))
+    return parse_data_blocks(
+        request, lambda group, variation: 2 if (group, variation) == (34, 1) else None
+    )
+
+
+class TestWalkingWrittenObjects:
+    def test_a_range_is_one_object_for_each_index(self):
+        (block,) = _data_blocks("22 01 00 03 05  0A 00  0B 00  0C 00")
+        assert block.items == (
+            (3, bytes.fromhex("0A00")),
+            (4, bytes.fromhex("0B00")),
+            (5, bytes.fromhex("0C00")),
+        )
+
+    def test_a_sixteen_bit_range(self):
+        (block,) = _data_blocks("22 01 01 00 01 01 01  0A 00  0B 00")
+        assert [index for index, _ in block.items] == [256, 257]
+
+    def test_an_eight_bit_index_comes_before_each_object(self):
+        (block,) = _data_blocks("22 01 17 02  01 0A 00  09 0B 00")
+        assert block.items == ((1, bytes.fromhex("0A00")), (9, bytes.fromhex("0B00")))
+
+    def test_a_sixteen_bit_index_comes_before_each_object(self):
+        (block,) = _data_blocks("22 01 28 02 00  01 00 0A 00  09 01 0B 00")
+        assert block.items == ((1, bytes.fromhex("0A00")), (265, bytes.fromhex("0B00")))
+
+    def test_headers_follow_one_another(self):
+        first, second = _data_blocks("22 01 00 01 01  0A 00  22 01 17 01  07  0B 00")
+        assert first.items == ((1, bytes.fromhex("0A00")),)
+        assert second.items == ((7, bytes.fromhex("0B00")),)
+
+    @pytest.mark.parametrize(
+        "octets",
+        [
+            "22 01 00 01 02  0A 00",  # One object short.
+            "22 01 00 01 01  0A",  # An object cut short.
+            "22 01 17 02  01 0A 00",  # A count of two, with one object.
+            "22 02 00 01 01  0A 00 00 00",  # A variation with no known width.
+            "22 01 07 01  0A 00",  # A count: nothing says which point it is for.
+            "22 01 06",  # All objects: nothing says how many.
+        ],
+    )
+    def test_a_body_that_does_not_hold_what_the_header_declares_is_refused(self, octets):
+        with pytest.raises(RequestError):
+            _data_blocks(octets)
+
+    def test_a_request_with_no_header_is_refused(self):
+        with pytest.raises(RequestError):
+            parse_data_blocks(parse_request(bytes.fromhex("C0 02")), lambda group, variation: 2)

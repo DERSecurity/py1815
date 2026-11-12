@@ -240,6 +240,21 @@ class TestThePointsTable:
         assert page.errors == []
 
     @pytest.mark.asyncio
+    async def test_double_bit_inputs_have_a_table_of_their_own(self, console):
+        # The simulated DER has none, so the table is empty and says so in its count.
+        page = console.page
+        await console.tab("points")
+        assert "Double-bit inputs 0" in await page.text("#point-types")
+        await console.point_type("dbi")
+        assert await page.count("#points-table tbody tr") == 0
+        options = await page.evaluate(
+            "[...document.querySelectorAll('#read-form select[name=type] option')]"
+            ".map(option => option.value)"
+        )
+        assert options[:2] == ["bi", "dbi"]
+        assert page.errors == []
+
+    @pytest.mark.asyncio
     async def test_it_holds_still_while_values_and_ages_move(self, console):
         """Columns keep their widths, and a row that did not change is not redrawn."""
         page = console.page
@@ -478,12 +493,18 @@ class TestCommands:
     async def test_a_request_the_outstation_refuses_says_so(self, console):
         page = console.page
         await console.tab("commands")
+        # The simulated DER serves no double-bit inputs below Level 4, so it
+        # answers a read of group 3 with OBJECT_UNKNOWN. A read of a point it
+        # lacks is no longer refused: a master held to Level 2 reads the whole
+        # group and keeps the points named (D82).
         await page.evaluate(
             "(() => { const form = document.querySelector('#read-form');"
-            " form.elements.type.value = 'ai'; form.elements.indices.value = '60000';"
+            " form.elements.type.value = 'dbi'; form.elements.indices.value = '0';"
             " form.requestSubmit(); })()"
         )
-        await page.wait_for("document.querySelector('#result').textContent.includes('PARAM_ERROR')")
+        await page.wait_for(
+            "document.querySelector('#result').textContent.includes('OBJECT_UNKNOWN')"
+        )
         assert await page.text("#result .outcome") == "complete"
 
     @pytest.mark.asyncio

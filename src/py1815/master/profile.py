@@ -24,17 +24,18 @@ from __future__ import annotations
 
 import asyncio
 import decimal
+import inspect
 import math
 import re
 import weakref
-from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar
 from xml.etree import ElementTree
 
 from py1815.application import IIN2Bit
 from py1815.decode import DecodedObject, PointType
-from py1815.master import controls
+from py1815.master import controls, requests
 from py1815.master.association import Exchange
 from py1815.master.controls import Command, Mode, Operated
 from py1815.objects import AnalogQuality
@@ -53,6 +54,7 @@ Plan = Generator[Step, Any, T]
 #: The point type a master reads each kind of profile point as.
 POINT_TYPES: dict[Kind, PointType] = {
     Kind.BI: PointType.BINARY_INPUT,
+    Kind.DBI: PointType.DOUBLE_BIT_INPUT,
     Kind.BO: PointType.BINARY_OUTPUT,
     Kind.AI: PointType.ANALOG_INPUT,
     Kind.AO: PointType.ANALOG_OUTPUT,
@@ -62,6 +64,7 @@ POINT_TYPES: dict[Kind, PointType] = {
 #: The argument of ``read`` that names each kind's indices.
 _READ_ARGUMENTS: dict[PointType, str] = {
     PointType.BINARY_INPUT: "binary_inputs",
+    PointType.DOUBLE_BIT_INPUT: "double_bit_inputs",
     PointType.BINARY_OUTPUT: "binary_outputs",
     PointType.COUNTER: "counters",
     PointType.FROZEN_COUNTER: "frozen_counters",
@@ -70,7 +73,7 @@ _READ_ARGUMENTS: dict[PointType, str] = {
 }
 
 #: Kinds in the order a group's points are listed.
-_KIND_ORDER = {Kind.BO: 0, Kind.BI: 1, Kind.AO: 2, Kind.AI: 3, Kind.CTR: 4}
+_KIND_ORDER = {Kind.BO: 0, Kind.BI: 1, Kind.AO: 2, Kind.AI: 3, Kind.CTR: 4, Kind.DBI: 5}
 
 #: The analog output that selects which curve the curve block shows, and the
 #: binary input that says whether a function names the selected curve. IEEE
@@ -82,7 +85,7 @@ CURVE_REFERENCED = 107
 
 _INT32 = (-(1 << 31), (1 << 31) - 1)
 
-_ADDRESS = re.compile(r"^\s*(BI|BO|AI|AO|CTR)\s*(\d+)\s*$", re.IGNORECASE)
+_ADDRESS = re.compile(r"^\s*(BI|BO|AI|AO|CTR|DBI)\s*(\d+)\s*$", re.IGNORECASE)
 
 #: A class number as the Device Profile schema spells it.
 _CLASS_WORDS = {"none": 0, "one": 1, "two": 2, "three": 3}
@@ -733,13 +736,20 @@ def _read_points(
     An outstation may refuse a whole read for one range that holds no point
     it serves, and a profile names many points an outstation may leave out.
     So a refused read is made again one range at a time, which reads every
-    range that holds a point and leaves out only the ones that do not. A
-    read changes nothing at the outstation, so making it again is harmless.
+    range that holds a point and leaves out only the ones that do not. An
+    outstation below Level 3 is read one point type at a time instead, since
+    each type is asked for whole (D82). A read changes nothing at the
+    outstation, so making it again is harmless.
     """
     exchange: Exchange = yield _read_step(wanted)
     exchanges = [exchange]
     received = _static(exchange.objects)
     runs = _runs(wanted)
+    if _refused(exchange) and len(runs) > 1:
+        level = yield lambda target: getattr(target, "level", requests.DEFAULT_LEVEL)
+        if not requests.reads_ranges(level):
+            # Below Level 3 each type is read whole, so a run is no narrower than its type.
+            runs = [(kind, sorted(set(indices))) for kind, indices in wanted.items()]
     if _refused(exchange) and len(runs) > 1:
         for kind, run_indices in runs:
             again: Exchange = yield _read_step({kind: run_indices})
@@ -1067,6 +1077,7 @@ def _included(word: str | None) -> bool | None:
 #: and the type a master reads it as.
 _LISTS = {
     "binaryInputPoints": ("binaryInput", PointType.BINARY_INPUT),
+    "doubleBitInputPoints": ("doubleBitInput", PointType.DOUBLE_BIT_INPUT),
     "binaryOutputPoints": ("binaryOutput", PointType.BINARY_OUTPUT),
     "counterPoints": ("counter", PointType.COUNTER),
     "analogInputPoints": ("analogInput", PointType.ANALOG_INPUT),
@@ -1242,12 +1253,16 @@ def run(target: Any, plan: Plan[T]) -> T:
 
 
 async def run_async(target: Any, plan: Plan[T]) -> T:
-    """Carry out a plan on a master whose requests are awaited, as an Outstation's are."""
+    """Carry out a plan on a master whose requests are awaited, as an Outstation's are.
+
+    A step that reads a setting of the master, and not the outstation,
+    returns its value at once and is not awaited.
+    """
     try:
         step = next(plan)
         while True:
-            outcome: Awaitable[Any] = step(target)
-            step = plan.send(await outcome)
+            outcome = step(target)
+            step = plan.send(await outcome if inspect.isawaitable(outcome) else outcome)
     except StopIteration as done:
         return done.value  # type: ignore[no-any-return]
 

@@ -532,13 +532,15 @@ class TestTheDocumentThisLibraryBuilds:
 
     TABLES: ClassVar[dict[Kind, str]] = {
         Kind.BI: "Binary input points",
+        Kind.DBI: "Double bit input points",
         Kind.BO: "Binary output points",
         Kind.CTR: "Counter points",
         Kind.AI: "Analog input points",
         Kind.AO: "Analog output points",
     }
 
-    @pytest.mark.parametrize("kind", list(Kind))
+    # The simulated DER has no double-bit inputs, which the profile does not define.
+    @pytest.mark.parametrize("kind", [kind for kind in Kind if kind is not Kind.DBI])
     def test_every_point_the_outstation_serves_is_a_row_of_its_table(self, simulation, kind):
         _, document = _built(simulation)
         points = table(document, "Data points list", self.TABLES[kind])

@@ -1,8 +1,9 @@
 """IED certification procedures, section 8.11: unsolicited responses.
 
-Support for unsolicited responses is optional at subset levels 1 and 2, and a
-session has them only when it is built with them on. The procedures for a
-device configured with them on are carried out here against that
+Support for unsolicited responses is optional at subset levels 1 and 2 and
+required at level 3, and a session has them only when it is built with them on.
+Every procedure here is carried out at level 2 and again at level 3. The
+procedures for a device configured with them on are carried out against that
 configuration; section 8.11.2.6, the same device with them configured off, is
 carried out against the default, which is how every other test file builds
 its device.
@@ -23,6 +24,8 @@ which is within the step's wait.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterator
 
 import pytest
 from ied_harness import (
@@ -53,7 +56,21 @@ ALL_CLASSES = classes(1, 2, 3)
 CLEAR_RESTART = header(80, 1, Q_RANGE_8, 7, 7) + b"\x00"
 
 
+#: The subset level the device under test is built at, set for each test by ``_at_level``.
+LEVEL = 2
+
+
+@pytest.fixture(autouse=True, params=[2, 3], ids=["level_2", "level_3"])
+def _at_level(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Run each procedure at Level 2 and at Level 3, where unsolicited responses are required."""
+    global LEVEL
+    LEVEL = request.param
+    yield
+    LEVEL = 2
+
+
 def _dut(**options) -> Dut:
+    options.setdefault("level", LEVEL)
     options.setdefault("unsolicited", True)
     options.setdefault("unsolicited_confirm_timeout", TIMEOUT)
     return Dut(**options)
@@ -108,7 +125,7 @@ def _binary_indices(fragment: Fragment) -> list[int]:
 
 class TestConfigurationAndStartup:
     def test_8_11_2_1_steps_1_to_3_mode_and_timeout_are_configured(self):
-        assert Dut().session.facts.unsolicited is False, "off unless configured on"
+        assert Dut(level=LEVEL).session.facts.unsolicited is False, "off unless configured on"
         facts = _dut().session.facts
         assert facts.unsolicited is True
         assert facts.unsolicited_confirm_timeout == TIMEOUT
@@ -383,7 +400,7 @@ class TestUnsolicitedAndPolled:
 
 class TestConfiguredOff:
     def test_8_11_2_6_nothing_is_sent_and_enable_and_disable_are_refused(self):
-        dut = Dut()
+        dut = Dut(level=LEVEL)
         dut.restart()
 
         # 1 to 6: no initial response, before or after the restart is cleared.

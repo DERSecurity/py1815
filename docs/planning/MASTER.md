@@ -108,7 +108,7 @@ out, somewhere to keep what was read, and an interface to all of it.
 - Serial links and UDP.
 - Secure Authentication. The outstation does not implement it either, and a
   master that authenticates is its own plan.
-- File transfer, data sets, virtual terminal, double-bit inputs, frozen analog
+- File transfer, data sets, virtual terminal, frozen analog
   inputs and octet strings, beyond reporting that one was received.
 - More than one master association to the same outstation, and multi-drop.
 - Users, roles, history, alarms, trending. See *Purpose*.

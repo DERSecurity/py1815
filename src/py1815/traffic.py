@@ -48,6 +48,7 @@ from importlib import resources
 from typing import TYPE_CHECKING, Any
 
 from py1815.application import UNS_MASK, build_response
+from py1815.attributes import DataType
 from py1815.decode import LAYOUTS, Layout, PointType, _Time
 from py1815.envelope import (
     NetworkEndpoint,
@@ -225,11 +226,6 @@ class _Layout:
 _F = _Field
 
 
-def _state(kind: str, *more: _Field) -> _Layout:
-    flags = _F.FLAGS_DOUBLE if kind == _DOUBLE_BIT_BINARY else _F.FLAGS_STATE
-    return _Layout(kind, (flags, *more))
-
-
 def _number(kind: str, number: str, *more: _Field, flags: bool = True) -> _Layout:
     leading = (_F.FLAGS,) if flags else ()
     return _Layout(kind, (*leading, _F.VALUE, *more), number)
@@ -268,6 +264,7 @@ _TIME_OBJECT = _Layout(None, (_F.TIME,))
 #: reads. A frozen counter is a counter in a body.
 _KINDS = {
     PointType.BINARY_INPUT: _BINARY,
+    PointType.DOUBLE_BIT_INPUT: _DOUBLE_BIT_BINARY,
     PointType.BINARY_OUTPUT: _BINARY_OUTPUT,
     PointType.COUNTER: _COUNTER,
     PointType.FROZEN_COUNTER: _COUNTER,
@@ -280,13 +277,16 @@ def _from_decode(layout: Layout) -> _Layout:
     """Return a layout from :data:`py1815.decode.LAYOUTS` as the fields a body lists."""
     kind = None if layout.point is None else _KINDS[layout.point]
     if layout.packed:
-        return _Layout(kind, packed_bits=1)
+        return _Layout(kind, packed_bits=2 if layout.double_bit else 1)
     if layout.opaque:
         return _Layout(None, opaque=layout.opaque)
     fields: list[_Field] = []
     if layout.flags:
         # A binary object carries its state in the flag octet; a number follows it.
-        fields.append(_F.FLAGS_STATE if layout.number is None else _F.FLAGS)
+        if layout.double_bit:
+            fields.append(_F.FLAGS_DOUBLE)
+        else:
+            fields.append(_F.FLAGS_STATE if layout.number is None else _F.FLAGS)
     if layout.number is not None:
         fields.append(_F.VALUE)
     if layout.time is _Time.ABSOLUTE:
@@ -312,13 +312,6 @@ _COMMAND_LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
 #: The objects a body reads that :mod:`py1815.decode` does not, from the
 #: object layouts of IEEE 1815-2012.
 _BODY_ONLY_LAYOUTS: dict[tuple[int, int], _Layout] = _groups(
-    # Double-bit binary inputs, two bits per point when packed, and their events.
-    g3={1: _Layout(_DOUBLE_BIT_BINARY, packed_bits=2), 2: _state(_DOUBLE_BIT_BINARY)},
-    g4={
-        1: _state(_DOUBLE_BIT_BINARY),
-        2: _state(_DOUBLE_BIT_BINARY, _F.TIME),
-        3: _state(_DOUBLE_BIT_BINARY, _F.RELATIVE_TIME),
-    },
     # The pattern control block and mask, and the binary output command events.
     g12={2: _CROB, 3: _Layout(_BINARY_OUTPUT, packed_bits=1)},
     g13={
@@ -392,6 +385,7 @@ _POINT_GROUPS = frozenset(
 )
 
 _GROUP_COMMON_TIME = 51
+_GROUP_DEVICE_ATTRIBUTES = 0
 _PATTERN_BLOCK = (12, 2)
 _PATTERN_MASK = (12, 3)
 
@@ -592,6 +586,20 @@ class _Walk:
             raise _Rejected(REJECTED_MALFORMED)
         return layout
 
+    def _attributes(self, prefix: int, number: int) -> None:
+        """Walk ``number`` device attributes, each as long as its own length octet says.
+
+        An attribute is a data type code, a length octet and that many octets,
+        and the length of an extended list is 256 more than the octet states
+        (IEEE 1815-2012 5.5.4). A device attribute is not a point, so its octets
+        are kept as the header's ``data``.
+        """
+        index_octets = _INDEX_PREFIX_OCTETS.get(prefix, 0)
+        for _ in range(number):
+            self._take(index_octets)
+            code, length = self._take(2)
+            self._take(length + 256 if code == DataType.U8BS8EXLIST else length)
+
     def _objects(
         self, group: int, variation: int, prefix: int, start: int | None, number: int
     ) -> None:
@@ -601,6 +609,10 @@ class _Walk:
             # An object this module does not read, such as a file or an
             # authentication object, can still be walked past by its size.
             self._sized(prefix, number)
+            return
+        if group == _GROUP_DEVICE_ATTRIBUTES:
+            # Without a size prefix, each attribute states its own length.
+            self._attributes(prefix, number)
             return
         layout = self._layout(group, variation)
         if layout.packed_bits:

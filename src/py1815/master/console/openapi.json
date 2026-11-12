@@ -211,6 +211,16 @@
                     "description": "Seconds.",
                     "default": 5
                   },
+                  "level": {
+                    "type": "integer",
+                    "enum": [
+                      2,
+                      3,
+                      4
+                    ],
+                    "default": 2,
+                    "description": "The DNP3 subset level of the outstation. A request that only a higher level is required to parse is refused before it is sent (IEEE 1815-2012 14.7.2). Level 3 allows reads by variation or range, of the time and of the internal indications, and ASSIGN_CLASS. Level 4 adds device attributes, analog deadbands and the groups only Level 4 defines."
+                  },
                   "tls": {
                     "oneOf": [
                       {
@@ -1184,6 +1194,12 @@
                                         "$ref": "#/components/schemas/ProfilePoint"
                                       }
                                     },
+                                    "dbi": {
+                                      "type": "array",
+                                      "items": {
+                                        "$ref": "#/components/schemas/ProfilePoint"
+                                      }
+                                    },
                                     "bo": {
                                       "type": "array",
                                       "items": {
@@ -1422,6 +1438,22 @@
                         ],
                         "description": "The indices wanted, or \"all\"."
                       },
+                      "dbi": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
                       "bo": {
                         "oneOf": [
                           {
@@ -1590,7 +1622,457 @@
               }
             }
           }
-        }
+        },
+        "description": "An outstation set to Level 3 or 4 is asked for the points by ranges of indices. One set to Level 2 is asked for every point of each type named, the only read of present values Level 2 requires, and the result holds the points named and no others."
+      }
+    },
+    "/api/read_group": {
+      "post": {
+        "operationId": "read_group",
+        "summary": "Read one group, in one variation",
+        "tags": [
+          "Reading"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "group": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  },
+                  "variation": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255,
+                    "default": 0
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "description": "The first point of a range. Needs `stop`."
+                  },
+                  "stop": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "description": "The last point of a range."
+                  },
+                  "indices": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 65535
+                    },
+                    "minItems": 1,
+                    "description": "The points to read, in the order asked. Not with a range."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "group"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "group": 30,
+                "variation": 1,
+                "start": 4,
+                "stop": 8
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every object of the group, a range of points (`start` and `stop`) or the points named (`indices`). Variation 0 is whichever the outstation sends by default. A read by variation or by range needs an outstation set to Level 3. A read of a group that only Level 4 defines needs Level 4, and so does a read by index, which no level requires an outstation to accept, and so does a variation or a form of read the subset tables do not list below Level 4; a request above the outstation's level is refused as `request`. Analog input deadbands are group 34 and device attributes group 0."
+      }
+    },
+    "/api/read_time": {
+      "post": {
+        "operationId": "read_time",
+        "summary": "Read an outstation's clock",
+        "tags": [
+          "Reading"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "One object of group 50 variation 1. Needs an outstation set to Level 3."
+      }
+    },
+    "/api/read_indications": {
+      "post": {
+        "operationId": "read_indications",
+        "summary": "Read an outstation's internal indications by index",
+        "tags": [
+          "Reading"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "default": 0
+                  },
+                  "stop": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "default": 15
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "start": 0,
+                "stop": 15
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Group 80 variation 1. Index 0 to 15 are the 16 bits of the two indication octets, IIN1.0 to IIN2.7 in order (IEEE 1815-2012 annex A.28). Needs an outstation set to Level 3."
+      }
+    },
+    "/api/read_attributes": {
+      "post": {
+        "operationId": "read_attributes",
+        "summary": "Read device attributes",
+        "tags": [
+          "Reading"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "variation": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 255,
+                    "default": 254
+                  },
+                  "attribute_set": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "description": "The attribute set, 0 for the outstation's own. Sent with 254 and 255 only when given."
+                  }
+                },
+                "required": [
+                  "outstation"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "variation": 255
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Variation 254 reads every attribute, 255 the list of the variations the outstation holds, and any other variation that one attribute. Needs an outstation set to Level 4."
       }
     },
     "/api/values": {
@@ -1655,6 +2137,12 @@
                               "type": "object",
                               "properties": {
                                 "bi": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/PointValue"
+                                  }
+                                },
+                                "dbi": {
                                   "type": "array",
                                   "items": {
                                     "$ref": "#/components/schemas/PointValue"
@@ -2287,6 +2775,487 @@
             }
           }
         }
+      }
+    },
+    "/api/assign_class": {
+      "post": {
+        "operationId": "assign_class",
+        "summary": "Assign the events of points to an event class",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "event_class": {
+                    "type": "integer",
+                    "enum": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ],
+                    "description": "The class the events go to, or 0 to turn them off."
+                  },
+                  "points": {
+                    "type": "object",
+                    "properties": {
+                      "bi": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "dbi": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "bo": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "counter": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "frozen": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "ai": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      },
+                      "ao": {
+                        "oneOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 65535
+                            }
+                          },
+                          {
+                            "const": "all"
+                          }
+                        ],
+                        "description": "The indices wanted, or \"all\"."
+                      }
+                    },
+                    "minProperties": 1,
+                    "additionalProperties": false,
+                    "description": "By point type."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "event_class",
+                  "points"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "event_class": 1,
+                "points": {
+                  "ai": [
+                    4,
+                    6,
+                    8
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "ASSIGN_CLASS: a class object, then the points whose events go to that class (IEEE 1815-2012 4.1.5.3). The outstation answers with no objects. Needs an outstation set to Level 3, or Level 4 for double-bit inputs and binary or analog output status. Sent once."
+      }
+    },
+    "/api/write_deadbands": {
+      "post": {
+        "operationId": "write_deadbands",
+        "summary": "Write analog input deadbands",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "variation": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2,
+                      3
+                    ]
+                  },
+                  "values": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "description": "The deadband of each point, by index."
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "variation",
+                  "values"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "variation": 1,
+                "values": {
+                  "4": 100,
+                  "5": 100
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Group 34, by point index. Variation 1 and 2 take whole numbers of 16 and 32 bits, in counts, and variation 3 a number of zero or more, in engineering units. Needs an outstation set to Level 4."
+      }
+    },
+    "/api/write_attribute": {
+      "post": {
+        "operationId": "write_attribute",
+        "summary": "Write a device attribute",
+        "tags": [
+          "Commanding"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "outstation": {
+                    "type": "string",
+                    "description": "The name the outstation was added under."
+                  },
+                  "variation": {
+                    "type": "integer",
+                    "enum": [
+                      240,
+                      245,
+                      246,
+                      247
+                    ]
+                  },
+                  "value": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "attribute_set": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535,
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "outstation",
+                  "variation",
+                  "value"
+                ]
+              },
+              "example": {
+                "outstation": "lab",
+                "variation": 247,
+                "value": "Feeder 4 inverter"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. `ok` says whether the operation was carried out; when it was not, `error` says why.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "description": "The id of the message, when it had one."
+                        },
+                        "ok": {
+                          "const": true
+                        },
+                        "result": {
+                          "$ref": "#/components/schemas/Exchange"
+                        }
+                      },
+                      "required": [
+                        "ok",
+                        "result"
+                      ]
+                    },
+                    {
+                      "$ref": "#/components/schemas/Failure"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON, or was not sent as `application/json`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A token is required, and is missing or wrong.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The request comes from another site, or names a host this server is not.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "The attributes that can be written are 240 (maximum transmit fragment size, a number) and 245, 246 and 247 (location name, ID code or number and device name, visible ASCII text). Needs an outstation set to Level 4."
       }
     },
     "/api/synchronize_time": {
@@ -5558,11 +6527,18 @@
                       "profile",
                       "scan",
                       "read",
+                      "read_group",
+                      "read_time",
+                      "read_indications",
+                      "read_attributes",
                       "values",
                       "events",
                       "request",
                       "operate",
                       "write_time",
+                      "assign_class",
+                      "write_deadbands",
+                      "write_attribute",
                       "synchronize_time",
                       "clear_restart",
                       "freeze",
@@ -5713,13 +6689,14 @@
         "type": "string",
         "enum": [
           "bi",
+          "dbi",
           "bo",
           "counter",
           "frozen",
           "ai",
           "ao"
         ],
-        "description": "Binary input, binary output status, counter, frozen counter, analog input, analog output status."
+        "description": "Binary input, double-bit binary input, binary output status, counter, frozen counter, analog input, analog output status."
       },
       "Tasks": {
         "type": "object",
@@ -5856,6 +6833,15 @@
             "type": "integer",
             "description": "Times a read that times out is sent again."
           },
+          "level": {
+            "type": "integer",
+            "enum": [
+              2,
+              3,
+              4
+            ],
+            "description": "The subset level the master treats it as."
+          },
           "tls": {
             "oneOf": [
               {
@@ -5903,6 +6889,9 @@
             "type": "object",
             "properties": {
               "bi": {
+                "type": "integer"
+              },
+              "dbi": {
                 "type": "integer"
               },
               "bo": {
@@ -5969,6 +6958,9 @@
                   "bi": {
                     "type": "integer"
                   },
+                  "dbi": {
+                    "type": "integer"
+                  },
                   "bo": {
                     "type": "integer"
                   },
@@ -6003,6 +6995,7 @@
           "outstation_address",
           "master_address",
           "read_retries",
+          "level",
           "tls",
           "connected",
           "indications",
@@ -6109,6 +7102,16 @@
           },
           "event": {
             "type": "boolean"
+          },
+          "attribute": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Attribute"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -6119,7 +7122,58 @@
           "flags",
           "event"
         ],
-        "description": "One object out of a response, decoded."
+        "description": "One object out of a response, decoded. A device attribute (group 0) carries its data type and value in `attribute`."
+      },
+      "Attribute": {
+        "type": "object",
+        "properties": {
+          "data_type": {
+            "type": "string",
+            "description": "The attribute data type: VSTR, UINT, INT, FLT, OSTR, BSTR, DNP3TIME, UNCD, U8BS8LIST or U8BS8EXLIST, or the code as a number for any other."
+          },
+          "value": {
+            "description": "Text, a number, an octet string in hexadecimal, or for a list of variations each variation and whether it can be written. Null where the data type or the length does not decode.",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "variation": {
+                      "type": "integer"
+                    },
+                    "writable": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "variation",
+                    "writable"
+                  ]
+                }
+              }
+            ]
+          },
+          "octets": {
+            "type": "string",
+            "description": "The attribute's value octets as received, in hexadecimal."
+          }
+        },
+        "required": [
+          "data_type",
+          "value",
+          "octets"
+        ],
+        "description": "A device attribute as the outstation sent it."
       },
       "ControlStatus": {
         "type": "object",
@@ -6653,6 +7707,15 @@
           "deviates": {
             "type": "boolean",
             "description": "Whether the check has the master break a protocol rule."
+          },
+          "level": {
+            "type": "integer",
+            "enum": [
+              2,
+              3,
+              4
+            ],
+            "description": "The lowest subset level the outstation has to be set to for the check to apply. Below it the check is not applicable."
           }
         },
         "required": [
@@ -6660,7 +7723,8 @@
           "title",
           "set",
           "writes",
-          "deviates"
+          "deviates",
+          "level"
         ],
         "description": "One check `evaluate` can run."
       },

@@ -11,7 +11,10 @@ the catalog has not accounted for.
 The procedures themselves are the Users Group's and are not reproduced here.
 Section numbers are how this suite refers to them; the descriptions are ours.
 
-The device is tested as a subset level 2 outstation over TCP.
+The device is tested as a subset level 2 outstation over TCP, and at level 3
+for the sections that level requires: unsolicited responses, frozen counter and
+counter events, point ranges, specific variations and class assignment, and at
+level 4 for the output events of section 10.
 """
 
 from __future__ import annotations
@@ -108,6 +111,7 @@ TESTED: dict[str, Tested] = {
     "8.6.5.3 broadcast, confirmed response options": ("8_6_5_3_",),
     "8.6.6.2.1 buffer overflow, binary input events": ("8_6_6_2_1_",),
     "8.6.6.2.2 buffer overflow, analog input events": ("8_6_6_2_2_",),
+    "8.6.6.2.3 buffer overflow, counter events, at level 3": ("8_6_6_2_3_",),
     "8.7 time, a device that does not ask": ("8_7_a_",),
     "8.7.1.1.2 delay measurement": ("8_7_1_1_2_",),
     "8.7.1.2.2 time synchronization": ("8_7_1_2_2_",),
@@ -155,6 +159,9 @@ TESTED: dict[str, Tested] = {
         "8_16_2_2_4_and_6_",
     ),
     "8.17.2.2 counter events not supported": ("8_17_2_2_",),
+    "8.17.2.3 counter events, qualifier 06, at level 3": ("8_17_2_3_",),
+    "8.17.2.4 and 8.17.2.5 counter events, limited quantity, at level 3": ("8_17_2_4_and_5_",),
+    "8.17.2.6 counter events without confirm, at level 3": ("8_17_2_6_",),
     "8.18.2.2 no analog inputs": ("8_18_2_2_",),
     "8.18.2.3 analog inputs": ("8_18_2_3_",),
     "8.19.1 analog change, desired behavior": ("8_19_1_",),
@@ -183,8 +190,12 @@ TESTED: dict[str, Tested] = {
     "9.5.1.1 port 20000": ("9_5_1_1_",),
     "9.5.1.2 port other than 20000": ("9_5_1_2_",),
     "9.5.1.5 UDP unicast broadcast while using TCP": ("9_5_1_5_",),
-    # 10: output events
-    "10 output control events, not offered": ("10_",),
+    # 10: output events, which Level 4 offers (D115)
+    "10 output control events, not offered below Level 4": ("10_output_event_groups",),
+    "10.3.2 binary output status in class 0": ("10_3_2_",),
+    "10.3.3 binary output status events": ("10_3_3_",),
+    "10.4.2 analog output status in class 0": ("10_4_2_",),
+    "10.4.3 analog output status events": ("10_4_3_",),
 }
 
 #: Sections that do not apply, and why. Each reason is a fact about this
@@ -198,7 +209,6 @@ NOT_APPLICABLE: dict[str, str] = {
     "8.2.4.2 steps 7 to 12": "a request may carry as many controls as fit a fragment",
     "8.4.4.2 steps 7 to 12": "a request may carry as many controls as fit a fragment",
     "8.6.4 local": "no local or disabled state for outputs is modeled, so IIN1.5 is never set",
-    "8.6.6.2.3 buffer overflow, counter events": "counter change events are not generated",
     "8.6.6.2.4 buffer overflow, double-bit events": "double-bit inputs are not supported",
     "8.12 collision avoidance": "a serial multi-drop feature; the outstation is TCP only",
     "8.13.2.1": "for a level 1 device that cannot read binary inputs; this one can",
@@ -208,15 +218,13 @@ NOT_APPLICABLE: dict[str, str] = {
     "8.16.1.2.1": "for a level 1 device that cannot read counters; this one can",
     "8.16.2.2.1": "for a level 1 device that cannot read frozen counters; this one can",
     "8.17.2.1": "for a level 1 device that cannot read counter events; this one answers",
-    "8.17.2.3 to 8.17.2.6 counter events": "counter change events are not generated",
     "8.18.2.1": "for a level 1 device that cannot read analog inputs; this one can",
     "8.19.2.1": "for a level 1 device that cannot read analog events; this one can",
     "8.20.2.1": "for a level 1 device that cannot read individual objects; this one can",
     "8.21 and 8.22, other than 8.21.1 and 8.22.1": "double-bit inputs are not supported",
     "8.25.2.1 binary input event variations": "carried out as 8.14.2.7 to 8.14.2.15",
     "8.25.2.2 double-bit event variations": "double-bit inputs are not supported",
-    "8.26.2 steps 20 to 58": "assign class is refused, which ends the procedure at step 19",
-    "8.26.3 no-class assignment": "assign class is not implemented",
+    "8.26.3 no-class assignment": "optional; points before the first class header are refused",
     "9.5.1.3 specific IP address": "optional; peers are admitted by TLS certificate, not address",
     "9.5.1.4 wildcard IP address": "optional; peers are admitted by TLS certificate, not address",
     "9.5.1.6 UDP multicast": "optional; not supported",
@@ -226,7 +234,7 @@ NOT_APPLICABLE: dict[str, str] = {
         "UDP is not offered as a main communication method, so unsolicited responses go over "
         "TCP only"
     ),
-    "10.3 and 10.4 output events": "output events are not supported, which needs no disabling",
+    "10.3.4 and 10.4.4 command events": "command events are not generated (D116)",
 }
 
 
@@ -250,7 +258,7 @@ def _test_names() -> dict[str, str]:
 
 
 def test_10_output_event_groups_are_refused():
-    """Output events are not offered, so nothing about them needs to be disabled."""
+    """Output events are not offered below Level 4, so nothing about them needs disabling."""
     dut = Dut()
     for group in (11, 13, 42, 43):
         fragment = dut.master.read(header(group, 0)).fragment
