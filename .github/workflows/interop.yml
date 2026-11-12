@@ -162,7 +162,7 @@ jobs:
           rustup default stable
 
       - name: Cache the master's dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -467,7 +467,7 @@ jobs:
           rustup default stable
 
       - name: Cache the outstation's dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
