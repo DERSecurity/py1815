@@ -39,7 +39,7 @@ from typing import Any
 from py1815.application import FunctionCode, IIN2Bit
 from py1815.attributes import DataType
 from py1815.control import CommandStatus
-from py1815.decode import DecodedObject, PointType
+from py1815.decode import GROUP_COMMON_TIME, DecodedObject, PointType
 from py1815.master import requests
 from py1815.master.association import Exchange
 from py1815.master.bench import (
@@ -1291,14 +1291,26 @@ def _first_served(bench: Bench) -> tuple[int, int, int]:
     raise NotApplicable("the outstation serves no analog input, binary input or counter")
 
 
+def _of_group(exchange: Exchange, group: int, what: str) -> tuple[DecodedObject, ...]:
+    """Return the objects of a response to a read of one group, and fail on anything else."""
+    found = _decoded(exchange, what)
+    other = sorted({each.group for each in found} - {group})
+    if other:
+        raise Failed(f"the response to {what} carried group {other[0]}")
+    return found
+
+
 def read_by_variation(bench: Bench) -> Plan[None]:
     """Check that a group is read by a named variation (TB2016-003b table 12-27 and others)."""
     group, variation, index = _first_served(bench)
     what = f"a read of group {group} variation {variation}"
     exchange = yield from bench.ask(lambda target: target.read_group(group, variation), what)
     _taken(exchange, what)
-    found = {each.index for each in exchange.objects if each.group == group and not each.event}
-    bench.require(index in found, f"the response to {what} did not carry point {index}")
+    found = _of_group(exchange, group, what)
+    other = sorted({each.variation for each in found} - {variation})
+    bench.require(not other, f"the response to {what} carried variation {other[0] if other else 0}")
+    indices = {each.index for each in found}
+    bench.require(index in indices, f"the response to {what} did not carry point {index}")
 
 
 def read_by_range(bench: Bench) -> Plan[None]:
@@ -1309,7 +1321,7 @@ def read_by_range(bench: Bench) -> Plan[None]:
         lambda target: target.read_group(group, start=index, stop=index), what
     )
     _taken(exchange, what)
-    found = sorted({each.index or 0 for each in exchange.objects if each.group == group})
+    found = sorted({each.index or 0 for each in _of_group(exchange, group, what)})
     bench.require(found == [index], f"the response to {what} carried points {found}")
 
 
@@ -1345,7 +1357,9 @@ def assign_class(bench: Bench) -> Plan[None]:
     outstation left as the tables describe it is left as it was.
     """
     for index in sorted(index for kind, index in bench.served if kind is Kind.AI):
-        event_class = bench.map.point(Kind.AI, index).event_class
+        # An input the outstation serves that the map does not hold has no class to assign.
+        mapped = bench.map.get(Kind.AI, index)
+        event_class = None if mapped is None else mapped.event_class
         if event_class in (1, 2, 3):
             break
     else:
@@ -1387,41 +1401,53 @@ def attributes_all(bench: Bench) -> Plan[None]:
     bench.note(f"{len(found)} attributes were returned")
 
 
-def _attribute_read(variation: int) -> Callable[[Any], Any]:
-    """Return the request that reads one attribute of the master it is given."""
-    return lambda target: target.read_attributes(variation)
+def _attribute_read(variation: int, attribute_set: int) -> Callable[[Any], Any]:
+    """Return the request that reads one attribute of one set of the master it is given."""
+    return lambda target: target.read_attributes(variation, attribute_set)
 
 
 def attribute_list(bench: Bench) -> Plan[None]:
     """Check that variation 255 lists the attributes, and that each listed is read by name.
 
-    The list is a series of variation and properties pairs. Each variation it
-    names is read in turn, and the outstation is to return that attribute.
+    A read of variation 255 with no range returns one list for each attribute
+    set, at the index of the set (IEEE 1815-2012 A.1.44; set 0 is the DNP
+    Users Group's). Each list is a series of variation and properties pairs.
+    Each variation a list names is read in turn from that set, by its index,
+    and the outstation is to return that attribute of that set.
     """
     what = "a read of the list of device attributes"
     exchange = yield from bench.ask(lambda target: target.read_attributes(255), what)
     _taken(exchange, what)
     listed = [each for each in _attributes(exchange, what) if each.variation == 255]
     bench.require(listed, f"the response to {what} carried no list")
-    listing = listed[0].attribute
-    assert listing is not None, "an attribute read from a response keeps its data type"
-    pairs = listing.value
-    bench.require(
-        listing.code in (DataType.U8BS8LIST, DataType.U8BS8EXLIST) and isinstance(pairs, tuple),
-        f"the list has data type {listing.code} and {len(listing.data)} octets, "
-        "not pairs of octets",
-    )
-    assert isinstance(pairs, tuple)
-    variations = [pair[0] for pair in pairs if pair[0] not in (254, 255)]
-    bench.note(f"{len(variations)} attributes are listed")
-    for variation in variations:
-        looked = f"a read of attribute {variation}"
-        one = yield from bench.ask(_attribute_read(variation), looked)
-        _taken(one, looked)
+    for each in listed:
+        attribute_set = each.index or 0
+        listing = each.attribute
+        assert listing is not None, "an attribute read from a response keeps its data type"
+        pairs = listing.value
         bench.require(
-            [each.variation for each in _attributes(one, looked)] == [variation],
-            f"the response to {looked}, which the list names, did not carry it",
+            listing.code in (DataType.U8BS8LIST, DataType.U8BS8EXLIST) and isinstance(pairs, tuple),
+            f"the list of set {attribute_set} has data type {listing.code} and "
+            f"{len(listing.data)} octets, not pairs of octets",
         )
+        assert isinstance(pairs, tuple)
+        variations = [pair[0] for pair in pairs if pair[0] not in (254, 255)]
+        bench.note(f"{len(variations)} attributes are listed in set {attribute_set}")
+        for variation in variations:
+            looked = f"a read of attribute {variation} of set {attribute_set}"
+            one = yield from bench.ask(_attribute_read(variation, attribute_set), looked)
+            _taken(one, looked)
+            returned = [(found.variation, found.index or 0) for found in _attributes(one, looked)]
+            bench.require(
+                returned == [(variation, attribute_set)],
+                f"the response to {looked}, which the list names, did not carry it",
+            )
+
+
+#: The relative-time events. A response carries each after a common time of
+#: occurrence, group 51 (TB2016-003b Table 12-5 footnote b, Table 12-7
+#: footnote c).
+_RELATIVE_TIME_EVENTS = frozenset({(2, 3), (4, 3)})
 
 
 def reads_taken(
@@ -1430,9 +1456,10 @@ def reads_taken(
     """Return the check that one read of every object of some groups is taken.
 
     The response may be empty, since an outstation may hold no event. What
-    it carries has to be objects of the groups asked for. With ``needs``, a
-    kind of point and its name, the check applies only to an outstation that
-    serves a point of that kind.
+    it carries has to be objects of the groups asked for, and the common time
+    of occurrence (group 51) of a relative-time event among them. With
+    ``needs``, a kind of point and its name, the check applies only to an
+    outstation that serves a point of that kind.
     """
     body = b"".join(requests.read_group(group) for group in groups)
 
@@ -1443,7 +1470,11 @@ def reads_taken(
             lambda target: target.request(FunctionCode.READ, body), what
         )
         _taken(exchange, what)
-        other = sorted({each.group for each in _decoded(exchange, what)} - set(groups))
+        found = _decoded(exchange, what)
+        allowed = set(groups)
+        if any((each.group, each.variation) in _RELATIVE_TIME_EVENTS for each in found):
+            allowed.add(GROUP_COMMON_TIME)
+        other = sorted({each.group for each in found} - allowed)
         bench.require(not other, f"the response to {what} carried group {other[0] if other else 0}")
 
     return procedure

@@ -2176,7 +2176,12 @@ check passes when the outstation answers and sets none of the indications for an
 unsupported function, an unknown object or a parameter error, and the response has the
 form the tables give. The time and the internal indications are compared octet for octet,
 since each has one form. Everything else is judged by the decoded objects: a response that
-cannot be decoded, or that carries a group the request did not ask for, fails. The
+cannot be decoded, or that carries a group the request did not ask for, fails, except that a
+relative-time event (g4v3) comes after its common time of occurrence, group 51 (TB2016-003b
+Table 12-7 footnote c). A response that stops before its final fragment fails, whatever its
+first fragments carried. The list of device attributes is read with no range, so it returns
+one list for each attribute set at the set's index (IEEE 1815-2012 A.1.44), and each
+attribute a list names is read from that index. The
 double-bit check is not applicable to an outstation that serves no double-bit input. The
 assignment check assigns a point the class the profile tables already give it, so it
 leaves an outstation as it found it. Ranges are only sent to an outstation set to Level 3

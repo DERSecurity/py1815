@@ -296,6 +296,12 @@ class Bench:
         for exchange in exchanges:
             if not exchange.fragments:
                 raise Unanswered(f"the outstation did not answer {what}")
+            # A response that stops before its final fragment is not judged on
+            # the part that arrived.
+            if not exchange.complete:
+                raise Unanswered(
+                    f"the outstation began its response to {what} and did not finish it"
+                )
 
     def read(self, points: Sequence[Point]) -> Plan[Readings]:
         """Read points in one request."""

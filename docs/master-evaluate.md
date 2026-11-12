@@ -107,20 +107,21 @@ the standard gives, and none says the outstation conforms to a level.
 
 | Check | Level | Writes | What it requires |
 |---|---|---|---|
-| `LEVEL3-001` | 3 | no | A read of a served group by a named variation (analog inputs in variation 1, else binary inputs in variation 2, else counters in variation 1) carries the served point and draws none of the indications for an unsupported function, an unknown object or a parameter error |
+| `LEVEL3-001` | 3 | no | A read of a served group by a named variation (analog inputs in variation 1, else binary inputs in variation 2, else counters in variation 1) carries the served point, only in the variation asked for, and draws none of the indications for an unsupported function, an unknown object or a parameter error |
 | `LEVEL3-002` | 3 | no | A read of the first served point by a range of that one point returns that point and no other |
 | `LEVEL3-003` | 3 | no | The time is read as one object of group 50 variation 1 with a 6-octet time |
 | `LEVEL3-004` | 3 | no | The internal indications are read as the range 0 to 15 of group 80 variation 1, with two octets of bits |
-| `LEVEL3-005` | 3 | yes | An assignment of an analog input to the class the tables give it is taken, and answered with no objects |
+| `LEVEL3-005` | 3 | yes | An assignment of an analog input to the class the tables give it is taken, and answered with no objects. Not applicable when no analog input the outstation serves is in the point map with a class |
 | `LEVEL4-001` | 4 | no | A read of variation 254 returns device attributes, and never variation 254 or 255 |
-| `LEVEL4-002` | 4 | no | A read of variation 255 returns a list of variation and properties pairs, and each attribute it names is returned when read by its variation |
+| `LEVEL4-002` | 4 | no | A read of variation 255 returns a list of variation and properties pairs for each attribute set, at the set's index, and each attribute a list names is returned when read by its variation from that set's index |
 | `LEVEL4-003` | 4 | no | A read of the analog input deadbands is taken, and what it returns is group 34 |
-| `LEVEL4-004` | 4 | no | A read of every double-bit input and double-bit event is taken, and returns only groups 3 and 4. Not applicable to an outstation that serves no double-bit input |
+| `LEVEL4-004` | 4 | no | A read of every double-bit input and double-bit event is taken, and returns only groups 3 and 4, with the common time of occurrence (group 51) that relative-time events (group 4 variation 3) are reported after. Not applicable to an outstation that serves no double-bit input |
 | `LEVEL4-005` | 4 | no | A read of every binary output event, binary command event, analog output event and analog command event is taken, and returns only groups 11, 13, 42 and 43 |
 
 The time and the internal indications are compared octet for octet. Every other response
 is judged by its decoded objects: one that cannot be decoded fails, as does one that carries
-a group the request did not ask for. The reads of events in `LEVEL4-004` and `LEVEL4-005`
+a group the request did not ask for. A response that stops before its final fragment fails
+every check, which is not judged on the part that arrived. The reads of events in `LEVEL4-004` and `LEVEL4-005`
 take the events the outstation holds for those groups, and the master confirms them as it
 does for any poll. A response with no events passes.
 `LEVEL3-005` assigns the point the class its tables give it, so an outstation left as its

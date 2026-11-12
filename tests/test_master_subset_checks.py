@@ -62,6 +62,19 @@ def silent() -> Exchange:
     return Exchange(FunctionCode.READ, 0, b"", Outcome.TIMEOUT)
 
 
+def unfinished(body: bytes) -> Exchange:
+    """The exchange of a response whose first fragment (FIR, not FIN) came and no more."""
+    fragment = parse_response(bytes([0x80, FunctionCode.RESPONSE, 0x00, 0x00]) + body)
+    return Exchange(
+        FunctionCode.READ,
+        0,
+        b"",
+        Outcome.TIMEOUT,
+        fragments=(fragment,),
+        objects=decode_objects(body).objects,
+    )
+
+
 class Master:
     """A master that records what it was asked and answers as it was told to."""
 
@@ -138,6 +151,27 @@ class TestReadByVariation:
         with pytest.raises(Unanswered, match="did not answer a read of group 30 variation 1"):
             run("LEVEL3-001", Master({"read_group": silent()}), _bench(points, (Kind.AI, 4)))
 
+    def test_it_fails_when_the_response_stops_before_its_final_fragment(self, points):
+        master = Master({"read_group": unfinished(AI_4)})
+        with pytest.raises(Unanswered, match="began its response to a read of group 30"):
+            run("LEVEL3-001", master, _bench(points, (Kind.AI, 4)))
+
+    @pytest.mark.parametrize(
+        ("decoded", "says"),
+        [
+            # Point 4, then group 30 variation 1 point 5 with no value.
+            (AI_4 + _hex("1E 01 00 05 05 01"), "could not be read"),
+            # Point 4, then binary input 7, which was not asked for.
+            (AI_4 + _hex("01 02 00 07 07 81"), "carried group 1"),
+            # Point 4 in variation 2 (16 bits), not the variation asked for.
+            (_hex("1E 02 00 04 04 01 64 00"), "carried variation 2"),
+        ],
+    )
+    def test_it_fails_when_the_rest_of_the_response_is_wrong(self, points, decoded, says):
+        master = Master({"read_group": answered(decoded=decoded)})
+        with pytest.raises(Failed, match=says):
+            run("LEVEL3-001", master, _bench(points, (Kind.AI, 4)))
+
     def test_it_is_not_applicable_when_no_point_of_a_kind_it_reads_is_served(self, points):
         with pytest.raises(NotApplicable):
             run("LEVEL3-001", Master({}), _bench(points, (Kind.AO, 4)))
@@ -158,6 +192,18 @@ class TestReadByRange:
     def test_it_fails_when_nothing_comes_back(self, points):
         with pytest.raises(Failed, match=r"carried points \[\]"):
             run("LEVEL3-002", Master({"read_group": answered()}), _bench(points, (Kind.AI, 4)))
+
+    @pytest.mark.parametrize(
+        ("decoded", "says"),
+        [
+            (AI_4 + _hex("1E 01 00 05 05 01"), "could not be read"),
+            (AI_4 + _hex("01 02 00 07 07 81"), "carried group 1"),
+        ],
+    )
+    def test_it_fails_when_the_rest_of_the_response_is_wrong(self, points, decoded, says):
+        master = Master({"read_group": answered(decoded=decoded)})
+        with pytest.raises(Failed, match=says):
+            run("LEVEL3-002", master, _bench(points, (Kind.AI, 4)))
 
 
 TIME = _hex("32 01 07 01 00 00 00 00 00 00")
@@ -217,6 +263,19 @@ class TestAssignClass:
         run("LEVEL3-005", master, _bench(points, (Kind.AI, index)))
         assert master.asked == [("assign_class", (event_class,), {"analog_inputs": [index]})]
 
+    def test_an_analog_input_the_map_does_not_hold_is_passed_over(self, points):
+        index, event_class = self._assigned(points)
+        # AI0 is not in the map, and sorts before the first input with a class.
+        assert points.get(Kind.AI, 0) is None and index > 0
+        master = Master({"assign_class": answered()})
+        run("LEVEL3-005", master, _bench(points, (Kind.AI, index), (Kind.AI, 0)))
+        assert master.asked == [("assign_class", (event_class,), {"analog_inputs": [index]})]
+
+    def test_it_is_not_applicable_when_only_unmapped_analog_inputs_are_served(self, points):
+        unmapped = max(each.index for each in points.points.values() if each.kind is Kind.AI) + 1
+        with pytest.raises(NotApplicable, match="give a class"):
+            run("LEVEL3-005", Master({}), _bench(points, (Kind.AI, unmapped)))
+
     def test_it_fails_when_the_answer_carries_objects(self, points):
         index, _ = self._assigned(points)
         master = Master({"assign_class": answered(AI_4)})
@@ -238,9 +297,9 @@ class TestAssignClass:
             run("LEVEL3-005", Master({}), _bench(points, (Kind.BI, 1)))
 
 
-def _attribute(variation: int, kind: int, value: bytes) -> bytes:
-    """One attribute of set 0: its header, data type code, length and value."""
-    return bytes([0, variation, 0, 0, 0, kind, len(value)]) + value
+def _attribute(variation: int, kind: int, value: bytes, attribute_set: int = 0) -> bytes:
+    """One attribute of a set: its header, data type code, length and value."""
+    return bytes([0, variation, 0, attribute_set, attribute_set, kind, len(value)]) + value
 
 
 NAME = _attribute(247, 1, b"ab")
@@ -281,12 +340,36 @@ class TestDeviceAttributes:
 
         master = Master({"read_attributes": reads})
         bench = run("LEVEL4-002", master, _bench(points))
+        # Each attribute is read from its set by index: 00 F9 00 00 00 and 00 FA 00 00 00.
         assert master.asked == [
             ("read_attributes", (255,), {}),
-            ("read_attributes", (249,), {}),
-            ("read_attributes", (250,), {}),
+            ("read_attributes", (249, 0), {}),
+            ("read_attributes", (250, 0), {}),
         ]
-        assert "2 attributes are listed" in bench.notes
+        assert "2 attributes are listed in set 0" in bench.notes
+
+    def test_each_set_listed_is_read_from_its_own_index(self, points):
+        # Set 0 lists 249 and 250, and set 1 lists 240 (00 FF 00 01 01 FE 02 F0 00).
+        listing = LISTED + _attribute(255, 254, bytes([240, 0]), attribute_set=1)
+
+        def reads(variation: int, attribute_set: int | None = None) -> Exchange:
+            if variation == 255:
+                return answered(listing)
+            return answered(_attribute(variation, 1, b"x", attribute_set or 0))
+
+        master = Master({"read_attributes": reads})
+        bench = run("LEVEL4-002", master, _bench(points))
+        assert [asked[1] for asked in master.asked] == [(255,), (249, 0), (250, 0), (240, 1)]
+        assert "1 attributes are listed in set 1" in bench.notes
+
+    def test_an_attribute_returned_from_another_set_fails(self, points):
+        listing = _attribute(255, 254, bytes([240, 0]), attribute_set=1)
+
+        def reads(variation: int, *_rest: Any) -> Exchange:
+            return answered(listing if variation == 255 else _attribute(variation, 1, b"x"))
+
+        with pytest.raises(Failed, match="attribute 240 of set 1, which the list names"):
+            run("LEVEL4-002", Master({"read_attributes": reads}), _bench(points))
 
     def test_a_list_names_the_attributes_but_not_the_list_itself(self, points):
         pairs = _attribute(255, 254, bytes([249, 1, 254, 0, 255, 0]))
@@ -296,7 +379,7 @@ class TestDeviceAttributes:
 
         master = Master({"read_attributes": reads})
         run("LEVEL4-002", master, _bench(points))
-        assert [asked[1] for asked in master.asked] == [(255,), (249,)]
+        assert [asked[1] for asked in master.asked] == [(255,), (249, 0)]
 
     def test_an_attribute_the_list_names_but_the_outstation_does_not_return_fails(self, points):
         def reads(variation: int, *_rest: Any) -> Exchange:
@@ -308,7 +391,7 @@ class TestDeviceAttributes:
                 else answered(_attribute(variation, 1, b"x"))
             )
 
-        with pytest.raises(Failed, match="attribute 250 with OBJECT_UNKNOWN"):
+        with pytest.raises(Failed, match="attribute 250 of set 0 with OBJECT_UNKNOWN"):
             run("LEVEL4-002", Master({"read_attributes": reads}), _bench(points))
 
     def test_an_attribute_that_comes_back_as_another_variation_fails(self, points):
@@ -330,6 +413,22 @@ class TestDeviceAttributes:
     def test_a_list_that_is_not_pairs_fails(self, points, body, says):
         with pytest.raises(Failed, match=says):
             run("LEVEL4-002", Master({"read_attributes": answered(body)}), _bench(points))
+
+    def test_a_second_list_that_is_not_pairs_fails(self, points):
+        listing = LISTED + _attribute(255, 2, bytes([240]), attribute_set=1)
+
+        def reads(variation: int, attribute_set: int | None = None) -> Exchange:
+            if variation == 255:
+                return answered(listing)
+            return answered(_attribute(variation, 1, b"x", attribute_set or 0))
+
+        with pytest.raises(Failed, match="the list of set 1 has data type 2"):
+            run("LEVEL4-002", Master({"read_attributes": reads}), _bench(points))
+
+    def test_a_response_that_stops_before_its_final_fragment_fails(self, points):
+        master = Master({"read_attributes": unfinished(NAME)})
+        with pytest.raises(Unanswered, match="did not finish it"):
+            run("LEVEL4-001", master, _bench(points))
 
 
 class TestDeadbands:
@@ -385,6 +484,17 @@ class TestGroupsOnlyLevel4Defines:
     def test_they_fail_when_the_outstation_does_not_answer(self, points, check):
         with pytest.raises(Unanswered):
             run(check, Master({"request": silent()}), _bench(points, (Kind.DBI, 0)))
+
+    def test_relative_time_events_may_come_with_their_common_time(self, points):
+        # g3v2 point 0, then a common time (g51v2) and a g4v3 event 10 ms after it.
+        body = _hex("03 02 00 00 00 81 33 02 07 01 00 00 00 00 00 00 04 03 17 01 00 81 0A 00")
+        run("LEVEL4-004", Master({"request": answered(body)}), _bench(points, (Kind.DBI, 0)))
+
+    def test_a_common_time_with_no_relative_time_event_fails(self, points):
+        # g3v2 point 0, then a common time (g51v1) and nothing that counts from it.
+        body = _hex("03 02 00 00 00 81 33 01 07 01 00 00 00 00 00 00")
+        with pytest.raises(Failed, match="carried group 51"):
+            run("LEVEL4-004", Master({"request": answered(body)}), _bench(points, (Kind.DBI, 0)))
 
     def test_the_double_bit_check_does_not_apply_without_a_double_bit_input(self, points):
         with pytest.raises(NotApplicable, match="serves no double-bit input"):
