@@ -64,7 +64,7 @@ _BINARY_FLAGS = 0x7F
 
 #: The kinds of point a check reads to see whether the outstation answers,
 #: most preferred first. An input is preferred to an output's status.
-_PROBE_ORDER = (Kind.AI, Kind.BI, Kind.CTR, Kind.AO, Kind.BO)
+_PROBE_ORDER = (Kind.AI, Kind.BI, Kind.DBI, Kind.CTR, Kind.AO, Kind.BO)
 
 
 class Verdict(Enum):

@@ -10,6 +10,7 @@ const TOKEN = new URLSearchParams(location.search).get("token");
 
 const POINT_TYPES = [
   ["bi", "Binary inputs"],
+  ["dbi", "Double-bit inputs"],
   ["bo", "Binary outputs"],
   ["counter", "Counters"],
   ["frozen", "Frozen counters"],

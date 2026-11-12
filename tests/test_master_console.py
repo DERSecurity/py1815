@@ -240,6 +240,21 @@ class TestThePointsTable:
         assert page.errors == []
 
     @pytest.mark.asyncio
+    async def test_double_bit_inputs_have_a_table_of_their_own(self, console):
+        # The simulated DER has none, so the table is empty and says so in its count.
+        page = console.page
+        await console.tab("points")
+        assert "Double-bit inputs 0" in await page.text("#point-types")
+        await console.point_type("dbi")
+        assert await page.count("#points-table tbody tr") == 0
+        options = await page.evaluate(
+            "[...document.querySelectorAll('#read-form select[name=type] option')]"
+            ".map(option => option.value)"
+        )
+        assert options[:2] == ["bi", "dbi"]
+        assert page.errors == []
+
+    @pytest.mark.asyncio
     async def test_it_holds_still_while_values_and_ages_move(self, console):
         """Columns keep their widths, and a row that did not change is not redrawn."""
         page = console.page

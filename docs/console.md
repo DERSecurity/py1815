@@ -140,14 +140,14 @@ given a profile.
 
 ### Points
 
-One table for each of binary inputs, binary outputs, counters, frozen
-counters, analog inputs and analog outputs.
+One table for each of binary inputs, double-bit inputs, binary outputs, counters,
+frozen counters, analog inputs and analog outputs.
 
 | Column | Holds |
 |---|---|
 | Index | The point's index |
 | Name | Its name, when the outstation has a profile |
-| Value | `ON` or `OFF`, a count, or an analog value as transmitted |
+| Value | `ON` or `OFF`, a double-bit state from 0 to 3, a count, or an analog value as transmitted |
 | Flags | The flag bits that are set, by name. `no flags` for a variation that carries none, and `none set` when not even `ONLINE` is |
 | Outstation time | The time the outstation gave the value, when it gave one |
 | Object | The group and variation that carried it |

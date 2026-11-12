@@ -34,7 +34,8 @@ from profile_fixtures import document, row
 from test_profile_device_profile_view import column, table
 
 from py1815.decode import PointType
-from py1815.master.profile import read_device_profile
+from py1815.master.bench import Bench
+from py1815.master.profile import DerProfile, read_device_profile
 from py1815.profile import device_profile, device_profile_view, load
 from py1815.profile.binding import Binding, Quality, Reading
 from py1815.profile.device_profile import NAMESPACE
@@ -496,6 +497,22 @@ class TestAssignClass:
             and row.request[0] == ASSIGN_CLASS
             for row in table.rows
         )
+
+
+class TestTheEvaluationBench:
+    def test_a_check_can_probe_an_outstation_that_serves_only_double_bit_inputs(self):
+        tables = document({"DBI": [row("Valve", 0, event_class=1)]})
+        bench = Bench(DerProfile(load.resolve(tables, Composition())))
+        bench.served = frozenset({(Kind.DBI, 0)})
+        step = next(bench.probe())
+        asked: dict[str, Any] = {}
+
+        class Target:
+            def read(self, **arguments: Any) -> None:
+                asked.update(arguments)
+
+        step(Target())
+        assert asked == {"double_bit_inputs": [0]}
 
 
 def _profile(level: int | None) -> ElementTree.Element:
