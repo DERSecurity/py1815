@@ -1771,7 +1771,8 @@ is written twice, in the JSON and in the module, and the test is what keeps them
 **D105 -- Coverage is read from the tables the code uses, and the subset level is read from
 the user's own copy of the subset tables.** `python -m py1815.object_coverage` marks each
 variation served, requested and parsed from the outstation's variation tables, the session's
-event tables, `decode.LAYOUTS` and the control parser, so it cannot drift from the code.
+event tables, the device attributes a Level 4 outstation builds (D119), `decode.LAYOUTS`, the
+group 0 walk of `decode` (D121) and the control parser, so it cannot drift from the code.
 The DNP Users Group's subset tables may not be committed (the subset test reads them from
 `PY1815_SUBSET_TABLES` for that reason), so the level column is present only when the command
 is given a copy, as `--subset-tables` or that variable, and holds the lowest level whose
@@ -2116,7 +2117,8 @@ attribute whole, with its data type code, in `attribute`; its `value` is set onl
 the attribute is a number, a time or a bit string, so that `value` is never a string or a
 list. A data type code this library has no name for is walked past by its length. The
 traffic walk reads group 0 the same way and keeps the octets after the header as the
-header's `data`. The Device Profile lists every attribute under its implementation table
+header's `data`; under a size prefix it walks each attribute by the prefix, as it walks any
+object that states its size. The Device Profile lists every attribute under its implementation table
 at Level 4, because the schema has no element for attributes beyond that.
 *Trade-off:* a master reads attributes but has no request helper for them yet.
 

@@ -12,9 +12,9 @@ For every variation :mod:`py1815.catalog` names, the report says three things:
 
 The answers are read from the tables the code itself uses, so the report
 changes when the code does and nothing here is counted by hand: the outstation's
-variation tables, the session's event tables, the master's object layouts and
-the control parser. A variation that no table mentions is reported as
-supported by none.
+variation tables, the session's event tables, the device attributes a Level 4
+outstation builds, the master's object layouts and the control parser. A
+variation that no table mentions is reported as supported by none.
 
 The marks cover every subset level and setting the tables hold: an object that
 only a Level 3 or Level 4 outstation serves or accepts is marked as served or
@@ -49,12 +49,15 @@ from dataclasses import asdict, dataclass
 
 from py1815 import catalog, control, decode, session
 from py1815.application import CLASS_GROUP, CLASS_VARIATIONS
+from py1815.attributes import GROUP_DEVICE_ATTRIBUTES, SESSION_VARIATIONS, Variation
 from py1815.objects import (
     COMMON_TIME_SYNCHRONIZED,
     COMMON_TIME_UNSYNCHRONIZED,
     GROUP_COMMON_TIME,
 )
 from py1815.profile import outstation, xlsx
+from py1815.profile.binding import Binding
+from py1815.profile.model import PointMap
 
 Key = tuple[int, int | None]
 
@@ -97,6 +100,17 @@ def _controls() -> set[Key]:
     }
 
 
+def _attributes() -> set[Key]:
+    """The device attributes a Level 4 outstation answers a read of with their value.
+
+    The ones its store holds, whatever the points served, and the three the
+    session adds (D119).
+    """
+    store = outstation.DerOutstation(PointMap({}), Binding(), level=4, strict=False).attributes
+    assert store is not None
+    return {(GROUP_DEVICE_ATTRIBUTES, int(v)) for v in (*store.snapshot(), *SESSION_VARIATIONS)}
+
+
 def served() -> set[Key]:
     """Every object the outstation can put in a response."""
     found: set[Key] = set()
@@ -117,6 +131,8 @@ def served() -> set[Key]:
         (GROUP_COMMON_TIME, variation)
         for variation in (COMMON_TIME_SYNCHRONIZED, COMMON_TIME_UNSYNCHRONIZED)
     )
+    found.update(_attributes())
+    found.add((GROUP_DEVICE_ATTRIBUTES, Variation.LIST_OF_VARIATIONS))
     return found | _controls()
 
 
@@ -146,12 +162,25 @@ def requested() -> set[Key]:
     found.add((session.TIME_GROUP, session.TIME_VARIATION))
     found.add((session.TIME_GROUP, session.LAST_RECORDED_TIME_VARIATION))
     found.add((session.RESTART_GROUP, session.RESTART_VARIATION))
+    # A read names each attribute, all of them or the list; a write is of one served.
+    found.update(_attributes())
+    found.update(
+        (GROUP_DEVICE_ATTRIBUTES, variation)
+        for variation in (Variation.ALL_ATTRIBUTES, Variation.LIST_OF_VARIATIONS)
+    )
     return found | _controls()
 
 
 def parsed() -> set[Key]:
     """Every object the master reads out of a response."""
-    return set(decode.LAYOUTS) | _controls()
+    # The master reads any device attribute by the length it states (D121).
+    # A response never carries variation 254, which only asks for the others.
+    attributes = {
+        (item.group, item.variation)
+        for item in catalog.objects()
+        if item.group == GROUP_DEVICE_ATTRIBUTES and item.variation != Variation.ALL_ATTRIBUTES
+    }
+    return set(decode.LAYOUTS) | _controls() | attributes
 
 
 def subset_levels(path: pathlib.Path) -> dict[Key, int]:
