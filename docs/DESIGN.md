@@ -2047,9 +2047,11 @@ does.** `DerOutstation` builds a `DeviceAttributes` store at Level 4 and hands i
 session it makes; below Level 4 group 0 is an unknown object, as it was. Each value is
 taken from where it lives: the counts and highest indices of points from the served
 points (a group with none reports no points and an index of zero, since IEEE 1815-2012
-A.1 states no value for it); "support for events" from the classes the served points
-report in, for the kinds `poll` records and for frozen counters, and false for the rest;
-the manufacturer, product, versions and serial number from `DeviceInformation`, which the
+A.1 states no value for it); "support for events" true for a kind when a served point of
+that kind reports in a class or may be given one by ASSIGN_CLASS (D110), which at Level 4
+covers binary, double-bit (D117) and analog inputs, counters (D124), frozen counters and
+the outputs (D115); "support for frozen analog inputs" false, since group 31 is not
+served; the manufacturer, product, versions and serial number from `DeviceInformation`, which the
 `identity` configuration fills; the subset attribute (variation 249) from the level, as
 `"4:"` with no test year because the library is not certified (A.1.40); the Secure
 Authentication version, the security statistics and the data set counts as zero, because
@@ -2069,10 +2071,13 @@ variations under 0x17 with a count of one, as 5.5.6.2 requires. Only set 0 exist
 read of another set, or with qualifier 0x06 for a variation other than 254 and 255, is a
 parameter error. Text is visible ASCII of at most 128 characters, which is what VSTR
 holds (TB2017-007a Table 11-4) and keeps one attribute inside the smallest fragment the
-outstation can be configured with. *Trade-off:* a kind of event that a later change
-makes the outstation record has to be added to the table of event kinds in
-`profile/outstation.py`, and until it is, its "support for events" attribute says false.
-The timing accuracy is a statement the operator makes and the library cannot check.
+outstation can be configured with. A.1 calls the event attributes support, a property of
+the device, so an assignment to class 0 leaves them true: the master that made it can
+assign a class again. No attribute of set 0 states a point's class or deadband, so nothing a
+master changes at run time other than the three names and the fragment size (D120) shows in
+the attributes. *Trade-off:* a master cannot learn from the attributes that every point of a
+kind has been assigned to class 0. The timing accuracy is a statement the operator makes and
+the library cannot check.
 
 **D120 -- A master may write the maximum transmit fragment size and three names, and a
 written value does not survive a restart.** Variations 240, 245, 246 and 247 are

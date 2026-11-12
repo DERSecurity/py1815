@@ -720,16 +720,18 @@ one the standard defines, exists.
 | 209 to 215 | Secure Authentication version, security statistics, data sets | Zero: none of them is implemented. Variation 211 reports no user-specific attribute sets |
 | 216 | Most binary outputs in a control request | The response and request sizes |
 | 217, 218 | Timing accuracy, and how long it holds | `timing_accuracy_us`, and zero |
-| 219 to 239 | For each kind of point, whether it reports events, its highest index and its count | The points served and the event class each reports in |
+| 219 to 239 | For each kind of point, whether it reports events, its highest index and its count | The points served and the event classes they can report in |
 | 240, 241 | Largest fragment sent, and received | The session: `max_response`, and the request size it accepts |
 | 242, 243, 248, 250, 252 | Software and hardware versions, serial number, product, manufacturer | The `identity` settings of the [configuration](der-config.md#identity) |
 | 245, 246, 247 | Location name, ID, device name | The `identity` settings, and a master may rewrite them |
 | 249 | The subset level claimed | The level, as `4:` |
 
 A group the outstation does not serve reports no points and a highest index of zero.
-"Supports events" is true for binary inputs and analog inputs that report in a class, and for
-frozen counters that do, and false for the other kinds. The optional attributes 196 to 208
-and 244 are not offered.
+"Supports events" is true for a kind of point (binary, double-bit and analog inputs,
+counters, frozen counters, binary and analog outputs) when a served point of that kind
+reports its events in a class, or may be given one by an assign-class request. An
+assign-class request therefore does not change it. Frozen analog inputs are not served, so
+that attribute is false. The optional attributes 196 to 208 and 244 are not offered.
 
 A master may write variations 245, 246 and 247 with text of at most 128 visible ASCII
 characters, and variation 240, the largest fragment the outstation sends. A write of 240

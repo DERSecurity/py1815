@@ -242,7 +242,11 @@ _RANGES = (QualifierCode.UINT8_START_STOP, QualifierCode.UINT16_START_STOP)
 #: reports: the variation of each, then the group.
 _POINT_ATTRIBUTES = (
     (Variation.MAXIMUM_BINARY_INPUT_INDEX, Variation.BINARY_INPUT_COUNT, GROUP_BINARY_INPUT),
-    (Variation.MAXIMUM_DOUBLE_BIT_INPUT_INDEX, Variation.DOUBLE_BIT_INPUT_COUNT, 3),
+    (
+        Variation.MAXIMUM_DOUBLE_BIT_INPUT_INDEX,
+        Variation.DOUBLE_BIT_INPUT_COUNT,
+        GROUP_DOUBLE_BIT_INPUT,
+    ),
     (Variation.MAXIMUM_ANALOG_INPUT_INDEX, Variation.ANALOG_INPUT_COUNT, GROUP_ANALOG_INPUT),
     (Variation.MAXIMUM_COUNTER_INDEX, Variation.COUNTER_COUNT, GROUP_COUNTER),
     (
@@ -257,17 +261,19 @@ _POINT_ATTRIBUTES = (
     ),
 )
 
-#: The kinds of point whose changes :meth:`DerOutstation.poll` records as
-#: events. The "support for events" device attribute of a kind is true only
-#: for a kind listed here that has a point reporting in a class.
-_EVENT_KINDS = frozenset({Kind.BI, Kind.AI})
-
-#: The "support for events" variation of each kind of point that has one.
+#: The "support for events" variation of each kind of event, with the static
+#: group of the points that raise it. At Level 4, the only level that serves
+#: device attributes, :meth:`DerOutstation.poll` records every one of them:
+#: binary, double-bit and analog input events, counter events (D124), frozen
+#: counter events, and binary and analog output events (D115).
 _EVENT_SUPPORT = (
-    (Variation.BINARY_INPUT_EVENTS, Kind.BI),
-    (Variation.ANALOG_INPUT_EVENTS, Kind.AI),
-    (Variation.BINARY_OUTPUT_EVENTS, Kind.BO),
-    (Variation.ANALOG_OUTPUT_EVENTS, Kind.AO),
+    (Variation.BINARY_INPUT_EVENTS, GROUP_BINARY_INPUT),
+    (Variation.DOUBLE_BIT_INPUT_EVENTS, GROUP_DOUBLE_BIT_INPUT),
+    (Variation.ANALOG_INPUT_EVENTS, GROUP_ANALOG_INPUT),
+    (Variation.COUNTER_EVENTS, GROUP_COUNTER),
+    (Variation.FROZEN_COUNTER_EVENTS, GROUP_FROZEN_COUNTER),
+    (Variation.BINARY_OUTPUT_EVENTS, GROUP_BINARY_OUTPUT_STATUS),
+    (Variation.ANALOG_OUTPUT_EVENTS, GROUP_ANALOG_OUTPUT_STATUS),
 )
 
 #: The attributes a master may write, besides the maximum transmit fragment size
@@ -539,7 +545,7 @@ class DerOutstation:
         """Build the device attributes from what this outstation serves and does (D119).
 
         Counts, highest indices and event support come from the served points and
-        the classes they report in. An attribute for a group this outstation does
+        the classes they can report in. An attribute for a group this outstation does
         not serve reports no points and a highest index of zero.
         """
         frozen = self._points(GROUP_FROZEN_COUNTER)
@@ -568,14 +574,8 @@ class DerOutstation:
             Variation.PRODUCT_NAME_AND_MODEL: Attribute.text(information.product),
             Variation.MANUFACTURER_NAME: Attribute.text(information.manufacturer),
             Variation.FROZEN_COUNTERS: Attribute.flag(bool(frozen)),
-            Variation.FROZEN_COUNTER_EVENTS: Attribute.flag(
-                not self._level2 and any(self._classes.get(p.address) for p in frozen)
-            ),
-            # Counter change events (group 22) are never buffered, and frozen
-            # analog inputs (group 31) are not served.
-            Variation.COUNTER_EVENTS: Attribute.flag(False),
+            # Frozen analog inputs (group 31) are not served.
             Variation.FROZEN_ANALOG_INPUTS: Attribute.flag(bool(_SERVED_VARIATIONS.get(31))),
-            Variation.DOUBLE_BIT_INPUT_EVENTS: Attribute.flag(False),
         }
         values.update(self._point_attributes())
         return DeviceAttributes(
@@ -585,15 +585,19 @@ class DerOutstation:
         )
 
     def _point_attributes(self) -> dict[int, Attribute]:
-        """Return the attributes that count the points served and say which report events."""
+        """Return the attributes that count the points served and say which report events.
+
+        A kind of event is supported when a served point can report it in a
+        class: one that reports in a class now, or one an ASSIGN_CLASS may give
+        a class (D110, D119). An assignment therefore leaves these attributes
+        as they were.
+        """
         values: dict[int, Attribute] = {}
-        for variation, kind in _EVENT_SUPPORT:
-            reports = kind in _EVENT_KINDS and any(
-                self._classes.get(p.address) for p in self._served[kind]
-            )
+        for variation, group in _EVENT_SUPPORT:
+            reports = any(self._can_report(p) for p in self._points(group))
             values[variation] = Attribute.flag(reports)
         for highest, count, group in _POINT_ATTRIBUTES:
-            points = self._points(group) if group in _GROUP_KINDS else []
+            points = self._points(group)
             values[highest] = Attribute.unsigned(max((p.index for p in points), default=0))
             values[count] = Attribute.unsigned(len(points))
         return values

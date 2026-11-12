@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from ied_harness import (
+    ASSIGN_CLASS,
     IIN2_OBJECT_UNKNOWN,
     IIN2_PARAMETER,
     Q_RANGE_8,
@@ -20,6 +21,7 @@ from ied_harness import (
     crobs,
     header,
 )
+from test_double_bit import Device as DoubleBitDevice
 
 from py1815.application import ObjectHeader, QualifierCode
 from py1815.attributes import (
@@ -37,6 +39,7 @@ from py1815.attributes import (
 )
 from py1815.decode import decode_objects
 from py1815.profile import device_profile
+from py1815.profile.model import Kind
 from py1815.session import Session
 
 INFORMATION = DeviceInformation(
@@ -67,15 +70,15 @@ EXPECTED = {
     216: "02 01 9C",
     217: "02 02 D0 07",
     218: "02 01 00",
-    219: "03 01 00",
+    219: "03 01 01",
     220: "02 01 03",
     221: "02 01 04",
-    222: "03 01 00",
+    222: "03 01 01",
     223: "02 01 03",
     224: "02 01 04",
     225: "03 01 01",
     226: "03 01 01",
-    227: "03 01 00",
+    227: "03 01 01",
     228: "02 01 02",
     229: "02 01 03",
     230: "03 01 00",
@@ -264,15 +267,42 @@ class TestWhereValuesComeFrom:
         assert (values[220], values[221]) == (3, 4)
 
     def test_frozen_counters_are_reported_only_when_the_counters_freeze(self):
+        # Counters that do not freeze have no class here, so they raise no
+        # counter events either (D124).
         dut = Dut(level=4, frozen_counters=False)
         assert _read(dut, 226).body.endswith(bytes.fromhex("03 01 00"))
         assert _read(dut, 225).body.endswith(bytes.fromhex("03 01 00"))
+        assert _read(dut, 227).body.endswith(bytes.fromhex("03 01 00"))
         assert _read(dut, 229).body.endswith(bytes.fromhex("02 01 03"))
 
-    def test_event_support_follows_the_classes_the_inputs_report_in(self):
-        dut = Dut(level=4, binary_inputs=False, analog_inputs=False)
-        assert _read(dut, 237).body.endswith(bytes.fromhex("03 01 00"))
-        assert _read(dut, 231).body.endswith(bytes.fromhex("03 01 00"))
+    def test_event_support_is_false_for_a_kind_with_no_points(self):
+        dut = Dut(level=4, binary_inputs=False, analog_inputs=False, binary_outputs=False)
+        for variation in (237, 231, 222):
+            assert _read(dut, variation).body.endswith(bytes.fromhex("03 01 00"))
+        assert _read(dut, 219).body.endswith(bytes.fromhex("03 01 01"))
+
+    def test_inputs_whose_events_start_off_still_support_events(self):
+        # The tables give the binary inputs a class, so an ASSIGN_CLASS may turn
+        # their events back on (D110).
+        dut = Dut(level=4, event_policy={"defaults": {"BI": {"events": False}}})
+        assert dut.outstation.event_class(Kind.BI, 0) == 0
+        assert _read(dut, 237).body.endswith(bytes.fromhex("03 01 01"))
+
+    def test_an_assign_class_to_class_0_leaves_event_support_as_it_was(self, dut):
+        # Groups 1, 20, 30, 10 and 40, all points, to class 0. The points can
+        # still be given a class again, so the device still supports their events.
+        body = bytes.fromhex("3C 01 06  01 00 06  14 00 06  1E 00 06  0A 00 06  28 00 06")
+        assert dut.master.request(ASSIGN_CLASS, body).fragment.iin2 == 0
+        for variation in (219, 222, 225, 227, 231, 237):
+            assert _read(dut, variation).body.endswith(bytes.fromhex("03 01 01"))
+
+    def test_double_bit_inputs_are_counted_and_report_events(self):
+        # Six double-bit inputs, indices 0 to 5, five of them in a class.
+        device = DoubleBitDevice()
+        body = device.body(*(header(0, v, Q_RANGE_8, 0, 0) for v in (234, 235, 236)))
+        assert body == bytes.fromhex(
+            "00 EA 00 00 00 03 01 01  00 EB 00 00 00 02 01 05  00 EC 00 00 00 02 01 06"
+        )
 
     def test_subset_level_is_the_level_claimed(self):
         # The attributes exist only at Level 4, so the claim is always "4:".
