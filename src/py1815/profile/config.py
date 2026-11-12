@@ -164,7 +164,8 @@ class DerConfig:
             elif key in ("unsolicited", "read_only", "disabled_offline"):
                 values[key] = settings.boolean(value, key)
             elif key == "level":
-                values[key] = None if value is None else _level(value, key)
+                # A null level keeps the level a "level2" key sets, in either key order.
+                values[key] = values.get(key) if value is None else _level(value, key)
             elif key == "level2":
                 # The earlier spelling of "level": 2.
                 if settings.boolean(value, key) and given.get("level") in (None, 2):

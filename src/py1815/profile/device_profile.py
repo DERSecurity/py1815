@@ -373,6 +373,9 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
                     2: "Binary Output Event - status with time",
                 },
             )
+        # Each output event group is read by name only where the session serves
+        # it, independently of the others.
+        if 13 in facts.output_events:
             events(
                 13,
                 "Binary Output Command Event",
@@ -488,6 +491,7 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         )
         if 42 in facts.output_events:
             events(42, "Analog Output Event", _ANALOG_OUTPUT_EVENT_NAMES)
+        if 43 in facts.output_events:
             events(
                 43,
                 "Analog Output Command Event",
@@ -567,6 +571,9 @@ def implementation(outstation: DerOutstation, facts: SessionFacts) -> Implementa
         if served[Kind.BI]:
             rows.append(Row(2, 2, "Binary Input Event - with absolute time", response=unsolicited))
             rows.append(Row(2, 3, "Binary Input Event - with relative time", response=unsolicited))
+        if served[Kind.BI] or served[Kind.DBI]:
+            # Both kinds of binary event travel with relative time behind a
+            # common time (D118).
             for variation, clock in ((1, "synchronized"), (2, "unsynchronized")):
                 rows.append(
                     Row(
@@ -1009,7 +1016,9 @@ def _database(
     reports = {Kind.BO: 11 in facts.output_events, Kind.AO: 42 in facts.output_events}
 
     def output_class_0(kind: Kind) -> list[str]:
-        return _output_class_0(outstation, served[kind]) if reports[kind] else ["never"]
+        # Class 0 membership is the outstation's, whichever event groups a read
+        # may name (D115).
+        return _output_class_0(outstation, served[kind])
 
     if served[Kind.BI]:
         groups.append(

@@ -629,7 +629,8 @@ events (group 11) and analog output events (group 42). `poll()` reads the output
 as a master would, which is your `status=` reader when you give one and the last accepted
 write when you do not, so a control a master sends, a change the device makes itself and
 a status that goes stale each produce an event. The first `poll()` only notes where each
-output stands.
+output stands. When one request commands an output twice, the outstation polls between
+the two controls, so a request that latches an output on and then off reports both changes.
 
 An output starts in the class the tables give it. The tables give none, so the class is
 that of the input paired with the output, which reports the same change: a master polling
@@ -690,14 +691,15 @@ state and its quality:
 
 Which physical condition is OFF and which is ON is the device's to say; the standard leaves
 it to the vendor to document. A value that is not one of the four is sent as INDETERMINATE
-with the point marked as not reachable.
+with the point marked as not reachable, and `coverage()` lists the point as offline.
 
 At Level 4 a master reads the points as group 3, in the packed variation (two bits a point)
 or with flags. A point in an exception condition, such as one that is not online, is always
 sent with flags. The points answer class 0 and report events as group 4, which a master reads
 by class or by naming the group, in the variations without time, with absolute time and with
 relative time. A change of state, or of any quality flag, is an event. Below Level 4, groups 3
-and 4 are unknown objects, no event is buffered, and the Device Profile lists none of the points.
+and 4 are unknown objects, no event is buffered, the Device Profile lists none of the points,
+and `coverage()` reports each of them as absent.
 An event policy's `defaults` may name the kind `DBI`, and a point's class is set in the same
 way as for a binary input. A master moves a point to another class, or turns its events off,
 with an assign-class request that names group 3; a point assigned to class 0 stays in a class
@@ -736,8 +738,10 @@ that attribute is false. The optional attributes 196 to 208 and 244 are not offe
 A master may write variations 245, 246 and 247 with text of at most 128 visible ASCII
 characters, and variation 240, the largest fragment the outstation sends. A write of 240
 changes how the session fragments its responses from the next one: it may be any size from
-the largest block of points plus a response header (1028 octets with the default) up to the
-`max_response` the session was given. A request that holds one unacceptable value changes
+the largest block a read can need plus a response header (1028 octets with the default block
+size; with a small one, at least the 139 octets that a 128-character name needs) up to the
+`max_response` the session was given. A session given a smaller `max_response` than that
+floor is refused with `ValueError`. A request that holds one unacceptable value changes
 nothing and is answered with the parameter error indication. A written value lasts until
 the outstation restarts; it is not stored.
 

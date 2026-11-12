@@ -482,6 +482,25 @@ class TestAWrittenDeadbandDecidesTheNextEvent:
         restarted = plant.outstation(4)
         assert restarted.deadband(1) == 5.0, "back to the configured deadband"
 
+    def test_a_session_restart_discards_written_deadbands(self):
+        plant, outstation, master = self._primed()
+        master.write("22 01 00 01 01 0a 00")
+        master.write("22 01 00 04 04 03 00")
+        master.session.restart()
+        # Power reads its configured 5 again, and AI4 its configured nothing.
+        assert _body(master.read("22 01 00 01 01")) == "22 01 00 01 01 05 00"
+        assert _body(master.read("22 01 00 04 04")) == "22 01 00 04 04 00 00"
+        plant.power = 1508.0
+        assert outstation.poll() == 1, "8 counts, past the configured 5"
+
+    def test_a_cold_restart_discards_written_deadbands(self):
+        _, _, master = self._primed()
+        master.session.restart_handler = lambda: 0
+        master.write("22 01 00 01 01 0a 00")
+        # Group 52 variation 2: the restart takes 0 ms.
+        assert _body(master.send(FunctionCode.COLD_RESTART, "")) == "34 02 07 01 00 00"
+        assert _body(master.read("22 01 00 01 01")) == "22 01 00 01 01 05 00"
+
     def test_a_written_deadband_is_kept_for_a_point_that_reports_no_events(self):
         _, _, master = self._primed()
         master.write("22 01 00 04 04 03 00")

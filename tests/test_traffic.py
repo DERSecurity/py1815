@@ -757,6 +757,16 @@ class TestObjects:
         assert body["points"] == [] and "apdu_rejected" not in body
         _assert_valid([body])
 
+    def test_an_attribute_under_a_size_prefix_is_walked_by_the_prefix(self):
+        # Group 0 variation 241, qualifier 0x4B: a one-octet size prefix and a
+        # count of 1. The size is 4, then the attribute 02 02 DC 05.
+        body = _response("C0 81 00 00  00 F1 4B 01 04 02 02 DC 05")
+
+        assert body["objects"] == [
+            {"group": 0, "variation": 241, "qualifier": 0x4B, "count": 1, "data": "040202dc05"},
+        ]
+        assert "apdu_rejected" not in body
+
     def test_an_extended_list_of_attributes_is_walked_by_its_true_length(self):
         body = _response(
             "C0 81 00 00  00 FF 17 01 00 FF 00" + " 01 00" * 128 + "  00 D1 00 00 00 02 01 00"

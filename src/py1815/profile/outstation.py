@@ -494,6 +494,8 @@ class DerOutstation:
         #: The class each point had at startup, which a restart or a reset
         #: returns every assignment to.
         self._initial_classes = dict(self._classes)
+        #: The deadbands in force at startup, which a restart returns to (D114).
+        self._initial_deadbands = dict(self._deadbands)
 
         if strict:
             self._require_mandatory()
@@ -921,6 +923,10 @@ class DerOutstation:
             chosen[index] = _transmitted(point, value) if variation == 3 else float(value)
         self._deadbands.update(chosen)
 
+    def reset_deadbands(self) -> None:
+        """Discard every written deadband and use the configured ones again (D114)."""
+        self._deadbands = dict(self._initial_deadbands)
+
     def _deadband_in(self, point: Point, variation: int) -> float:
         """The deadband in force for a point, in the units a variation carries."""
         span = self._deadbands.get(point.index, 0.0)
@@ -952,7 +958,13 @@ class DerOutstation:
         entries: list[Entry] = []
         for kind in Kind:
             for point in self._map.of(kind):
-                source = self._origins.get(point.address, Source.ABSENT)
+                # A point the claimed level does not serve is absent, however it
+                # is bound: a double-bit input below Level 4 (D117).
+                source = (
+                    self._origins.get(point.address, Source.ABSENT)
+                    if point.index in self._by_index[kind]
+                    else Source.ABSENT
+                )
                 if source is Source.ABSENT:
                     entries.append(Entry(point, source))
                     continue
@@ -975,6 +987,10 @@ class DerOutstation:
                 online = not math.isnan(point.to_wire(float(value)))
             return quality, online
         reading = self._reading(point)
+        if point.kind is Kind.DBI:
+            # A value that is not a state goes out with ONLINE clear (D117).
+            flags = self._double_bit_of(point, reading).flags
+            return reading.quality, bool(flags & BinaryQuality.ONLINE)
         online = reading.quality is Quality.GOOD
         if online and point.kind is Kind.AI:
             online = not math.isnan(point.to_wire(float(reading.value)))
@@ -1697,7 +1713,21 @@ class DerOutstation:
 
     def operate(self, controls: Sequence[Control]) -> Sequence[CommandStatus]:
         """Execute each control through its binding, and say how each went."""
-        statuses = [self._command(control, execute=True) for control in controls]
+        statuses: list[CommandStatus] = []
+        commanded: set[tuple[int, int]] = set()
+        for control in controls:
+            named = (control.group, control.index)
+            if named in commanded and self._primed and self.at_least(SubsetLevel.LEVEL_4):
+                # The request commands this output again. Record the change the
+                # earlier control made before this one can undo it: each change
+                # of an output's status is an event (IEEE 1815-2012 A.7.1.1,
+                # A.21.1; D115).
+                self.poll()
+                commanded.clear()
+            status = self._command(control, execute=True)
+            statuses.append(status)
+            if status is CommandStatus.SUCCESS:
+                commanded.add(named)
         if self._primed and CommandStatus.SUCCESS in statuses:
             # So the inputs mirroring what just changed report it in the
             # indications of this very response, not on the next cadence.

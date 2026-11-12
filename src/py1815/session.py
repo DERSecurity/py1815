@@ -148,6 +148,7 @@ from py1815.objects import (
     encode_double_bit_event,
     encode_double_bit_event_relative,
     encode_frozen_counter_event,
+    encode_time,
 )
 
 # Controls echo in the same shape events do -- a count with an index in front of
@@ -722,7 +723,7 @@ class ClassProvider(Protocol):
         ...
 
 
-class DeadbandProvider(Protocol):  # pylint: disable=too-few-public-methods
+class DeadbandProvider(Protocol):
     """Where a written analog input deadband goes (IEEE 1815-2012 Table 12-18).
 
     The session decodes each object of a write of group 34 and hands the provider
@@ -736,6 +737,10 @@ class DeadbandProvider(Protocol):  # pylint: disable=too-few-public-methods
         The value is as the variation carries it. Raises :class:`ParameterError`,
         having changed nothing, when an index names no analog input.
         """
+        ...
+
+    def reset_deadbands(self) -> None:
+        """Discard every written deadband and use the configured ones again (D114)."""
         ...
 
 
@@ -1076,7 +1081,8 @@ class Session:
             deadband_provider: Takes a write of analog input deadbands (group
                 34, variations 1 to 3, with a range or an index for each
                 object). Without one the write is refused as an unknown
-                object. Reading deadbands is the read provider's.
+                object. Reading deadbands is the read provider's. A restart
+                puts the configured deadbands back.
             extended_events: Whether the event variations of subset Level 4
                 that this session can write are read by name and may be
                 chosen as ``analog_event_variation``: floating-point analog
@@ -1163,6 +1169,10 @@ class Session:
                 fragments its responses to the size written. Without a store,
                 group 0 is answered as an object this outstation does not
                 have.
+
+        Raises:
+            ValueError: An option is out of range, such as a ``max_response``
+                smaller than a response header or than ``attributes.min_fragment``.
         """
         #: Whether a read may name group 4.
         self._double_bit_events = double_bit_events
@@ -1246,6 +1256,13 @@ class Session:
         #: The ceiling a write of the transmit fragment size is held to, and the
         #: size this session returns to when it restarts.
         self._configured_response = max_response
+        if attributes is not None and max_response < attributes.min_fragment:
+            # A read of an attribute is refused when its block does not fit a
+            # fragment, so a smaller ceiling leaves an attribute unreadable (D120).
+            raise ValueError(
+                f"max_response is {max_response}; the device attributes need "
+                f"{attributes.min_fragment} octets"
+            )
         self._attributes = attributes
         #: Set until a master clears it. Every response says so until then,
         #: which is how a master knows to re-read what it had cached.
@@ -1413,6 +1430,9 @@ class Session:
         self._max_response = self._configured_response
         if self._attributes is not None:
             self._attributes.reset()
+        # A written deadband is held in memory only (IEEE 1815-2012 11.9.1.3; D114).
+        if self._deadbands is not None:
+            self._deadbands.reset_deadbands()
 
     def abandon_select(self) -> None:
         """Forget an armed select, so the operate it was granted for finds none.
@@ -3244,9 +3264,10 @@ class Session:
                 )
             if header.count != 1:
                 raise ParameterError(f"the current time is one object, not {header.count}")
-            moment = self._time_source()
-            return bytes([TIME_GROUP, TIME_VARIATION, int(header.qualifier), 1]) + (
-                moment.to_bytes(TIME_SIZE, "little")
+            # A clock written near the top of the 48-bit range runs past it; the
+            # time is clamped as every other time this outstation sends is.
+            return bytes([TIME_GROUP, TIME_VARIATION, int(header.qualifier), 1]) + encode_time(
+                self._time_source()
             )
         if header.group == RESTART_GROUP and self._indications_read:
             return self._indications_object(header)

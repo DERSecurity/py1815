@@ -393,7 +393,11 @@ class DeviceInformation:  # pylint: disable=too-many-instance-attributes
         for each in fields(self):
             value = getattr(self, each.name)
             if each.name == "timing_accuracy_us":
-                if isinstance(value, bool) or not 0 <= value <= 0xFFFFFFFF:
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or not 0 <= value <= 0xFFFFFFFF
+                ):
                     raise ValueError(f"{each.name} must be a whole number from 0 to 4294967295")
                 continue
             try:
@@ -443,7 +447,10 @@ class DeviceAttributes:
                 ``attributes`` and has to hold text.
             min_fragment: The smallest maximum transmit fragment size, in octets,
                 a master may write to the session. The owner sets it to what
-                its largest response block needs.
+                its largest response block needs. The store raises it to what
+                its own largest block needs: the list of variations, and each
+                attribute at its longest, a written text of :data:`MAX_TEXT`
+                characters included.
         """
         for variation in attributes:
             if variation in _SPECIAL or variation in SESSION_VARIATIONS:
@@ -456,7 +463,24 @@ class DeviceAttributes:
                 raise ValueError(f"writable attribute variation {variation} is not supplied")
             if self._initial[variation].code != DataType.VSTR:
                 raise ValueError(f"writable attribute variation {variation} does not hold text")
-        self.min_fragment = min_fragment
+        self.min_fragment = max(min_fragment, RESPONSE_HEADER_SIZE + self._largest_block())
+
+    def _largest_block(self) -> int:
+        """Return the octets of the largest block a read of group 0 can need.
+
+        A response block holds one attribute (:func:`read_blocks`), so every one
+        has to fit a fragment or the read that names it is refused.
+        """
+        listed = dict.fromkeys((*self._initial, *SESSION_VARIATIONS), False)
+        blocks = [
+            attribute_block(Variation.LIST_OF_VARIATIONS, Attribute.variation_list(listed)),
+            # The session's own attributes are unsigned integers of four octets at most.
+            attribute_block(SESSION_VARIATIONS[0], Attribute.unsigned(0xFFFFFFFF)),
+        ]
+        for variation, attribute in self._initial.items():
+            longest = Attribute.text("x" * MAX_TEXT) if variation in self._writable else attribute
+            blocks.append(attribute_block(variation, longest))
+        return max(len(block) for block in blocks)
 
     @property
     def writable(self) -> frozenset[int]:

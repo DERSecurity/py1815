@@ -577,7 +577,9 @@ class Device:
     def freeze(self, indices: list[int] | None = None) -> dict[str, Any]:
         """Freeze the counters named, or every counter, and say what the freeze buffered."""
         outstation = self.outstation
-        held = outstation.events.total
+        # Count what the freeze recorded, not what is held: in a full class each
+        # new event evicts an old one, and the number held stays the same.
+        recorded = outstation.events.recorded
         if indices is None:
             frozen = outstation.freeze_all()
         else:
@@ -592,7 +594,7 @@ class Device:
                     clear=False,
                 )
             frozen = len(indices)
-        return {"frozen": frozen, "events": outstation.events.total - held}
+        return {"frozen": frozen, "events": outstation.events.recorded - recorded}
 
     def set_cold_restart(self, enabled: bool) -> None:
         """Turn cold restart support on or off without a power cycle.

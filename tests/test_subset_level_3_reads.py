@@ -241,6 +241,14 @@ class TestCurrentTimeRead:
         assert _body(dut, "32 01 07 01") == "32 01 07 01 00 68 E5 CF 8B 01"
 
     @ABOVE_LEVEL_2
+    def test_a_clock_past_the_48_bit_range_reads_as_the_largest_time(self, level):
+        dut = Dut(level=level)
+        # The largest time six octets hold, then one millisecond past it.
+        dut.master.request(WRITE, bytes.fromhex("32 01 07 01 FF FF FF FF FF FF"))
+        dut.clock.advance(0.001)
+        assert _body(dut, "32 01 07 01") == "32 01 07 01 FF FF FF FF FF FF"
+
+    @ABOVE_LEVEL_2
     @pytest.mark.parametrize(
         ("request_octets", "refusal"),
         [
