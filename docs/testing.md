@@ -219,7 +219,11 @@ python scripts/extract_conformance.py --pdf "IEEE 1815-2012.pdf" --check
 ```
 
 `conformance/README.md` covers what that file holds and what it deliberately
-does not.
+does not. The way the script reads Annex A is tested without the standard
+(`tests/test_extract_conformance.py`): synthetic text laid out as `pdftotext`
+prints Annex A checks how a size is read from a formal structure, that each named
+erratum corrects its object, and that an erratum is refused once the text no
+longer needs it.
 
 ## The certification procedures are carried out section by section
 
