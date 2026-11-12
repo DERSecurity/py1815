@@ -673,6 +673,18 @@ def provenance_refs(prov: dict[str, str]) -> list[dict[str, str]]:
     return refs
 
 
+def settle_resolution(resolution: str, model: dict[str, Any]) -> str:
+    """Return the resolution kind to record for *model*.
+
+    A release with no runtime dependencies has no resolution to qualify, so a
+    range-declaring project's caveat (``build-time`` or ``tested-lock``) becomes
+    ``none`` and the documents say there are no dependencies instead.
+    """
+    if resolution in ("build-time", "tested-lock") and not model["components"]:
+        return "none"
+    return resolution
+
+
 def render_cyclonedx(
     model: dict[str, Any],
     cdx: dict[str, Any],
@@ -842,6 +854,8 @@ def render_spdx(
             "may get different versions, and the test suite resolves them "
             "independently, so this set is not asserted to be the tested one."
         )
+    if prov.get("resolution") == "none":
+        root_comment.append("This release has no runtime dependencies.")
     if prov.get("resolution") == "tested-lock":
         root_comment.append(
             "This project declares dependency ranges rather than pinning a tree. "
@@ -952,6 +966,8 @@ def render_spdx(
             "version ranges rather than pinning a tree, so a consumer resolving "
             "them may get different versions."
         )
+    elif prov.get("resolution") == "none":
+        resolution_note = "Generated for a release with no runtime dependencies."
     else:
         resolution_note = "Generated from the locked runtime dependency closure."
 
@@ -1128,6 +1144,7 @@ def main() -> int:
             return 1
         extra += load_npm_lock(args.npm_lock)
     model = build_model(cdx, lock, extra=extra)
+    resolution = settle_resolution(resolution, model)
 
     if args.product_name:
         # Rename in the CycloneDX document too, not only in the model, so the

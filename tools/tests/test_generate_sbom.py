@@ -444,6 +444,36 @@ def test_tested_lock_says_the_versions_are_the_tested_ones():
     assert "locked runtime dependency closure" not in spdx
 
 
+def test_a_release_with_no_runtime_dependencies_carries_no_resolution_caveat():
+    """With nothing resolved, the documents state there are no dependencies
+    rather than qualifying a resolution that does not exist."""
+    cdx, model = _root_only_model()
+    assert gs.settle_resolution("tested-lock", model) == "none"
+    assert gs.settle_resolution("build-time", model) == "none"
+    assert gs.settle_resolution("lockfile", model) == "lockfile"
+
+    prov = {"resolution": "none"}
+    cyclonedx = gs.render_cyclonedx(model, cdx, "0" * 32, "2026-01-01T00:00:00Z", prov)
+    props = {p["name"] for p in cyclonedx["metadata"]["component"].get("properties", [])}
+    assert "dersec:dependency-resolution" not in props
+
+    spdx = json.dumps(gs.render_spdx(model, "0" * 32, "2026-01-01T00:00:00Z", "https://x", prov))
+    assert "This release has no runtime dependencies." in spdx
+    assert "Generated for a release with no runtime dependencies." in spdx
+    assert "may get different versions" not in spdx
+    assert "locked runtime dependency closure" not in spdx
+
+
+def test_a_release_with_runtime_dependencies_keeps_its_resolution():
+    cdx = {
+        "metadata": {"component": {"bom-ref": "root", "name": "demo", "version": "1.0.0"}},
+        "components": [{"bom-ref": "a", "name": "attrs", "version": "25.1.0"}],
+        "dependencies": [],
+    }
+    model = gs.build_model(cdx, {})
+    assert gs.settle_resolution("tested-lock", model) == "tested-lock"
+
+
 def test_a_digest_is_taken_only_from_the_installed_version():
     """A universal lock can pin one package at two versions for two Python
     versions. The digest of the other version must not be recorded."""
