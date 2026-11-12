@@ -1090,20 +1090,10 @@ class DerOutstation:
         with flags, so that asking for the compact form never hides that
         a value is not to be trusted.
         """
-        if group == GROUP_BINARY_INPUT:
-            return variation, encode_binary(self._binary(point))
+        if group in (GROUP_BINARY_INPUT, GROUP_DOUBLE_BIT_INPUT):
+            return self._encode_two_state(group, variation, point)
         if group == GROUP_ANALOG_DEADBAND:
             return variation, encode_deadband(self._deadband_in(point, variation), variation)
-        if group == GROUP_DOUBLE_BIT_INPUT:
-            double_bit = self._double_bit(point)
-            if double_bit.flags != BinaryQuality.ONLINE:
-                # The packed variation has no flags. A point in an exception
-                # condition is reported with them (TB2016-003b Table 12-7, note a).
-                variation = int(DoubleBitVariation.WITH_FLAGS)
-            if variation == DoubleBitVariation.PACKED:
-                # One state, packed with its neighbors by the range that holds it.
-                return variation, bytes([double_bit.state])
-            return variation, encode_double_bit(double_bit)
         if group == GROUP_ANALOG_INPUT:
             reading = self._reading(point)
             analog = self._analog_of(point, reading)
@@ -1145,6 +1135,20 @@ class DerOutstation:
             # instead of the read failing on it.
             raw = float(round(raw))
         return variation, encode_analog_output_status(raw, variation, flags=flags)
+
+    def _encode_two_state(self, group: int, variation: int, point: Point) -> tuple[int, bytes]:
+        """Encode a binary or double-bit input as one object, and return the variation it took."""
+        if group == GROUP_BINARY_INPUT:
+            return variation, encode_binary(self._binary(point))
+        double_bit = self._double_bit(point)
+        if double_bit.flags != BinaryQuality.ONLINE:
+            # The packed variation has no flags. A point in an exception
+            # condition is reported with them (TB2016-003b Table 12-7, note a).
+            variation = int(DoubleBitVariation.WITH_FLAGS)
+        if variation == DoubleBitVariation.PACKED:
+            # One state, packed with its neighbors by the range that holds it.
+            return variation, bytes([double_bit.state])
+        return variation, encode_double_bit(double_bit)
 
     def _output_status(self, point: Point) -> tuple[float | bool | None, int]:
         """What an output currently stands at, and the flags that go with it."""
@@ -1277,21 +1281,7 @@ class DerOutstation:
                 timestamp_ms=self._event_time(reading, now),
             ):
                 buffered += 1
-        for point in self._served[Kind.DBI]:
-            reported = self._classes[point.address]
-            if not reported:
-                continue
-            reading = self._reading(point)
-            double_bit = self._double_bit_of(point, reading)
-            if not self._primed:
-                self.events.prime_double_bit(point.index, double_bit)
-            elif self.events.record_double_bit(
-                point.index,
-                double_bit,
-                event_class=EventClass(reported),
-                timestamp_ms=self._event_time(reading, now),
-            ):
-                buffered += 1
+        buffered += self._poll_double_bits(now)
         for point in self._served[Kind.AI]:
             reported = self._classes[point.address]
             if not reported:
@@ -1314,6 +1304,30 @@ class DerOutstation:
         if self.at_least(SubsetLevel.LEVEL_4):
             buffered += self._poll_outputs(now)
         self._primed = True
+        return buffered
+
+    def _poll_double_bits(self, now: int) -> int:
+        """Buffer a double-bit event for each change of state or flags (D118).
+
+        Only a Level 4 outstation serves double-bit inputs, so below it there
+        is nothing to read.
+        """
+        buffered = 0
+        for point in self._served[Kind.DBI]:
+            reported = self._classes[point.address]
+            if not reported:
+                continue
+            reading = self._reading(point)
+            double_bit = self._double_bit_of(point, reading)
+            if not self._primed:
+                self.events.prime_double_bit(point.index, double_bit)
+            elif self.events.record_double_bit(
+                point.index,
+                double_bit,
+                event_class=EventClass(reported),
+                timestamp_ms=self._event_time(reading, now),
+            ):
+                buffered += 1
         return buffered
 
     def _poll_counters(self, now: int) -> int:
