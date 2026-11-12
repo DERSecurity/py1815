@@ -33,7 +33,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from py1815.application import FunctionCode, IIN2Bit, IINBit
-from py1815.attributes import Variation
+from py1815.attributes import Attribute, DataType, Variation
 from py1815.control import AnalogOutput
 from py1815.decode import DecodedObject, PointType
 from py1815.master import requests
@@ -347,6 +347,34 @@ def _number(value: bool | int | float | None) -> bool | int | float | str | None
     return value
 
 
+def describe_attribute(attribute: Attribute) -> dict[str, Any]:
+    """Describe a device attribute: its data type, its value and its octets.
+
+    The value is text, a number, the octets of an octet string in hexadecimal,
+    or for a list of variations each variation and whether it can be written.
+    It is None where the data type or the length does not decode.
+    """
+    value = attribute.value
+    shown: Any
+    if isinstance(value, bytes):
+        shown = value.hex()
+    elif isinstance(value, tuple):
+        shown = [{"variation": variation, "writable": writable} for variation, writable in value]
+    elif isinstance(value, str):
+        shown = value
+    else:
+        shown = _number(value)
+    try:
+        data_type = DataType(attribute.code).name
+    except ValueError:
+        data_type = str(attribute.code)
+    return {
+        "data_type": data_type,
+        "value": shown,
+        "octets": attribute.data.hex(),
+    }
+
+
 def describe_object(decoded: DecodedObject, name: str | None = None) -> dict[str, Any]:
     return {
         "type": decoded.point.value if decoded.point is not None else None,
@@ -359,6 +387,7 @@ def describe_object(decoded: DecodedObject, name: str | None = None) -> dict[str
         "time_ms": decoded.time_ms,
         "synchronized": decoded.synchronized,
         "event": decoded.event,
+        "attribute": None if decoded.attribute is None else describe_attribute(decoded.attribute),
     }
 
 

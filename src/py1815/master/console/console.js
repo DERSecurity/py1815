@@ -760,8 +760,23 @@ function renderFrame() {
 
 // What came of one request, as the Commands and Requests tabs both show it:
 // the facts of the exchange, and a table of the objects that came back.
+// The value of an object that is not a point: a device attribute, the time,
+// an internal indication or a deadband.
+function otherValue(object) {
+  const attribute = object.attribute;
+  if (attribute) {
+    if (Array.isArray(attribute.value)) {
+      return attribute.value.map((each) => `${each.variation}${each.writable ? " (writable)" : ""}`).join(", ");
+    }
+    return attribute.value === null ? attribute.octets : formatValue(attribute.value);
+  }
+  if (object.time_ms !== null && object.time_ms !== undefined) return stationTime(object.time_ms);
+  return formatValue(object.value);
+}
+
 function exchangeNodes(exchange) {
   const rows = exchange.objects.filter((object) => object.type !== null).slice(0, 200);
+  const others = exchange.objects.filter((object) => object.type === null).slice(0, 200);
   const named = rows.some((row) => row.name);
   return [
     el("dl", { class: "facts" },
@@ -784,6 +799,16 @@ function exchangeNodes(exchange) {
           el("td", { class: "num value", text: formatValue(row.value) }),
           el("td", {}, flagChips(row.flags)),
           el("td", { class: "mono", text: `g${row.group}v${row.variation}${row.event ? " event" : ""}` })))))) : null,
+    others.length ? el("div", { class: "table-wrap", style: "margin-top:12px; max-height:320px" },
+      el("table", { class: "other-objects" },
+        el("thead", {}, el("tr", {},
+          el("th", { text: "Object" }), el("th", { class: "num", text: "Index" }),
+          el("th", { text: "Value" }), el("th", { text: "Data type" }))),
+        el("tbody", {}, others.map((object) => el("tr", {},
+          el("td", { class: "mono", text: `g${object.group}v${object.variation}` }),
+          el("td", { class: "num", text: object.index === null ? "" : object.index }),
+          el("td", { class: "value", text: otherValue(object) }),
+          el("td", { class: "mono", text: object.attribute ? object.attribute.data_type : "" })))))) : null,
   ].filter(Boolean);
 }
 

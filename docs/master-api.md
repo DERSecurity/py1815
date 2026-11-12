@@ -417,6 +417,7 @@ An object out of a response, in `objects` and in `events`:
 | `flags` | The flag bits set, by name, or null for a variation that carries none |
 | `time_ms` | The outstation's time for the value, in milliseconds since the epoch, when it gave one |
 | `event` | Whether it reports a change, and not the present value |
+| `attribute` | For a device attribute (group 0): its `data_type` (`VSTR`, `UINT` and the others, or the code for a data type no table defines), its `value`, and its `octets` in hexadecimal. The value is text, a number, an octet string in hexadecimal, or for the list of attributes (variation 255) each `variation` and whether it is `writable`. It is null where the data type or the length does not decode. Null for any other object |
 
 A point of a profile, from `profile`:
 

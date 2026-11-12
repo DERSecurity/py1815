@@ -57,14 +57,20 @@ as_level = pytest.mark.parametrize("console", [(False, 3)], indirect=True)
 at_level_2 = pytest.mark.parametrize("console", [(False, 2)], indirect=True)
 commanding_at_4 = pytest.mark.parametrize("console", [(True, 4)], indirect=True)
 reading_at_4 = pytest.mark.parametrize("console", [(False, 4)], indirect=True)
+#: As ``reading_at_4``, with the simulated DER itself answering at Level 4.
+served_at_4 = pytest.mark.parametrize("console", [(False, 4, 4)], indirect=True)
 
 
 @pytest_asyncio.fixture
 async def console(request):
-    """The console in a browser, with the simulated DER added at a level, sending nothing."""
-    allow_control, level = getattr(request, "param", (False, 2))
+    """The console in a browser, with the simulated DER added at a level, sending nothing.
+
+    The parameter is the service's permission to command, the level the
+    outstation is added at, and optionally the level the simulated DER answers at.
+    """
+    allow_control, level, *serves = getattr(request, "param", (False, 2))
     points = load.resolve(for_reference_der(), Composition())
-    simulation = der.build(points)
+    simulation = der.build(points, **({"level": serves[0]} if serves else {}))
     outstation = OutstationServer(
         simulation.outstation.session(need_time=False), bind="127.0.0.1:0"
     )
@@ -110,6 +116,13 @@ def _fill(form: str, **fields: str) -> str:
 async def _result(page: Page, text: str) -> str:
     await page.wait_for(f"document.querySelector('#result').textContent.includes({text!r})")
     return await page.text("#result")
+
+
+#: The rows of the result's table of objects that are not points, as the text of each cell.
+_OTHER_ROWS = (
+    "[...document.querySelectorAll('#result .other-objects tbody tr')]"
+    ".map((row) => [...row.cells].map((cell) => cell.textContent))"
+)
 
 
 class TestTheLevelOfAnOutstation:
@@ -189,6 +202,58 @@ class TestReadByVariationOrRange:
             before = console.last
             await page.click(f"#level-reads [data-read='{button}']")
             assert await console.request(before) == octets, button
+
+
+class TestTheOtherReadsShowWhatCameBack:
+    """The objects of these reads are not points, and each is shown with its value."""
+
+    @staticmethod
+    async def _rows(console: Console, button: str, shown: str) -> list[list[str]]:
+        await console.page.click(f"#level-reads [data-read='{button}']")
+        await console.page.wait_for(f"JSON.stringify({_OTHER_ROWS}).includes({shown!r})")
+        return await console.page.evaluate(_OTHER_ROWS)
+
+    @pytest.mark.asyncio
+    @served_at_4
+    async def test_every_device_attribute_is_shown_with_its_value_and_data_type(self, console):
+        rows = await self._rows(console, "attributes_all", "py1815 DER outstation")
+        assert ["g0v250", "0", "py1815 DER outstation", "VSTR"] in rows
+        assert ["g0v240", "0", "2048", "UINT"] in rows
+
+    @pytest.mark.asyncio
+    @served_at_4
+    async def test_the_list_of_attributes_shows_each_variation_and_which_can_be_written(
+        self, console
+    ):
+        rows = await self._rows(console, "attributes_list", "240 (writable)")
+        ((object_, index, listed, data_type),) = rows
+        assert (object_, index, data_type) == ("g0v255", "0", "U8BS8LIST")
+        assert "209, 210," in listed and "240 (writable)" in listed
+        assert "247 (writable)" in listed and "250," in listed
+
+    @pytest.mark.asyncio
+    @served_at_4
+    async def test_the_time_is_shown_as_a_date(self, console):
+        ((object_, index, shown, data_type),) = await self._rows(console, "read_time", "UTC")
+        assert (object_, index, data_type) == ("g50v1", "", "")
+        assert shown.endswith(" UTC") and shown[:2] == "20"
+
+    @pytest.mark.asyncio
+    @served_at_4
+    async def test_each_internal_indication_is_shown_on_or_off(self, console):
+        rows = await self._rows(console, "read_indications", "g80v1")
+        assert [row[1] for row in rows] == [str(index) for index in range(16)]
+        assert {row[0] for row in rows} == {"g80v1"}
+        assert {row[2] for row in rows} <= {"ON", "OFF"}
+        # IIN1.7, the device restart bit, is set until a master clears it.
+        assert rows[7][2] == "ON"
+
+    @pytest.mark.asyncio
+    @served_at_4
+    async def test_the_deadbands_are_shown_with_their_values(self, console):
+        rows = await self._rows(console, "deadbands", "g34v")
+        assert rows and all(row[0].startswith("g34v") for row in rows)
+        assert all(row[2] != "" for row in rows)
 
 
 class TestWhatWrites:

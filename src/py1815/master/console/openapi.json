@@ -7102,6 +7102,16 @@
           },
           "event": {
             "type": "boolean"
+          },
+          "attribute": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Attribute"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -7112,7 +7122,58 @@
           "flags",
           "event"
         ],
-        "description": "One object out of a response, decoded."
+        "description": "One object out of a response, decoded. A device attribute (group 0) carries its data type and value in `attribute`."
+      },
+      "Attribute": {
+        "type": "object",
+        "properties": {
+          "data_type": {
+            "type": "string",
+            "description": "The attribute data type: VSTR, UINT, INT, FLT, OSTR, BSTR, DNP3TIME, UNCD, U8BS8LIST or U8BS8EXLIST, or the code as a number for any other."
+          },
+          "value": {
+            "description": "Text, a number, an octet string in hexadecimal, or for a list of variations each variation and whether it can be written. Null where the data type or the length does not decode.",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "variation": {
+                      "type": "integer"
+                    },
+                    "writable": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "variation",
+                    "writable"
+                  ]
+                }
+              }
+            ]
+          },
+          "octets": {
+            "type": "string",
+            "description": "The attribute's value octets as received, in hexadecimal."
+          }
+        },
+        "required": [
+          "data_type",
+          "value",
+          "octets"
+        ],
+        "description": "A device attribute as the outstation sent it."
       },
       "ControlStatus": {
         "type": "object",

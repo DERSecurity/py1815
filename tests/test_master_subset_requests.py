@@ -17,11 +17,11 @@ import pytest_asyncio
 from profile_fixtures import for_reference_der
 
 from py1815.application import FunctionCode
-from py1815.decode import PointType
+from py1815.decode import PointType, decode_objects
 from py1815.master import Loopback, Master, requests
 from py1815.master.api import Outstation
 from py1815.master.requests import AboveSubsetLevel
-from py1815.master.service import Service
+from py1815.master.service import Service, describe_object
 from py1815.profile import der, load
 from py1815.profile.model import Composition
 from py1815.server import OutstationServer
@@ -704,6 +704,49 @@ class TestTheService:
         assert answer["ok"] is False and answer["error"]["kind"] == "request"
         assert says in answer["error"]["message"]
         assert (await _ask(commanding, "trace"))["result"]["frames"] == []
+
+
+class TestHowAnAttributeIsDescribed:
+    """The service describes a device attribute's data type, value and octets."""
+
+    @staticmethod
+    def _described(octets: str) -> list:
+        return [describe_object(each)["attribute"] for each in decode_objects(_hex(octets)).objects]
+
+    @pytest.mark.parametrize(
+        ("octets", "attribute"),
+        [
+            # g0v250, set 0: VSTR, 2 octets, "ab".
+            ("00 FA 00 00 00 01 02 61 62", {"data_type": "VSTR", "value": "ab", "octets": "6162"}),
+            # g0v240: UINT, 2 octets, 2048.
+            ("00 F0 00 00 00 02 02 00 08", {"data_type": "UINT", "value": 2048, "octets": "0008"}),
+            # g0v200: OSTR, 2 octets, shown in hexadecimal.
+            (
+                "00 C8 00 00 00 05 02 01 FF",
+                {"data_type": "OSTR", "value": "01ff", "octets": "01ff"},
+            ),
+            # g0v255: U8BS8LIST, 240 writable and 249 not.
+            (
+                "00 FF 00 00 00 FE 04 F0 01 F9 00",
+                {
+                    "data_type": "U8BS8LIST",
+                    "value": [
+                        {"variation": 240, "writable": True},
+                        {"variation": 249, "writable": False},
+                    ],
+                    "octets": "f001f900",
+                },
+            ),
+            # A data type code no table defines (9): its code and its octets.
+            ("00 C8 00 00 00 09 01 07", {"data_type": "9", "value": None, "octets": "07"}),
+        ],
+    )
+    def test_an_attribute_is_described_by_its_data_type_value_and_octets(self, octets, attribute):
+        assert self._described(octets) == [attribute]
+
+    def test_an_object_that_is_not_an_attribute_has_none(self):
+        # g30v1 point 4, online, 100.
+        assert self._described("1E 01 00 04 04 01 64 00 00 00") == [None]
 
 
 COMMANDS = [
