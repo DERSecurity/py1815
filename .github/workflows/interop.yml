@@ -211,7 +211,9 @@ jobs:
 
   parsers:
     name: independent dissectors read the sweep and the master
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: on the 26.04 image, tshark refuses to read the capture
+    # this job writes ("You don't have permission to read the file").
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The sweep walks the function code space and writes the exchange to a
     # capture. Then this library's master reads a second outstation and writes
