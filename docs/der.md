@@ -607,9 +607,13 @@ multiplier of 0.1 is 2.0 V. Variation 3 is in engineering units, like the other
 floating-point objects, and is converted with the point's multiplier: a written 5.0 is
 50 for that voltage. Variations 1 and 2 read back rounded to a whole count, and a
 deadband at or past what the variation holds reads as the largest value it holds.
-A deadband written for an input that reports no events is kept and is used if that
-input reports events later; `outstation.deadband(index)` returns the one in force, in
-transmitted units.
+A deadband written for an input that reports no events, such as one assigned to class
+0, is kept and is used if that input reports events later;
+`outstation.deadband(index)` returns the one in force, in transmitted units.
+
+Group 34 holds analog input deadbands only. The deadband of a counter that reports
+value changes is set by the event policy and is not read or written over DNP3;
+`outstation.counter_deadband(index)` returns it.
 
 A written deadband is held in memory. It is lost when the outstation restarts, which
 then uses the configured deadbands again, and the Device Profile says that no

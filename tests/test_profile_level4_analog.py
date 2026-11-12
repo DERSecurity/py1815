@@ -488,6 +488,74 @@ class TestAWrittenDeadbandDecidesTheNextEvent:
         assert _body(master.read("22 01 00 04 04")) == "22 01 00 04 04 03 00"
 
 
+class TestAssignedClassAtLevel4:
+    """Analog input events follow the class ASSIGN_CLASS gives (D110), in every variation."""
+
+    def _primed(self) -> tuple[Plant, DerOutstation, Master]:
+        plant = Plant()
+        outstation = plant.outstation(4)
+        outstation.poll()
+        session = outstation.session(analog_event_variation=AnalogEventVariation.FLOAT32)
+        return plant, outstation, Master(session)
+
+    @staticmethod
+    def _assign(master: Master, body: str) -> None:
+        response = master.send(FunctionCode.ASSIGN_CLASS, body)
+        assert _body(response) == "" and _iin2(response) == 0
+
+    def test_a_floating_point_event_is_reported_in_the_assigned_class(self):
+        plant, outstation, master = self._primed()
+        # Class 3 (3C 04 06), then group 30 variation 0, index 2 by 8-bit range.
+        self._assign(master, "3C 04 06 1E 00 00 02 02")
+        plant.voltage = 244.07
+        assert outstation.poll() == 1
+        assert _body(master.read("3C 03 06")) == "", "nothing left in class 2"
+        assert _body(master.read("3C 04 06")) == "20 05 17 01 02 01 ec 11 74 43"
+
+    def test_class_0_stops_floating_point_events(self):
+        plant, outstation, master = self._primed()
+        self._assign(master, "3C 01 06 1E 00 00 02 02")
+        plant.voltage = 244.07
+        assert outstation.poll() == 0
+        assert _body(master.read("3C 02 06 3C 03 06 3C 04 06")) == ""
+
+    def test_a_written_deadband_is_kept_through_class_changes(self):
+        plant, outstation, master = self._primed()
+        # Group 34 variation 1, index 2: 100 counts, which is 10.0 volts.
+        master.write("22 01 00 02 02 64 00")
+        self._assign(master, "3C 01 06 1E 00 00 02 02")
+        self._assign(master, "3C 03 06 1E 00 00 02 02")
+        assert outstation.deadband(2) == 100.0
+        plant.voltage = 249.0
+        assert outstation.poll() == 0, "90 counts"
+        plant.voltage = 251.0
+        assert outstation.poll() == 1, "110 counts"
+
+
+def test_a_deadband_write_leaves_the_counter_deadbands_alone():
+    # A counter that reports value changes has a deadband from the event policy
+    # (D124). Group 34 names analog inputs only, so a write of every analog
+    # input's deadband does not touch it.
+    binding = Binding()
+    binding.read(AI, 1, lambda: 1500.0)
+    binding.read(AI, 2, lambda: 240.0)
+    binding.read(CTR, 0, lambda: 10.0)
+    outstation = DerOutstation(
+        load.resolve(small(), units(0)),
+        binding,
+        strict=False,
+        clock_ms=lambda: CLOCK_MS,
+        level=4,
+        event_policy={"points": {"CTR0": {"value_changes": True, "deadband": 3}}},
+    )
+    master = Master(outstation.session())
+    assert outstation.counter_deadband(0) == 3.0
+    response = master.write("22 01 00 01 02 07 00 07 00")
+    assert _body(response) == "" and _iin2(response) == 0
+    assert (outstation.deadband(1), outstation.deadband(2)) == (7.0, 7.0)
+    assert outstation.counter_deadband(0) == 3.0
+
+
 LEVEL_4_ONLY = [
     (30, 5, 1),
     (32, 5, 1),
