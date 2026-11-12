@@ -539,7 +539,7 @@ What each level answers, beyond what the level before it does:
 | 2 | A read that names no variation is answered in the variations Level 2 requires a master to parse. Frozen counter events are not reported, and a freeze-and-clear clears, as it does at Levels 3 and 4. Reads of the packed binary input variation, of 16-bit frozen counter events, of the current time and of the internal indications are refused as unknown objects. Counter events are not reported, and a read of group 22 is answered with nothing. |
 | none | As Level 2, with the profile's additions: frozen counters with time, frozen counter events with time, and a freeze that never clears. The reads Level 2 refuses are refused here too. |
 | 3 | Reads of the packed binary input variation, answered with flags as the standard allows. Reads of 16-bit frozen counter events, answered in 32 bits. A read of the current time (group 50 variation 1, one object) and of the internal indications (group 80 variation 1, by index 0 to 15). Frozen counter events are reported in class 3 polls, without time, and frozen counters are reported without time when a read names no variation. A change in a counter's flags, such as communication lost or restored, raises a counter event (group 22 variation 1) in the class of the counter's frozen counter events; a change in its value raises one only where the event policy turns `value_changes` on. Reads of group 22 variations 0, 1 and 2 return them, in variation 1. |
-| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Below Level 4 a request that names one of these is refused as an unknown object. |
+| 4 | Everything Level 3 answers, with the profile's own variations (frozen counters and frozen counter events with time) when a read names none. The floating-point analog variations, reads of 16-bit frozen counters and frozen counter events with time, answered in 32 bits, and the analog input deadbands, which a master reads and writes; see [Level 4](#level-4-floating-point-and-deadbands). Binary and analog output events, and reads of the command event groups, answered with nothing; see [Output events at Level 4](#output-events-at-level-4). Below Level 4 a request that names one of these is refused as an unknown object. |
 
 Every level reads each static group by range as well as for all points, and each event
 group by count as well as for all events.
@@ -552,7 +552,8 @@ the configuration the conformance tests run against; see
 From Level 3 a master may move points between event classes, or turn their events off,
 with an assign-class request (function code 22). Levels 3 and 4 accept it for binary
 inputs, counters, frozen counters and analog inputs, and Level 4 also for the outputs.
-A point assigned to class 0 raises no events but stays in a class 0 read. A change made
+A point assigned to class 0 raises no events but stays in a class 0 read; an output is the
+exception, as [Output events at Level 4](#output-events-at-level-4) describes. A change made
 after the request is reported in the new class; events already buffered stay in the class
 they were recorded in. A restart returns every point to the class it started with: the
 outstation does not keep assignments. Level 2 and the default refuse the request as an
@@ -628,25 +629,38 @@ write when you do not, so a control a master sends, a change the device makes it
 a status that goes stale each produce an event. The first `poll()` only notes where each
 output stands.
 
-An output reports in the class the tables give it. The tables give none, so the class is
+An output starts in the class the tables give it. The tables give none, so the class is
 that of the input paired with the output, which reports the same change: a master polling
 that class hears of both together. An output whose paired input reports no events reports
 none. An output with no paired input reports in class 3. The [event
 policy](#setting-the-event-policy) does not apply to outputs.
 
+A master moves an output's events to another class with an assign-class request that
+names group 10 or group 40, and turns them off by assigning class 0. Assigning the paired
+input moves only the input. An assignment that names group 12 or group 41 is accepted and
+changes nothing, because it assigns the command events, which are not generated. An
+output given a class again reports only the changes after the request. A restart returns
+each output to the class it started in. `outstation.event_class(Kind.BO, index)` returns the
+class in force.
+
 Every change is kept, and a full class drops its oldest event and sets the overflow
 indication, as for the inputs. A class poll returns the events in the order they
 happened, binary and analog outputs among the inputs, with time. A master can also read
 them by group, as variation 0, or in variations 1 and 2 of group 11 and 1 to 5 and 7 of
-group 42. Floating-point values are in engineering units, as in an analog output command.
+group 42. A class poll and a variation 0 read return group 11 variation 2 and group 42
+variation 3, a 32-bit integer with time; `analog_event_variation` chooses the variation of
+analog input events only. Floating-point values are in engineering units, as in an analog
+output command and the other floating-point objects; whether a value changed is decided on
+the integer form, as for analog inputs.
 
 The command event groups, 13 and 43, are read and answered with nothing: no outstation
 is required to generate them, and this one does not. A read of a variation these groups
 do not offer is answered as an unknown object.
 
-An output that reports events is also carried by a class 0 read, in group 10 and group 40,
-because a master learns the value an event changes from class 0. The other outputs are left
-out, as at the lower levels.
+An output that reports events is also carried by a class 0 read, in group 10 variation 2
+and group 40 variation 1, because a master learns the value an event changes from class 0.
+The other outputs are left out, as at the lower levels, and so is an output assigned to
+class 0.
 
 ## Memory on a small controller
 

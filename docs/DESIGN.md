@@ -1851,7 +1851,11 @@ outstation follows them.
   buffered earlier may be reported or deleted (8.26.1); they are reported. When the point is
   assigned a class again, its next change is measured from its value at that moment, so a
   change that happened while it reported nothing is not reported afterwards. Procedure steps
-  46 to 48 check this.
+  46 to 48 check this. An output is the exception to staying in class 0: TB2016-003b Table
+  12-49 note i does not require output status in class 0, and D115 carries it there only while
+  the output reports events.
+- *Outputs.* An output has one class, the class of its output events (D115), and only
+  groups 10 and 40 move it. Assigning its paired input does not.
 - *Counters.* A counter has one class, which its counter events (D124) and its frozen counter
   events both use. Assigning it through group 20 or group 21 moves both kinds of event, and
   class 0 stops both.
@@ -1884,8 +1888,9 @@ the answer is a null response whose `IIN2` says why a refusal happened.
   header with another qualifier and a group 60 variation that names no class.
 - A set that gives a class to a point that cannot report events leaves that point alone, so
   that "all" can be used without naming the points the tables keep static. A set that gives it
-  class 0 is always accepted. Outputs record the class they are given; they generate no
-  events yet.
+  class 0 is always accepted. An output's class is the class of its output events (D115). A
+  set through group 12 or 41 is checked the same way and changes no class, because it
+  assigns command events, which are not generated (D116).
 - Where sets overlap, the later one wins.
 
 **D112 -- Floating-point variations are Level 4 objects, and carry the value unscaled.**
@@ -1947,28 +1952,47 @@ comes from the event policy and is not read or written over DNP3. *Trade-off:* a
 writes deadbands writes them again after each restart, in return for an outstation that holds
 no state outside the process.
 
-**D115 -- At Level 4 an output reports an event when its status changes, in the class of
-its paired input, and class 0 carries the status of every output that reports.**
+**D115 -- At Level 4 an output reports an event when its status changes, starting in the
+class of its paired input, and class 0 carries the status of every output that reports.**
 Binary output events (g11) and analog output events (g42) are required of a Level 4
 outstation (TB2016-003b, Tables 12-13 and 12-41). `poll()` reads each output's status as a
 read of group 10 or 40 does and records a change of value or flags, whether a control, the
 device or a failing status reader caused it (IEEE 1815-2012, A.7.1.1). There is no
-deadband, and every change is kept, as for binary inputs. The tables give an output no
-event class, so it takes the class of the input paired with it, which reports the same
-change; an output whose paired input reports no events reports none, and an output with no
-paired input reports in class 3, as a frozen counter does where the tables are silent. The
-event policy does not name outputs. A class poll and a variation 0 read answer g11v2 and
-g42v3, with time, and a read by name takes any variation of Tables 12-13 and 12-41 except
-the double-precision ones. Floating-point variations carry engineering units, as an analog
-output command does. Table 12-49 note i has an outstation that leaves g10 and g40 out of
-class 0 leave their events out of classes 1 to 3, and A.7.1.1 allows an output event only
-for a point that class 0 reports. So at Level 4 class 0 carries g10v2 and g40v1 for each
-output that reports events, and no other output; Levels 2 and 3 and the default answer
-class 0 as before. The Device Profile lists the groups and each output's class.
-*Trade-off:* a mirrored status input reports the same change in the same class, so a
-master sees it twice, once as an input and once as an output. A class 0 read is larger. The
-absolute time of an event stamped before a master set the clock is sent as it is: g11 and
-g42 have no relative-time variation to say the clock was unset.
+deadband, and every change is kept, as for binary inputs; an analog output's change is judged
+on its integer form, as an analog input's is (D112).
+
+- *Class.* The tables give an output no event class, so it starts in the class of the input
+  paired with it, which reports the same change; an output whose paired input reports no
+  events starts with none, and an output with no paired input starts in class 3, as a frozen
+  counter does where the tables are silent. The event policy does not name outputs. The class
+  is held with the inputs' classes and follows D110. It is the output's own from then on:
+  IEEE 1815-2012 Table 4-12 gives an output status its own row, so an ASSIGN_CLASS naming
+  group 10 or 40 moves the output's events, and one naming the paired input moves the input's
+  only. A master that wants both moved names both. An assignment through group 12 or 41
+  sets the class of command events (Table 4-12), which are not generated (D116), so it is
+  accepted and moves nothing. TB2016-003b Tables 12-11 and 12-37 require ASSIGN_CLASS on
+  groups 10 and 40 at Level 4, so D111 already takes them.
+- *Class 0.* Table 12-49 note i has an outstation that leaves g10 and g40 out of class 0
+  leave their events out of classes 1 to 3, and A.7.1.1 allows an output event only for a
+  point that class 0 reports. So at Level 4 class 0 carries g10v2 and g40v1 for each output
+  that reports events, and no other output; Levels 2 and 3 and the default answer class 0 as
+  before. An output assigned to class 0 stops reporting events (4.4.14) and so leaves class
+  0 as well, unlike an input, whose static data is always in class 0 (D110). Given a class
+  again, it reports from its value at that moment, as an input does.
+- *Variations.* A class poll and a variation 0 read answer g11v2 and g42v3, with time.
+  g42v3 is an integer, as D112 keeps variation 0 and class 0 of the analog groups; the
+  session's `analog_event_variation` applies to analog inputs only. A read by name takes any
+  variation of Tables 12-13 and 12-41 that Level 4 lists: g11v1 and v2, and g42v1 to v5 and
+  v7. The double-precision g42v6 and v8 are not required at any level and are refused, as
+  the double-precision analog input variations are. Floating-point variations carry
+  engineering units, as an analog output command and D112 do; class 0 sends g40v1, and
+  g40v3 is answered when a read names it (D112).
+
+The Device Profile lists the groups and each output's class.
+*Trade-off:* a mirrored status input reports the same change in the same class until one of
+the two is reassigned, so a master sees it twice, once as an input and once as an output. A
+class 0 read is larger. The absolute time of an event stamped before a master set the clock
+is sent as it is: g11 and g42 have no relative-time variation to say the clock was unset.
 
 **D116 -- Command events are not generated, and a read of g13 or g43 is answered with a
 null response.** Table 12-17 note a and Table 12-43 note a make generating g13 and g43

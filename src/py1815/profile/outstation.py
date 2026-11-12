@@ -182,6 +182,12 @@ _ASSIGNABLE_GROUPS = {
     GROUP_ANALOG_OUTPUT_COMMAND: (GROUP_ANALOG_OUTPUT_STATUS, SubsetLevel.LEVEL_4),
 }
 
+#: The command groups. An assignment through one of them sets the class of the
+#: output's command events (IEEE 1815-2012 Table 4-12: group 12 for group 13,
+#: group 41 for group 43), not of its output events. No command events are
+#: generated (D116), so the points are checked and no class changes.
+_COMMAND_EVENT_ASSIGNMENTS = frozenset({GROUP_BINARY_OUTPUT_COMMAND, GROUP_ANALOG_OUTPUT_COMMAND})
+
 #: The groups a class 0 read is answered with, in the order they are sent.
 _CLASS_0_GROUPS = (GROUP_BINARY_INPUT, GROUP_COUNTER, GROUP_FROZEN_COUNTER, GROUP_ANALOG_INPUT)
 
@@ -389,7 +395,8 @@ class DerOutstation:
             event_policy = EventPolicy.from_mapping(event_policy)
         #: The event class each input reports in, and 0 for one that reports
         #: none. For a counter it is the class its freezes are logged in, and
-        #: from Level 3 the class of its counter events as well.
+        #: from Level 3 the class of its counter events as well. From Level 4
+        #: it holds each output's class too (D115).
         self._classes: dict[Address, int] = {}
         #: Each event-reporting analog input's deadband, in transmitted units.
         #: One absent from here reports every change of its transmitted value.
@@ -567,6 +574,10 @@ class DerOutstation:
         change and a master polling one class hears of both together; an output
         whose paired input reports no events reports none. An output with
         neither is given the class a frozen counter defaults to.
+
+        This is only the starting class. From then on the output's class is its
+        own: an ASSIGN_CLASS naming group 10 or 40 changes it, and one naming
+        the paired input does not (IEEE 1815-2012 Table 4-12).
         """
         for kind in (Kind.BO, Kind.AO):
             for point in self._served[kind]:
@@ -708,7 +719,8 @@ class DerOutstation:
 
         What is in force, after the event policy and the tables have both had
         their say. For a counter it is the class its freezes are logged in,
-        and from Level 3 the class of its counter events as well.
+        and from Level 3 the class of its counter events as well. For an
+        output it is the class of its output events, which only Level 4 reports.
         """
         return self._classes.get(self._map.point(kind, index).address, 0)
 
@@ -1300,7 +1312,10 @@ class DerOutstation:
         chosen: dict[Address, int] = {}
         for assignment in assignments:
             for header in assignment.headers:
-                for point in self._assignable(header):
+                points = self._assignable(header)
+                if header.group in _COMMAND_EVENT_ASSIGNMENTS:
+                    continue
+                for point in points:
                     if assignment.event_class and not self._can_report(point):
                         continue
                     chosen[point.address] = assignment.event_class
@@ -1366,6 +1381,14 @@ class DerOutstation:
                     self._deadbands[point.index] = _transmitted(point, default.deadband)
         elif point.kind is Kind.CTR and self.at_least(SubsetLevel.LEVEL_3):
             self.events.prime_counter(point.index, self._counter(point))
+        elif point.kind is Kind.BO:
+            self.events.prime_binary_output(
+                point.index, self._binary_of(self._standing(point.address))
+            )
+        elif point.kind is Kind.AO:
+            self.events.prime_analog_output(
+                point.index, self._analog_of(point, self._standing(point.address))
+            )
 
     # -------------------------------------------------------------- freezes
 

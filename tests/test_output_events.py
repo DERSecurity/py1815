@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 from ied_harness import (
+    ASSIGN_CLASS,
     DIRECT_OPERATE,
     IIN1_CLASS_1,
     IIN1_CLASS_2,
@@ -391,6 +392,96 @@ class TestTheClassAnOutputReportsIn:
         )
         assert outstation.event_class(Kind.BO, 0) == 0
         assert outstation.event_class(Kind.AO, 0) == 0
+
+
+def _assigned(master: TestMaster, body: str) -> None:
+    """Send an ASSIGN_CLASS request written as hexadecimal octets; expect a null response."""
+    fragment = master.request(ASSIGN_CLASS, _bytes(body)).fragment
+    assert fragment.is_null and not fragment.iin2, f"IIN2 0x{fragment.iin2:02X}"
+
+
+class TestAssigningAnOutputsClass:
+    """The output's class is the one ASSIGN_CLASS uses (D110, D115, IEEE 1815-2012 Table 4-12)."""
+
+    def test_assigning_group_10_moves_the_binary_output_events(self):
+        dut = Dut(level=4)
+        # Class 1 (g60v2), then g10v0 with a start-stop range of index 1.
+        _assigned(dut.master, "3C 02 06  0A 00 00 01 01")
+        _switch(dut, 1)
+        assert dut.master.read(classes(3)).fragment.is_null
+        assert dut.master.read(classes(1)).fragment.body == _bytes(f"0B 02 17 01 01 81 {STAMP}")
+
+    def test_assigning_group_40_moves_the_analog_output_events(self):
+        dut = Dut(level=4)
+        # Class 2 (g60v3), then g40v0 with a start-stop range of index 2.
+        _assigned(dut.master, "3C 03 06  28 00 00 02 02")
+        _setpoint(dut, 2, 1234)
+        assert dut.master.read(classes(3)).fragment.is_null
+        assert dut.master.read(classes(2)).fragment.body == _bytes(
+            f"2A 03 17 01 02 01 D2 04 00 00 {STAMP}"
+        )
+
+    @pytest.mark.parametrize("group", [0x0C, 0x29])
+    def test_a_command_group_assignment_leaves_the_output_events_where_they_are(self, group):
+        # Group 12 and group 41 assign the command events (groups 13 and 43),
+        # which are not generated.
+        dut = Dut(level=4)
+        _assigned(dut.master, f"3C 02 06  {group:02X} 00 06")
+        assert dut.outstation.event_class(Kind.BO, 1) == 3
+        assert dut.outstation.event_class(Kind.AO, 2) == 3
+        _switch(dut, 1)
+        assert dut.master.read(classes(1)).fragment.is_null
+        assert dut.master.read(classes(3)).fragment.body == _bytes(f"0B 02 17 01 01 81 {STAMP}")
+
+    def test_a_command_group_naming_a_missing_output_is_a_parameter_error(self):
+        dut = Dut(level=4)
+        fragment = dut.master.request(ASSIGN_CLASS, _bytes("3C 02 06  0C 00 00 09 09")).fragment
+        assert fragment.iin2 & IIN2_PARAMETER
+
+    def test_an_output_assigned_to_class_0_raises_no_events_and_leaves_class_0(self):
+        dut = Dut(level=4)
+        # Events off (g60v1) for binary output 1 and analog output 2.
+        _assigned(dut.master, "3C 01 06  0A 00 00 01 01  28 00 00 02 02")
+        _switch(dut, 1)
+        _setpoint(dut, 2, 1234)
+        assert dut.master.read(classes(1, 2, 3)).fragment.is_null
+        body = dut.master.read(classes(0)).fragment.body
+        # g10v2 for outputs 0 and then 2 to 3, all off, without output 1.
+        assert _bytes("0A 02 00 00 00  01  0A 02 00 02 03  01 01") in body
+        # g40v1 for outputs 0 and 1, then 3, all 0, without output 2.
+        assert body.endswith(
+            _bytes("28 01 00 00 01  01 00 00 00 00  01 00 00 00 00  28 01 00 03 03  01 00 00 00 00")
+        )
+
+    def test_an_output_given_a_class_again_reports_only_later_changes(self):
+        dut = Dut(level=4)
+        _assigned(dut.master, "3C 01 06  0A 00 00 01 01  28 00 00 02 02")
+        _switch(dut, 1)
+        _setpoint(dut, 2, 5)
+        _assigned(dut.master, "3C 04 06  0A 00 00 01 01  28 00 00 02 02")
+        assert dut.master.read(classes(1, 2, 3)).fragment.is_null
+        _switch(dut, 1, on=False)
+        _setpoint(dut, 2, 6)
+        assert _events(dut) == _bytes(
+            f"0B 02 17 01 01 01 {STAMP}  2A 03 17 01 02 01 06 00 00 00 {STAMP}"
+        )
+
+    def test_assigning_the_paired_input_leaves_the_output_in_its_own_class(self):
+        plant = Plant()
+        outstation, master = _outstation(_tables(binary_pair_class=2, analog_pair_class=2), plant)
+        # Class 1 for binary input 0 and analog input 0, the outputs' pairs.
+        _assigned(master, "3C 02 06  01 00 00 00 00  1E 00 00 00 00")
+        assert outstation.event_class(Kind.BI, 0) == outstation.event_class(Kind.AI, 0) == 1
+        assert outstation.event_class(Kind.BO, 0) == outstation.event_class(Kind.AO, 0) == 2
+        plant.relay = Reading(True)
+        outstation.poll()
+        assert master.read(classes(2)).fragment.body == _bytes(f"0B 02 17 01 00 81 {STAMP}")
+
+    def test_a_restart_returns_an_output_to_its_starting_class(self):
+        dut = Dut(level=4)
+        _assigned(dut.master, "3C 02 06  0A 00 00 01 01")
+        dut.outstation.reset_classes()
+        assert dut.outstation.event_class(Kind.BO, 1) == 3
 
 
 class TestChangesTheDeviceMakesItself:

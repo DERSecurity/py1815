@@ -131,7 +131,11 @@ def requested() -> set[Key]:
     for widened in _widened():
         for group, answers in widened.items():
             found.update((group, variation) for variation in answers)
-    for event_table in (session._EVENT_VARIATIONS, session._EXTENDED_EVENT_VARIATIONS):
+    for event_table in (
+        session._EVENT_VARIATIONS,
+        session._EXTENDED_EVENT_VARIATIONS,
+        session._OUTPUT_EVENT_VARIATIONS,
+    ):
         for group, named in event_table.items():
             found.update((group, variation) for variation in named if variation)
     for group, answers in session._WIDENED_EVENT_VARIATIONS.items():

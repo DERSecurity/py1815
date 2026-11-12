@@ -272,6 +272,15 @@ def test_the_report_follows_the_session_event_tables(monkeypatch: pytest.MonkeyP
     assert not _row(23, 2).requested
 
 
+def test_the_output_event_reads_are_accepted() -> None:
+    # Group 11 and 42 events are reported; group 13 and 43 reads are answered
+    # with nothing, because command events are not generated (D116).
+    for group, variation in ((11, 1), (42, 5)):
+        assert (_row(group, variation).served, _row(group, variation).requested) == (True, True)
+    assert (_row(13, 1).served, _row(13, 1).requested) == (False, True)
+    assert not _row(42, 6).requested
+
+
 def test_a_class_object_is_accepted_in_a_request_and_never_served() -> None:
     row = _row(60, 2)
     assert (row.served, row.requested, row.parsed) == (False, True, False)
