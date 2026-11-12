@@ -14,7 +14,7 @@ from enum import IntEnum
 
 import pytest
 
-from py1815 import catalog, control, decode, object_coverage, objects, session
+from py1815 import attributes, catalog, control, decode, object_coverage, objects, session
 from py1815.application import CLASS_GROUP
 from py1815.catalog import ALL, ObjectKind, SizeKind
 from py1815.profile import xlsx
@@ -66,6 +66,8 @@ def test_no_two_variations_share_a_name_within_a_group() -> None:
 
 #: The group constants the library declares, with the name Annex A gives the group.
 GROUP_CONSTANTS = {
+    (attributes, "GROUP_DEVICE_ATTRIBUTES"): (0, "device attributes"),
+    (decode, "GROUP_DEVICE_ATTRIBUTES"): (0, "device attributes"),
     (objects, "GROUP_BINARY_INPUT"): (1, "binary inputs"),
     (objects, "GROUP_BINARY_INPUT_EVENT"): (2, "binary input events"),
     (objects, "GROUP_DOUBLE_BIT_INPUT"): (3, "double-bit binary inputs"),
@@ -113,8 +115,9 @@ def test_the_class_group_is_the_class_objects_group() -> None:
         (objects, set(GROUP_CONSTANTS)),
         (control, set(GROUP_CONSTANTS)),
         (decode, set(GROUP_CONSTANTS)),
+        (attributes, set(GROUP_CONSTANTS)),
     ],
-    ids=["objects", "control", "decode"],
+    ids=["objects", "control", "decode", "attributes"],
 )
 def test_every_group_constant_in_a_module_is_checked_here(module: object, wanted: set) -> None:
     """A new ``GROUP_*`` constant fails until it is added to the table above."""
