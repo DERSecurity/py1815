@@ -13,7 +13,8 @@ Section numbers are how this suite refers to them; the descriptions are ours.
 
 The device is tested as a subset level 2 outstation over TCP, and at level 3
 for the sections that level requires: unsolicited responses, frozen counter and
-counter events, point ranges, specific variations and class assignment.
+counter events, point ranges, specific variations and class assignment, and at
+level 4 for the output events of section 10.
 """
 
 from __future__ import annotations
@@ -189,8 +190,12 @@ TESTED: dict[str, Tested] = {
     "9.5.1.1 port 20000": ("9_5_1_1_",),
     "9.5.1.2 port other than 20000": ("9_5_1_2_",),
     "9.5.1.5 UDP unicast broadcast while using TCP": ("9_5_1_5_",),
-    # 10: output events
-    "10 output control events, not offered": ("10_",),
+    # 10: output events, which Level 4 offers (D115)
+    "10 output control events, not offered below Level 4": ("10_output_event_groups",),
+    "10.3.2 binary output status in class 0": ("10_3_2_",),
+    "10.3.3 binary output status events": ("10_3_3_",),
+    "10.4.2 analog output status in class 0": ("10_4_2_",),
+    "10.4.3 analog output status events": ("10_4_3_",),
 }
 
 #: Sections that do not apply, and why. Each reason is a fact about this
@@ -229,7 +234,7 @@ NOT_APPLICABLE: dict[str, str] = {
         "UDP is not offered as a main communication method, so unsolicited responses go over "
         "TCP only"
     ),
-    "10.3 and 10.4 output events": "output events are not supported, which needs no disabling",
+    "10.3.4 and 10.4.4 command events": "command events are not generated (D116)",
 }
 
 
@@ -253,7 +258,7 @@ def _test_names() -> dict[str, str]:
 
 
 def test_10_output_event_groups_are_refused():
-    """Output events are not offered, so nothing about them needs to be disabled."""
+    """Output events are not offered below Level 4, so nothing about them needs disabling."""
     dut = Dut()
     for group in (11, 13, 42, 43):
         fragment = dut.master.read(header(group, 0)).fragment
