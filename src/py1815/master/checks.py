@@ -34,9 +34,13 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
+from py1815.application import FunctionCode, IIN2Bit
+from py1815.attributes import DataType
 from py1815.control import CommandStatus
 from py1815.decode import DecodedObject, PointType
+from py1815.master import requests
 from py1815.master.association import Exchange
 from py1815.master.bench import (
     POLL_SECONDS,
@@ -50,6 +54,7 @@ from py1815.master.bench import (
 from py1815.master.profile import POINT_TYPES, Function, Plan, address
 from py1815.profile import curves, der
 from py1815.profile.model import Kind, Point
+from py1815.subset import SubsetLevel
 
 # The points the function procedures name outright. IEEE 1815.2 clause 5.2
 # gives these blocks fixed indices.
@@ -1248,6 +1253,303 @@ DEVIATION_CHECKS: tuple[Check, ...] = (
 )
 
 
+# ------------------------------------------------------- subset level checks
+
+#: The set of the checks of what an outstation of a subset level answers.
+SUBSET = "subset"
+
+#: Indications that say the outstation did not take a request: it does not
+#: support the function, does not know the object, or refused the parameters.
+_NOT_TAKEN = (IIN2Bit.FUNC_NOT_SUPPORTED, IIN2Bit.OBJECT_UNKNOWN, IIN2Bit.PARAM_ERROR)
+
+#: What each point type a check reads is, by profile kind: its group and the
+#: variation a Level 3 outstation is read in by name. The first kind the
+#: outstation serves is the one read.
+_BY_VARIATION = ((Kind.AI, 30, 1), (Kind.BI, 1, 2), (Kind.CTR, 20, 1))
+
+
+def _body(exchange: Exchange) -> bytes:
+    """Return the object headers and objects of every fragment of a response."""
+    return b"".join(fragment.body for fragment in exchange.fragments)
+
+
+def _taken(exchange: Exchange, what: str) -> None:
+    """Fail the check when the outstation's indications say it did not take a request."""
+    iin = exchange.iin
+    assert iin is not None, "an exchange that was answered has indications"
+    refused = [bit.name for bit in _NOT_TAKEN if iin.is_set(bit)]
+    if refused:
+        raise Failed(f"the outstation answered {what} with {' and '.join(refused)}")
+
+
+def _first_served(bench: Bench) -> tuple[int, int, int]:
+    """Return the group, the variation and the index of the point a read by variation uses."""
+    for kind, group, variation in _BY_VARIATION:
+        indices = sorted(index for served, index in bench.served if served is kind)
+        if indices:
+            return group, variation, indices[0]
+    raise NotApplicable("the outstation serves no analog input, binary input or counter")
+
+
+def read_by_variation(bench: Bench) -> Plan[None]:
+    """Check that a group is read by a named variation (TB2016-003b table 12-27 and others)."""
+    group, variation, index = _first_served(bench)
+    what = f"a read of group {group} variation {variation}"
+    exchange = yield from bench.ask(lambda target: target.read_group(group, variation), what)
+    _taken(exchange, what)
+    found = {each.index for each in exchange.objects if each.group == group and not each.event}
+    bench.require(index in found, f"the response to {what} did not carry point {index}")
+
+
+def read_by_range(bench: Bench) -> Plan[None]:
+    """Check that a read by start and stop returns the points of the range and no others."""
+    group, _, index = _first_served(bench)
+    what = f"a read of group {group} for point {index} alone"
+    exchange = yield from bench.ask(
+        lambda target: target.read_group(group, start=index, stop=index), what
+    )
+    _taken(exchange, what)
+    found = sorted({each.index or 0 for each in exchange.objects if each.group == group})
+    bench.require(found == [index], f"the response to {what} carried points {found}")
+
+
+def read_time(bench: Bench) -> Plan[None]:
+    """Check that the time is read as one group 50 variation 1 object."""
+    exchange = yield from bench.ask(lambda target: target.read_time(), "a read of the time")
+    _taken(exchange, "a read of the time")
+    body = _body(exchange)
+    bench.require(
+        body[:4] == bytes([50, 1, 7, 1]) and len(body) == 10,
+        f"the response to a read of the time was {body.hex()}, not one object of group 50 "
+        "variation 1 with a 6-octet time",
+    )
+
+
+def read_indications(bench: Bench) -> Plan[None]:
+    """Check that the internal indications are read as 16 bits of group 80 variation 1."""
+    what = "a read of the internal indications"
+    exchange = yield from bench.ask(lambda target: target.read_indications(), what)
+    _taken(exchange, what)
+    body = _body(exchange)
+    bench.require(
+        body[:5] == bytes([80, 1, 0, 0, 15]) and len(body) == 7,
+        f"the response to {what} was {body.hex()}, not the range 0 to 15 of group 80 "
+        "variation 1 and two octets of bits",
+    )
+
+
+def assign_class(bench: Bench) -> Plan[None]:
+    """Check that an assignment of events to a class is taken, and answered with no objects.
+
+    The point is assigned the class the profile tables give it, so an
+    outstation left as the tables describe it is left as it was.
+    """
+    for index in sorted(index for kind, index in bench.served if kind is Kind.AI):
+        event_class = bench.map.point(Kind.AI, index).event_class
+        if event_class in (1, 2, 3):
+            break
+    else:
+        raise NotApplicable("the outstation serves no analog input that the tables give a class")
+    what = f"an assignment of AI{index} to class {event_class}"
+    exchange = yield from bench.ask(
+        lambda target: target.assign_class(event_class, analog_inputs=[index]), what
+    )
+    _taken(exchange, what)
+    bench.require(not _body(exchange), f"the response to {what} carried objects")
+
+
+def _decoded(exchange: Exchange, what: str) -> tuple[DecodedObject, ...]:
+    """Return the objects of a response, and fail the check when any could not be read."""
+    if exchange.undecoded:
+        problem = exchange.undecoded[0].problem
+        raise Failed(f"the response to {what} could not be read: {problem}")
+    return exchange.objects
+
+
+def _attributes(exchange: Exchange, what: str) -> tuple[DecodedObject, ...]:
+    """Return the device attributes of a response, and fail on anything else in it."""
+    found = _decoded(exchange, what)
+    for each in found:
+        if each.attribute is None:
+            raise Failed(f"the response to {what} carried group {each.group}, not an attribute")
+    return found
+
+
+def attributes_all(bench: Bench) -> Plan[None]:
+    """Check that variation 254 returns every attribute, and never itself or the list."""
+    what = "a read of every device attribute"
+    exchange = yield from bench.ask(lambda target: target.read_attributes(), what)
+    _taken(exchange, what)
+    found = _attributes(exchange, what)
+    bench.require(found, f"the response to {what} carried no attributes")
+    named = sorted({each.variation for each in found} & {254, 255})
+    bench.require(not named, f"the response to {what} carried variation {named[0] if named else 0}")
+    bench.note(f"{len(found)} attributes were returned")
+
+
+def _attribute_read(variation: int) -> Callable[[Any], Any]:
+    """Return the request that reads one attribute of the master it is given."""
+    return lambda target: target.read_attributes(variation)
+
+
+def attribute_list(bench: Bench) -> Plan[None]:
+    """Check that variation 255 lists the attributes, and that each listed is read by name.
+
+    The list is a series of variation and properties pairs. Each variation it
+    names is read in turn, and the outstation is to return that attribute.
+    """
+    what = "a read of the list of device attributes"
+    exchange = yield from bench.ask(lambda target: target.read_attributes(255), what)
+    _taken(exchange, what)
+    listed = [each for each in _attributes(exchange, what) if each.variation == 255]
+    bench.require(listed, f"the response to {what} carried no list")
+    listing = listed[0].attribute
+    assert listing is not None, "an attribute read from a response keeps its data type"
+    pairs = listing.value
+    bench.require(
+        listing.code in (DataType.U8BS8LIST, DataType.U8BS8EXLIST) and isinstance(pairs, tuple),
+        f"the list has data type {listing.code} and {len(listing.data)} octets, "
+        "not pairs of octets",
+    )
+    assert isinstance(pairs, tuple)
+    variations = [pair[0] for pair in pairs if pair[0] not in (254, 255)]
+    bench.note(f"{len(variations)} attributes are listed")
+    for variation in variations:
+        looked = f"a read of attribute {variation}"
+        one = yield from bench.ask(_attribute_read(variation), looked)
+        _taken(one, looked)
+        bench.require(
+            [each.variation for each in _attributes(one, looked)] == [variation],
+            f"the response to {looked}, which the list names, did not carry it",
+        )
+
+
+def reads_taken(
+    groups: Sequence[int], what: str, needs: tuple[Kind, str] | None = None
+) -> Callable[[Bench], Plan[None]]:
+    """Return the check that one read of every object of some groups is taken.
+
+    The response may be empty, since an outstation may hold no event. What
+    it carries has to be objects of the groups asked for. With ``needs``, a
+    kind of point and its name, the check applies only to an outstation that
+    serves a point of that kind.
+    """
+    body = b"".join(requests.read_group(group) for group in groups)
+
+    def procedure(bench: Bench) -> Plan[None]:
+        if needs is not None and not any(served is needs[0] for served, _ in bench.served):
+            raise NotApplicable(f"the outstation serves no {needs[1]}")
+        exchange = yield from bench.ask(
+            lambda target: target.request(FunctionCode.READ, body), what
+        )
+        _taken(exchange, what)
+        other = sorted({each.group for each in _decoded(exchange, what)} - set(groups))
+        bench.require(not other, f"the response to {what} carried group {other[0] if other else 0}")
+
+    return procedure
+
+
+def deadbands(bench: Bench) -> Plan[None]:
+    """Check that the analog input deadbands are read, and that what is returned is group 34."""
+    if not any(kind is Kind.AI for kind, _ in bench.served):
+        raise NotApplicable("the outstation serves no analog input")
+    what = "a read of the analog input deadbands"
+    exchange = yield from bench.ask(lambda target: target.read_deadbands(), what)
+    _taken(exchange, what)
+    other = sorted({each.group for each in _decoded(exchange, what)} - {requests.DEADBAND_GROUP})
+    bench.require(not other, f"the response to {what} carried group {other[0] if other else 0}")
+
+
+SUBSET_CHECKS: tuple[Check, ...] = (
+    Check(
+        "LEVEL3-001",
+        "A group is read by a named variation",
+        False,
+        read_by_variation,
+        SUBSET,
+        level=SubsetLevel.LEVEL_3,
+    ),
+    Check(
+        "LEVEL3-002",
+        "A group is read by a range of points",
+        False,
+        read_by_range,
+        SUBSET,
+        level=SubsetLevel.LEVEL_3,
+    ),
+    Check(
+        "LEVEL3-003",
+        "The time is read",
+        False,
+        read_time,
+        SUBSET,
+        level=SubsetLevel.LEVEL_3,
+    ),
+    Check(
+        "LEVEL3-004",
+        "The internal indications are read",
+        False,
+        read_indications,
+        SUBSET,
+        level=SubsetLevel.LEVEL_3,
+    ),
+    Check(
+        "LEVEL3-005",
+        "Events are assigned to a class",
+        True,
+        assign_class,
+        SUBSET,
+        level=SubsetLevel.LEVEL_3,
+    ),
+    Check(
+        "LEVEL4-001",
+        "Every device attribute is read in one request",
+        False,
+        attributes_all,
+        SUBSET,
+        level=SubsetLevel.LEVEL_4,
+    ),
+    Check(
+        "LEVEL4-002",
+        "The list of device attributes names attributes that can be read",
+        False,
+        attribute_list,
+        SUBSET,
+        level=SubsetLevel.LEVEL_4,
+    ),
+    Check(
+        "LEVEL4-003",
+        "Analog input deadbands are read",
+        False,
+        deadbands,
+        SUBSET,
+        level=SubsetLevel.LEVEL_4,
+    ),
+    Check(
+        "LEVEL4-004",
+        "Double-bit inputs and their events are read",
+        False,
+        reads_taken(
+            (3, 4),
+            "a read of double-bit inputs and their events",
+            (Kind.DBI, "double-bit input"),
+        ),
+        SUBSET,
+        level=SubsetLevel.LEVEL_4,
+    ),
+    Check(
+        "LEVEL4-005",
+        "Output events and command events are read",
+        False,
+        reads_taken(
+            (11, 13, 42, 43), "a read of binary and analog output events and command events"
+        ),
+        SUBSET,
+        level=SubsetLevel.LEVEL_4,
+    ),
+)
+
+
 # ----------------------------------------------------------------- the catalog
 
 CATALOG: tuple[Check, ...] = (
@@ -1285,6 +1587,7 @@ CATALOG: tuple[Check, ...] = (
         Check(identifier, f"The function enabled by BO{enable}", True, mode_check(enable))
         for identifier, enable in MODES.items()
     ),
+    *SUBSET_CHECKS,
     *DEVIATION_CHECKS,
 )
 
@@ -1311,6 +1614,8 @@ __all__ = [
     "DEVIATION_CHECKS",
     "MODES",
     "SAMPLE_CURVES",
+    "SUBSET",
+    "SUBSET_CHECKS",
     "Check",
     "SampleCurve",
     "events_kept",

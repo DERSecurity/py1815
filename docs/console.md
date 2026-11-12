@@ -129,7 +129,7 @@ given a profile.
 
 | Tab | Shows |
 |---|---|
-| **Overview** | Addresses, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, what the master does for the outstation unasked, and every internal indication of the last response as a lamp |
+| **Overview** | Addresses, subset level, connection state, the scans being repeated, how the requests so far ended, how many points of each type have been reported, what the master does for the outstation unasked, and every internal indication of the last response as a lamp |
 | **Points** | A table for each point type |
 | **Commands** | Scans, reads, operating outputs, the time and the counters, unsolicited responses, any request by function code, and the result of each |
 | **Events** | Events as they arrive, newest first, and whether each was polled or sent unasked |
@@ -194,8 +194,10 @@ and the values are listed one to a line:
 |---|---|
 | **Scan** | An integrity poll, an event poll, one class, or output status. **Repeat** sets how often each is made unasked, and an empty field stops it |
 | **Read points** | One point type, by a list of indices or `all`. An outstation set to Level 2 is asked for every point of the type, and the result shows the points named |
+| **Read by variation or range** | One group in one variation, by a range of points as `4-8`, a list as `4, 6, 8` or every object. **Other reads** read the time, the internal indications, every device attribute, the list of them and the analog input deadbands. See [Subset levels](#subset-levels) |
 | **Operate outputs** | Commands one binary or analog output. See [Commanding](#commanding) |
 | **Clock, restart and counters** | Writes the time, clears the restart indication, freezes the counters, or freezes and clears them |
+| **Event classes, deadbands and attributes** | With `--allow-control`: assigns the events of one point type to a class or turns them off, writes an analog input deadband, or writes a device attribute. See [Subset levels](#subset-levels) |
 | **Unsolicited responses** | Asks the outstation to report the classes ticked without being polled, or to stop |
 | **Request by function code** | Any request: a function, and the object headers after it in hexadecimal |
 
@@ -203,6 +205,27 @@ Each shows its result: the request, how it ended, how many fragments and
 objects came back, the indications, how long it took, and the objects. An
 outstation that does not answer is shown as a timeout, and one that refuses
 shows the indication it refused with.
+
+### Subset levels
+
+Each outstation has a subset level, 2, 3 or 4, which is chosen in **Subset level** when the
+outstation is added and shown on the Overview tab. It is 2 unless chosen. The console sends
+no request above it: the service refuses it, and the card shows the refusal and what level
+the request needs. A line above the cards of the Commands tab says what the selected
+outstation's level allows. See [Subset levels](master.md#subset-levels) for which request
+needs which level.
+
+| Card | Needs |
+|---|---|
+| **Read by variation or range** | Level 3 for a variation other than 0, or for a range, in a static group. Level 4 for a list of indices, and for groups that only Level 4 defines |
+| **Other reads** | Level 3 for the time and the internal indications. Level 4 for device attributes and deadbands |
+| **Event classes, deadbands and attributes** | Level 3 to assign the events of binary inputs, counters, frozen counters and analog inputs. Level 4 for double-bit inputs, output status, deadbands and attributes |
+
+The forms of **Event classes, deadbands and attributes** change the outstation, so
+they are off unless the console was started with `--allow-control`. A deadband is sent as a
+16-bit or 32-bit integer, in counts, or as a single-precision float. The attributes that can
+be written are the device name, the ID code or number, the location name and the maximum
+transmit fragment size. Each request is sent once.
 
 ### Commanding
 

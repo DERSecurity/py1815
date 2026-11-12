@@ -32,6 +32,13 @@
         <label>Port <input name="port" type="number" min="1" max="65535" value="20000"></label>
         <label>Outstation address <input name="outstation_address" type="number" min="0" max="65519" value="1024"></label>
         <label>Master address <input name="master_address" type="number" min="0" max="65519" value="1"></label>
+        <label title="The DNP3 subset level of the outstation. The console sends no request above it.">Subset level
+          <select name="level">
+            <option value="2" selected>Level 2</option>
+            <option value="3">Level 3</option>
+            <option value="4">Level 4</option>
+          </select>
+        </label>
         <label>Integrity poll every (s) <input name="integrity_interval" type="number" min="1" step="any" placeholder="off"></label>
         <label>Event poll every (s) <input name="event_interval" type="number" min="0.2" step="any" placeholder="off"></label>
         <label>Output status every (s) <input name="output_interval" type="number" min="1" step="any" placeholder="with the integrity poll"></label>
@@ -154,6 +161,25 @@
             </form>
           </div>
 
+          <div class="card" id="group-card">
+            <h3>Read by variation or range</h3>
+            <p id="level-hint" class="hint"></p>
+            <form id="group-form" class="stack">
+              <label>Group <input name="group" type="number" min="0" max="255" step="1" value="30" required></label>
+              <label>Variation <input name="variation" type="number" min="0" max="255" step="1" value="0" title="0 is whichever variation the outstation sends by default"></label>
+              <label>Points <input name="points" placeholder="all, a range as 4-8, or a list as 4, 6, 8"></label>
+              <button type="submit">Read</button>
+            </form>
+            <h4>Other reads</h4>
+            <div class="buttons" id="level-reads">
+              <button data-read="read_time">The time</button>
+              <button data-read="read_indications">Internal indications</button>
+              <button data-read="attributes_all">All device attributes</button>
+              <button data-read="attributes_list">List of device attributes</button>
+              <button data-read="deadbands">Analog input deadbands</button>
+            </div>
+          </div>
+
           <div class="card" id="operate-card">
             <h3>Operate outputs</h3>
             <p id="control-off" class="hint">Commanding is off. Start the console with <span class="mono">--allow-control</span> to operate outputs.</p>
@@ -207,6 +233,63 @@
               <button data-write="freeze" disabled>Freeze counters</button>
               <button data-write="freeze_clear" disabled>Freeze and clear counters</button>
             </div>
+          </div>
+
+          <div class="card" id="configure-card">
+            <h3>Event classes, deadbands and attributes</h3>
+            <p id="configure-off" class="hint">Commanding is off. Start the console with <span class="mono">--allow-control</span> to change these.</p>
+            <fieldset id="configure-fields" class="stack" disabled>
+              <form id="assign-form" class="stack">
+                <h4>Assign events to a class</h4>
+                <label>Point type
+                  <select name="type">
+                    <option value="bi">Binary inputs (group 1)</option>
+                    <option value="dbi">Double-bit inputs (group 3)</option>
+                    <option value="counter">Counters (group 20)</option>
+                    <option value="frozen">Frozen counters (group 21)</option>
+                    <option value="ai" selected>Analog inputs (group 30)</option>
+                    <option value="bo">Binary output status (group 10)</option>
+                    <option value="ao">Analog output status (group 40)</option>
+                  </select>
+                </label>
+                <label>Indices <input name="indices" placeholder="all, or 4, 6, 8"></label>
+                <label>Events go to
+                  <select name="event_class">
+                    <option value="1">Class 1</option>
+                    <option value="2">Class 2</option>
+                    <option value="3">Class 3</option>
+                    <option value="0">No class: events off</option>
+                  </select>
+                </label>
+                <button type="submit">Assign</button>
+              </form>
+              <form id="deadband-form" class="stack">
+                <h4>Write an analog input deadband</h4>
+                <label>Index <input name="index" type="number" min="0" max="65535" step="1" required></label>
+                <label>Value <input name="value" type="number" min="0" step="any" required></label>
+                <label>Sent as
+                  <select name="variation">
+                    <option value="1">16-bit integer (variation 1)</option>
+                    <option value="2">32-bit integer (variation 2)</option>
+                    <option value="3">Single-precision float (variation 3)</option>
+                  </select>
+                </label>
+                <button type="submit">Write</button>
+              </form>
+              <form id="attribute-form" class="stack">
+                <h4>Write a device attribute</h4>
+                <label>Attribute
+                  <select name="variation">
+                    <option value="247">Device name (247)</option>
+                    <option value="246">ID code or number (246)</option>
+                    <option value="245">Location name (245)</option>
+                    <option value="240">Maximum transmit fragment size (240)</option>
+                  </select>
+                </label>
+                <label>Value <input name="value" required></label>
+                <button type="submit">Write</button>
+              </form>
+            </fieldset>
           </div>
 
           <div class="card">

@@ -452,6 +452,7 @@ def describe_check(check: Check) -> dict[str, Any]:
         "set": check.group,
         "writes": check.commands,
         "deviates": check.deviates,
+        "level": int(check.level),
     }
 
 

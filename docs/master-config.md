@@ -138,7 +138,7 @@ These go in `defaults`, in an outstation's entry, or both.
 | `tls` | `null` | Connect over TLS with these files, or `null` for plain TCP. See [`tls`](#tls) |
 | `connect` | `true` | Connect when the master starts |
 | `reconnect` | `5` | Seconds between reconnection attempts after a lost connection. `null` disables reconnection |
-| `level` | `2` | The DNP3 subset level of the outstation: `2`, `3` or `4`. The master sends no request above it. See [Subset levels](master.md#subset-levels) |
+| `level` | `2` | The DNP3 subset level of the outstation: `2`, `3` or `4`. The master sends no request above it, and an evaluation reports the checks of a higher level as not applicable. See [Subset levels](master.md#subset-levels) |
 | `confirm` | `true` | Confirm response fragments that ask for confirmation |
 | `manual` | `false` | Send only what is asked for. Disables every task and confirmation, whatever `tasks` and `confirm` say |
 | `profile` | `false` | The outstation is an IEEE 1815.2 DER: name its points from the profile tables, and offer the [DER profile's operations](master-api.md#the-der-profile) |

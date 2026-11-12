@@ -505,8 +505,13 @@ SCHEMAS: dict[str, Schema] = {
                 "type": "boolean",
                 "description": "Whether the check has the master break a protocol rule.",
             },
+            "level": {
+                **_LEVEL,
+                "description": "The lowest subset level the outstation has to be set to for "
+                "the check to apply. Below it the check is not applicable.",
+            },
         },
-        required=["id", "title", "set", "writes", "deviates"],
+        required=["id", "title", "set", "writes", "deviates", "level"],
         description="One check `evaluate` can run.",
     ),
     "CheckResult": _object(

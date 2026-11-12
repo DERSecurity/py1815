@@ -7646,6 +7646,15 @@
           "deviates": {
             "type": "boolean",
             "description": "Whether the check has the master break a protocol rule."
+          },
+          "level": {
+            "type": "integer",
+            "enum": [
+              2,
+              3,
+              4
+            ],
+            "description": "The lowest subset level the outstation has to be set to for the check to apply. Below it the check is not applicable."
           }
         },
         "required": [
@@ -7653,7 +7662,8 @@
           "title",
           "set",
           "writes",
-          "deviates"
+          "deviates",
+          "level"
         ],
         "description": "One check `evaluate` can run."
       },

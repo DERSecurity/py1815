@@ -45,6 +45,7 @@ from py1815.master.profile import (
 )
 from py1815.objects import AnalogQuality
 from py1815.profile.model import Address, Kind, Point
+from py1815.subset import SubsetLevel
 
 T = TypeVar("T")
 
@@ -120,6 +121,9 @@ class Check:
     group: str = "der"
     #: Whether the check has the master break a protocol rule on purpose.
     deviates: bool = False
+    #: The lowest subset level the outstation has to be set to for the check
+    #: to apply. A check above the outstation's level is not applicable.
+    level: SubsetLevel = SubsetLevel.LEVEL_2
 
 
 @dataclass(frozen=True)
@@ -212,6 +216,9 @@ class Bench:
         self.device_profile = device_profile
         #: The points the outstation reported when the run began.
         self.served: frozenset[Address] = frozenset()
+        #: The subset level the master is set to for the outstation. Read from
+        #: the master when a run begins.
+        self.level = SubsetLevel.LEVEL_2
         #: A title for the check being run that says more than the catalog's.
         self.title: str | None = None
         self.requests = 0
@@ -529,6 +536,16 @@ class Bench:
         said = "a well-formed read" if reads == 1 else f"any of {reads} well-formed reads"
         raise Failed(f"the outstation did not answer {said} sent after {after}")
 
+    def ask(self, send: Callable[[Any], Any], what: str) -> Plan[Exchange]:
+        """Send the request ``send`` makes of the master, and require an answer.
+
+        ``send`` is called with the master and returns the exchange, or an
+        awaitable of it, as every operation of the master does.
+        """
+        exchange: Exchange = yield send
+        self._made([exchange], what)
+        return exchange
+
     def events(self) -> Plan[Exchange]:
         """Read the events of every class, and return the exchange."""
         exchange: Exchange = yield lambda target: target.scan("events")
@@ -670,6 +687,7 @@ def run_plan(
         # A point missing because a read went unanswered would be taken as
         # a point the outstation does not serve.
         raise NoAnswer("the outstation did not answer every read of the points it serves")
+    bench.level = yield lambda target: getattr(target, "level", SubsetLevel.LEVEL_2)
     kinds = {point_type: kind for kind, point_type in POINT_TYPES.items()}
     bench.served = frozenset(
         (kinds[point_type], index) for point_type, index in survey.served if point_type in kinds
@@ -692,6 +710,14 @@ def run_plan(
                 check.title,
                 Verdict.NOT_RUN,
                 "it breaks a protocol rule on purpose, and the run was not allowed to",
+            )
+        elif check.level > bench.level:
+            result = Result(
+                check.id,
+                check.title,
+                Verdict.NOT_APPLICABLE,
+                f"it needs a Level {int(check.level)} outstation, and this one is set to "
+                f"Level {int(bench.level)}",
             )
         else:
             result = yield from _one(bench, check, run)

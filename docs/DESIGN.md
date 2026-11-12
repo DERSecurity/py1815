@@ -2151,6 +2151,23 @@ person who knows the outstation is Level 4 has to do once. The level is the oper
 statement and is not read from the outstation. An outstation that accepts index lists
 below Level 4 is still not sent one.
 
+**D123 -- The Level 3 and 4 checks apply from a level, and judge a response by what it
+decodes to.** A check has the lowest level it applies from, and is `not applicable` below
+the outstation's level, so that a run against a Level 2 outstation does not report a
+request it was never meant to take as a failure. The checks are interoperability checks in
+the style of the rest of the catalog and do not say an outstation conforms to a level. A
+check passes when the outstation answers and sets none of the indications for an
+unsupported function, an unknown object or a parameter error, and the response has the
+form the tables give. The time and the internal indications are compared octet for octet,
+since each has one form. Everything else is judged by the decoded objects: a response that
+cannot be decoded, or that carries a group the request did not ask for, fails. The
+double-bit check is not applicable to an outstation that serves no double-bit input. The
+assignment check assigns a point the class the profile tables already give it, so it
+leaves an outstation as it found it. Ranges are only sent to an outstation set to Level 3
+or 4, so the checks of reads by variation and by range never reach a Level 2 one (D82).
+*Trade-off:* the reads of output events take the events the outstation holds, as an event
+poll does, and an empty response passes.
+
 **D124 -- From Level 3, a change in a counter's flags raises a counter event; a change in its
 value does too where the event policy turns it on.** IEEE 1815-2012 11.9.5.2 makes counter
 events optional, and has a device that supports them raise one whenever any of a counter's
