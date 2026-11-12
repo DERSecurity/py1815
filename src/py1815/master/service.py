@@ -1078,9 +1078,20 @@ class Service:
                     f"{kind!r} is not a point type; one of {', '.join(_POINT_ARGUMENTS)}"
                 )
             named[_POINT_ARGUMENTS[kind]] = (
-                indices if isinstance(indices, str) else [int(index) for index in indices]
+                indices if isinstance(indices, str) else self._indices(indices, f"points.{kind}")
             )
         return named
+
+    @staticmethod
+    def _indices(indices: Any, key: str) -> list[int]:
+        """Return a list of point indices a message gives, each a whole number."""
+        if (
+            isinstance(indices, (str, bytes))
+            or not isinstance(indices, Sequence)
+            or any(isinstance(index, bool) or not isinstance(index, int) for index in indices)
+        ):
+            raise BadRequest(f"{key} is a list of point indices, each a whole number")
+        return list(indices)
 
     async def _read(self, params: Mapping[str, Any]) -> dict[str, Any]:
         outstation = self._outstation(params)
@@ -1103,17 +1114,15 @@ class Service:
         if group is None:
             raise BadRequest("a read of a group names the group")
         indices = params.get("indices")
-        if indices is not None and (
-            isinstance(indices, (str, bytes)) or not isinstance(indices, Sequence)
-        ):
-            raise BadRequest("indices is a list of point indices")
+        if indices is not None:
+            indices = self._indices(indices, "indices")
         variation = self._whole(params, "variation")
         exchange = await outstation.read_group(
             group,
             requests.DEFAULT_VARIATION if variation is None else variation,
             start=self._whole(params, "start"),
             stop=self._whole(params, "stop"),
-            indices=None if indices is None else [int(index) for index in indices],
+            indices=indices,
         )
         return self._describe_exchange(outstation, exchange)
 

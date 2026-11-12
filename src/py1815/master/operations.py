@@ -109,7 +109,9 @@ class Operations(Generic[ResultT, OperatedT, SyncedT]):  # pylint: disable=too-m
     #: only a higher level is required to parse is refused with
     #: :class:`~py1815.master.requests.AboveSubsetLevel` before it is sent
     #: (IEEE 1815-2012 14.7.2). See :data:`~py1815.master.requests.DEFAULT_LEVEL`.
-    level: SubsetLevel = requests.DEFAULT_LEVEL
+    #: Each carrier sets it when it is made. It has no value here, so that the
+    #: blocking master does not take it for an operation and make it a method.
+    level: SubsetLevel
 
     def _require(self, needed: SubsetLevel, what: str) -> None:
         """Refuse a request that needs a higher subset level than the outstation's."""

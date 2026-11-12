@@ -15,6 +15,7 @@ from py1815.master.operations import Operations
 from py1815.profile import der, load
 from py1815.profile.model import Composition
 from py1815.server import OutstationServer
+from py1815.subset import SubsetLevel
 
 WATTS = der.AI_METER_FIRST + 4
 
@@ -64,6 +65,9 @@ class TestTheInterface:
             assert not inspect.iscoroutinefunction(method), name
             assert method.__doc__ == getattr(api.Outstation, name).__doc__, name
 
+    def test_the_subset_level_is_not_made_a_blocking_method(self):
+        assert "level" not in sync.BLOCKING
+
     def test_the_ones_that_matter_are_among_them(self):
         assert {"integrity_poll", "read", "operate", "connect", "wait_for", "broadcast"} <= set(
             sync.BLOCKING
@@ -84,6 +88,13 @@ class TestAgainstAnOutstation:
         assert poll.outcome is Outcome.COMPLETE and answer.complete and held
         assert answer.objects[0].index == WATTS
         assert not lab.connected, "leaving the master closed the connection"
+
+    def test_the_subset_level_reads_as_the_level_the_outstation_was_added_with(self, served):
+        with sync.Master() as master:
+            lab = master.add("lab", host="127.0.0.1", port=served.port, tasks=Tasks.none(), level=3)
+            assert lab.level is SubsetLevel.LEVEL_3
+            # A Level 3 read by variation is sent, not refused at Level 2.
+            assert lab.read_group(30, 1).request[2:] == bytes.fromhex("1E 01 06")
 
     def test_the_store_and_the_trace_are_read_on_the_masters_thread(self, served):
         with sync.Master() as master:

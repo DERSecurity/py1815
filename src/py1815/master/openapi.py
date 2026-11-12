@@ -1121,7 +1121,8 @@ OPERATIONS: dict[str, dict[str, Any]] = {
         "the points named (`indices`). Variation 0 is whichever the outstation sends by "
         "default. A read by variation or by range needs an outstation set to Level 3. A read "
         "of a group that only Level 4 defines needs Level 4, and so does a read by index, "
-        "which no level requires an outstation to accept; a request "
+        "which no level requires an outstation to accept, and so does a variation or a form "
+        "of read the subset tables do not list below Level 4; a request "
         "above the outstation's level is refused as `request`. Analog input deadbands are "
         "group 34 and device attributes group 0.",
         "tag": "Reading",

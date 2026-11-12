@@ -222,44 +222,57 @@ def _runs(indices: Sequence[int]) -> list[tuple[int, int]]:
 #: 1815-2012 14.7.2 requires a master to be configurable to avoid those.
 DEFAULT_LEVEL = SubsetLevel.LEVEL_2
 
-#: Static groups: a read of one by a named variation or by a range of points
-#: is a Level 3 request (TB2016-003b Tables 12-3, 12-11, 12-19, 12-21, 12-27
-#: and 12-37).
-_STATIC_GROUPS = frozenset({1, 10, 20, 21, 30, 40})
+_L2, _L3 = SubsetLevel.LEVEL_2, SubsetLevel.LEVEL_3
 
-#: Event groups a Level 2 outstation reads in variation 0, and a Level 3 one
-#: by a named variation (Tables 12-23 and 12-31). Group 2 is read in any of
-#: its variations from Level 2 (Table 12-5).
-_LEVEL_2_EVENT_GROUPS = frozenset({22, 32})
-
-#: Groups a read of which is a Level 4 request whatever the variation.
-_LEVEL_4_GROUPS = frozenset({0, 3, 4, 11, 13, 34, 42, 43})
-
-#: Variations of a group a Level 3 outstation serves that it is not required
-#: to accept in a read: the ones only Level 4 lists, and the ones no level
-#: lists (g10v1, g22v5, g22v6, g30v6, g32v6, g32v8, g40v4), which are taken to
-#: need Level 4 as well.
-_LEVEL_4_VARIATIONS = frozenset(
-    {
-        (10, 1),
-        (21, 5),
-        (21, 6),
-        (22, 5),
-        (22, 6),
-        (23, 5),
-        (23, 6),
-        (30, 5),
-        (30, 6),
-        (32, 3),
-        (32, 4),
-        (32, 5),
-        (32, 6),
-        (32, 7),
-        (32, 8),
-        (40, 3),
-        (40, 4),
-    }
-)
+#: The reads TB2016-003b lists below Level 4, by group and variation: the
+#: lowest level required to accept a read of every object (qualifier 0x06),
+#: and of a range (0x00 and 0x01), or None where no level below 4 lists that
+#: form. A row the tables give from Level 1 is listed from Level 2, the lowest
+#: level this library implements. Tables 12-3, 12-5, 12-11, 12-19, 12-21,
+#: 12-23, 12-25, 12-27, 12-31, 12-37, 12-49 and 12-52.
+_READ_LEVELS: dict[tuple[int, int], tuple[SubsetLevel | None, SubsetLevel | None]] = {
+    (1, 0): (_L2, _L3),
+    (1, 1): (_L3, _L3),
+    (1, 2): (_L3, _L3),
+    (2, 0): (_L2, None),
+    (2, 1): (_L2, None),
+    (2, 2): (_L2, None),
+    (2, 3): (_L2, None),
+    (10, 0): (_L2, _L3),
+    (10, 2): (_L3, _L3),
+    (20, 0): (_L2, _L3),
+    (20, 1): (_L3, _L3),
+    (20, 2): (_L3, _L3),
+    (20, 5): (_L3, _L3),
+    (20, 6): (_L3, _L3),
+    (21, 0): (_L2, _L3),
+    (21, 1): (_L3, _L3),
+    (21, 2): (_L3, _L3),
+    (21, 9): (_L3, _L3),
+    (21, 10): (_L3, _L3),
+    (22, 0): (_L2, None),
+    (22, 1): (_L3, None),
+    (22, 2): (_L3, None),
+    (23, 0): (_L3, None),
+    (23, 1): (_L3, None),
+    (23, 2): (_L3, None),
+    (30, 0): (_L2, _L3),
+    (30, 1): (_L3, _L3),
+    (30, 2): (_L3, _L3),
+    (30, 3): (_L3, _L3),
+    (30, 4): (_L3, _L3),
+    (32, 0): (_L2, None),
+    (32, 1): (_L3, None),
+    (32, 2): (_L3, None),
+    (40, 0): (_L2, _L3),
+    (40, 1): (_L3, _L3),
+    (40, 2): (_L3, _L3),
+    (60, 1): (_L2, None),
+    (60, 2): (_L2, None),
+    (60, 3): (_L2, None),
+    (60, 4): (_L2, None),
+    (80, 1): (None, _L3),
+}
 
 #: The group of the internal indications, which has one variation, the packed one.
 INDICATIONS_GROUP = 80
@@ -304,27 +317,19 @@ def read_group_level(
 
     ``ranged`` is a read by start and stop (qualifiers 0x00 and 0x01) and
     ``indexed`` a read by a list of indices (0x17 and 0x28). Anything else
-    asks for every object of the group; an event group is read with no
-    range. TB2016-003b lists a read by index
-    list of a static group only as subset-independent, required at no level,
-    so it is taken to need Level 4, as is a group or a variation the tables
-    do not name: a master never sends what a lower level might not parse.
+    asks for every object of the group (0x06). A read the subset tables list
+    below Level 4 needs the level they give it. Every other read needs Level 4,
+    the highest this master knows, so that nothing is sent that a lower level
+    might not parse (D122): a read by index list, which TB2016-003b lists only
+    as subset-independent, a group or variation the tables do not name, and a
+    form they do not list for that variation, such as a range of events or
+    group 50 variation 1 by qualifier 0x06 (Table 12-45 lists its read with
+    qualifier 0x07 only, as :func:`read_time` builds it).
     """
-    if group in _LEVEL_4_GROUPS or (group, variation) in _LEVEL_4_VARIATIONS or indexed:
+    if indexed:
         return SubsetLevel.LEVEL_4
-    by_variation = variation != DEFAULT_VARIATION
-    if group in _STATIC_GROUPS:
-        return SubsetLevel.LEVEL_3 if ranged or by_variation else SubsetLevel.LEVEL_2
-    if group == 2 and not ranged:
-        return SubsetLevel.LEVEL_2
-    if group in _LEVEL_2_EVENT_GROUPS and not ranged:
-        return SubsetLevel.LEVEL_3 if by_variation else SubsetLevel.LEVEL_2
-    if (group == 23 and not ranged) or (group, variation) in (
-        (TIME_GROUP, ABSOLUTE_TIME),
-        (INDICATIONS_GROUP, PACKED_INDICATIONS),
-    ):
-        return SubsetLevel.LEVEL_3
-    return SubsetLevel.LEVEL_4
+    levels = _READ_LEVELS.get((group, variation), (None, None))
+    return levels[1 if ranged else 0] or SubsetLevel.LEVEL_4
 
 
 def _byte(value: int, what: str) -> int:

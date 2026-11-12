@@ -2152,7 +2152,12 @@ Level 4 defines, and an ASSIGN_CLASS of double-bit inputs or output status are L
 (Tables 12-1, 12-7, 12-11, 12-35 and 12-37). A read by index list of a static group, and a
 group or variation the tables do not name (such as g10v1, g30v6 or g32v6), are listed at no
 level; they are taken to need Level 4, the highest this master knows, so that nothing is
-sent that a lower level might not parse. The requests that existed before the level are
+sent that a lower level might not parse. The same holds for a form of read the tables do not
+list for a variation: a range of event objects, or group 50 variation 1 asked for whole
+(qualifier 0x06), since Table 12-45 lists its read with qualifier 0x07 only. The master holds
+one table of the reads listed below Level 4, by group, variation and form, and every read
+not in it needs Level 4. A row the tables give from Level 1, such as the class data reads of
+group 60 (Table 12-49), needs Level 2. The requests that existed before the level are
 not held to it, except that `read` changes form with it (D82); `request` and `broadcast`
 send the octets they are given. Attributes are built with the outstation's own attribute
 encoding (D119), so both sides agree on it: a number takes the fewest octets of 1, 2 or 4,

@@ -191,7 +191,7 @@ curl -s http://127.0.0.1:8815/api/read_group -H 'Content-Type: application/json'
 
 | Operation | Takes | Needs |
 |---|---|---|
-| `read_group` | `group`, `variation` (0 when left out), and a range with `start` and `stop`, or `indices`, or neither for every object | Level 2 for every object in the default variation, 3 for a variation or a range of a static group, 4 for `indices`, which no level requires, and for the groups only Level 4 defines |
+| `read_group` | `group`, `variation` (0 when left out), and a range with `start` and `stop`, or `indices`, or neither for every object | Level 2 for every object in the default variation, 3 for a variation or a range of a static group, 4 for `indices`, which no level requires, for the groups only Level 4 defines, and for a variation or a form of read the subset tables do not list below Level 4 |
 | `read_time` | nothing | Level 3 |
 | `read_indications` | `start` and `stop`, 0 and 15 when left out | Level 3 |
 | `read_attributes` | `variation` (254, every attribute, when left out; 255 is the list; any other is one attribute) and `attribute_set` | Level 4 |

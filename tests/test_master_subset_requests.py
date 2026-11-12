@@ -202,7 +202,6 @@ class TestWhichLevelARequestNeeds:
             (22, 2, {}, LEVEL_3),
             (23, 0, {}, LEVEL_3),
             (23, 1, {}, LEVEL_3),
-            (50, 1, {}, LEVEL_3),
             (80, 1, {"ranged": True}, LEVEL_3),
             # An index list is required at no level (TB2016-003b lists it as
             # subset-independent), so it is taken to need Level 4, with the
@@ -229,10 +228,104 @@ class TestWhichLevelARequestNeeds:
             (40, 4, {}, LEVEL_4),
             (50, 4, {}, LEVEL_4),
             (23, 1, {"ranged": True}, LEVEL_4),
+            # An unknown variation of a group the tables name.
+            (2, 255, {}, LEVEL_4),
+            (30, 255, {}, LEVEL_4),
+            (1, 3, {"ranged": True}, LEVEL_4),
+            # A form the tables do not list for the variation: the time is
+            # listed with qualifier 0x07 only, the indications by range only.
+            (50, 1, {}, LEVEL_4),
+            (80, 1, {}, LEVEL_4),
         ],
     )
     def test_the_level_of_a_read(self, group, variation, options, level):
         assert requests.read_group_level(group, variation, **options) is level
+
+
+#: The reads TB2016-003b's request tables list at a level, written out by hand:
+#: (group, variations, form, the lowest level listed). "all" is qualifier 0x06
+#: and "range" 0x00 or 0x01. The reads by quantity (0x07 and 0x08) are left out,
+#: because a read of a group is never sent with them. Group 60 variations 2 to 4
+#: are the row of Table 12-49 for class 1, 2 and 3 data.
+LISTED_READS = [
+    (0, (254, 255), "all", 4),
+    (0, (*range(209, 244), *range(245, 251), 252, 254, 255), "range", 4),
+    (1, (0,), "all", 2),
+    (1, (1, 2), "all", 3),
+    (1, (0, 1, 2), "range", 3),
+    (2, (0, 1, 2, 3), "all", 2),
+    (3, (0, 1, 2), "all", 4),
+    (3, (0, 1, 2), "range", 4),
+    (4, (0, 1, 2, 3), "all", 4),
+    (10, (0,), "all", 1),
+    (10, (2,), "all", 3),
+    (10, (0, 2), "range", 3),
+    (11, (0, 1, 2), "all", 4),
+    (13, (0, 1, 2), "all", 4),
+    (20, (0,), "all", 2),
+    (20, (1, 2, 5, 6), "all", 3),
+    (20, (0, 1, 2, 5, 6), "range", 3),
+    (21, (0,), "all", 2),
+    (21, (1, 2, 9, 10), "all", 3),
+    (21, (5, 6), "all", 4),
+    (21, (0, 1, 2, 9, 10), "range", 3),
+    (21, (5, 6), "range", 4),
+    (22, (0,), "all", 2),
+    (22, (1, 2), "all", 3),
+    (23, (0, 1, 2), "all", 3),
+    (23, (5, 6), "all", 4),
+    (30, (0,), "all", 2),
+    (30, (1, 2, 3, 4), "all", 3),
+    (30, (5,), "all", 4),
+    (30, (0, 1, 2, 3, 4), "range", 3),
+    (30, (5,), "range", 4),
+    (32, (0,), "all", 2),
+    (32, (1, 2), "all", 3),
+    (32, (3, 4, 5, 7), "all", 4),
+    (34, (0, 1, 2, 3), "all", 4),
+    (34, (0, 1, 2, 3), "range", 4),
+    (40, (0,), "all", 1),
+    (40, (1, 2), "all", 3),
+    (40, (3,), "all", 4),
+    (40, (0, 1, 2), "range", 3),
+    (40, (3,), "range", 4),
+    (42, (0, 1, 2, 3, 4, 5, 7), "all", 4),
+    (43, (0, 1, 2, 3, 4, 5, 7), "all", 4),
+    (60, (1, 2, 3, 4), "all", 1),
+    (80, (1,), "range", 3),
+]
+
+_LISTED = {
+    (group, variation, form): level
+    for group, variations, form, level in LISTED_READS
+    for variation in variations
+}
+
+
+class TestTheLevelOfEveryRead:
+    """Every read of a group is held to the level the subset tables give it (D122)."""
+
+    @pytest.mark.parametrize(("group", "variation", "form"), sorted(_LISTED))
+    def test_a_listed_read_needs_the_level_the_tables_give(self, group, variation, form):
+        # A row listed from Level 1 needs Level 2, the lowest level a master is set to.
+        expected = SubsetLevel(max(2, _LISTED[group, variation, form]))
+        level = requests.read_group_level(group, variation, ranged=form == "range")
+        assert level is expected
+
+    def test_every_read_the_tables_do_not_list_needs_level_4(self):
+        wrong = [
+            (group, variation, form)
+            for group in range(256)
+            for variation in range(256)
+            for form in ("all", "range")
+            if (group, variation, form) not in _LISTED
+            and requests.read_group_level(group, variation, ranged=form == "range") is not LEVEL_4
+        ]
+        assert wrong == []
+
+    def test_a_read_by_index_list_needs_level_4_for_every_listed_read(self):
+        for group, variation, _form in _LISTED:
+            assert requests.read_group_level(group, variation, indexed=True) is LEVEL_4
 
     def test_an_assignment_of_inputs_and_counters_is_level_3(self):
         sets = [(1, {PointType.ANALOG_INPUT: None, PointType.COUNTER: [1]})]
@@ -595,6 +688,11 @@ class TestTheService:
             ("read_group", {}, "names the group"),
             ("read_group", {"group": "30"}, "group is a whole number"),
             ("read_group", {"group": 30, "indices": "1"}, "indices is a list"),
+            ("read_group", {"group": 30, "indices": [1.9]}, "indices is a list"),
+            ("read_group", {"group": 30, "indices": [True]}, "each a whole number"),
+            ("read", {"points": {"ai": [1.9]}}, "points.ai is a list"),
+            ("read", {"points": {"ai": [True]}}, "each a whole number"),
+            ("assign_class", {"event_class": 1, "points": {"ai": [0.5]}}, "points.ai is a"),
             ("read_group", {"group": 30, "start": 1}, "both start and stop"),
             ("read_attributes", {"variation": True}, "variation is a whole number"),
         ],
@@ -605,6 +703,7 @@ class TestTheService:
         answer = await _ask(commanding, op, **params)
         assert answer["ok"] is False and answer["error"]["kind"] == "request"
         assert says in answer["error"]["message"]
+        assert (await _ask(commanding, "trace"))["result"]["frames"] == []
 
 
 COMMANDS = [

@@ -112,7 +112,8 @@ the level either.
 | Request | Level |
 |---|---|
 | `read_group(group)`, every object in the default variation, for a group Level 2 defines | 2 |
-| `read_group(group, variation)` or with `start` and `stop`, for the static groups 1, 10, 20, 21, 30 and 40 | 3 |
+| `read_group(2, variation)` for variations 0 to 3, and `read_group(60, variation)` for class 0, 1, 2 or 3 data (variations 1 to 4) | 2 |
+| `read_group(group, variation)` or with `start` and `stop`, for the variations of the static groups 1, 10, 20, 21, 30 and 40 that the tables list at Level 3 | 3 |
 | `read_group(group, variation)` for the event groups 22 and 32, and any read of group 23 | 3 |
 | `read_time()`, `read_indications()` | 3 |
 | `assign_class(...)` for binary inputs, counters, frozen counters and analog inputs | 3 |
@@ -123,7 +124,10 @@ the level either.
 | `read_attributes(...)`, `write_attribute(...)` | 4 |
 
 The levels are those of the DNP Users Group's request and response subset tables
-(TB2016-003b). A group or a variation the tables do not name is taken to need Level 4.
+(TB2016-003b). Every other read is taken to need Level 4: a group or a variation the tables
+do not name, such as `read_group(30, 255)`, and a form of read they do not list for the
+variation, such as a range of events, or `read_group(50, 1)`, which asks for every object
+where the tables list only the single-object form that `read_time()` sends.
 
 ```python
 await lab.read_group(30, 1)                       # group 30 variation 1, every point
