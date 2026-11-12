@@ -589,6 +589,11 @@ def build_model(
     for comp in cdx.get("components", []):
         key = normalize(comp["name"])
         lock_entry = lock.get(key, {})
+        # A universal lock can pin one package at different versions for
+        # different Python versions. Take a digest only from the entry for the
+        # version that was installed.
+        if lock_entry.get("version") and lock_entry["version"] != comp.get("version"):
+            lock_entry = {}
         digest, url = pick_checksum(lock_entry)
         expression, note = license_expression(comp)
         by_ref[comp["bom-ref"]] = {
@@ -668,6 +673,18 @@ def provenance_refs(prov: dict[str, str]) -> list[dict[str, str]]:
     return refs
 
 
+def settle_resolution(resolution: str, model: dict[str, Any]) -> str:
+    """Return the resolution kind to record for *model*.
+
+    A release with no runtime dependencies has no resolution to qualify, so a
+    range-declaring project's caveat (``build-time`` or ``tested-lock``) becomes
+    ``none`` and the documents say there are no dependencies instead.
+    """
+    if resolution in ("build-time", "tested-lock") and not model["components"]:
+        return "none"
+    return resolution
+
+
 def render_cyclonedx(
     model: dict[str, Any],
     cdx: dict[str, Any],
@@ -712,6 +729,18 @@ def render_cyclonedx(
                     "than pinning a tree, so the versions here are the resolution "
                     "this release was built from, not necessarily what a consumer "
                     "installs"
+                ),
+            }
+        )
+    if prov.get("resolution") == "tested-lock":
+        root.setdefault("properties", []).append(
+            {
+                "name": "dersec:dependency-resolution",
+                "value": (
+                    "tested-lock; this project declares dependency ranges rather "
+                    "than pinning a tree, so the versions here are the ones its "
+                    "lockfile pins and its test suite runs against, not "
+                    "necessarily what a consumer installs"
                 ),
             }
         )
@@ -825,6 +854,15 @@ def render_spdx(
             "may get different versions, and the test suite resolves them "
             "independently, so this set is not asserted to be the tested one."
         )
+    if prov.get("resolution") == "none":
+        root_comment.append("This release has no runtime dependencies.")
+    if prov.get("resolution") == "tested-lock":
+        root_comment.append(
+            "This project declares dependency ranges rather than pinning a tree. "
+            "The dependency versions recorded here are the ones its lockfile pins "
+            "and its test suite runs against. A consumer resolving the same "
+            "ranges may get different versions."
+        )
 
     root_pkg: dict[str, Any] = {
         "SPDXID": root_id,
@@ -921,6 +959,15 @@ def render_spdx(
             "pinning a tree, so a consumer resolving them later may get "
             "different versions."
         )
+    elif prov.get("resolution") == "tested-lock":
+        resolution_note = (
+            "Generated from the runtime dependencies this project's lockfile "
+            "pins and its test suite runs against. This project declares "
+            "version ranges rather than pinning a tree, so a consumer resolving "
+            "them may get different versions."
+        )
+    elif prov.get("resolution") == "none":
+        resolution_note = "Generated for a release with no runtime dependencies."
     else:
         resolution_note = "Generated from the locked runtime dependency closure."
 
@@ -997,6 +1044,15 @@ def main() -> int:
             "release was built from, not one every consumer will get."
         ),
     )
+    ap.add_argument(
+        "--requirements-from-lock",
+        action="store_true",
+        help=(
+            "The --requirements file was exported from the project's uv.lock, "
+            "which a library keeps for its own tests. The document then says "
+            "the versions are the tested ones, not what every consumer gets."
+        ),
+    )
     ap.add_argument("--version", required=True)
     ap.add_argument("--out-dir", required=True, type=Path)
     ap.add_argument(
@@ -1071,6 +1127,8 @@ def main() -> int:
         ),
     )
     args = ap.parse_args()
+    if args.requirements_from_lock and not args.requirements:
+        ap.error("--requirements-from-lock needs --requirements")
 
     cdx = json.loads(args.cyclonedx.read_text(encoding="utf-8"))
     if args.uv_lock:
@@ -1078,7 +1136,7 @@ def main() -> int:
         resolution = "lockfile"
     else:
         lock = load_requirements_hashes(args.requirements)
-        resolution = "build-time"
+        resolution = "tested-lock" if args.requirements_from_lock else "build-time"
     extra = load_vendored_assets(args.vendored_assets) if args.vendored_assets else []
     if args.npm_lock:
         if not args.npm_lock.exists():
@@ -1086,6 +1144,7 @@ def main() -> int:
             return 1
         extra += load_npm_lock(args.npm_lock)
     model = build_model(cdx, lock, extra=extra)
+    resolution = settle_resolution(resolution, model)
 
     if args.product_name:
         # Rename in the CycloneDX document too, not only in the model, so the
@@ -1186,7 +1245,7 @@ def main() -> int:
     if missing_license:
         print(f"no declared license ({len(missing_license)}): {', '.join(sorted(missing_license))}")
     if missing_hash:
-        if resolution == "build-time":
+        if resolution in ("build-time", "tested-lock"):
             # Expected here rather than a defect. A compiled requirements file
             # lists every artifact that satisfies a pin -- the sdist and one
             # wheel per platform -- and no single one of them identifies the

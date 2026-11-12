@@ -38,9 +38,15 @@ building against either.
 ```bash
 git clone https://github.com/DERSecurity/py1815
 cd py1815
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+uv sync --extra dev                                 # installs the versions uv.lock pins
+source .venv/bin/activate                           # Windows: .venv\Scripts\activate
 ```
+
+`uv.lock` pins the development tools CI tests with. It is not part of the
+package, which has no runtime dependencies. After changing a dependency in
+`pyproject.toml`, run `uv lock` and commit both files together; CI fails with
+`--locked` when they disagree. Dependabot proposes the lock updates for new
+upstream releases every week.
 
 There are no runtime dependencies, and that is deliberate -- an outstation that
 drags a dependency tree onto an embedded target is harder to justify than one

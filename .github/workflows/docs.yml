@@ -18,13 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
-          cache: pip
+          activate-environment: true
       # mkdocstrings imports the package to read its docstrings, so the docs
       # build doubles as a check that the public API is importable.
-      - run: pip install -e ".[docs]"
+      - run: uv sync --locked --extra docs
       - name: Build (warnings are errors)
         run: mkdocs build --strict
       - uses: actions/upload-pages-artifact@v3

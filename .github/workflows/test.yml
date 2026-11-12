@@ -18,10 +18,13 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # Installs the versions uv.lock pins, so a new upstream release cannot
+      # change what CI tests until a Dependabot pull request updates the lock.
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
+          activate-environment: true
+      - run: uv sync --locked --extra dev
       - run: ruff check src tests interop scripts
       - run: ruff format --check src tests interop scripts
       - run: mypy src
@@ -139,7 +142,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: arm
       - name: The unit suite passes where a native integer is 32 bits
@@ -175,7 +178,7 @@ jobs:
         platform: [linux/arm64, linux/arm/v7]
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: arm64,arm
       - run: docker build --platform ${{ matrix.platform }} -t py1815-der .

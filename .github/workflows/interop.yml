@@ -154,9 +154,12 @@ jobs:
       - name: Install the library
         run: pip install --quiet -e .
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # rustup ships on the runner image. Installing the toolchain with it
+      # avoids a third-party action that can only be referenced by branch.
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
 
       - name: Cache the master's dependencies
         uses: actions/cache@v4
@@ -456,9 +459,12 @@ jobs:
       - name: Install the library
         run: pip install --quiet -e .
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # rustup ships on the runner image. Installing the toolchain with it
+      # avoids a third-party action that can only be referenced by branch.
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
 
       - name: Cache the outstation's dependencies
         uses: actions/cache@v4

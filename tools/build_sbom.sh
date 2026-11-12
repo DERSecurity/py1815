@@ -36,6 +36,7 @@ RELEASE_TAG=""
 # an explicit argument with no default rather than something inferred.
 PRODUCT_LICENSE=""
 DOWNLOAD_LOCATION=""
+LIBRARY=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -58,6 +59,9 @@ while [ $# -gt 0 ]; do
     --release-tag)   RELEASE_TAG="$2"; shift 2 ;;
     --product-license) PRODUCT_LICENSE="$2"; shift 2 ;;
     --download-location) DOWNLOAD_LOCATION="$2"; shift 2 ;;
+    # The project is a library: its uv.lock pins what its own CI tests, not
+    # what a consumer installs, and the documents say so.
+    --library)       LIBRARY=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -90,11 +94,16 @@ if [ -n "$PACKAGE" ]; then
 fi
 
 # An application pins its whole tree in uv.lock and ships exactly that. A
-# library declares ranges and the consumer resolves them, so there is no
-# lockfile: the honest thing a release can describe is the resolution its own
-# CI produced and tested. Which input applies is decided by what the project
-# has, not by a flag someone has to remember.
-if [ -f uv.lock ]; then
+# library declares ranges and the consumer resolves them, so what a release
+# can honestly describe is the resolution its own CI tested. A library that
+# keeps a uv.lock for CI passes --library: the documents then describe the
+# lock's runtime pins and say a consumer may resolve other versions. A
+# library with no lock resolves its declared ranges here.
+if [ -f uv.lock ] && [ -n "$LIBRARY" ]; then
+  echo "==> exporting the runtime dependencies the lockfile pins for testing"
+  uv export "${EXPORT_ARGS[@]}" -o "$WORK/requirements.txt"
+  RESOLUTION_ARG=(--requirements "$WORK/requirements.txt" --requirements-from-lock)
+elif [ -f uv.lock ]; then
   echo "==> exporting locked runtime dependencies"
   uv export "${EXPORT_ARGS[@]}" -o "$WORK/requirements.txt"
   RESOLUTION_ARG=(--uv-lock uv.lock)
