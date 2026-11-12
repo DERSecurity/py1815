@@ -48,6 +48,7 @@ from importlib import resources
 from typing import TYPE_CHECKING, Any
 
 from py1815.application import UNS_MASK, build_response
+from py1815.attributes import DataType
 from py1815.decode import LAYOUTS, Layout, PointType, _Time
 from py1815.envelope import (
     NetworkEndpoint,
@@ -385,8 +386,6 @@ _POINT_GROUPS = frozenset(
 
 _GROUP_COMMON_TIME = 51
 _GROUP_DEVICE_ATTRIBUTES = 0
-#: The data type code whose length octet states 256 less than its length.
-_EXTENDED_LIST = 255
 _PATTERN_BLOCK = (12, 2)
 _PATTERN_MASK = (12, 3)
 
@@ -599,7 +598,7 @@ class _Walk:
         for _ in range(number):
             self._take(index_octets)
             code, length = self._take(2)
-            self._take(length + 256 if code == _EXTENDED_LIST else length)
+            self._take(length + 256 if code == DataType.U8BS8EXLIST else length)
 
     def _objects(
         self, group: int, variation: int, prefix: int, start: int | None, number: int

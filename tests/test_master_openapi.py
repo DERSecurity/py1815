@@ -9,6 +9,7 @@ actually answers does not fit what the document says it answers.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -198,7 +199,9 @@ async def live():
     the examples of the DER profile's operations have something to act on.
     """
     point_map = load.resolve(paired_reference_der(), Composition())
-    simulation = der.build(point_map)
+    # Level 4, so that the examples of the Level 3 and 4 requests are carried out
+    # rather than refused.
+    simulation = der.build(point_map, level=4)
     outstation = OutstationServer(simulation.outstation.session(), bind="127.0.0.1:0")
     # Started to command, so that every operation's example is carried out.
     service = Service(allow_control=True)
@@ -227,6 +230,33 @@ async def _post(http: HttpServer, path: str, body: Any = None) -> tuple[int, Any
 def _documented(name: str) -> dict[str, Any]:
     responses = DOCUMENT["paths"][f"/api/{name}"]["post"]["responses"]
     return dict(responses["200"]["content"]["application/json"]["schema"])
+
+
+#: The operations that send a Level 3 or Level 4 request.
+SUBSET_REQUESTS = {
+    "read_group",
+    "read_time",
+    "read_indications",
+    "read_attributes",
+    "assign_class",
+    "write_deadbands",
+    "write_attribute",
+}
+
+#: The indications an outstation sets when it does not carry out a request.
+REFUSALS = {"FUNC_NOT_SUPPORTED", "OBJECT_UNKNOWN", "PARAM_ERROR"}
+
+
+def _indications(result: Any) -> list[str]:
+    """Return every indication named anywhere in *result*."""
+    if isinstance(result, Mapping):
+        found = list(result.get("indications") or [])
+        for value in result.values():
+            found += _indications(value)
+        return found
+    if isinstance(result, list):
+        return [name for item in result for name in _indications(item)]
+    return []
 
 
 #: The order the examples make sense in, against one outstation.
@@ -306,6 +336,9 @@ class TestWhatTheServiceAnswers:
             assert problems(answer, _documented(name)) == [], name
             # And not vacuously: the result is the documented one, not a stray shape.
             assert problems(answer["result"], openapi.OPERATIONS[name]["result"]) == [], name
+            if name in SUBSET_REQUESTS:
+                # A refusal is still ok=True, so check the outstation carried it out.
+                assert not REFUSALS & set(_indications(answer["result"])), (name, answer)
 
     @pytest.mark.asyncio
     async def test_a_refusal_is_the_documented_failure(self, live):
