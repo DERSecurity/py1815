@@ -171,6 +171,9 @@ def configuration(args: argparse.Namespace) -> DerConfig:
     for name in _TOP_LEVEL_FLAGS:
         if given(name) is not None:
             document[name] = given(name)
+    if given("level") is not None:
+        # The level flag replaces the file's level in either spelling.
+        document.pop("level2", None)
     if given("tables") is not None:
         document["tables"] = str(given("tables"))
     if given("any_master"):

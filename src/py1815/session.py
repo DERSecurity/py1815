@@ -148,6 +148,7 @@ from py1815.objects import (
     encode_double_bit_event,
     encode_double_bit_event_relative,
     encode_frozen_counter_event,
+    encode_time,
 )
 
 # Controls echo in the same shape events do -- a count with an index in front of
@@ -3244,9 +3245,10 @@ class Session:
                 )
             if header.count != 1:
                 raise ParameterError(f"the current time is one object, not {header.count}")
-            moment = self._time_source()
-            return bytes([TIME_GROUP, TIME_VARIATION, int(header.qualifier), 1]) + (
-                moment.to_bytes(TIME_SIZE, "little")
+            # A clock written near the top of the 48-bit range runs past it; the
+            # time is clamped as every other time this outstation sends is.
+            return bytes([TIME_GROUP, TIME_VARIATION, int(header.qualifier), 1]) + encode_time(
+                self._time_source()
             )
         if header.group == RESTART_GROUP and self._indications_read:
             return self._indications_object(header)

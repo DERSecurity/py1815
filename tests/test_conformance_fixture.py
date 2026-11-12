@@ -639,6 +639,16 @@ class TestTheTestBench:
             assert (answer["frozen"], answer["events"]) == (2, 2)
             assert (await bench.ask("state"))["events_held"]["3"] == 2
 
+    async def test_freeze_into_a_full_class_still_reports_its_event(self):
+        async with Bench() as bench:
+            capacity = bench.device.outstation.events.capacity
+            await bench.ask("freeze", indices=[1] * capacity)
+            assert (await bench.ask("state"))["events_held"]["3"] == capacity
+            # The new event evicts the oldest, so the number held does not change.
+            answer = await bench.ask("freeze", indices=[1])
+            assert (answer["frozen"], answer["events"]) == (1, 1)
+            assert (await bench.ask("state"))["events_held"]["3"] == capacity
+
     async def test_freeze_of_a_counter_the_device_lacks_is_refused(self):
         async with Bench() as bench:
             answer = await bench.send(b'{"op": "freeze", "indices": [9]}')
