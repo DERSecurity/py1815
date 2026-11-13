@@ -25,8 +25,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           activate-environment: true
       - run: uv sync --locked --extra dev
-      - run: ruff check src tests interop scripts
-      - run: ruff format --check src tests interop scripts
+      - run: ruff check src tests interop scripts tools
+      - run: ruff format --check src tests interop scripts tools
       - run: mypy src
       # Validates changelog.d/, so a malformed entry fails here rather
       # than at release, when whoever is cutting it has the least context.

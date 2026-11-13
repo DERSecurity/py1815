@@ -60,8 +60,8 @@ Then:
 
 ```bash
 pytest -q
-ruff check src tests interop scripts
-ruff format --check src tests interop scripts
+ruff check src tests interop scripts tools
+ruff format --check src tests interop scripts tools
 mypy src
 python scripts/build_changelog.py --check
 ```
