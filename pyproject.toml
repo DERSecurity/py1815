@@ -91,7 +91,8 @@ include = [
     "conformance",
     # The script that extracts those tables. `tests/test_extract_conformance.py`
     # runs it against synthetic Annex A text, so the shipped suite fails without
-    # it. The other scripts are repository tooling and stay out.
+    # it. The other scripts are repository tooling and stay out. Also named in
+    # `ALLOWED_FILES` in `tools/check_dist.py`, which checks the built sdist.
     "/scripts/extract_conformance.py",
     # Only a README: what the Device Profile schema is and where to get it. The
     # schema itself is ignored, so this is the whole of what the directory

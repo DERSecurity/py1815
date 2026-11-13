@@ -61,63 +61,15 @@ jobs:
           strays=$(python -m zipfile -l dist/*.whl \
             | grep -Eo '^(interop|tests|docs)/[^ ]*' || true)
           test -z "$strays" || { echo "the wheel carries:"; echo "$strays"; exit 1; }
+      # The sdist checks live in tools/check_dist.py, which says what each
+      # asserts and why. The test workflow runs them on every pull request;
+      # here they run on the sdist this job publishes.
       - name: The sdist must carry only what it is meant to
-        # An allow-list, checked rather than assumed. `pyproject.toml` gives
-        # hatchling one too, but hatchling force-includes some files whatever
-        # it says -- README files anywhere in the tree, for one -- so the
-        # configuration states the intent and this states the guarantee.
-        #
-        # A new top-level path fails here rather than being published. If it
-        # belongs in the sdist, add it in both places; if it does not, that is
-        # the check doing its job.
-        run: |
-          python - <<'PY'
-          import glob, sys, tarfile
-
-          ALLOWED = {
-              "PKG-INFO", "pyproject.toml", ".gitignore",
-              "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md",
-              "LICENSE", "NOTICE",
-              "src", "tests", "docs", "conformance", "schema", "changelog.d",
-          }
-          # Single files allowed from a directory that is otherwise kept out.
-          ALLOWED_FILES = {"scripts/extract_conformance.py"}
-          # Inside `docs`, which is allowed wholesale above.
-          FORBIDDEN = ("docs/planning/",)
-
-          with tarfile.open(glob.glob("dist/*.tar.gz")[0]) as tar:
-              paths = [n.split("/", 1)[1] for n in tar.getnames() if "/" in n]
-
-          kept = [p for p in paths if p not in ALLOWED_FILES and p != "scripts"]
-          strays = sorted({p.split("/")[0] for p in kept} - ALLOWED)
-          inside = sorted(p for p in paths if p.startswith(FORBIDDEN))
-          for bad, why in ((strays, "not in the allow-list"), (inside, "excluded")):
-              for path in bad:
-                  print(f"the sdist carries {path}, which is {why}")
-          sys.exit(1 if strays or inside else 0)
-          PY
-
+        run: python tools/check_dist.py allowlist dist/*.tar.gz
       - name: The sdist must carry a test suite that passes
-        # The allow-list above asserts nothing unwanted is in the sdist. It
-        # cannot see that something wanted is missing: `tests` is inside the
-        # list, so a test whose subject was excluded is allowed and broken at
-        # the same time. That is how a suite referring to `interop` shipped
-        # while `interop` did not.
-        #
-        # So run what ships, in a directory holding nothing else. A PyPI
-        # version cannot be replaced, only yanked, and downstream packagers
-        # build from the sdist and run this suite -- a broken one surfaces as
-        # their bug report, after the only chance to fix it has gone.
-        #
-        # jsonschema is installed with the test runner because the traffic
-        # tests validate every record against the schema and fail without it.
-        # The other dev dependencies gate tests that skip when they are absent.
         run: |
           pip install pytest pytest-asyncio "jsonschema>=4.18"
-          work=$(mktemp -d)
-          tar -xzf dist/*.tar.gz -C "$work"
-          cd "$work"/py1815-*
-          python -m pytest tests -q
+          python tools/check_dist.py suite dist/*.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
