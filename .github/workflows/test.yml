@@ -25,8 +25,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           activate-environment: true
       - run: uv sync --locked --extra dev
-      - run: ruff check src tests interop scripts
-      - run: ruff format --check src tests interop scripts
+      - run: ruff check src tests interop scripts tools
+      - run: ruff format --check src tests interop scripts tools
       - run: mypy src
       # Validates changelog.d/, so a malformed entry fails here rather
       # than at release, when whoever is cutting it has the least context.
@@ -41,6 +41,23 @@ jobs:
           # skip is a failure: a test that silently never ran is the outcome
           # the skip would otherwise allow.
           PY1815_REQUIRE_BROWSER: ${{ matrix.python-version == '3.12' && '1' || '' }}
+
+  sdist:
+    # The checks the release job runs on the sdist it publishes, run here on
+    # every pull request so a test that needs a file the sdist leaves out
+    # fails while its branch is open, not at the tag. Installs only what the
+    # release job installs, so the shipped suite skips what it skips there.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install build pytest pytest-asyncio "jsonschema>=4.18"
+      - run: python -m build --sdist
+      - run: python tools/check_dist.py allowlist dist/*.tar.gz
+      - run: python tools/check_dist.py suite dist/*.tar.gz
 
   image:
     # The Dockerfile is what the README tells people to build, so it is built

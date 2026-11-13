@@ -60,8 +60,8 @@ Then:
 
 ```bash
 pytest -q
-ruff check src tests interop scripts
-ruff format --check src tests interop scripts
+ruff check src tests interop scripts tools
+ruff format --check src tests interop scripts tools
 mypy src
 python scripts/build_changelog.py --check
 ```
@@ -174,7 +174,7 @@ new major version, updates the stability statements in that same commit:
 `docs/outstation.md` and `SECURITY.md`. A published version cannot be
 corrected, so these have to be right before the tag.
 
-Once it merges, push the tag:
+Once the release pull request merges, push the tag:
 
 ```bash
 git tag -a vX.Y.Z -m "py1815 X.Y.Z" && git push origin vX.Y.Z
@@ -189,6 +189,20 @@ to be.
 Nothing publishes without a tag, and **a version on PyPI can be yanked but never
 replaced** -- so the tag is the step worth being deliberate about, not the
 merge.
+
+### Tests in the sdist
+
+The sdist ships the test suite, and `tools/check_dist.py` runs it from an
+extracted sdist on every pull request and again before a release. A test whose
+subject is not in the sdist takes one of three paths:
+
+- Ship the subject when it produces something the sdist already carries, as
+  `scripts/extract_conformance.py` produces `conformance/`. Name it in the
+  sdist `include` list in `pyproject.toml` and in `ALLOWED_FILES` in
+  `tools/check_dist.py`.
+- Otherwise exclude the test, in the sdist `exclude` list in `pyproject.toml`.
+- When the test shares a module with tests that must ship, skip it with a
+  `skipif` that states the reason.
 
 ## Conventions
 
