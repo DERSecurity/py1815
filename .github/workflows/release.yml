@@ -80,13 +80,16 @@ jobs:
               "LICENSE", "NOTICE",
               "src", "tests", "docs", "conformance", "schema", "changelog.d",
           }
+          # Single files allowed from a directory that is otherwise kept out.
+          ALLOWED_FILES = {"scripts/extract_conformance.py"}
           # Inside `docs`, which is allowed wholesale above.
           FORBIDDEN = ("docs/planning/",)
 
           with tarfile.open(glob.glob("dist/*.tar.gz")[0]) as tar:
               paths = [n.split("/", 1)[1] for n in tar.getnames() if "/" in n]
 
-          strays = sorted({p.split("/")[0] for p in paths} - ALLOWED)
+          kept = [p for p in paths if p not in ALLOWED_FILES and p != "scripts"]
+          strays = sorted({p.split("/")[0] for p in kept} - ALLOWED)
           inside = sorted(p for p in paths if p.startswith(FORBIDDEN))
           for bad, why in ((strays, "not in the allow-list"), (inside, "excluded")):
               for path in bad:
