@@ -351,7 +351,7 @@ jobs:
 
       - name: Keep the captures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dnp3-function-sweep
           path: |
@@ -761,7 +761,7 @@ jobs:
 
       - name: Keep the report, the logs and the captures
         if: always() && steps.scope.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dnp3c-conformance-results
           path: interop/dnp3c/results
