@@ -51,3 +51,8 @@ updates:
     groups:
       cargo-minor-and-patch:
         update-types: [minor, patch]
+    # dnp3 1.8.0 and later are under a license that forbids using the crate to
+    # test another DNP3 implementation, which is what these peers do.
+    ignore:
+      - dependency-name: dnp3
+        versions: [">= 1.8"]

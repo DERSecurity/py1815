@@ -137,7 +137,7 @@ jobs:
     #
     # The crate is Step Function I/O's `dnp3`, used under their public license,
     # which is not an open-source license:
-    #   https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt
+    #   https://github.com/stepfunc/dnp3/blob/1.7.0/LICENSE.txt
     # They have said that this use, in this repository's public CI, is in line
     # with it (https://github.com/DERSecurity/py1815/issues/48).
     # A fork running this job should read the license for its own use;
@@ -437,7 +437,7 @@ jobs:
     #
     # The crate is used under their public license, which is not an
     # open-source license:
-    #   https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt
+    #   https://github.com/stepfunc/dnp3/blob/1.7.0/LICENSE.txt
     # They have said that using it for testing and interoperability of py1815
     # in this repository's public CI is in line with it
     # (https://github.com/DERSecurity/py1815/issues/48). A fork running this

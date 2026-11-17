@@ -131,14 +131,15 @@ tests. Nothing of the tool or the plugin is linked into, distributed with, or de
 by this library, and neither the wheel nor the source distribution carries any of it.
 
 **[`dnp3`](https://github.com/stepfunc/dnp3)** is published by [Step Function I/O](https://stepfunc.io).
-It is used under their public [license](https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt), which is not an open-source
+It is used under their public [license](https://github.com/stepfunc/dnp3/blob/1.7.0/LICENSE.txt), which is not an open-source
 license and is better read than summarized. Step Function I/O has said that
 reading this outstation with the crate in this repository's public continuous
 integration is in line with that license ([#48](https://github.com/DERSecurity/py1815/issues/48)). That is a statement
 about this repository. Anyone running the job from a fork, or using the crate
 for anything else, should read the license for their own use; commercial
 licensing is at <https://stepfunc.io/contact>. Nothing the crate provides is linked into,
-distributed with, or depended on by this library.
+distributed with, or depended on by this library. The crate is held at 1.7.x: release
+1.8.0 changed the license to forbid using the crate to test another DNP3 implementation.
 
 **[opendnp3](https://github.com/dnp3/opendnp3)** is under the Apache License 2.0 and is driven through
 the [`dnp3-python`](https://pypi.org/project/dnp3-python/) bindings. Its upstream is archived, which rules

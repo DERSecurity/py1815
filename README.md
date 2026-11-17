@@ -358,11 +358,12 @@ What this library can say about interoperating rests on implementations other pe
   and the Rust outstation that this library's master reads and commands.
   It is the peer that checks the quality flags and that a refused control arrives as a refusal,
   which the other master cannot do, so it carries a real share of the verification. It is used
-  under Step Function I/O's public [license](https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt), which is not an open-source license.
+  under Step Function I/O's public [license](https://github.com/stepfunc/dnp3/blob/1.7.0/LICENSE.txt), which is not an open-source license.
   Step Function I/O has said that using it for testing and interoperability of py1815 in this
   repository's public CI is in line with that license ([#48](https://github.com/DERSecurity/py1815/issues/48)). That statement is about this repository: anyone
   running the job from a fork, or using the crate anywhere else, should read the license for
-  their own use. Commercial licensing is at <https://stepfunc.io/contact>.
+  their own use. Commercial licensing is at <https://stepfunc.io/contact>. The crate is held at
+  1.7.x: release 1.8.0 changed the license to forbid using it to test another DNP3 implementation.
 - **[dnp3c](https://github.com/stepfunc/dnp3c) by Step Function I/O** is the conformance test harness that
   runs the Level 3 outstation certification procedures against this library in CI. It is licensed
   under the [GNU General Public License v3.0 only](https://github.com/stepfunc/dnp3c/blob/main/LICENSE).
