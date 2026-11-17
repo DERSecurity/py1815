@@ -71,7 +71,7 @@ jobs:
           pip install pytest pytest-asyncio "jsonschema>=4.18"
           python tools/check_dist.py suite dist/*.tar.gz
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -139,7 +139,7 @@ jobs:
             --library \
             --out-dir dist/sbom
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: dist/sbom/
