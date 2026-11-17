@@ -72,7 +72,7 @@ jobs:
     # not as a witness: a frame it parses is a frame that was correct when it
     # was maintained, and the wire format has not moved.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python for the outstation
         uses: actions/setup-python@v7
@@ -145,7 +145,7 @@ jobs:
     # interop/rust-master/README.md says more, and deleting that directory and
     # this job removes the crate entirely.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
@@ -227,7 +227,7 @@ jobs:
     # that passes because there was nothing to disagree with.
     # src/py1815/master/capture.py has the trade-off.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
@@ -380,7 +380,7 @@ jobs:
     # refusal, that the frozen counters read back unchanged, and that the
     # stack's own log names each freeze sent with no response.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python for the master
         uses: actions/setup-python@v7
@@ -450,7 +450,7 @@ jobs:
     # change the outstation's points. The certificates are made in the job and
     # are never in the repository.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
@@ -584,7 +584,7 @@ jobs:
     # and the comparison step fails when a procedure ends in any way other
     # than the one on record.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The whole history, so the change can be compared with its base.
           fetch-depth: 0
