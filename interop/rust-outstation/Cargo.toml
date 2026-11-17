@@ -12,7 +12,7 @@ description = "Serves an outstation built on Step Function I/O's dnp3, an indepe
 # under their public license, which is not an open-source license. The license
 # is the authority on what it permits, so it is linked here and not summarized:
 #
-#   https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt
+#   https://github.com/stepfunc/dnp3/blob/1.7.0/LICENSE.txt
 #
 # Step Function I/O has said that using the crate for testing and
 # interoperability of py1815 in its public CI is in line with that license
@@ -30,7 +30,10 @@ description = "Serves an outstation built on Step Function I/O's dnp3, an indepe
 # The job that runs this is self-contained: delete this directory and its
 # workflow job, and the remaining peers carry on unchanged.
 [dependencies]
-dnp3 = "1.7"
+# Held at 1.7.x. Release 1.8.0 changed the license to forbid using the crate to
+# test another DNP3 implementation, which is what this peer is for. Check the
+# license of any later dnp3 release before taking it.
+dnp3 = "~1.7"
 tokio = { version = "1", features = ["rt", "macros", "time", "net", "sync"] }
 
 [[bin]]

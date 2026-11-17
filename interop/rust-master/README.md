@@ -20,11 +20,15 @@ repository claims about interoperability is owed to it.
 It is used under Step Function I/O's public license, which is not an
 open-source license. Read it instead of a summary of it:
 
-<https://github.com/stepfunc/dnp3/blob/main/LICENSE.txt>
+<https://github.com/stepfunc/dnp3/blob/1.7.0/LICENSE.txt>
 
 Step Function I/O has said that using the crate for testing and
 interoperability of py1815 in its public CI is in line with that license
 ([#48](https://github.com/DERSecurity/py1815/issues/48)). Before they said so, that was this repository's own reading.
+
+The crate is held at 1.7.x, and the link above is to that release's license. Release
+1.8.0 changed the license to forbid using the crate to test another DNP3
+implementation, which is what this peer does, so this repository does not take it.
 
 Nothing the crate provides is linked into, distributed with, or depended on by
 the library. It is fetched only when this directory's job runs.
