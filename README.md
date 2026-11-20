@@ -303,6 +303,10 @@ mkdocs build --strict        # docs, warnings are errors
 
 All five run in CI and all five must pass.
 
+The repository is mirrored, read-only, to
+[Codeberg](https://codeberg.org/DERSecurity/py1815), which receives `main` and every
+tag after each change here. Open issues and pull requests on GitHub.
+
 ## Testing approach
 
 Two rules, both learned the hard way:
