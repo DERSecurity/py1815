@@ -1,0 +1,38 @@
+name: Mirror
+
+# Push main and every tag to the read-only mirror on Codeberg, which gives the
+# project a copy hosted in the EU. Development stays on GitHub: each run
+# overwrites the mirror's main and tags with the ones here.
+#
+# CODEBERG_TOKEN is a Codeberg access token with write access to the mirror
+# repository. The job does not run on forks, which have no such token.
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  codeberg:
+    if: github.repository == 'DERSecurity/py1815'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Push main and tags to Codeberg
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+        run: |
+          test -n "$CODEBERG_TOKEN" || { echo "CODEBERG_TOKEN is not set"; exit 1; }
+          url="https://${CODEBERG_TOKEN}@codeberg.org/DERSecurity/py1815.git"
+          git push --force "$url" refs/remotes/origin/main:refs/heads/main 'refs/tags/*:refs/tags/*'
