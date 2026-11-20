@@ -1,8 +1,9 @@
 name: Mirror
 
 # Push main and every tag to the read-only mirror on Codeberg, which gives the
-# project a copy hosted in the EU. Development stays on GitHub: each run
-# overwrites the mirror's main and tags with the ones here.
+# project a copy hosted in the EU. Development stays on GitHub: each run sets
+# the mirror's main and tags to match the ones here, and deletes tags that no
+# longer exist here.
 #
 # CODEBERG_TOKEN is a Codeberg access token with write access to the mirror
 # repository. The job does not run on forks, which have no such token.
@@ -10,7 +11,7 @@ name: Mirror
 on:
   push:
     branches: [main]
-    tags: ["*"]
+    tags: ["**"]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Check out the current main, not the commit that triggered the run,
+          # so a re-run of an older run cannot move the mirror's main back.
+          ref: main
           fetch-depth: 0
           persist-credentials: false
       - name: Push main and tags to Codeberg
@@ -35,4 +39,4 @@ jobs:
         run: |
           test -n "$CODEBERG_TOKEN" || { echo "CODEBERG_TOKEN is not set"; exit 1; }
           url="https://${CODEBERG_TOKEN}@codeberg.org/DERSecurity/py1815.git"
-          git push --force "$url" refs/remotes/origin/main:refs/heads/main 'refs/tags/*:refs/tags/*'
+          git push --force --prune "$url" refs/remotes/origin/main:refs/heads/main 'refs/tags/*:refs/tags/*'
